@@ -353,7 +353,7 @@ export default function Page() {
         if (ml) {
           const qtyToSet = ml.reserved_uom_qty || 1;
           await odoo.setMoveLineQtyDone(session, ml.id, qtyToSet, lotId);
-          setPrepScanned(prev => new Set([...prev, ml.id]));
+          setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(ml.id); return n; });
           // Refresh move lines
           setPickingMoveLines(await odoo.getPickingMoveLines(session, selectedPicking.id));
           vibrateSuccess();
