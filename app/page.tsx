@@ -24,16 +24,110 @@ const Icon = {
   transfer: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>,
   edit: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
   home: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+  zap: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
 };
 
 // Session persistence
 const SESSION_KEY = "wms_session";
 const CONFIG_KEY = "wms_config";
 function saveSession(s: odoo.OdooSession) { try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch {} }
-function loadSession(): odoo.OdooSession | null { try { const s = sessionStorage.getItem(SESSION_KEY); return s ? JSON.parse(s) : null; } catch { return null; } }
+function loadSessionStorage(): odoo.OdooSession | null { try { const s = sessionStorage.getItem(SESSION_KEY); return s ? JSON.parse(s) : null; } catch { return null; } }
 function clearSessionStorage() { try { sessionStorage.removeItem(SESSION_KEY); } catch {} }
 function saveConfig(url: string, db: string) { try { localStorage.setItem(CONFIG_KEY, JSON.stringify({ url, db })); } catch {} }
 function loadConfig(): { url: string; db: string } | null { try { const c = localStorage.getItem(CONFIG_KEY); return c ? JSON.parse(c) : null; } catch { return null; } }
+
+// ============================================
+// GLOBAL SCANNER HOOK — intercepts Zebra keystrokes
+// ============================================
+function useScannerListener(onScan: (code: string) => void, enabled: boolean) {
+  const bufferRef = useRef("");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onScanRef = useRef(onScan);
+  onScanRef.current = onScan;
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    const SCAN_THRESHOLD_MS = 50; // max ms between keystrokes for scanner mode
+    const MIN_LENGTH = 3; // minimum chars to consider it a scan
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ne pas intercepter si l'utilisateur tape dans un input/textarea manuellement
+      const target = e.target as HTMLElement;
+      const isTyping = target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+
+      // Si c'est Enter et qu'on a un buffer → c'est la fin d'un scan
+      if (e.key === "Enter") {
+        if (bufferRef.current.length >= MIN_LENGTH) {
+          e.preventDefault();
+          e.stopPropagation();
+          const code = bufferRef.current;
+          bufferRef.current = "";
+          if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+          onScanRef.current(code);
+          // Clear l'input si on était dedans
+          if (isTyping && target instanceof HTMLInputElement) {
+            target.value = "";
+            target.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          return;
+        }
+        // Pas assez de chars → laisser passer le Enter normal
+        bufferRef.current = "";
+        if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+        return;
+      }
+
+      // Ignorer les touches de contrôle
+      if (e.key.length !== 1) return;
+
+      // Si on est dans un input, le scanner tape aussi dedans.
+      // On accumule quand même dans le buffer pour détecter le scan rapide.
+      bufferRef.current += e.key;
+
+      // Reset le timer — si le prochain char arrive dans 50ms c'est un scanner
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        // Timeout expiré = saisie manuelle lente, on clear le buffer
+        bufferRef.current = "";
+        timerRef.current = null;
+      }, SCAN_THRESHOLD_MS);
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true); // capture phase
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [enabled]);
+}
+
+// ============================================
+// SCAN INDICATOR — shows buffer activity
+// ============================================
+function ScanIndicator({ lastScan }: { lastScan: string }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (lastScan) {
+      setVisible(true);
+      const t = setTimeout(() => setVisible(false), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [lastScan]);
+  if (!visible || !lastScan) return null;
+  return (
+    <div style={{
+      position: "fixed", top: 60, left: "50%", transform: "translateX(-50%)", zIndex: 200,
+      background: T.accent, color: "#000", padding: "8px 16px", borderRadius: 8,
+      fontSize: 12, fontWeight: 700, fontFamily: "inherit",
+      display: "flex", alignItems: "center", gap: 6,
+      boxShadow: `0 4px 20px rgba(34,211,238,0.4)`,
+      animation: "fadeIn 0.15s ease-out",
+    }}>
+      {Icon.zap} Scan: {lastScan}
+    </div>
+  );
+}
 
 // ============================================
 // MAIN APP
@@ -44,6 +138,7 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [locations, setLocations] = useState<any[]>([]);
+  const [lastScanCode, setLastScanCode] = useState("");
 
   // Lookup
   const [lookupResult, setLookupResult] = useState<any>(null);
@@ -61,9 +156,37 @@ export default function Page() {
   const [stockInfo, setStockInfo] = useState<any[]>([]);
   const [scanFeedback, setScanFeedback] = useState<{ type: string; message: string } | null>(null);
 
+  // Global scan handler — routes to correct function based on screen
+  const handleGlobalScan = useCallback((code: string) => {
+    setLastScanCode(code + "_" + Date.now()); // force re-render of indicator
+    if (screen === "home") {
+      handleLookup(code);
+    } else if (screen === "scan") {
+      handleSmartScan(code);
+    }
+    // Clear any input fields that the scanner may have typed into
+    setTimeout(() => {
+      const inputs = document.querySelectorAll("input");
+      inputs.forEach((inp) => {
+        // Only clear if the value matches what was just scanned
+        if (inp.value === code || inp.value.includes(code)) {
+          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+          if (nativeInputValueSetter) {
+            nativeInputValueSetter.call(inp, "");
+            inp.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+        }
+      });
+    }, 10);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, session, sourceLocation, destLocation]);
+
+  // Activate scanner listener when logged in
+  useScannerListener(handleGlobalScan, screen !== "login");
+
   // Restore session
   useEffect(() => {
-    const saved = loadSession();
+    const saved = loadSessionStorage();
     if (saved) {
       setSession(saved);
       setScreen("home");
@@ -87,7 +210,6 @@ export default function Page() {
   const goHome = () => { setScreen("home"); resetTransfer(); };
   const clearLookup = () => { setLookupResult(null); setLookupStock([]); setLookupType(""); setError(""); };
 
-  // Load location content preview
   const loadLocationContent = async (locationId: number): Promise<any[]> => {
     if (!session) return [];
     try { return await odoo.getProductsAtLocation(session, locationId); } catch { return []; }
@@ -221,123 +343,128 @@ export default function Page() {
 
   if (screen === "login") return <LoginScreen onLogin={handleLogin} loading={loading} error={error} />;
 
-  if (screen === "confirm") return (
-    <div style={base}>
-      <Header name={session?.name} onLogout={handleLogout} onHome={goHome} />
-      <div style={{ padding: 20, textAlign: "center", paddingTop: 60 }}>
-        <div style={{ width: 80, height: 80, borderRadius: "50%", background: T.successDim, border: `2px solid ${T.success}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke={T.success} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-        </div>
-        <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Transfert validé !</h2>
-        <p style={{ color: T.textDim, fontSize: 13, marginBottom: 30 }}>{transferLines.length} ligne(s) • {sourceLocation?.name} → {destLocation?.name}</p>
-        <button style={btnStyle()} onClick={startTransfer}>Nouveau transfert</button>
-        <button style={btnSecondary()} onClick={goHome}>Retour accueil</button>
-      </div>
-    </div>
-  );
-
-  // HOME
-  if (screen === "home") return (
-    <div style={base}>
-      <Header name={session?.name} onLogout={handleLogout} onHome={goHome} />
-      <div style={{ padding: 20 }}>
-        <div style={{ ...card(), border: `1px solid rgba(34,211,238,0.3)`, padding: 20, marginBottom: 20 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-            <span style={{ color: T.accent }}>{Icon.search}</span>
-            <span style={{ fontSize: 14, fontWeight: 700 }}>Scan libre</span>
-          </div>
-          <p style={{ fontSize: 11, color: T.textDim, margin: "0 0 12px 0" }}>Code-barres, référence, lot, emplacement</p>
-          <ScanField onScan={handleLookup} loading={loading} placeholder="Scanne ou tape n'importe quoi..." />
-        </div>
-        {error && <ErrCard msg={error} />}
-        {lookupType === "product" && lookupResult && <LookupProductCard product={lookupResult} stock={lookupStock} />}
-        {lookupType === "lot" && lookupResult && <LookupLotCard lot={lookupResult.lot} product={lookupResult.product} stock={lookupStock} />}
-        {lookupType === "location" && lookupResult && <LookupLocationCard location={lookupResult} stock={lookupStock} onRename={handleRenameLocation} />}
-        <button style={{ ...btnStyle(), display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 12 }} onClick={startTransfer}>
-          {Icon.transfer} Nouveau transfert
-        </button>
-      </div>
-    </div>
-  );
-
-  // TRANSFER
   return (
     <div style={base}>
+      {/* Global scan indicator toast */}
+      <ScanIndicator lastScan={lastScanCode.split("_")[0]} />
+
+      {/* CSS for animation */}
+      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(-10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }`}</style>
+
       <Header name={session?.name} onLogout={handleLogout} onHome={goHome} />
-      <div style={{ padding: 20 }}>
-        {/* Progress */}
-        <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
-          {(["source", "dest", "product"] as const).map((s, i) => (
-            <div key={s} style={{ flex: 1, height: 3, borderRadius: 2, background: step === s ? T.accent : (["source","dest","product"].indexOf(step) > i ? T.success : T.border) }}/>
-          ))}
-        </div>
 
-        {/* Location cards with content preview */}
-        {sourceLocation && (
-          <LocationPreviewCard location={sourceLocation} label="Source" content={sourceContent} onRename={handleRenameLocation} />
-        )}
-        {destLocation && (
-          <LocationPreviewCard location={destLocation} label="Destination" content={destContent} onRename={handleRenameLocation} />
-        )}
-
-        {/* Smart scan with autocomplete */}
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <label style={{ ...lbl(), marginBottom: 0 }}>Scan intelligent</label>
-            {loading && <span style={{ fontSize: 11, color: T.accent }}>Recherche...</span>}
+      {/* CONFIRM */}
+      {screen === "confirm" && (
+        <div style={{ padding: 20, textAlign: "center", paddingTop: 60 }}>
+          <div style={{ width: 80, height: 80, borderRadius: "50%", background: T.successDim, border: `2px solid ${T.success}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke={T.success} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
           </div>
-          <SmartScanWithAutocomplete
-            locations={locations}
-            onScan={handleSmartScan}
-            onSelectLocation={selectLocation}
-            loading={loading}
-            currentStep={step}
-          />
+          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Transfert validé !</h2>
+          <p style={{ color: T.textDim, fontSize: 13, marginBottom: 30 }}>{transferLines.length} ligne(s) • {sourceLocation?.name} → {destLocation?.name}</p>
+          <button style={btnStyle()} onClick={startTransfer}>Nouveau transfert</button>
+          <button style={btnSecondary()} onClick={goHome}>Retour accueil</button>
         </div>
+      )}
 
-        {scanFeedback && <FeedbackCard feedback={scanFeedback} />}
-        {error && <ErrCard msg={error} />}
-        {lastProduct && <ProductStockCard product={lastProduct} lot={lastLot} stockInfo={stockInfo} sourceLocation={sourceLocation} onAdd={addLine} />}
+      {/* HOME */}
+      {screen === "home" && (
+        <div style={{ padding: 20 }}>
+          {/* Scan indicator */}
+          <div style={{ ...card(), border: `1px solid rgba(34,211,238,0.3)`, padding: 20, marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <span style={{ color: T.accent }}>{Icon.search}</span>
+              <span style={{ fontSize: 14, fontWeight: 700 }}>Scan libre</span>
+              <span style={{ marginLeft: "auto", fontSize: 10, color: T.success, display: "flex", alignItems: "center", gap: 4 }}>{Icon.zap} Scanner actif</span>
+            </div>
+            <p style={{ fontSize: 11, color: T.textDim, margin: "0 0 12px 0" }}>Scanne directement avec le Zebra ou tape manuellement</p>
+            <ManualInput onSubmit={handleLookup} loading={loading} placeholder="Ou tape ici manuellement..." />
+          </div>
+          {error && <ErrCard msg={error} />}
+          {lookupType === "product" && lookupResult && <LookupProductCard product={lookupResult} stock={lookupStock} />}
+          {lookupType === "lot" && lookupResult && <LookupLotCard lot={lookupResult.lot} product={lookupResult.product} stock={lookupStock} />}
+          {lookupType === "location" && lookupResult && <LookupLocationCard location={lookupResult} stock={lookupStock} onRename={handleRenameLocation} />}
+          <button style={{ ...btnStyle(), display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 12 }} onClick={startTransfer}>
+            {Icon.transfer} Nouveau transfert
+          </button>
+        </div>
+      )}
 
-        {transferLines.length > 0 && (
-          <div style={{ marginTop: 16 }}>
-            <div style={lbl()}>Lignes ({transferLines.length})</div>
-            {transferLines.map((line, i) => (
-              <div key={i} style={{ ...card(), display: "flex", alignItems: "center", gap: 12, padding: "10px 14px" }}>
-                <span style={{ color: T.accent }}>{Icon.box}</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{line.productName}</div>
-                  <div style={{ fontSize: 11, color: T.textDim }}>
-                    {line.productCode} • {line.qty} {line.uomName}
-                    {line.lotName && <span style={{ color: T.accent }}> • Lot {line.lotName}</span>}
-                  </div>
-                </div>
-                <button onClick={() => removeLine(i)} style={{ background: "transparent", border: "none", color: T.danger, cursor: "pointer", padding: 4 }}>{Icon.trash}</button>
-              </div>
+      {/* TRANSFER */}
+      {screen === "scan" && (
+        <div style={{ padding: 20 }}>
+          {/* Progress */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+            {(["source", "dest", "product"] as const).map((s, i) => (
+              <div key={s} style={{ flex: 1, height: 3, borderRadius: 2, background: step === s ? T.accent : (["source","dest","product"].indexOf(step) > i ? T.success : T.border) }}/>
             ))}
-            {!destLocation && <div style={{ ...card(), background: T.warningDim, borderColor: "rgba(251,191,36,0.3)", color: T.warning, fontSize: 12, textAlign: "center" }}>Scanne une destination</div>}
-            {destLocation && (
-              <button style={{ ...btnStyle(`linear-gradient(135deg, ${T.success}, #10b981)`), marginTop: 12 }} onClick={handleValidate} disabled={loading}>
-                {loading ? "Envoi..." : `Valider (${transferLines.length} ligne${transferLines.length > 1 ? "s" : ""})`}
-              </button>
-            )}
           </div>
-        )}
-      </div>
+
+          {/* Scanner status */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12, justifyContent: "center" }}>
+            <span style={{ color: T.success }}>{Icon.zap}</span>
+            <span style={{ fontSize: 11, color: T.success }}>Scanner Zebra actif — scanne directement</span>
+          </div>
+
+          {/* Location previews */}
+          {sourceLocation && <LocationPreviewCard location={sourceLocation} label="Source" content={sourceContent} onRename={handleRenameLocation} color={T.success} />}
+          {destLocation && <LocationPreviewCard location={destLocation} label="Destination" content={destContent} onRename={handleRenameLocation} color={T.accent} />}
+
+          {/* Manual input with autocomplete */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <label style={{ ...lbl(), marginBottom: 0 }}>Saisie manuelle</label>
+              {loading && <span style={{ fontSize: 11, color: T.accent }}>Recherche...</span>}
+            </div>
+            <SmartInputWithAutocomplete
+              locations={locations}
+              onScan={handleSmartScan}
+              onSelectLocation={selectLocation}
+              currentStep={step}
+            />
+          </div>
+
+          {scanFeedback && <FeedbackCard feedback={scanFeedback} />}
+          {error && <ErrCard msg={error} />}
+          {lastProduct && <ProductStockCard product={lastProduct} lot={lastLot} stockInfo={stockInfo} sourceLocation={sourceLocation} onAdd={addLine} />}
+
+          {transferLines.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={lbl()}>Lignes ({transferLines.length})</div>
+              {transferLines.map((line, i) => (
+                <div key={i} style={{ ...card(), display: "flex", alignItems: "center", gap: 12, padding: "10px 14px" }}>
+                  <span style={{ color: T.accent }}>{Icon.box}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{line.productName}</div>
+                    <div style={{ fontSize: 11, color: T.textDim }}>
+                      {line.productCode} • {line.qty} {line.uomName}
+                      {line.lotName && <span style={{ color: T.accent }}> • Lot {line.lotName}</span>}
+                    </div>
+                  </div>
+                  <button onClick={() => removeLine(i)} style={{ background: "transparent", border: "none", color: T.danger, cursor: "pointer", padding: 4 }}>{Icon.trash}</button>
+                </div>
+              ))}
+              {!destLocation && <div style={{ ...card(), background: T.warningDim, borderColor: "rgba(251,191,36,0.3)", color: T.warning, fontSize: 12, textAlign: "center" }}>Scanne une destination</div>}
+              {destLocation && (
+                <button style={{ ...btnStyle(`linear-gradient(135deg, ${T.success}, #10b981)`), marginTop: 12 }} onClick={handleValidate} disabled={loading}>
+                  {loading ? "Envoi..." : `Valider (${transferLines.length} ligne${transferLines.length > 1 ? "s" : ""})`}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ============================================
-// SMART SCAN WITH AUTOCOMPLETE
+// SMART INPUT WITH AUTOCOMPLETE (manual typing)
 // ============================================
-function SmartScanWithAutocomplete({ locations, onScan, onSelectLocation, loading, currentStep }: any) {
+function SmartInputWithAutocomplete({ locations, onScan, onSelectLocation, currentStep }: any) {
   const ref = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState("");
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
-
-  useEffect(() => { ref.current?.focus(); }, [currentStep]);
 
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
@@ -359,6 +486,7 @@ function SmartScanWithAutocomplete({ locations, onScan, onSelectLocation, loadin
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && value.trim()) {
+      e.stopPropagation();
       setShowSuggestions(false);
       onScan(value.trim());
       setValue("");
@@ -373,25 +501,25 @@ function SmartScanWithAutocomplete({ locations, onScan, onSelectLocation, loadin
   };
 
   const hints: Record<string, string> = {
-    source: "Tape un nom d'emplacement ou scanne",
-    dest: "Scanne ou tape la destination",
-    product: "Scanne produit, réf ou lot",
+    source: "Tape un emplacement source ou scanne avec le Zebra",
+    dest: "Tape la destination ou scanne",
+    product: "Tape réf, code-barres ou lot",
   };
 
   return (
     <div style={{ position: "relative" }}>
       <input ref={ref} style={{
-        width: "100%", padding: "14px 20px", background: T.surfaceLight, border: `2px solid ${T.accent}`, borderRadius: 12,
-        color: T.text, fontSize: 16, fontFamily: "inherit", outline: "none", boxSizing: "border-box" as const,
-        textAlign: "center" as const, letterSpacing: "0.08em", boxShadow: `0 0 20px ${T.accentDim}`,
-      }} value={value} onChange={onChange} onKeyDown={handleKey} onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-        placeholder="Code-barres / Réf / Lot / Emplacement..." autoFocus />
+        width: "100%", padding: "12px 16px", background: T.surfaceLight, border: `1px solid ${T.border}`, borderRadius: 10,
+        color: T.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" as const,
+      }} value={value} onChange={onChange} onKeyDown={handleKey}
+        onFocus={() => { if (suggestions.length) setShowSuggestions(true); }}
+        onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+        placeholder="Tape ici pour chercher..." />
       <p style={{ fontSize: 11, color: T.textMuted, textAlign: "center", marginTop: 6 }}>{hints[currentStep]}</p>
 
-      {/* Autocomplete dropdown */}
       {showSuggestions && (
         <div style={{
-          position: "absolute", top: 56, left: 0, right: 0, zIndex: 50,
+          position: "absolute", top: 48, left: 0, right: 0, zIndex: 50,
           background: T.surface, border: `1px solid ${T.accent}`, borderRadius: 10,
           maxHeight: 220, overflowY: "auto", boxShadow: `0 8px 30px rgba(0,0,0,0.5)`,
         }}>
@@ -414,17 +542,36 @@ function SmartScanWithAutocomplete({ locations, onScan, onSelectLocation, loadin
 }
 
 // ============================================
-// LOCATION PREVIEW CARD (shows content)
+// MANUAL INPUT (for home screen)
 // ============================================
-function LocationPreviewCard({ location, label, content, onRename }: { location: any; label: string; content: any[]; onRename: (id: number, name: string) => void }) {
+function ManualInput({ onSubmit, loading, placeholder }: { onSubmit: (v: string) => void; loading: boolean; placeholder: string }) {
+  const [value, setValue] = useState("");
+  return (
+    <div style={{ display: "flex", gap: 8 }}>
+      <input style={{
+        flex: 1, padding: "12px 16px", background: T.surfaceLight, border: `1px solid ${T.border}`, borderRadius: 10,
+        color: T.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" as const,
+      }} value={value} onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && value.trim()) { e.stopPropagation(); onSubmit(value.trim()); setValue(""); } }}
+        placeholder={placeholder} />
+      <button onClick={() => { if (value.trim()) { onSubmit(value.trim()); setValue(""); } }}
+        style={{ padding: "12px 16px", background: T.accent, color: "#000", border: "none", borderRadius: 10, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", fontSize: 13 }}>
+        OK
+      </button>
+    </div>
+  );
+}
+
+// ============================================
+// LOCATION PREVIEW CARD
+// ============================================
+function LocationPreviewCard({ location, label, content, onRename, color }: { location: any; label: string; content: any[]; onRename: (id: number, name: string) => void; color: string }) {
   const [expanded, setExpanded] = useState(false);
-  // Aggregate by product
   const grouped = content.reduce((acc: any, q: any) => {
     const key = q.product_id[0];
-    if (!acc[key]) acc[key] = { name: q.product_id[1], qty: 0, reserved: 0, lots: [] };
+    if (!acc[key]) acc[key] = { name: q.product_id[1], qty: 0, reserved: 0 };
     acc[key].qty += q.quantity;
     acc[key].reserved += q.reserved_quantity || 0;
-    if (q.lot_id) acc[key].lots.push(q.lot_id[1]);
     return acc;
   }, {});
   const products = Object.values(grouped) as any[];
@@ -434,10 +581,9 @@ function LocationPreviewCard({ location, label, content, onRename }: { location:
   return (
     <div style={{ ...card(), padding: "12px 16px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ color: label === "Source" ? T.success : T.accent }}>{Icon.location}</span>
+        <span style={{ color }}>{Icon.location}</span>
         <EditableLocation location={location} onRename={onRename} label={label} />
       </div>
-      {/* Content summary */}
       <div style={{ marginTop: 8, padding: "8px 10px", background: T.surfaceLight, borderRadius: 8, cursor: "pointer" }} onClick={() => setExpanded(!expanded)}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontSize: 11, color: T.textDim }}>{totalRefs} réf • {totalQty} unités</span>
@@ -461,9 +607,8 @@ function LocationPreviewCard({ location, label, content, onRename }: { location:
 }
 
 // ============================================
-// OTHER COMPONENTS (same as before with minor tweaks)
+// OTHER COMPONENTS
 // ============================================
-
 function EditableLocation({ location, onRename, label }: { location: any; onRename: (id: number, name: string) => void; label: string }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(location.name);
@@ -475,7 +620,7 @@ function EditableLocation({ location, onRename, label }: { location: any; onRena
       {editing ? (
         <div style={{ display: "flex", gap: 4, marginTop: 2 }}>
           <input style={{ ...inp(), fontSize: 12, padding: "4px 8px", flex: 1 }} value={name} onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} autoFocus />
+            onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} autoFocus />
           <button onClick={save} style={{ background: "transparent", border: "none", color: T.success, cursor: "pointer", padding: 2 }}>{Icon.check}</button>
         </div>
       ) : (
@@ -544,7 +689,9 @@ function ProductStockCard({ product, lot, stockInfo, sourceLocation, onAdd }: an
       <div style={{ display: "flex", gap: 8 }}>
         <div style={{ flex: 1 }}>
           <label style={lbl()}>Quantité</label>
-          <input style={{ ...inp(), textAlign: "center" as const, fontSize: 16, fontWeight: 700 }} type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} />
+          <input style={{ ...inp(), textAlign: "center" as const, fontSize: 16, fontWeight: 700 }} type="number" min="1" value={qty}
+            onChange={(e) => setQty(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()} />
         </div>
         <div style={{ display: "flex", alignItems: "flex-end" }}>
           <button style={{ ...btnStyle(), width: "auto", padding: "12px 20px", display: "flex", alignItems: "center", gap: 6 }}
@@ -569,7 +716,7 @@ function LookupProductCard({ product, stock }: { product: any; stock: any[] }) {
           <div style={{ fontSize: 11, color: T.textDim }}>{product.default_code && `Réf: ${product.default_code}`}{product.barcode && ` • EAN: ${product.barcode}`}</div>
         </div>
       </div>
-      <div style={{ display: "flex", gap: 16, marginBottom: 14, padding: "10px 14px", background: T.successDim, borderRadius: 8, border: `1px solid rgba(52,211,153,0.2)` }}>
+      <div style={{ display: "flex", gap: 16, marginBottom: 14, padding: "10px 14px", background: T.successDim, borderRadius: 8 }}>
         <div><div style={{ fontSize: 22, fontWeight: 800, color: T.success }}>{tQ - tR}</div><div style={{ fontSize: 10, color: T.textDim }}>Dispo</div></div>
         <div><div style={{ fontSize: 22, fontWeight: 800, color: T.textDim }}>{tQ}</div><div style={{ fontSize: 10, color: T.textDim }}>Stock</div></div>
         {tR > 0 && <div><div style={{ fontSize: 22, fontWeight: 800, color: T.warning }}>{tR}</div><div style={{ fontSize: 10, color: T.textDim }}>Réservé</div></div>}
@@ -635,21 +782,6 @@ function LookupLocationCard({ location, stock, onRename }: { location: any; stoc
   );
 }
 
-function ScanField({ onScan, loading, placeholder }: { onScan: (c: string) => void; loading: boolean; placeholder: string }) {
-  const ref = useRef<HTMLInputElement>(null);
-  const [value, setValue] = useState("");
-  useEffect(() => { ref.current?.focus(); }, []);
-  return (
-    <input ref={ref} style={{
-      width: "100%", padding: "14px 20px", background: T.surfaceLight, border: `2px solid ${T.accent}`, borderRadius: 12,
-      color: T.text, fontSize: 16, fontFamily: "inherit", outline: "none", boxSizing: "border-box" as const,
-      textAlign: "center" as const, letterSpacing: "0.08em", boxShadow: `0 0 20px ${T.accentDim}`,
-    }} value={value} onChange={(e) => setValue(e.target.value)}
-      onKeyDown={(e) => { if (e.key === "Enter" && value.trim()) { onScan(value.trim()); setValue(""); } }}
-      placeholder={placeholder} autoFocus />
-  );
-}
-
 function FeedbackCard({ feedback }: { feedback: { type: string; message: string } }) {
   const c: Record<string, any> = {
     success: { bg: T.successDim, border: "rgba(52,211,153,0.3)", text: T.success },
@@ -700,7 +832,7 @@ function LoginScreen({ onLogin, loading, error }: { onLogin: (u: string, d: stri
           <div><label style={lbl()}>Base de données</label><input style={inp()} placeholder="nom_de_la_base" value={db} onChange={(e) => setDb(e.target.value)} /></div>
         </div>)}
         <div style={{ marginTop: 16, marginBottom: 12 }}><label style={lbl()}>Identifiant</label><input style={inp()} placeholder="admin@company.com" value={login} onChange={(e) => setLogin(e.target.value)} /></div>
-        <div style={{ marginBottom: 20 }}><label style={lbl()}>Mot de passe</label><input style={inp()} type="password" placeholder="••••••••" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} /></div>
+        <div style={{ marginBottom: 20 }}><label style={lbl()}>Mot de passe</label><input style={inp()} type="password" placeholder="••••••••" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} /></div>
         {error && <ErrCard msg={error} />}
         <button style={btnStyle()} onClick={submit} disabled={loading}>{loading ? "Connexion..." : "Se connecter"}</button>
       </div>
