@@ -152,12 +152,23 @@ const PICKING_FIELDS = [
   "move_ids_without_package", "location_id", "location_dest_id",
 ];
 
-// Get all outgoing pickings in confirmed/assigned state
+// Get pick-type pickings in confirmed/assigned state (preparation)
 export async function getOutgoingPickings(session: OdooSession) {
-  // Find outgoing picking type(s)
-  const types = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
-  if (!types.length) return [];
-  const typeIds = types.map((t: any) => t.id);
+  // Find pick picking type(s) — preparation before delivery
+  const types = await searchRead(session, "stock.picking.type", [["code", "=", "internal"], ["name", "ilike", "pick"]], ["id", "name"], 10);
+  // Fallback: if no "pick" type found, try sequence_code or all internal
+  let typeIds = types.map((t: any) => t.id);
+  if (!typeIds.length) {
+    // Try by sequence_code
+    const types2 = await searchRead(session, "stock.picking.type", [["sequence_code", "=", "PICK"]], ["id"], 10);
+    typeIds = types2.map((t: any) => t.id);
+  }
+  if (!typeIds.length) {
+    // Last resort: outgoing
+    const types3 = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+    typeIds = types3.map((t: any) => t.id);
+  }
+  if (!typeIds.length) return [];
 
   return searchRead(
     session, "stock.picking",
