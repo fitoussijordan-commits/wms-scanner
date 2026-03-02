@@ -69,77 +69,42 @@ export async function smartScan(session: OdooSession, code: string): Promise<Sca
 }
 
 // ============================================
-// STOCK QUERIES - ONLY INTERNAL LOCATIONS
+// STOCK QUERIES
 // ============================================
-
-// Stock d'un produit sur TOUS les emplacements internes
 export async function getAllStockForProduct(session: OdooSession, productId: number) {
-  return searchRead(
-    session,
-    "stock.quant",
-    [
-      ["product_id", "=", productId],
-      ["quantity", "!=", 0],
-      ["location_id.usage", "=", "internal"],
-    ],
-    ["location_id", "lot_id", "quantity", "reserved_quantity"],
-    500,
-    "location_id"
-  );
+  return searchRead(session, "stock.quant",
+    [["product_id", "=", productId], ["quantity", "!=", 0], ["location_id.usage", "=", "internal"]],
+    ["location_id", "lot_id", "quantity", "reserved_quantity"], 500, "location_id");
 }
 
-// Stock d'un lot spécifique sur tous les emplacements internes
 export async function getStockForLot(session: OdooSession, lotId: number, productId: number) {
-  return searchRead(
-    session,
-    "stock.quant",
-    [
-      ["lot_id", "=", lotId],
-      ["product_id", "=", productId],
-      ["quantity", "!=", 0],
-      ["location_id.usage", "=", "internal"],
-    ],
-    ["location_id", "lot_id", "quantity", "reserved_quantity"],
-    200,
-    "location_id"
-  );
+  return searchRead(session, "stock.quant",
+    [["lot_id", "=", lotId], ["product_id", "=", productId], ["quantity", "!=", 0], ["location_id.usage", "=", "internal"]],
+    ["location_id", "lot_id", "quantity", "reserved_quantity"], 200, "location_id");
 }
 
-// Stock sur un emplacement donné (pour le mode transfert)
 export async function getStockAtLocation(session: OdooSession, productId: number, locationId: number) {
-  return searchRead(
-    session,
-    "stock.quant",
+  return searchRead(session, "stock.quant",
     [["product_id", "=", productId], ["location_id", "=", locationId]],
-    ["quantity", "lot_id", "reserved_quantity"]
-  );
+    ["quantity", "lot_id", "reserved_quantity"]);
 }
 
-// Tous les produits d'un emplacement
 export async function getProductsAtLocation(session: OdooSession, locationId: number) {
-  return searchRead(
-    session,
-    "stock.quant",
+  return searchRead(session, "stock.quant",
     [["location_id", "=", locationId], ["quantity", "!=", 0]],
-    ["product_id", "lot_id", "quantity", "reserved_quantity"],
-    500,
-    "product_id"
-  );
+    ["product_id", "lot_id", "quantity", "reserved_quantity"], 500, "product_id");
 }
 
 export async function getLocations(session: OdooSession) {
   return searchRead(session, "stock.location", [["usage", "=", "internal"]], ["id", "name", "complete_name", "barcode"], 500, "complete_name");
 }
 
-// ============================================
-// RENAME LOCATION
-// ============================================
 export async function renameLocation(session: OdooSession, locationId: number, newName: string) {
   return write(session, "stock.location", [locationId], { name: newName });
 }
 
 // ============================================
-// TRANSFER
+// TRANSFER - fixed for Odoo 16
 // ============================================
 export async function createInternalTransfer(
   session: OdooSession,
@@ -167,10 +132,11 @@ export async function createInternalTransfer(
   await callMethod(session, "stock.picking", "action_confirm", [[pickingId]]);
   await callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
 
-  // Écrire les qty_done et les lots sur les move lines
+  // Odoo 16: stock.move.line utilise "qty_done" et "lot_id"
+  // On ne lit pas product_uom_qty (n'existe pas sur move.line)
   const moveLines = await searchRead(session, "stock.move.line",
     [["picking_id", "=", pickingId]],
-    ["id", "product_id", "lot_id", "product_uom_qty", "qty_done"]
+    ["id", "product_id", "lot_id", "qty_done"]
   );
 
   for (const ml of moveLines) {
