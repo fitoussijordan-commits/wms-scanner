@@ -247,10 +247,34 @@ export default function Page() {
 
   const addLine = (qty: number, lotId?: number | null, lotName?: string | null) => {
     if (!curProduct) return;
-    setLines(p => [...p, { productId: curProduct.id, productName: curProduct.name, productCode: curProduct.default_code, qty, uomId: curProduct.uom_id[0], uomName: curProduct.uom_id[1], lotId: lotId || curLot?.id || null, lotName: lotName || curLot?.name || null }]);
-    setCurProduct(null); setCurLot(null); setCurStock([]); setAllStock([]); setFeedback(null);
-    if (transferMode === "quick") { setSrc(null); setDst(null); }
-    vibrateSuccess();
+    const line = { productId: curProduct.id, productName: curProduct.name, productCode: curProduct.default_code, qty, uomId: curProduct.uom_id[0], uomName: curProduct.uom_id[1], lotId: lotId || curLot?.id || null, lotName: lotName || curLot?.name || null };
+
+    if (transferMode === "quick" && src && dst) {
+      // Mode rapide → validation immédiate
+      quickValidate(line);
+    } else {
+      // Mode classique → ajouter à la liste
+      setLines(p => [...p, line]);
+      setCurProduct(null); setCurLot(null); setCurStock([]); setAllStock([]); setFeedback(null);
+      vibrateSuccess();
+    }
+  };
+
+  const quickValidate = async (line: any) => {
+    if (!session || !src || !dst) return;
+    setLoading(true); setError("");
+    try {
+      const pid = await odoo.createInternalTransfer(session, src.id, dst.id, [line]);
+      await odoo.validatePicking(session, pid);
+      const entry: HistoryEntry = { date: new Date().toISOString(), from: src.name, to: dst.name, lineCount: 1, products: [line.productName] };
+      saveHistory(entry);
+      setHistory(loadHistory());
+      vibrateSuccess();
+      // Reset pour le prochain scan — on reste en mode transfert rapide
+      setCurProduct(null); setCurLot(null); setCurStock([]); setAllStock([]); setSrc(null); setDst(null);
+      setFeedback({ t: "ok", m: `✅ ${line.productName} · ${line.qty} ${line.uomName} → ${dst.name}` });
+    } catch (e: any) { setError(e.message); vibrateError(); }
+    setLoading(false);
   };
 
   const validate = async () => {
@@ -404,6 +428,24 @@ export default function Page() {
                 <LocationDropdown locations={locations} onSelect={(loc) => { setDst(loc); vibrateSuccess(); }} excludeId={src.id} />
               </Section>
             )}
+
+            {/* Quick mode: recent validations this session */}
+            {!curProduct && history.length > 0 && (
+              <Section style={{ marginTop: 4 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                  {clockIcon} Validés récemment
+                </div>
+                {history.slice(0, 5).map((h, i) => (
+                  <div key={i} style={{ padding: "6px 0", borderBottom: i < Math.min(history.length, 5) - 1 ? `1px solid ${C.border}` : "none", fontSize: 11 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: C.green, fontWeight: 600 }}>✓ {h.products[0]}</span>
+                      <span style={{ color: C.textMuted }}>{new Date(h.date).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span>
+                    </div>
+                    <span style={{ color: C.textMuted }}>{h.from} → {h.to}</span>
+                  </div>
+                ))}
+              </Section>
+            )}
           </>}
 
           {/* Common: feedback / error */}
@@ -412,11 +454,12 @@ export default function Page() {
 
           {/* Product picker (both modes) */}
           {curProduct && ((transferMode === "classic") || (transferMode === "quick" && src && dst)) && (
-            <ProductPicker product={curProduct} lot={curLot} stock={curStock} srcName={src?.name} onAdd={addLine} />
+            <ProductPicker product={curProduct} lot={curLot} stock={curStock} srcName={src?.name} onAdd={addLine}
+              quickMode={transferMode === "quick"} dstName={dst?.name} loading={loading} />
           )}
 
-          {/* Lines */}
-          {lines.length > 0 && (
+          {/* Lines — classic mode only */}
+          {transferMode === "classic" && lines.length > 0 && (
             <Section>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>
                 Lignes de transfert
@@ -443,8 +486,8 @@ export default function Page() {
             </Section>
           )}
 
-          {/* Validate */}
-          {lines.length > 0 && dst && src && (
+          {/* Validate — classic mode */}
+          {transferMode === "classic" && lines.length > 0 && dst && src && (
             <div style={{ marginTop: 16 }}>
               <BigButton
                 icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
@@ -456,7 +499,7 @@ export default function Page() {
               />
             </div>
           )}
-          {lines.length > 0 && !dst && <Alert type="warning">Choisis ou scanne une destination</Alert>}
+          {transferMode === "classic" && lines.length > 0 && !dst && <Alert type="warning">Choisis ou scanne une destination</Alert>}
         </>}
 
         {/* ===== DONE ===== */}
@@ -522,7 +565,7 @@ function LocationDropdown({ locations, onSelect, excludeId }: { locations: any[]
 // ============================================
 // PRODUCT PICKER with +/- buttons
 // ============================================
-function ProductPicker({ product, lot, stock, srcName, onAdd }: any) {
+function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName, loading: parentLoading }: any) {
   const [qty, setQty] = useState(1);
   const [selLot, setSelLot] = useState<{ id: number; name: string } | null>(lot ? { id: lot.id, name: lot.name } : null);
   const total = stock.reduce((s: number, q: any) => s + q.quantity, 0);
@@ -596,9 +639,21 @@ function ProductPicker({ product, lot, stock, srcName, onAdd }: any) {
         </div>
       </div>
 
+      {/* Quick mode: show route summary */}
+      {quickMode && srcName && dstName && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 12, padding: "10px 14px", background: C.greenSoft, borderRadius: 10, border: `1px solid ${C.greenBorder}` }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{srcName}</span>
+          <span style={{ fontSize: 16, color: C.green }}>→</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{dstName}</span>
+        </div>
+      )}
+
       <button onClick={() => { if (qty > 0) onAdd(qty, selLot?.id, selLot?.name); }}
-        style={{ width: "100%", padding: 14, background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-        Ajouter à la liste
+        disabled={parentLoading}
+        style={{ width: "100%", padding: 14, background: quickMode ? C.green : C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700,
+          cursor: parentLoading ? "wait" : "pointer", fontFamily: "inherit", opacity: parentLoading ? 0.6 : 1, transition: "all .15s",
+        }}>
+        {parentLoading ? "Envoi en cours..." : quickMode ? `✓ Valider le transfert` : "Ajouter à la liste"}
       </button>
     </Section>
   );
