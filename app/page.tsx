@@ -7,26 +7,14 @@ import * as odoo from "@/lib/odoo";
 // THEME
 // ============================================
 const T = {
-  bg: "#0a0f1a",
-  surface: "#111827",
-  surfaceLight: "#1a2236",
-  border: "#1e2d45",
-  accent: "#22d3ee",
-  accentDim: "rgba(34,211,238,0.1)",
-  success: "#34d399",
-  successDim: "rgba(52,211,153,0.1)",
-  warning: "#fbbf24",
-  warningDim: "rgba(251,191,36,0.1)",
-  danger: "#f87171",
-  dangerDim: "rgba(248,113,113,0.1)",
-  text: "#e2e8f0",
-  textDim: "#64748b",
-  textMuted: "#475569",
+  bg: "#0a0f1a", surface: "#111827", surfaceLight: "#1a2236", border: "#1e2d45",
+  accent: "#22d3ee", accentDim: "rgba(34,211,238,0.1)",
+  success: "#34d399", successDim: "rgba(52,211,153,0.1)",
+  warning: "#fbbf24", warningDim: "rgba(251,191,36,0.1)",
+  danger: "#f87171", dangerDim: "rgba(248,113,113,0.1)",
+  text: "#e2e8f0", textDim: "#64748b", textMuted: "#475569",
 };
 
-// ============================================
-// ICONS
-// ============================================
 const Icon = {
   scan: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>,
   box: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>,
@@ -37,7 +25,8 @@ const Icon = {
   back: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>,
   warehouse: <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3"/></svg>,
   logout: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>,
-  lot: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>,
+  search: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+  transfer: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>,
 };
 
 // ============================================
@@ -48,8 +37,12 @@ export default function Page() {
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [scanFeedback, setScanFeedback] = useState<{ type: string; message: string } | null>(null);
   const [locations, setLocations] = useState<any[]>([]);
+
+  // Lookup state
+  const [lookupResult, setLookupResult] = useState<any>(null);
+  const [lookupStock, setLookupStock] = useState<any[]>([]);
+  const [lookupType, setLookupType] = useState<string>("");
 
   // Transfer state
   const [sourceLocation, setSourceLocation] = useState<any>(null);
@@ -58,12 +51,11 @@ export default function Page() {
   const [lastProduct, setLastProduct] = useState<any>(null);
   const [lastLot, setLastLot] = useState<any>(null);
   const [stockInfo, setStockInfo] = useState<any[]>([]);
+  const [scanFeedback, setScanFeedback] = useState<{ type: string; message: string } | null>(null);
 
-  // === HANDLERS ===
-
+  // === LOGIN ===
   const handleLogin = async (url: string, db: string, login: string, password: string) => {
-    setLoading(true);
-    setError("");
+    setLoading(true); setError("");
     try {
       const config = { url: url.replace(/\/$/, ""), db };
       const sess = await odoo.authenticate(config, login, password);
@@ -71,47 +63,67 @@ export default function Page() {
       const locs = await odoo.getLocations(sess);
       setLocations(locs);
       setScreen("home");
-    } catch (e: any) {
-      setError(e.message);
-    }
+    } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
 
-  const handleLogout = () => {
-    setSession(null);
-    setScreen("login");
-    resetTransfer();
-  };
+  const handleLogout = () => { setSession(null); setScreen("login"); resetTransfer(); clearLookup(); };
 
-  const resetTransfer = () => {
-    setSourceLocation(null);
-    setDestLocation(null);
-    setTransferLines([]);
-    setLastProduct(null);
-    setLastLot(null);
-    setStockInfo([]);
-    setError("");
-    setScanFeedback(null);
-  };
+  // === LOOKUP (home screen) ===
+  const clearLookup = () => { setLookupResult(null); setLookupStock([]); setLookupType(""); setError(""); };
 
-  const startTransfer = () => {
-    resetTransfer();
-    setScreen("scan");
-  };
-
-  // === SMART SCAN ===
-  const handleSmartScan = async (code: string) => {
+  const handleLookup = async (code: string) => {
     if (!code || !session) return;
-    setLoading(true);
-    setError("");
-    setScanFeedback(null);
-    setLastProduct(null);
-    setLastLot(null);
-    setStockInfo([]);
-
+    setLoading(true); setError(""); clearLookup();
     try {
       const result = await odoo.smartScan(session, code);
+      switch (result.type) {
+        case "product": {
+          setLookupResult(result.data);
+          setLookupType("product");
+          const stock = await odoo.getAllStockForProduct(session, result.data.id);
+          setLookupStock(stock);
+          break;
+        }
+        case "lot": {
+          setLookupResult(result.data);
+          setLookupType("lot");
+          if (result.data.product) {
+            const stock = await odoo.getAllStockForProduct(session, result.data.product.id);
+            setLookupStock(stock);
+          }
+          break;
+        }
+        case "location": {
+          setLookupResult(result.data);
+          setLookupType("location");
+          const products = await odoo.getProductsAtLocation(session, result.data.id);
+          setLookupStock(products);
+          break;
+        }
+        case "not_found":
+          setError(`"${code}" non reconnu — ni emplacement, ni produit, ni réf, ni lot`);
+          break;
+      }
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
 
+  // === TRANSFER ===
+  const resetTransfer = () => {
+    setSourceLocation(null); setDestLocation(null); setTransferLines([]);
+    setLastProduct(null); setLastLot(null); setStockInfo([]);
+    setError(""); setScanFeedback(null);
+  };
+
+  const startTransfer = () => { resetTransfer(); setScreen("scan"); };
+
+  const handleSmartScan = async (code: string) => {
+    if (!code || !session) return;
+    setLoading(true); setError(""); setScanFeedback(null);
+    setLastProduct(null); setLastLot(null); setStockInfo([]);
+    try {
+      const result = await odoo.smartScan(session, code);
       switch (result.type) {
         case "location":
           if (!sourceLocation) {
@@ -121,110 +133,74 @@ export default function Page() {
             setDestLocation(result.data);
             setScanFeedback({ type: "success", message: `📍 Destination : ${result.data.complete_name || result.data.name}` });
           } else {
-            setScanFeedback({ type: "info", message: `📍 Emplacement détecté : ${result.data.complete_name || result.data.name} (source et dest déjà définies)` });
+            setScanFeedback({ type: "info", message: `📍 ${result.data.complete_name || result.data.name} (source et dest déjà définies)` });
           }
           break;
-
         case "product":
-          if (!sourceLocation) {
-            setScanFeedback({ type: "warning", message: "Scanne d'abord un emplacement source" });
-            break;
-          }
+          if (!sourceLocation) { setScanFeedback({ type: "warning", message: "Scanne d'abord un emplacement source" }); break; }
           setLastProduct(result.data);
-          setScanFeedback({ type: "success", message: `📦 ${result.data.name} (${result.data.default_code || result.data.barcode})` });
-          // Charger le stock sur l'emplacement source
+          setScanFeedback({ type: "success", message: `📦 ${result.data.name}` });
           const quants = await odoo.getStockAtLocation(session, result.data.id, sourceLocation.id);
           setStockInfo(quants);
           break;
-
         case "lot":
-          if (!sourceLocation) {
-            setScanFeedback({ type: "warning", message: "Scanne d'abord un emplacement source" });
-            break;
-          }
+          if (!sourceLocation) { setScanFeedback({ type: "warning", message: "Scanne d'abord un emplacement source" }); break; }
           setLastProduct(result.data.product);
           setLastLot(result.data.lot);
-          setScanFeedback({ type: "success", message: `🏷️ Lot ${result.data.lot.name} → ${result.data.product?.name || "Produit inconnu"}` });
+          setScanFeedback({ type: "success", message: `🏷️ Lot ${result.data.lot.name} → ${result.data.product?.name}` });
           if (result.data.product) {
-            const lotQuants = await odoo.getStockAtLocation(session, result.data.product.id, sourceLocation.id);
-            setStockInfo(lotQuants);
+            const lq = await odoo.getStockAtLocation(session, result.data.product.id, sourceLocation.id);
+            setStockInfo(lq);
           }
           break;
-
         case "not_found":
-          setScanFeedback({ type: "error", message: `❌ "${code}" non reconnu (ni emplacement, ni produit, ni réf, ni lot)` });
+          setScanFeedback({ type: "error", message: `"${code}" non reconnu` });
           break;
       }
-    } catch (e: any) {
-      setError(e.message);
-    }
+    } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
 
   const selectLocation = (loc: any) => {
-    if (!sourceLocation) {
-      setSourceLocation(loc);
-      setScanFeedback({ type: "success", message: `📍 Source : ${loc.complete_name || loc.name}` });
-    } else if (!destLocation) {
-      setDestLocation(loc);
-      setScanFeedback({ type: "success", message: `📍 Destination : ${loc.complete_name || loc.name}` });
-    }
+    if (!sourceLocation) { setSourceLocation(loc); setScanFeedback({ type: "success", message: `📍 Source : ${loc.complete_name || loc.name}` }); }
+    else if (!destLocation) { setDestLocation(loc); setScanFeedback({ type: "success", message: `📍 Dest : ${loc.complete_name || loc.name}` }); }
   };
 
   const addLine = (qty: number) => {
     if (!lastProduct) return;
     setTransferLines((prev) => [...prev, {
-      productId: lastProduct.id,
-      productName: lastProduct.name,
-      productCode: lastProduct.default_code,
-      qty,
-      uomId: lastProduct.uom_id[0],
-      uomName: lastProduct.uom_id[1],
-      lotId: lastLot?.id || null,
-      lotName: lastLot?.name || null,
+      productId: lastProduct.id, productName: lastProduct.name, productCode: lastProduct.default_code,
+      qty, uomId: lastProduct.uom_id[0], uomName: lastProduct.uom_id[1],
+      lotId: lastLot?.id || null, lotName: lastLot?.name || null,
     }]);
-    setLastProduct(null);
-    setLastLot(null);
-    setStockInfo([]);
-    setScanFeedback(null);
+    setLastProduct(null); setLastLot(null); setStockInfo([]); setScanFeedback(null);
   };
 
   const removeLine = (i: number) => setTransferLines((prev) => prev.filter((_, idx) => idx !== i));
 
   const handleValidate = async () => {
     if (!session || !sourceLocation || !destLocation || !transferLines.length) return;
-    setLoading(true);
-    setError("");
+    setLoading(true); setError("");
     try {
-      const pickingId = await odoo.createInternalTransfer(
-        session, sourceLocation.id, destLocation.id, transferLines
-      );
+      const pickingId = await odoo.createInternalTransfer(session, sourceLocation.id, destLocation.id, transferLines);
       await odoo.validatePicking(session, pickingId);
       setScreen("confirm");
-    } catch (e: any) {
-      setError(e.message);
-    }
+    } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
 
-  // === RENDER ===
-
+  // === STYLES ===
   const baseStyle: React.CSSProperties = {
-    minHeight: "100vh",
-    background: `linear-gradient(180deg, ${T.bg} 0%, #0d1424 100%)`,
-    color: T.text,
-    fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
-    maxWidth: 480,
-    margin: "0 auto",
+    minHeight: "100vh", background: `linear-gradient(180deg, ${T.bg} 0%, #0d1424 100%)`,
+    color: T.text, fontFamily: "'JetBrains Mono', 'SF Mono', monospace", maxWidth: 480, margin: "0 auto",
   };
 
-  // Determine current step
   const currentStep = !sourceLocation ? "source" : !destLocation ? "dest" : "product";
 
-  // LOGIN
+  // === SCREENS ===
+
   if (screen === "login") return <LoginScreen onLogin={handleLogin} loading={loading} error={error} />;
 
-  // CONFIRM
   if (screen === "confirm") return (
     <div style={baseStyle}>
       <Header name={session?.name} onLogout={handleLogout} />
@@ -242,43 +218,59 @@ export default function Page() {
     </div>
   );
 
-  // HOME
+  // HOME with LOOKUP
   if (screen === "home") return (
     <div style={baseStyle}>
       <Header name={session?.name} onLogout={handleLogout} />
       <div style={{ padding: 20 }}>
-        <div style={{ textAlign: "center", padding: "40px 0 30px" }}>
-          <div style={{ color: T.accent, marginBottom: 16, display: "flex", justifyContent: "center" }}>{Icon.warehouse}</div>
-          <h1 style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>WMS Scanner</h1>
-          <p style={{ color: T.textDim, fontSize: 13 }}>Scan intelligent — détecte tout automatiquement</p>
+
+        {/* SCAN LIBRE - toujours visible */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ ...cardStyle(), border: `1px solid rgba(34,211,238,0.3)`, padding: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <span style={{ color: T.accent }}>{Icon.search}</span>
+              <span style={{ fontSize: 14, fontWeight: 700 }}>Scan libre</span>
+            </div>
+            <p style={{ fontSize: 11, color: T.textDim, marginBottom: 12, margin: "0 0 12px 0" }}>
+              Scanne ou tape n'importe quoi : code-barres, référence, lot, emplacement
+            </p>
+            <ScanField onScan={handleLookup} loading={loading} placeholder="Code-barres / Réf / Lot / Emplacement..." />
+          </div>
         </div>
-        <button style={{ ...btnStyle(), display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }} onClick={startTransfer}>
-          {Icon.scan} Nouveau transfert
+
+        {/* Error */}
+        {error && <div style={{ ...cardStyle(), background: T.dangerDim, borderColor: "rgba(248,113,113,0.3)", color: T.danger, fontSize: 13, textAlign: "center" }}>{error}</div>}
+
+        {/* LOOKUP RESULTS */}
+        {lookupType === "product" && lookupResult && (
+          <LookupProductCard product={lookupResult} stock={lookupStock} />
+        )}
+        {lookupType === "lot" && lookupResult && (
+          <LookupLotCard lot={lookupResult.lot} product={lookupResult.product} stock={lookupStock} />
+        )}
+        {lookupType === "location" && lookupResult && (
+          <LookupLocationCard location={lookupResult} stock={lookupStock} />
+        )}
+
+        {/* Bouton transfert */}
+        <button style={{ ...btnStyle(), display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 12 }} onClick={startTransfer}>
+          {Icon.transfer} Nouveau transfert
         </button>
-        <div style={cardStyle()}>
-          <div style={labelStyle()}>Emplacements chargés</div>
-          <p style={{ fontSize: 28, fontWeight: 700, color: T.accent, margin: 0 }}>{locations.length}</p>
-        </div>
       </div>
     </div>
   );
 
-  // SCAN SCREEN
+  // SCAN / TRANSFER SCREEN
   return (
     <div style={baseStyle}>
       <Header name={session?.name} onLogout={handleLogout} showBack onBack={() => { setScreen("home"); resetTransfer(); }} />
       <div style={{ padding: 20 }}>
-        {/* Progress bar */}
         <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
           {(["source", "dest", "product"] as const).map((step, i) => (
-            <div key={step} style={{
-              flex: 1, height: 3, borderRadius: 2,
-              background: currentStep === step ? T.accent : (["source","dest","product"].indexOf(currentStep) > i ? T.success : T.border),
-            }}/>
+            <div key={step} style={{ flex: 1, height: 3, borderRadius: 2, background: currentStep === step ? T.accent : (["source","dest","product"].indexOf(currentStep) > i ? T.success : T.border) }}/>
           ))}
         </div>
 
-        {/* Location info */}
         {sourceLocation && (
           <div style={{ ...cardStyle(), display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
             <span style={{ color: T.success }}>{Icon.location}</span>
@@ -296,50 +288,39 @@ export default function Page() {
           </div>
         )}
 
-        {/* SINGLE SMART SCAN INPUT */}
-        <SmartScanInput
-          onScan={handleSmartScan}
-          loading={loading}
-          currentStep={currentStep}
-          locations={locations}
-          onSelectLocation={selectLocation}
-        />
+        {/* Smart scan for transfer */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <label style={{ ...labelStyle(), marginBottom: 0 }}>Scan intelligent</label>
+            {loading && <span style={{ fontSize: 11, color: T.accent }}>Recherche...</span>}
+          </div>
+          <ScanField onScan={handleSmartScan} loading={loading} placeholder="Code-barres / Réf / Lot / Emplacement..." />
+          <p style={{ fontSize: 11, color: T.textMuted, textAlign: "center", marginTop: 6 }}>
+            {currentStep === "source" ? "Scanne un emplacement source pour commencer" : currentStep === "dest" ? "Scanne l'emplacement destination" : "Scanne un produit, une réf ou un lot"}
+          </p>
 
-        {/* Scan feedback */}
+          <LocationPicker locations={locations} onSelect={selectLocation} />
+        </div>
+
         {scanFeedback && (
           <div style={{
             ...cardStyle(),
-            background: scanFeedback.type === "success" ? T.successDim
-              : scanFeedback.type === "warning" ? T.warningDim
-              : scanFeedback.type === "error" ? T.dangerDim
-              : T.accentDim,
-            borderColor: scanFeedback.type === "success" ? "rgba(52,211,153,0.3)"
-              : scanFeedback.type === "warning" ? "rgba(251,191,36,0.3)"
-              : scanFeedback.type === "error" ? "rgba(248,113,113,0.3)"
-              : "rgba(34,211,238,0.3)",
-            color: scanFeedback.type === "success" ? T.success
-              : scanFeedback.type === "warning" ? T.warning
-              : scanFeedback.type === "error" ? T.danger
-              : T.accent,
-            fontSize: 13,
-            textAlign: "center",
-          }}>
-            {scanFeedback.message}
-          </div>
+            background: scanFeedback.type === "success" ? T.successDim : scanFeedback.type === "warning" ? T.warningDim : scanFeedback.type === "error" ? T.dangerDim : T.accentDim,
+            borderColor: scanFeedback.type === "success" ? "rgba(52,211,153,0.3)" : scanFeedback.type === "warning" ? "rgba(251,191,36,0.3)" : scanFeedback.type === "error" ? "rgba(248,113,113,0.3)" : "rgba(34,211,238,0.3)",
+            color: scanFeedback.type === "success" ? T.success : scanFeedback.type === "warning" ? T.warning : scanFeedback.type === "error" ? T.danger : T.accent,
+            fontSize: 13, textAlign: "center",
+          }}>{scanFeedback.message}</div>
         )}
 
-        {/* Error */}
         {error && <div style={{ ...cardStyle(), background: T.dangerDim, borderColor: "rgba(248,113,113,0.3)", color: T.danger, fontSize: 13, textAlign: "center" }}>{error}</div>}
 
-        {/* Product + Stock */}
         {lastProduct && (
           <ProductStockCard product={lastProduct} lot={lastLot} stockInfo={stockInfo} sourceLocation={sourceLocation} onAdd={addLine} />
         )}
 
-        {/* Transfer lines */}
         {transferLines.length > 0 && (
           <div style={{ marginTop: 16 }}>
-            <div style={labelStyle()}>Lignes du transfert ({transferLines.length})</div>
+            <div style={labelStyle()}>Lignes ({transferLines.length})</div>
             {transferLines.map((line, i) => (
               <div key={i} style={{ ...cardStyle(), display: "flex", alignItems: "center", gap: 12, padding: "10px 14px" }}>
                 <span style={{ color: T.accent }}>{Icon.box}</span>
@@ -353,19 +334,9 @@ export default function Page() {
                 <button onClick={() => removeLine(i)} style={{ background: "transparent", border: "none", color: T.danger, cursor: "pointer", padding: 4 }}>{Icon.trash}</button>
               </div>
             ))}
-
-            {!destLocation && (
-              <div style={{ ...cardStyle(), background: T.warningDim, borderColor: "rgba(251,191,36,0.3)", color: T.warning, fontSize: 12, textAlign: "center" }}>
-                Scanne un emplacement destination avant de valider
-              </div>
-            )}
-
+            {!destLocation && <div style={{ ...cardStyle(), background: T.warningDim, borderColor: "rgba(251,191,36,0.3)", color: T.warning, fontSize: 12, textAlign: "center" }}>Scanne une destination avant de valider</div>}
             {destLocation && (
-              <button
-                style={{ ...btnStyle(`linear-gradient(135deg, ${T.success}, #10b981)`), marginTop: 12 }}
-                onClick={handleValidate}
-                disabled={loading}
-              >
+              <button style={{ ...btnStyle(`linear-gradient(135deg, ${T.success}, #10b981)`), marginTop: 12 }} onClick={handleValidate} disabled={loading}>
                 {loading ? "Envoi..." : `Valider (${transferLines.length} ligne${transferLines.length > 1 ? "s" : ""})`}
               </button>
             )}
@@ -377,144 +348,174 @@ export default function Page() {
 }
 
 // ============================================
-// SUB COMPONENTS
+// LOOKUP RESULT CARDS
 // ============================================
 
-function Header({ name, onLogout, showBack, onBack }: { name?: string; onLogout: () => void; showBack?: boolean; onBack?: () => void }) {
+function LookupProductCard({ product, stock }: { product: any; stock: any[] }) {
+  const totalQty = stock.reduce((s, q) => s + q.quantity, 0);
+  const totalReserved = stock.reduce((s, q) => s + (q.reserved_quantity || 0), 0);
+
   return (
-    <div style={{
-      padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between",
-      borderBottom: `1px solid ${T.border}`, background: "rgba(17,24,39,0.8)", backdropFilter: "blur(20px)",
-      position: "sticky", top: 0, zIndex: 100,
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        {showBack && <button onClick={onBack} style={{ background: "transparent", border: "none", color: T.textDim, cursor: "pointer", padding: 0 }}>{Icon.back}</button>}
-        <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: T.accent }}>⬡ WMS</span>
+    <div style={{ ...cardStyle(), border: `1px solid rgba(34,211,238,0.3)` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+        <div style={{ width: 44, height: 44, borderRadius: 10, background: T.accentDim, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{Icon.box}</div>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>{product.name}</div>
+          <div style={{ fontSize: 11, color: T.textDim }}>
+            {product.default_code && <span>Réf: {product.default_code}</span>}
+            {product.barcode && <span> • EAN: {product.barcode}</span>}
+          </div>
+        </div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ fontSize: 12, color: T.textDim }}>{name}</span>
-        <button onClick={onLogout} style={{ background: "transparent", border: "none", color: T.textDim, cursor: "pointer", padding: 0 }}>{Icon.logout}</button>
+
+      {/* Totaux */}
+      <div style={{ display: "flex", gap: 16, marginBottom: 14, padding: "10px 14px", background: T.successDim, borderRadius: 8, border: `1px solid rgba(52,211,153,0.2)` }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: T.success }}>{totalQty - totalReserved}</div>
+          <div style={{ fontSize: 10, color: T.textDim }}>Disponible total</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: T.textDim }}>{totalQty}</div>
+          <div style={{ fontSize: 10, color: T.textDim }}>En stock total</div>
+        </div>
+        {totalReserved > 0 && <div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: T.warning }}>{totalReserved}</div>
+          <div style={{ fontSize: 10, color: T.textDim }}>Réservé</div>
+        </div>}
       </div>
+
+      {/* Par emplacement */}
+      <div style={labelStyle()}>Détail par emplacement</div>
+      {stock.length === 0 && <div style={{ fontSize: 12, color: T.textMuted, textAlign: "center", padding: 10 }}>Aucun stock</div>}
+      {stock.map((q, i) => (
+        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < stock.length - 1 ? `1px solid ${T.border}` : "none" }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600 }}>{q.location_id[1]}</div>
+            {q.lot_id && <div style={{ fontSize: 10, color: T.accent }}>Lot: {q.lot_id[1]}</div>}
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: (q.quantity - (q.reserved_quantity || 0)) > 0 ? T.success : T.warning }}>
+              {q.quantity - (q.reserved_quantity || 0)}
+            </span>
+            <span style={{ fontSize: 11, color: T.textDim }}> / {q.quantity}</span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
 
-function LoginScreen({ onLogin, loading, error }: { onLogin: (url: string, db: string, login: string, pw: string) => void; loading: boolean; error: string }) {
-  const [url, setUrl] = useState("");
-  const [db, setDb] = useState("");
-  const [login, setLogin] = useState("");
-  const [pw, setPw] = useState("");
-  const [showConfig, setShowConfig] = useState(true);
-
-  const submit = () => { if (url && db && login && pw) onLogin(url, db, login, pw); };
+function LookupLotCard({ lot, product, stock }: { lot: any; product: any; stock: any[] }) {
+  // Filtrer le stock pour ce lot spécifique
+  const lotStock = stock.filter((q) => q.lot_id && q.lot_id[0] === lot.id);
 
   return (
-    <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.bg} 0%, #0d1424 100%)`, color: T.text, fontFamily: "'JetBrains Mono', 'SF Mono', monospace", maxWidth: 480, margin: "0 auto" }}>
-      <div style={{ padding: 20, paddingTop: 60 }}>
-        <div style={{ textAlign: "center", marginBottom: 40 }}>
-          <div style={{ width: 64, height: 64, borderRadius: 16, background: T.accentDim, border: `1px solid ${T.accent}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
-            {Icon.warehouse}
-          </div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>WMS Scanner</h1>
-          <p style={{ color: T.textDim, fontSize: 13 }}>Connexion Odoo</p>
+    <div style={{ ...cardStyle(), border: `1px solid rgba(251,191,36,0.3)` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+        <div style={{ width: 44, height: 44, borderRadius: 10, background: T.warningDim, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 20 }}>🏷️</div>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>Lot: {lot.name}</div>
+          <div style={{ fontSize: 11, color: T.textDim }}>{product?.name || "Produit inconnu"}</div>
+          {product?.default_code && <div style={{ fontSize: 10, color: T.textMuted }}>Réf: {product.default_code}</div>}
         </div>
-
-        <button style={btnSecondary()} onClick={() => setShowConfig(!showConfig)}>
-          {showConfig ? "Masquer" : "Afficher"} config serveur
-        </button>
-
-        {showConfig && (
-          <div style={{ ...cardStyle(), marginTop: 12 }}>
-            <div style={{ marginBottom: 12 }}>
-              <label style={labelStyle()}>URL Odoo</label>
-              <input style={inputStyle()} placeholder="https://monentreprise.odoo.com" value={url} onChange={(e) => setUrl(e.target.value)} />
-            </div>
-            <div>
-              <label style={labelStyle()}>Base de données</label>
-              <input style={inputStyle()} placeholder="nom_de_la_base" value={db} onChange={(e) => setDb(e.target.value)} />
-            </div>
-          </div>
-        )}
-
-        <div style={{ marginTop: 16, marginBottom: 12 }}>
-          <label style={labelStyle()}>Identifiant</label>
-          <input style={inputStyle()} placeholder="admin@company.com" value={login} onChange={(e) => setLogin(e.target.value)} />
-        </div>
-        <div style={{ marginBottom: 20 }}>
-          <label style={labelStyle()}>Mot de passe</label>
-          <input style={inputStyle()} type="password" placeholder="••••••••" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
-        </div>
-
-        {error && <div style={{ ...cardStyle(), background: T.dangerDim, borderColor: "rgba(248,113,113,0.3)", color: T.danger, fontSize: 13, textAlign: "center", marginBottom: 16 }}>{error}</div>}
-
-        <button style={btnStyle()} onClick={submit} disabled={loading}>
-          {loading ? "Connexion..." : "Se connecter"}
-        </button>
       </div>
+
+      <div style={labelStyle()}>Stock de ce lot par emplacement</div>
+      {lotStock.length === 0 && <div style={{ fontSize: 12, color: T.textMuted, textAlign: "center", padding: 10 }}>Aucun stock pour ce lot</div>}
+      {lotStock.map((q, i) => (
+        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < lotStock.length - 1 ? `1px solid ${T.border}` : "none" }}>
+          <div style={{ fontSize: 12, fontWeight: 600 }}>{q.location_id[1]}</div>
+          <span style={{ fontSize: 14, fontWeight: 700, color: T.success }}>{q.quantity - (q.reserved_quantity || 0)}</span>
+        </div>
+      ))}
     </div>
   );
 }
 
-function SmartScanInput({ onScan, loading, currentStep, locations, onSelectLocation }: any) {
+function LookupLocationCard({ location, stock }: { location: any; stock: any[] }) {
+  const totalItems = stock.reduce((s, q) => s + q.quantity, 0);
+
+  return (
+    <div style={{ ...cardStyle(), border: `1px solid rgba(52,211,153,0.3)` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+        <div style={{ width: 44, height: 44, borderRadius: 10, background: T.successDim, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{Icon.location}</div>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>{location.complete_name || location.name}</div>
+          {location.barcode && <div style={{ fontSize: 11, color: T.textDim }}>Code: {location.barcode}</div>}
+          <div style={{ fontSize: 11, color: T.accent }}>{stock.length} produit(s) • {totalItems} unités</div>
+        </div>
+      </div>
+
+      <div style={labelStyle()}>Contenu de l'emplacement</div>
+      {stock.length === 0 && <div style={{ fontSize: 12, color: T.textMuted, textAlign: "center", padding: 10 }}>Emplacement vide</div>}
+      {stock.map((q, i) => (
+        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < stock.length - 1 ? `1px solid ${T.border}` : "none" }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600 }}>{q.product_id[1]}</div>
+            {q.lot_id && <div style={{ fontSize: 10, color: T.accent }}>Lot: {q.lot_id[1]}</div>}
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: T.success }}>{q.quantity - (q.reserved_quantity || 0)}</span>
+            <span style={{ fontSize: 11, color: T.textDim }}> / {q.quantity}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ============================================
+// SHARED COMPONENTS
+// ============================================
+
+function ScanField({ onScan, loading, placeholder }: { onScan: (code: string) => void; loading: boolean; placeholder: string }) {
   const ref = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState("");
-  const [showPicker, setShowPicker] = useState(false);
-  const [filter, setFilter] = useState("");
 
-  useEffect(() => { ref.current?.focus(); }, [currentStep]);
-
-  const hints: Record<string, string> = {
-    source: "Scanne un emplacement source, une réf, un code-barres, ou un lot...",
-    dest: "Scanne un emplacement destination, ou continue avec les produits...",
-    product: "Scanne un produit, une réf, un lot, ou un emplacement...",
-  };
+  useEffect(() => { ref.current?.focus(); }, []);
 
   const handleKey = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && value.trim()) {
-      onScan(value.trim());
-      setValue("");
-    }
+    if (e.key === "Enter" && value.trim()) { onScan(value.trim()); setValue(""); }
   };
 
-  const filtered = locations.filter((l: any) =>
+  return (
+    <input
+      ref={ref}
+      style={{
+        width: "100%", padding: "14px 20px", background: T.surfaceLight,
+        border: `2px solid ${T.accent}`, borderRadius: 12, color: T.text,
+        fontSize: 16, fontFamily: "inherit", outline: "none", boxSizing: "border-box" as const,
+        textAlign: "center" as const, letterSpacing: "0.08em",
+        boxShadow: `0 0 20px ${T.accentDim}`,
+      }}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onKeyDown={handleKey}
+      placeholder={placeholder}
+      autoFocus
+    />
+  );
+}
+
+function LocationPicker({ locations, onSelect }: { locations: any[]; onSelect: (loc: any) => void }) {
+  const [show, setShow] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const filtered = locations.filter((l) =>
     (l.complete_name || l.name).toLowerCase().includes(filter.toLowerCase()) ||
     (l.barcode && l.barcode.toLowerCase().includes(filter.toLowerCase()))
   );
 
   return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <label style={{ ...labelStyle(), marginBottom: 0 }}>Scan intelligent</label>
-        {loading && <span style={{ fontSize: 11, color: T.accent, animation: "pulse 1s infinite" }}>Recherche...</span>}
-      </div>
-      <input
-        ref={ref}
-        style={{
-          width: "100%", padding: "16px 20px", background: T.surfaceLight,
-          border: `2px solid ${T.accent}`, borderRadius: 12, color: T.text,
-          fontSize: 18, fontFamily: "inherit", outline: "none", boxSizing: "border-box" as const,
-          textAlign: "center" as const, letterSpacing: "0.1em",
-          boxShadow: `0 0 20px ${T.accentDim}`,
-        }}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={handleKey}
-        placeholder="Code-barres / Réf / Lot..."
-        autoFocus
-      />
-      <p style={{ fontSize: 11, color: T.textMuted, textAlign: "center", marginTop: 6 }}>
-        {hints[currentStep]}
-      </p>
-
-      {/* Manual location picker */}
-      <button style={{ ...btnSecondary(), marginTop: 4, fontSize: 12 }} onClick={() => setShowPicker(!showPicker)}>
-        {showPicker ? "Fermer" : "Choisir un emplacement manuellement"}
+    <>
+      <button style={{ ...btnSecondary(), marginTop: 4, fontSize: 12 }} onClick={() => setShow(!show)}>
+        {show ? "Fermer" : "Choisir un emplacement manuellement"}
       </button>
-      {showPicker && (
+      {show && (
         <div style={{ ...cardStyle(), marginTop: 8, maxHeight: 200, overflowY: "auto" as const }}>
           <input style={{ ...inputStyle(), marginBottom: 8, fontSize: 12 }} placeholder="Filtrer..." value={filter} onChange={(e) => setFilter(e.target.value)} />
-          {filtered.slice(0, 20).map((loc: any) => (
-            <button key={loc.id} onClick={() => { onSelectLocation(loc); setShowPicker(false); setFilter(""); }}
+          {filtered.slice(0, 20).map((loc) => (
+            <button key={loc.id} onClick={() => { onSelect(loc); setShow(false); setFilter(""); }}
               style={{ display: "block", width: "100%", padding: "8px 10px", background: "transparent", border: "none", borderBottom: `1px solid ${T.border}`, color: T.text, fontSize: 12, textAlign: "left" as const, cursor: "pointer", fontFamily: "inherit" }}>
               <span style={{ fontWeight: 600 }}>{loc.complete_name || loc.name}</span>
               {loc.barcode && <span style={{ color: T.textDim, marginLeft: 8 }}>[{loc.barcode}]</span>}
@@ -522,7 +523,7 @@ function SmartScanInput({ onScan, loading, currentStep, locations, onSelectLocat
           ))}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -534,7 +535,6 @@ function ProductStockCard({ product, lot, stockInfo, sourceLocation, onAdd }: an
 
   return (
     <div style={{ ...cardStyle(), border: `1px solid rgba(34,211,238,0.3)` }}>
-      {/* Product info */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 14 }}>
         <div style={{ width: 44, height: 44, borderRadius: 10, background: T.accentDim, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{Icon.box}</div>
         <div style={{ flex: 1 }}>
@@ -543,15 +543,10 @@ function ProductStockCard({ product, lot, stockInfo, sourceLocation, onAdd }: an
             {product.default_code && <span>Réf: {product.default_code} • </span>}
             {product.barcode && <span>EAN: {product.barcode}</span>}
           </div>
-          {lot && (
-            <div style={{ fontSize: 11, color: T.accent, marginTop: 2 }}>
-              🏷️ Lot: {lot.name}
-            </div>
-          )}
+          {lot && <div style={{ fontSize: 11, color: T.accent, marginTop: 2 }}>🏷️ Lot: {lot.name}</div>}
         </div>
       </div>
 
-      {/* STOCK INFO */}
       <div style={{
         background: available > 0 ? T.successDim : T.warningDim,
         border: `1px solid ${available > 0 ? "rgba(52,211,153,0.3)" : "rgba(251,191,36,0.3)"}`,
@@ -585,7 +580,6 @@ function ProductStockCard({ product, lot, stockInfo, sourceLocation, onAdd }: an
         )}
       </div>
 
-      {/* Qty + add */}
       <div style={{ display: "flex", gap: 8 }}>
         <div style={{ flex: 1 }}>
           <label style={labelStyle()}>Quantité</label>
@@ -598,24 +592,65 @@ function ProductStockCard({ product, lot, stockInfo, sourceLocation, onAdd }: an
           </button>
         </div>
       </div>
-      {available <= 0 && <div style={{ marginTop: 8, fontSize: 11, color: T.warning, textAlign: "center" as const }}>Stock insuffisant sur cet emplacement</div>}
+      {available <= 0 && <div style={{ marginTop: 8, fontSize: 11, color: T.warning, textAlign: "center" as const }}>Stock insuffisant</div>}
+    </div>
+  );
+}
+
+function Header({ name, onLogout, showBack, onBack }: { name?: string; onLogout: () => void; showBack?: boolean; onBack?: () => void }) {
+  return (
+    <div style={{
+      padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between",
+      borderBottom: `1px solid ${T.border}`, background: "rgba(17,24,39,0.8)", backdropFilter: "blur(20px)",
+      position: "sticky", top: 0, zIndex: 100,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {showBack && <button onClick={onBack} style={{ background: "transparent", border: "none", color: T.textDim, cursor: "pointer", padding: 0 }}>{Icon.back}</button>}
+        <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: T.accent }}>⬡ WMS</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <span style={{ fontSize: 12, color: T.textDim }}>{name}</span>
+        <button onClick={onLogout} style={{ background: "transparent", border: "none", color: T.textDim, cursor: "pointer", padding: 0 }}>{Icon.logout}</button>
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen({ onLogin, loading, error }: { onLogin: (url: string, db: string, login: string, pw: string) => void; loading: boolean; error: string }) {
+  const [url, setUrl] = useState("");
+  const [db, setDb] = useState("");
+  const [login, setLogin] = useState("");
+  const [pw, setPw] = useState("");
+  const [showConfig, setShowConfig] = useState(true);
+  const submit = () => { if (url && db && login && pw) onLogin(url, db, login, pw); };
+
+  return (
+    <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.bg} 0%, #0d1424 100%)`, color: T.text, fontFamily: "'JetBrains Mono', 'SF Mono', monospace", maxWidth: 480, margin: "0 auto" }}>
+      <div style={{ padding: 20, paddingTop: 60 }}>
+        <div style={{ textAlign: "center", marginBottom: 40 }}>
+          <div style={{ width: 64, height: 64, borderRadius: 16, background: T.accentDim, border: `1px solid ${T.accent}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>{Icon.warehouse}</div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>WMS Scanner</h1>
+          <p style={{ color: T.textDim, fontSize: 13 }}>Connexion Odoo</p>
+        </div>
+        <button style={btnSecondary()} onClick={() => setShowConfig(!showConfig)}>{showConfig ? "Masquer" : "Afficher"} config serveur</button>
+        {showConfig && (
+          <div style={{ ...cardStyle(), marginTop: 12 }}>
+            <div style={{ marginBottom: 12 }}><label style={labelStyle()}>URL Odoo</label><input style={inputStyle()} placeholder="https://monentreprise.odoo.com" value={url} onChange={(e) => setUrl(e.target.value)} /></div>
+            <div><label style={labelStyle()}>Base de données</label><input style={inputStyle()} placeholder="nom_de_la_base" value={db} onChange={(e) => setDb(e.target.value)} /></div>
+          </div>
+        )}
+        <div style={{ marginTop: 16, marginBottom: 12 }}><label style={labelStyle()}>Identifiant</label><input style={inputStyle()} placeholder="admin@company.com" value={login} onChange={(e) => setLogin(e.target.value)} /></div>
+        <div style={{ marginBottom: 20 }}><label style={labelStyle()}>Mot de passe</label><input style={inputStyle()} type="password" placeholder="••••••••" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} /></div>
+        {error && <div style={{ ...cardStyle(), background: T.dangerDim, borderColor: "rgba(248,113,113,0.3)", color: T.danger, fontSize: 13, textAlign: "center", marginBottom: 16 }}>{error}</div>}
+        <button style={btnStyle()} onClick={submit} disabled={loading}>{loading ? "Connexion..." : "Se connecter"}</button>
+      </div>
     </div>
   );
 }
 
 // === STYLE HELPERS ===
-function cardStyle(): React.CSSProperties {
-  return { background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16, marginBottom: 12 };
-}
-function labelStyle(): React.CSSProperties {
-  return { fontSize: 11, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "0.08em", color: T.textDim, marginBottom: 6, display: "block" };
-}
-function inputStyle(): React.CSSProperties {
-  return { width: "100%", padding: "12px 16px", background: T.surfaceLight, border: `1px solid ${T.border}`, borderRadius: 8, color: T.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" as const };
-}
-function btnStyle(bg?: string): React.CSSProperties {
-  return { width: "100%", padding: "14px", background: bg || `linear-gradient(135deg, ${T.accent}, #06b6d4)`, color: "#000", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", letterSpacing: "0.03em", textTransform: "uppercase" as const };
-}
-function btnSecondary(): React.CSSProperties {
-  return { width: "100%", padding: "12px", background: "transparent", color: T.accent, border: `1px solid ${T.border}`, borderRadius: 10, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", marginTop: 10 };
-}
+function cardStyle(): React.CSSProperties { return { background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }; }
+function labelStyle(): React.CSSProperties { return { fontSize: 11, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "0.08em", color: T.textDim, marginBottom: 6, display: "block" }; }
+function inputStyle(): React.CSSProperties { return { width: "100%", padding: "12px 16px", background: T.surfaceLight, border: `1px solid ${T.border}`, borderRadius: 8, color: T.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" as const }; }
+function btnStyle(bg?: string): React.CSSProperties { return { width: "100%", padding: "14px", background: bg || `linear-gradient(135deg, ${T.accent}, #06b6d4)`, color: "#000", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", letterSpacing: "0.03em", textTransform: "uppercase" as const }; }
+function btnSecondary(): React.CSSProperties { return { width: "100%", padding: "12px", background: "transparent", color: T.accent, border: `1px solid ${T.border}`, borderRadius: 10, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", marginTop: 10 }; }
