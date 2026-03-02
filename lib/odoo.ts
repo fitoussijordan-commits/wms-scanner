@@ -217,7 +217,7 @@ export async function autoFillPicking(session: OdooSession, pickingId: number) {
 }
 
 // Get the PDF report for a picking (bon de livraison)
-export async function getPickingReportUrl(session: OdooSession, pickingId: number): Promise<string> {
+export function getPickingReportUrl(session: OdooSession, pickingId: number): string {
   // Standard Odoo delivery slip report
   return `${session.config.url}/report/pdf/stock.report_deliveryslip/${pickingId}`;
 }
