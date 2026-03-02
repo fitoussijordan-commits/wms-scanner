@@ -42,7 +42,7 @@ export async function write(session: OdooSession, model: string, ids: number[], 
 }
 
 // ============================================
-// SMART SCAN
+// SMART SCAN — cherche aussi les produits archivés
 // ============================================
 export type ScanResult =
   | { type: "location"; data: any }
@@ -50,19 +50,35 @@ export type ScanResult =
   | { type: "lot"; data: { lot: any; product: any } }
   | { type: "not_found"; code: string };
 
+const PRODUCT_FIELDS = ["id", "name", "barcode", "default_code", "uom_id", "tracking", "active"];
+
 export async function smartScan(session: OdooSession, code: string): Promise<ScanResult> {
+  // 1. Emplacement
   const locs = await searchRead(session, "stock.location", [["barcode", "=", code]], ["id", "name", "complete_name", "barcode"], 1);
   if (locs.length) return { type: "location", data: locs[0] };
 
-  const byBC = await searchRead(session, "product.product", [["barcode", "=", code]], ["id", "name", "barcode", "default_code", "uom_id", "tracking"], 1);
-  if (byBC.length) return { type: "product", data: byBC[0] };
+  // 2. Produit par barcode (actif + archivé)
+  let products = await searchRead(session, "product.product", [["barcode", "=", code]], PRODUCT_FIELDS, 1);
+  if (!products.length) {
+    // Chercher dans les archivés
+    products = await searchRead(session, "product.product", [["barcode", "=", code], ["active", "=", false]], PRODUCT_FIELDS, 1);
+  }
+  if (products.length) return { type: "product", data: products[0] };
 
-  const byRef = await searchRead(session, "product.product", [["default_code", "=", code]], ["id", "name", "barcode", "default_code", "uom_id", "tracking"], 1);
+  // 3. Produit par référence (actif + archivé)
+  let byRef = await searchRead(session, "product.product", [["default_code", "=", code]], PRODUCT_FIELDS, 1);
+  if (!byRef.length) {
+    byRef = await searchRead(session, "product.product", [["default_code", "=", code], ["active", "=", false]], PRODUCT_FIELDS, 1);
+  }
   if (byRef.length) return { type: "product", data: byRef[0] };
 
+  // 4. Lot
   const lots = await searchRead(session, "stock.lot", [["name", "=", code]], ["id", "name", "product_id"], 1);
   if (lots.length) {
-    const prod = await searchRead(session, "product.product", [["id", "=", lots[0].product_id[0]]], ["id", "name", "barcode", "default_code", "uom_id", "tracking"], 1);
+    let prod = await searchRead(session, "product.product", [["id", "=", lots[0].product_id[0]]], PRODUCT_FIELDS, 1);
+    if (!prod.length) {
+      prod = await searchRead(session, "product.product", [["id", "=", lots[0].product_id[0]], ["active", "=", false]], PRODUCT_FIELDS, 1);
+    }
     return { type: "lot", data: { lot: lots[0], product: prod[0] || null } };
   }
   return { type: "not_found", code };
@@ -104,7 +120,7 @@ export async function renameLocation(session: OdooSession, locationId: number, n
 }
 
 // ============================================
-// TRANSFER - fixed for Odoo 16
+// TRANSFER
 // ============================================
 export async function createInternalTransfer(
   session: OdooSession,
@@ -132,8 +148,7 @@ export async function createInternalTransfer(
   await callMethod(session, "stock.picking", "action_confirm", [[pickingId]]);
   await callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
 
-  // Odoo 16: stock.move.line utilise "qty_done" et "lot_id"
-  // On ne lit pas product_uom_qty (n'existe pas sur move.line)
+  // Écrire qty_done et lots sur les move lines
   const moveLines = await searchRead(session, "stock.move.line",
     [["picking_id", "=", pickingId]],
     ["id", "product_id", "lot_id", "qty_done"]
