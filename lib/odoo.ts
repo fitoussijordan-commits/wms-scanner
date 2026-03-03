@@ -132,7 +132,7 @@ export async function getProductsAtLocation(session: OdooSession, locationId: nu
 }
 
 export async function getLocations(session: OdooSession) {
-  return searchRead(session, "stock.location", [["usage", "=", "internal"]], ["id", "name", "complete_name", "barcode"], 500, "complete_name");
+  return searchRead(session, "stock.location", [["usage", "in", ["internal", "transit"]]], ["id", "name", "complete_name", "barcode", "usage"], 2000, "complete_name");
 }
 
 // ============================================

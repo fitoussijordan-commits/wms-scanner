@@ -949,7 +949,7 @@ function AutoInput({ locations, onScan, onPickLoc, placeholder }: any) {
     const val = e.target.value; setV(val);
     if (val.length >= 2) {
       const l = val.toLowerCase();
-      const m = locations.filter((x: any) => (x.name||"").toLowerCase().includes(l) || (x.complete_name||"").toLowerCase().includes(l) || (x.barcode||"").toLowerCase().includes(l)).slice(0, 6);
+      const m = locations.filter((x: any) => (x.name||"").toLowerCase().includes(l) || (x.complete_name||"").toLowerCase().includes(l) || (x.barcode||"").toLowerCase().includes(l)).slice(0, 15);
       setSugg(m); setShow(m.length > 0);
     } else { setSugg([]); setShow(false); }
   };
