@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import * as odoo from "@/lib/odoo";
+import * as pn from "@/lib/printnode";
 
 // ============================================
 // DESIGN TOKENS
@@ -26,6 +27,88 @@ function vibrate(pattern: number | number[] = 30) {
 }
 function vibrateSuccess() { vibrate([30, 50, 30]); }
 function vibrateError() { vibrate([100, 30, 100]); }
+
+// ============================================
+// LABEL PRINTING — PrintNode ZPL → fallback popup
+// ============================================
+async function printLabel(productName: string, barcode: string, ref?: string) {
+  const printerId = pn.getSavedPrinterId();
+
+  // If PrintNode configured → silent ZPL print
+  if (printerId && process.env.NEXT_PUBLIC_PRINTNODE_API_KEY) {
+    const result = await pn.printLabel(printerId, productName, barcode);
+    if (result.success) return result;
+    // If PrintNode fails, fall through to popup
+    console.warn("PrintNode failed:", result.error);
+  }
+
+  // Fallback: browser popup print
+  printLabelPopup(productName, barcode);
+  return { success: true };
+}
+
+function printLabelPopup(productName: string, barcode: string) {
+  const w = window.open("", "_blank", "width=400,height=320,menubar=no,toolbar=no");
+  if (!w) return;
+
+  const isEAN = /^\d{8}$|^\d{13}$/.test(barcode);
+  const bcFormat = isEAN ? (barcode.length === 8 ? "EAN8" : "EAN13") : "CODE128";
+
+  w.document.write(`<!DOCTYPE html>
+<html><head>
+<style>
+  @page { size: 50mm 30mm; margin: 0; }
+  @media print {
+    body { margin: 0; padding: 0; }
+    .no-print { display: none !important; }
+  }
+  body {
+    margin: 0; padding: 8px;
+    font-family: Arial, Helvetica, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 100vh;
+  }
+  .label {
+    width: 48mm; padding: 2mm;
+    display: flex; flex-direction: column; align-items: center;
+    text-align: center;
+  }
+  .product-name {
+    font-size: 8pt; font-weight: 700;
+    margin-bottom: 2mm;
+    max-width: 46mm;
+    overflow: hidden; text-overflow: ellipsis;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    line-height: 1.2;
+  }
+  canvas { max-width: 44mm; }
+  .barcode-text {
+    font-size: 7pt; font-family: monospace;
+    margin-top: 1mm; letter-spacing: 1px;
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+</head>
+<body>
+  <div class="label">
+    <div class="product-name">${productName.replace(/"/g, "&quot;")}</div>
+    <canvas id="bc"></canvas>
+    <div class="barcode-text">${barcode}</div>
+  </div>
+  <button class="no-print" onclick="window.print()" style="margin-top:16px;padding:10px 24px;font-size:14px;font-weight:700;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+    Imprimer
+  </button>
+  <script>
+    try {
+      JsBarcode("#bc", "${barcode}", { format: "${bcFormat}", width: 2, height: 40, displayValue: false, margin: 0 });
+    } catch(e) {
+      try { JsBarcode("#bc", "${barcode}", { format: "CODE128", width: 2, height: 40, displayValue: false, margin: 0 }); } catch(e2) {}
+    }
+    setTimeout(() => window.print(), 600);
+  <\/script>
+</body></html>`);
+  w.document.close();
+}
 
 // ============================================
 // HISTORY (localStorage)
@@ -464,6 +547,9 @@ export default function Page() {
               ))}
             </Section>
           )}
+
+          {/* PrintNode printer config */}
+          <PrinterConfig />
         </>}
 
         {/* ===== TRANSFER ===== */}
@@ -1049,8 +1135,19 @@ function ProductResult({ product, stock }: { product: any; stock: any[] }) {
   const tR = stock.reduce((s, q) => s + (q.reserved_quantity || 0), 0);
   return (
     <Section>
-      <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 2 }}>{product.name}{product.active === false && <Chip color={C.orange}>archivé</Chip>}</div>
-      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{product.default_code || ""} {product.barcode ? `· ${product.barcode}` : ""}</div>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 2 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{product.name}{product.active === false && <Chip color={C.orange}>archivé</Chip>}</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{product.default_code || ""} {product.barcode ? `· ${product.barcode}` : ""}</div>
+        </div>
+        {product.barcode && (
+          <button onClick={() => printLabel(product.name, product.barcode, product.default_code)}
+            style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", marginLeft: 8, flexShrink: 0 }}
+            title="Imprimer étiquette">
+            {printerIcon}
+          </button>
+        )}
+      </div>
       <div style={{ display: "flex", gap: 1, borderRadius: 10, overflow: "hidden", marginBottom: 14 }}>
         <StatBox value={tQ - tR} label="DISPO" color={C.green} />
         <StatBox value={tQ} label="STOCK" color={C.textSec} />
@@ -1105,6 +1202,111 @@ function LocationResult({ location, stock }: { location: any; stock: any[] }) {
 // ============================================
 // LOGIN
 // ============================================
+// ============================================
+// PRINTER CONFIG PANEL
+// ============================================
+function PrinterConfig() {
+  const [open, setOpen] = useState(false);
+  const [printerId, setPrinterId] = useState(() => {
+    const saved = pn.getSavedPrinterId();
+    return saved ? String(saved) : "";
+  });
+  const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
+  const [loadingP, setLoadingP] = useState(false);
+  const [testMsg, setTestMsg] = useState("");
+
+  const hasKey = !!process.env.NEXT_PUBLIC_PRINTNODE_API_KEY;
+  const savedId = pn.getSavedPrinterId();
+
+  const fetchPrinters = async () => {
+    setLoadingP(true); setTestMsg("");
+    try {
+      const list = await pn.listPrinters();
+      setPrinters(list);
+      if (!list.length) setTestMsg("Aucune imprimante trouvée");
+    } catch (e: any) { setTestMsg("Erreur: " + e.message); }
+    setLoadingP(false);
+  };
+
+  const save = () => {
+    const id = parseInt(printerId, 10);
+    if (id > 0) { pn.savePrinterId(id); setTestMsg("✓ Imprimante sauvegardée"); }
+    else setTestMsg("ID invalide");
+  };
+
+  const testPrint = async () => {
+    const id = parseInt(printerId, 10);
+    if (!id) { setTestMsg("Saisis un ID d'imprimante"); return; }
+    setTestMsg("Envoi test...");
+    const result = await pn.printLabel(id, "TEST IMPRESSION", "0000000000000");
+    setTestMsg(result.success ? "✓ Étiquette envoyée !" : "✕ " + result.error);
+  };
+
+  if (!hasKey) return null;
+
+  return (
+    <Section style={{ marginTop: 16 }}>
+      <button onClick={() => { setOpen(!open); if (!open && !printers.length) fetchPrinters(); }}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {printerIcon}
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Imprimante</span>
+          {savedId && <span style={{ fontSize: 10, color: C.green, fontWeight: 600, background: C.greenSoft, padding: "2px 6px", borderRadius: 4 }}>#{savedId}</span>}
+        </div>
+        <span style={{ fontSize: 11, color: C.textMuted }}>{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div style={{ marginTop: 12 }}>
+          {/* Manual ID input */}
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: C.textSec, marginBottom: 4, display: "block" }}>ID Imprimante PrintNode</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input type="number" style={{ ...inputStyle, flex: 1 }} value={printerId}
+                onChange={e => setPrinterId(e.target.value)}
+                onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") save(); }}
+                placeholder="Ex: 70123456" />
+              <button onClick={save} style={{ padding: "0 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>OK</button>
+            </div>
+          </div>
+
+          {/* Printer list from PrintNode */}
+          {loadingP && <div style={{ fontSize: 11, color: C.textMuted, padding: 8 }}>Chargement...</div>}
+          {printers.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: C.textSec, marginBottom: 6 }}>Imprimantes disponibles</div>
+              {printers.map(p => (
+                <button key={p.id}
+                  onClick={() => { setPrinterId(String(p.id)); pn.savePrinterId(p.id); setTestMsg(`✓ ${p.name} sélectionnée`); }}
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "8px 12px", marginBottom: 4,
+                    background: String(p.id) === printerId ? C.blueSoft : C.bg,
+                    border: `1px solid ${String(p.id) === printerId ? C.blue : C.border}`,
+                    borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, textAlign: "left",
+                  }}>
+                  <div>
+                    <div style={{ fontWeight: 600, color: C.text }}>{p.name}</div>
+                    <div style={{ fontSize: 10, color: C.textMuted }}>{p.computer.name} · #{p.id}</div>
+                  </div>
+                  <span style={{ fontSize: 9, fontWeight: 600, color: p.state === "online" ? C.green : C.orange,
+                    background: p.state === "online" ? C.greenSoft : C.orangeSoft, padding: "2px 6px", borderRadius: 4
+                  }}>{p.state}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Test print */}
+          <button onClick={testPrint}
+            style={{ width: "100%", padding: 10, background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            🖨 Impression test
+          </button>
+          {testMsg && <div style={{ fontSize: 11, marginTop: 6, color: testMsg.startsWith("✓") ? C.green : testMsg.startsWith("✕") ? C.red : C.textSec, fontWeight: 600 }}>{testMsg}</div>}
+        </div>
+      )}
+    </Section>
+  );
+}
+
 // ============================================
 // PREPARATION LIST SCREEN
 // ============================================
@@ -1365,6 +1567,7 @@ const logoutIcon = <svg width="18" height="18" viewBox="0 0 24 24" fill="none" s
 const trashIcon = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>;
 const editIcon = <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
 const clockIcon = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
+const printerIcon = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>;
 const transferIcon = (c: string) => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>;
 const prepIcon = <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 11l3 3L22 4"/><line x1="9" y1="17" x2="9" y2="17"/><line x1="13" y1="17" x2="13" y2="17"/></svg>;
 const boxIcon = (c: string, s: number) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>;
