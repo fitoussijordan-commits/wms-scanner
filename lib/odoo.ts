@@ -56,20 +56,38 @@ export type ScanResult =
   | { type: "not_found"; code: string };
 
 export async function smartScan(session: OdooSession, code: string): Promise<ScanResult> {
-  // 1. Location by barcode
-  const locs = await searchRead(session, "stock.location", [["barcode", "=", code]], ["id", "name", "complete_name", "barcode"], 1);
-  if (locs.length) return { type: "location", data: locs[0] };
+  const trimmed = code.trim();
+  const upper = trimmed.toUpperCase();
 
-  // 2. Product by barcode (active)
-  const byBC = await searchRead(session, "product.product", [["barcode", "=", code]], PRODUCT_FIELDS, 1);
+  // 1. Location by barcode (exact then case-insensitive)
+  const locs = await searchRead(session, "stock.location", [["barcode", "=", trimmed]], ["id", "name", "complete_name", "barcode"], 1);
+  if (locs.length) return { type: "location", data: locs[0] };
+  if (upper !== trimmed) {
+    const locsU = await searchRead(session, "stock.location", [["barcode", "=", upper]], ["id", "name", "complete_name", "barcode"], 1);
+    if (locsU.length) return { type: "location", data: locsU[0] };
+  }
+  const locsI = await searchRead(session, "stock.location", [["barcode", "ilike", trimmed]], ["id", "name", "complete_name", "barcode"], 1);
+  if (locsI.length) return { type: "location", data: locsI[0] };
+
+  // 2. Product by barcode (exact — EAN codes are numeric, case doesn't matter)
+  const byBC = await searchRead(session, "product.product", [["barcode", "=", trimmed]], PRODUCT_FIELDS, 1);
   if (byBC.length) return { type: "product", data: byBC[0] };
 
-  // 3. Product by reference (active)
-  const byRef = await searchRead(session, "product.product", [["default_code", "=", code]], PRODUCT_FIELDS, 1);
+  // 3. Product by reference — exact, then uppercase, then ilike
+  const byRef = await searchRead(session, "product.product", [["default_code", "=", trimmed]], PRODUCT_FIELDS, 1);
   if (byRef.length) return { type: "product", data: byRef[0] };
+  if (upper !== trimmed) {
+    const byRefU = await searchRead(session, "product.product", [["default_code", "=", upper]], PRODUCT_FIELDS, 1);
+    if (byRefU.length) return { type: "product", data: byRefU[0] };
+  }
+  const byRefI = await searchRead(session, "product.product", [["default_code", "=ilike", trimmed]], PRODUCT_FIELDS, 1);
+  if (byRefI.length) return { type: "product", data: byRefI[0] };
 
-  // 4. Lot
-  const lots = await searchRead(session, "stock.lot", [["name", "=", code]], ["id", "name", "product_id", "expiration_date", "use_date", "removal_date"], 1);
+  // 4. Lot — exact, then uppercase, then ilike
+  const LOT_FIELDS = ["id", "name", "product_id", "expiration_date", "use_date", "removal_date"];
+  let lots = await searchRead(session, "stock.lot", [["name", "=", trimmed]], LOT_FIELDS, 1);
+  if (!lots.length && upper !== trimmed) lots = await searchRead(session, "stock.lot", [["name", "=", upper]], LOT_FIELDS, 1);
+  if (!lots.length) lots = await searchRead(session, "stock.lot", [["name", "ilike", trimmed]], LOT_FIELDS, 1);
   if (lots.length) {
     let prod = await searchRead(session, "product.product", [["id", "=", lots[0].product_id[0]]], PRODUCT_FIELDS, 1);
     // Fallback: archived product
@@ -78,14 +96,14 @@ export async function smartScan(session: OdooSession, code: string): Promise<Sca
   }
 
   // 5. Fallback: archived product by barcode
-  const archivedBC = await searchRead(session, "product.product", [["barcode", "=", code], ["active", "=", false]], PRODUCT_FIELDS, 1);
+  const archivedBC = await searchRead(session, "product.product", [["barcode", "=", trimmed], ["active", "=", false]], PRODUCT_FIELDS, 1);
   if (archivedBC.length) return { type: "product", data: archivedBC[0] };
 
-  // 6. Fallback: archived product by reference
-  const archivedRef = await searchRead(session, "product.product", [["default_code", "=", code], ["active", "=", false]], PRODUCT_FIELDS, 1);
+  // 6. Fallback: archived product by reference (case-insensitive)
+  let archivedRef = await searchRead(session, "product.product", [["default_code", "=ilike", trimmed], ["active", "=", false]], PRODUCT_FIELDS, 1);
   if (archivedRef.length) return { type: "product", data: archivedRef[0] };
 
-  return { type: "not_found", code };
+  return { type: "not_found", code: trimmed };
 }
 
 // ============================================
@@ -142,12 +160,29 @@ export async function getStockAtLocation(session: OdooSession, productId: number
 
 // All products at a location
 export async function getProductsAtLocation(session: OdooSession, locationId: number) {
-  return searchRead(
+  const quants = await searchRead(
     session, "stock.quant",
     [["location_id", "=", locationId], ["quantity", "!=", 0]],
     ["product_id", "lot_id", "quantity", "reserved_quantity"],
     500, "product_id"
   );
+  // Enrich with lot expiration dates
+  const lotIds = Array.from(new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0])));
+  if (lotIds.length > 0) {
+    const lots = await searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "name", "expiration_date", "use_date", "removal_date"], lotIds.length);
+    const lotMap: Record<number, any> = {};
+    for (const l of lots) lotMap[l.id] = l;
+    for (const q of quants) {
+      if (q.lot_id) {
+        const lot = lotMap[q.lot_id[0]];
+        if (lot) {
+          q.expiration_date = lot.expiration_date || lot.use_date || lot.removal_date || "";
+          q.lot_name = lot.name;
+        }
+      }
+    }
+  }
+  return quants;
 }
 
 export async function getLocations(session: OdooSession) {
