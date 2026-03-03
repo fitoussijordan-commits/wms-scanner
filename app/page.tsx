@@ -747,6 +747,9 @@ export default function Page() {
           <SettingsScreen onBack={goHome} />
         )}
       </main>
+
+      {/* Print Modal — rendered at root level for z-index */}
+      {printReq && <PrintModal req={printReq} onClose={() => setPrintReq(null)} onToast={showToast} />}
     </Shell>
   );
 }
@@ -907,9 +910,6 @@ function Shell({ children, toast }: { children: React.ReactNode; toast: string }
         input[type=number] { -moz-appearance: textfield; }
       `}</style>
       {toast && <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 999, background: C.text, color: "#fff", padding: "10px 20px", borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: C.shadowLg, animation: "fadeIn .15s" }}>{toast}</div>}
-
-      {/* Print Modal */}
-      {printReq && <PrintModal req={printReq} onClose={() => setPrintReq(null)} onToast={showToast} />}
       {children}
     </div>
   );
