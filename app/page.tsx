@@ -31,23 +31,35 @@ function vibrateError() { vibrate([100, 30, 100]); }
 // ============================================
 // LABEL PRINTING — PrintNode ZPL → fallback popup
 // ============================================
-async function printLabel(productName: string, barcode: string, ref?: string) {
+async function doPrintProduct(productName: string, barcode: string) {
   const printerId = pn.getSavedPrinterId();
-
-  // If PrintNode configured → silent ZPL print
   if (printerId && process.env.NEXT_PUBLIC_PRINTNODE_API_KEY) {
-    const result = await pn.printLabel(printerId, productName, barcode);
-    if (result.success) return result;
-    // If PrintNode fails, fall through to popup
-    console.warn("PrintNode failed:", result.error);
+    return pn.printProductLabel(printerId, productName, barcode);
   }
-
-  // Fallback: browser popup print
-  printLabelPopup(productName, barcode);
+  printLabelPopup(productName, barcode, barcode);
   return { success: true };
 }
 
-function printLabelPopup(productName: string, barcode: string) {
+async function doPrintLot(lotName: string, productName: string, lotBarcode: string) {
+  const printerId = pn.getSavedPrinterId();
+  if (printerId && process.env.NEXT_PUBLIC_PRINTNODE_API_KEY) {
+    return pn.printLotLabel(printerId, lotName, productName, lotBarcode);
+  }
+  printLabelPopup(`${lotName} — ${productName}`, lotBarcode, lotBarcode);
+  return { success: true };
+}
+
+async function doPrintLocation(locationName: string, locationBarcode: string) {
+  const printerId = pn.getSavedPrinterId();
+  if (printerId && process.env.NEXT_PUBLIC_PRINTNODE_API_KEY) {
+    return pn.printLocationLabel(printerId, locationName, locationBarcode);
+  }
+  printLabelPopup(locationName, locationBarcode, locationBarcode);
+  return { success: true };
+}
+
+function printLabelPopup(title: string, barcode: string, displayCode: string) {
+  const sz = pn.getLabelSize();
   const w = window.open("", "_blank", "width=400,height=320,menubar=no,toolbar=no");
   if (!w) return;
 
@@ -57,53 +69,26 @@ function printLabelPopup(productName: string, barcode: string) {
   w.document.write(`<!DOCTYPE html>
 <html><head>
 <style>
-  @page { size: 50mm 30mm; margin: 0; }
-  @media print {
-    body { margin: 0; padding: 0; }
-    .no-print { display: none !important; }
-  }
-  body {
-    margin: 0; padding: 8px;
-    font-family: Arial, Helvetica, sans-serif;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    min-height: 100vh;
-  }
-  .label {
-    width: 48mm; padding: 2mm;
-    display: flex; flex-direction: column; align-items: center;
-    text-align: center;
-  }
-  .product-name {
-    font-size: 8pt; font-weight: 700;
-    margin-bottom: 2mm;
-    max-width: 46mm;
-    overflow: hidden; text-overflow: ellipsis;
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-    line-height: 1.2;
-  }
-  canvas { max-width: 44mm; }
-  .barcode-text {
-    font-size: 7pt; font-family: monospace;
-    margin-top: 1mm; letter-spacing: 1px;
-  }
+  @page { size: ${sz.widthMM}mm ${sz.heightMM}mm; margin: 0; }
+  @media print { body { margin: 0; padding: 0; } .no-print { display: none !important; } }
+  body { margin: 0; padding: 8px; font-family: Arial, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
+  .label { width: ${sz.widthMM - 4}mm; padding: 2mm; display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .title { font-size: 9pt; font-weight: 700; margin-bottom: 2mm; max-width: ${sz.widthMM - 6}mm; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; }
+  canvas { max-width: ${sz.widthMM - 8}mm; }
+  .code { font-size: 7pt; font-family: monospace; margin-top: 1mm; letter-spacing: 1px; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
 </head>
 <body>
   <div class="label">
-    <div class="product-name">${productName.replace(/"/g, "&quot;")}</div>
+    <div class="title">${title.replace(/"/g, "&quot;")}</div>
     <canvas id="bc"></canvas>
-    <div class="barcode-text">${barcode}</div>
+    <div class="code">${displayCode}</div>
   </div>
-  <button class="no-print" onclick="window.print()" style="margin-top:16px;padding:10px 24px;font-size:14px;font-weight:700;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;">
-    Imprimer
-  </button>
+  <button class="no-print" onclick="window.print()" style="margin-top:16px;padding:10px 24px;font-size:14px;font-weight:700;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;">Imprimer</button>
   <script>
-    try {
-      JsBarcode("#bc", "${barcode}", { format: "${bcFormat}", width: 2, height: 40, displayValue: false, margin: 0 });
-    } catch(e) {
-      try { JsBarcode("#bc", "${barcode}", { format: "CODE128", width: 2, height: 40, displayValue: false, margin: 0 }); } catch(e2) {}
-    }
+    try { JsBarcode("#bc", "${barcode}", { format: "${bcFormat}", width: 2, height: 50, displayValue: false, margin: 0 }); }
+    catch(e) { try { JsBarcode("#bc", "${barcode}", { format: "CODE128", width: 2, height: 50, displayValue: false, margin: 0 }); } catch(e2) {} }
     setTimeout(() => window.print(), 600);
   <\/script>
 </body></html>`);
@@ -177,7 +162,7 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -507,7 +492,7 @@ export default function Page() {
 
   return (
     <Shell toast={toast}>
-      <Header name={session?.name} onLogout={logout} onHome={goHome} />
+      <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} />
 
       <main style={{ maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px" }}>
 
@@ -548,8 +533,7 @@ export default function Page() {
             </Section>
           )}
 
-          {/* PrintNode printer config */}
-          <PrinterConfig />
+          {/* PrintNode printer config — moved to settings */}
         </>}
 
         {/* ===== TRANSFER ===== */}
@@ -752,6 +736,11 @@ export default function Page() {
             onReport={openPickingReport}
           />
         )}
+
+        {/* ===== SETTINGS ===== */}
+        {screen === "settings" && (
+          <SettingsScreen onBack={goHome} />
+        )}
       </main>
     </Shell>
   );
@@ -918,7 +907,7 @@ function Shell({ children, toast }: { children: React.ReactNode; toast: string }
   );
 }
 
-function Header({ name, onLogout, onHome }: { name?: string; onLogout: () => void; onHome: () => void }) {
+function Header({ name, onLogout, onHome, onSettings }: { name?: string; onLogout: () => void; onHome: () => void; onSettings: () => void }) {
   return (
     <header style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -929,6 +918,7 @@ function Header({ name, onLogout, onHome }: { name?: string; onLogout: () => voi
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.green, boxShadow: `0 0 6px ${C.green}` }} />
         <span style={{ fontSize: 12, color: C.textSec }}>{name}</span>
+        <button onClick={onSettings} style={iconBtn}>{settingsIcon}</button>
         <button onClick={onLogout} style={iconBtn}>{logoutIcon}</button>
       </div>
     </header>
@@ -1141,7 +1131,7 @@ function ProductResult({ product, stock }: { product: any; stock: any[] }) {
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{product.default_code || ""} {product.barcode ? `· ${product.barcode}` : ""}</div>
         </div>
         {product.barcode && (
-          <button onClick={() => printLabel(product.name, product.barcode, product.default_code)}
+          <button onClick={() => doPrintProduct(product.name, product.barcode)}
             style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", marginLeft: 8, flexShrink: 0 }}
             title="Imprimer étiquette">
             {printerIcon}
@@ -1168,8 +1158,19 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
   const tR = stock.reduce((s, q) => s + (q.reserved_quantity || 0), 0);
   return (
     <Section>
-      <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Lot {lot.name}</div>
-      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{product?.name}</div>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 2 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Lot {lot.name}</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{product?.name}</div>
+        </div>
+        {lot.name && (
+          <button onClick={() => doPrintLot(lot.name, product?.name || "", lot.name)}
+            style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", marginLeft: 8, flexShrink: 0 }}
+            title="Imprimer étiquette lot">
+            {printerIcon}
+          </button>
+        )}
+      </div>
       <div style={{ display: "flex", gap: 1, borderRadius: 10, overflow: "hidden", marginBottom: 14 }}>
         <StatBox value={tQ - tR} label="DISPO" color={C.green} />
         <StatBox value={tQ} label="STOCK" color={C.textSec} />
@@ -1187,8 +1188,19 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
 function LocationResult({ location, stock }: { location: any; stock: any[] }) {
   return (
     <Section>
-      <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 2 }}>{location.name}</div>
-      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{location.barcode || location.complete_name} · {stock.length} réf</div>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 2 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 2 }}>{location.name}</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{location.barcode || location.complete_name} · {stock.length} réf</div>
+        </div>
+        {location.barcode && (
+          <button onClick={() => doPrintLocation(location.name, location.barcode)}
+            style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", marginLeft: 8, flexShrink: 0 }}
+            title="Imprimer étiquette emplacement">
+            {printerIcon}
+          </button>
+        )}
+      </div>
       {stock.map((q, i) => (
         <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
           <div><span style={{ fontWeight: 600 }}>{q.product_id[1]}</span>{q.lot_id && <span style={{ color: C.blue, marginLeft: 6 }}>{q.lot_id[1]}</span>}</div>
@@ -1203,107 +1215,173 @@ function LocationResult({ location, stock }: { location: any; stock: any[] }) {
 // LOGIN
 // ============================================
 // ============================================
-// PRINTER CONFIG PANEL
+// SETTINGS SCREEN
 // ============================================
-function PrinterConfig() {
-  const [open, setOpen] = useState(false);
-  const [printerId, setPrinterId] = useState(() => {
-    const saved = pn.getSavedPrinterId();
-    return saved ? String(saved) : "";
-  });
+function SettingsScreen({ onBack }: { onBack: () => void }) {
+  // Printer
+  const [printerId, setPrinterId] = useState(() => { const s = pn.getSavedPrinterId(); return s ? String(s) : ""; });
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   const [loadingP, setLoadingP] = useState(false);
-  const [testMsg, setTestMsg] = useState("");
+  const [msg, setMsg] = useState("");
+
+  // Label size
+  const [labelSize, setLabelSize] = useState<pn.LabelSize>(() => pn.getLabelSize());
 
   const hasKey = !!process.env.NEXT_PUBLIC_PRINTNODE_API_KEY;
-  const savedId = pn.getSavedPrinterId();
 
   const fetchPrinters = async () => {
-    setLoadingP(true); setTestMsg("");
+    setLoadingP(true); setMsg("");
     try {
       const list = await pn.listPrinters();
       setPrinters(list);
-      if (!list.length) setTestMsg("Aucune imprimante trouvée");
-    } catch (e: any) { setTestMsg("Erreur: " + e.message); }
+      if (!list.length) setMsg("Aucune imprimante trouvée");
+    } catch (e: any) { setMsg("Erreur: " + e.message); }
     setLoadingP(false);
   };
 
-  const save = () => {
+  const savePrinter = () => {
     const id = parseInt(printerId, 10);
-    if (id > 0) { pn.savePrinterId(id); setTestMsg("✓ Imprimante sauvegardée"); }
-    else setTestMsg("ID invalide");
+    if (id > 0) { pn.savePrinterId(id); setMsg("✓ Imprimante sauvegardée"); }
+    else setMsg("ID invalide");
   };
 
-  const testPrint = async () => {
-    const id = parseInt(printerId, 10);
-    if (!id) { setTestMsg("Saisis un ID d'imprimante"); return; }
-    setTestMsg("Envoi test...");
-    const result = await pn.printLabel(id, "TEST IMPRESSION", "0000000000000");
-    setTestMsg(result.success ? "✓ Étiquette envoyée !" : "✕ " + result.error);
+  const saveSize = () => {
+    if (labelSize.widthMM > 0 && labelSize.heightMM > 0) {
+      pn.saveLabelSize(labelSize);
+      setMsg("✓ Taille sauvegardée");
+    }
   };
 
-  if (!hasKey) return null;
+  const testProduct = async () => {
+    const id = parseInt(printerId, 10);
+    if (!id) { setMsg("Configure une imprimante d'abord"); return; }
+    setMsg("Envoi test produit...");
+    const r = await pn.printProductLabel(id, "TEST PRODUIT", "3401234567890");
+    setMsg(r.success ? "✓ Étiquette produit envoyée" : "✕ " + r.error);
+  };
+
+  const testLot = async () => {
+    const id = parseInt(printerId, 10);
+    if (!id) { setMsg("Configure une imprimante d'abord"); return; }
+    setMsg("Envoi test lot...");
+    const r = await pn.printLotLabel(id, "A12345-01/2026", "Crème Purifiante 50ml", "A12345-01/2026");
+    setMsg(r.success ? "✓ Étiquette lot envoyée" : "✕ " + r.error);
+  };
+
+  const testLocation = async () => {
+    const id = parseInt(printerId, 10);
+    if (!id) { setMsg("Configure une imprimante d'abord"); return; }
+    setMsg("Envoi test emplacement...");
+    const r = await pn.printLocationLabel(id, "A42-RKD1", "B-A42");
+    setMsg(r.success ? "✓ Étiquette emplacement envoyée" : "✕ " + r.error);
+  };
 
   return (
-    <Section style={{ marginTop: 16 }}>
-      <button onClick={() => { setOpen(!open); if (!open && !printers.length) fetchPrinters(); }}
-        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {printerIcon}
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Imprimante</span>
-          {savedId && <span style={{ fontSize: 10, color: C.green, fontWeight: 600, background: C.greenSoft, padding: "2px 6px", borderRadius: 4 }}>#{savedId}</span>}
-        </div>
-        <span style={{ fontSize: 11, color: C.textMuted }}>{open ? "▲" : "▼"}</span>
-      </button>
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+        <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Paramètres</h2>
+      </div>
 
-      {open && (
-        <div style={{ marginTop: 12 }}>
-          {/* Manual ID input */}
-          <div style={{ marginBottom: 10 }}>
-            <label style={{ fontSize: 11, fontWeight: 600, color: C.textSec, marginBottom: 4, display: "block" }}>ID Imprimante PrintNode</label>
+      {/* LABEL SIZE */}
+      <Section>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+          📐 Taille des étiquettes
+        </div>
+        <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: C.textSec, display: "block", marginBottom: 4 }}>Largeur (mm)</label>
+            <input type="number" style={inputStyle} value={labelSize.widthMM}
+              onChange={e => setLabelSize(s => ({ ...s, widthMM: parseInt(e.target.value) || 0 }))}
+              onKeyDown={e => e.stopPropagation()} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: C.textSec, display: "block", marginBottom: 4 }}>Hauteur (mm)</label>
+            <input type="number" style={inputStyle} value={labelSize.heightMM}
+              onChange={e => setLabelSize(s => ({ ...s, heightMM: parseInt(e.target.value) || 0 }))}
+              onKeyDown={e => e.stopPropagation()} />
+          </div>
+        </div>
+        <button onClick={saveSize} style={{ width: "100%", padding: 10, background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+          Sauvegarder la taille
+        </button>
+        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6, textAlign: "center" }}>
+          Tailles courantes : 50×30, 57×32, 70×45, 100×50
+        </div>
+      </Section>
+
+      {/* PRINTER */}
+      {hasKey ? (
+        <Section>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+            🖨 Imprimante PrintNode
+          </div>
+
+          {/* Manual ID */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: C.textSec, display: "block", marginBottom: 4 }}>ID Imprimante</label>
             <div style={{ display: "flex", gap: 6 }}>
               <input type="number" style={{ ...inputStyle, flex: 1 }} value={printerId}
                 onChange={e => setPrinterId(e.target.value)}
-                onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") save(); }}
+                onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") savePrinter(); }}
                 placeholder="Ex: 70123456" />
-              <button onClick={save} style={{ padding: "0 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>OK</button>
+              <button onClick={savePrinter} style={{ padding: "0 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>OK</button>
             </div>
           </div>
 
-          {/* Printer list from PrintNode */}
-          {loadingP && <div style={{ fontSize: 11, color: C.textMuted, padding: 8 }}>Chargement...</div>}
+          {/* List printers */}
+          <button onClick={fetchPrinters} disabled={loadingP}
+            style={{ width: "100%", padding: 10, background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", marginBottom: 10 }}>
+            {loadingP ? "Chargement..." : "Rechercher les imprimantes"}
+          </button>
+
           {printers.length > 0 && (
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: C.textSec, marginBottom: 6 }}>Imprimantes disponibles</div>
+            <div style={{ marginBottom: 12 }}>
               {printers.map(p => (
                 <button key={p.id}
-                  onClick={() => { setPrinterId(String(p.id)); pn.savePrinterId(p.id); setTestMsg(`✓ ${p.name} sélectionnée`); }}
-                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "8px 12px", marginBottom: 4,
+                  onClick={() => { setPrinterId(String(p.id)); pn.savePrinterId(p.id); setMsg(`✓ ${p.name} sélectionnée`); }}
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "10px 12px", marginBottom: 4,
                     background: String(p.id) === printerId ? C.blueSoft : C.bg,
-                    border: `1px solid ${String(p.id) === printerId ? C.blue : C.border}`,
+                    border: `1.5px solid ${String(p.id) === printerId ? C.blue : C.border}`,
                     borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, textAlign: "left",
                   }}>
                   <div>
                     <div style={{ fontWeight: 600, color: C.text }}>{p.name}</div>
                     <div style={{ fontSize: 10, color: C.textMuted }}>{p.computer.name} · #{p.id}</div>
                   </div>
-                  <span style={{ fontSize: 9, fontWeight: 600, color: p.state === "online" ? C.green : C.orange,
-                    background: p.state === "online" ? C.greenSoft : C.orangeSoft, padding: "2px 6px", borderRadius: 4
+                  <span style={{ fontSize: 9, fontWeight: 600,
+                    color: p.state === "online" ? C.green : C.orange,
+                    background: p.state === "online" ? C.greenSoft : C.orangeSoft,
+                    padding: "2px 6px", borderRadius: 4
                   }}>{p.state}</span>
                 </button>
               ))}
             </div>
           )}
 
-          {/* Test print */}
-          <button onClick={testPrint}
-            style={{ width: "100%", padding: 10, background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-            🖨 Impression test
-          </button>
-          {testMsg && <div style={{ fontSize: 11, marginTop: 6, color: testMsg.startsWith("✓") ? C.green : testMsg.startsWith("✕") ? C.red : C.textSec, fontWeight: 600 }}>{testMsg}</div>}
-        </div>
+          {/* Test prints */}
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Impressions test</div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <button onClick={testProduct} style={testBtnStyle}>Produit</button>
+            <button onClick={testLot} style={testBtnStyle}>Lot</button>
+            <button onClick={testLocation} style={testBtnStyle}>Emplacement</button>
+          </div>
+        </Section>
+      ) : (
+        <Section>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 8 }}>🖨 Imprimante</div>
+          <Alert type="info">Ajoute NEXT_PUBLIC_PRINTNODE_API_KEY dans les variables Vercel pour activer PrintNode.</Alert>
+        </Section>
       )}
-    </Section>
+
+      {msg && (
+        <div style={{ textAlign: "center", fontSize: 13, fontWeight: 600, padding: 12,
+          color: msg.startsWith("✓") ? C.green : msg.startsWith("✕") ? C.red : C.textSec,
+        }}>{msg}</div>
+      )}
+    </>
   );
 }
 
@@ -1568,6 +1646,13 @@ const trashIcon = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" st
 const editIcon = <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
 const clockIcon = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
 const printerIcon = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>;
+const settingsIcon = <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>;
+
+const testBtnStyle: React.CSSProperties = {
+  flex: 1, padding: "10px 0", background: C.bg, color: C.textSec,
+  border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11,
+  fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+};
 const transferIcon = (c: string) => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>;
 const prepIcon = <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 11l3 3L22 4"/><line x1="9" y1="17" x2="9" y2="17"/><line x1="13" y1="17" x2="13" y2="17"/></svg>;
 const boxIcon = (c: string, s: number) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>;
