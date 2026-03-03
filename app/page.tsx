@@ -1151,8 +1151,8 @@ function ProductResult({ product, stock }: { product: any; stock: any[] }) {
             {q.lot_id && (
               <button
                 onClick={() => requestPrint({
-                  type: "lot", title: `${q.lot_id[1]} — ${product.name}`,
-                  barcode: q.lot_id[1], lotName: q.lot_id[1], productName: product.name,
+                  type: "lot", title: `${q.lot_name || q.lot_id[1]} — ${product.name}`,
+                  barcode: q.lot_name || q.lot_id[1], lotName: q.lot_name || q.lot_id[1], productName: product.name,
                   expiryDate: q.expiration_date || "",
                 })}
                 style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit",

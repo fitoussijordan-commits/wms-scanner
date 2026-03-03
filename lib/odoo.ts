@@ -104,13 +104,16 @@ export async function getAllStockForProduct(session: OdooSession, productId: num
   // Enrich with lot expiration dates
   const lotIds = Array.from(new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0])));
   if (lotIds.length > 0) {
-    const lots = await searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "expiration_date", "use_date", "removal_date"], lotIds.length);
+    const lots = await searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "name", "expiration_date", "use_date", "removal_date"], lotIds.length);
     const lotMap: Record<number, any> = {};
     for (const l of lots) lotMap[l.id] = l;
     for (const q of quants) {
       if (q.lot_id) {
         const lot = lotMap[q.lot_id[0]];
-        if (lot) q.expiration_date = lot.expiration_date || lot.use_date || lot.removal_date || "";
+        if (lot) {
+          q.expiration_date = lot.expiration_date || lot.use_date || lot.removal_date || "";
+          q.lot_name = lot.name; // clean lot name without date suffix
+        }
       }
     }
   }
