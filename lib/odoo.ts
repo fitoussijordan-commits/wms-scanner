@@ -102,7 +102,7 @@ export async function getAllStockForProduct(session: OdooSession, productId: num
   );
 
   // Enrich with lot expiration dates
-  const lotIds = [...new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0]))];
+  const lotIds = Array.from(new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0])));
   if (lotIds.length > 0) {
     const lots = await searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "expiration_date", "use_date", "removal_date"], lotIds.length);
     const lotMap: Record<number, any> = {};
