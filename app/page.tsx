@@ -949,8 +949,23 @@ function AutoInput({ locations, onScan, onPickLoc, placeholder }: any) {
     const val = e.target.value; setV(val);
     if (val.length >= 2) {
       const l = val.toLowerCase();
-      const m = locations.filter((x: any) => (x.name||"").toLowerCase().includes(l) || (x.complete_name||"").toLowerCase().includes(l) || (x.barcode||"").toLowerCase().includes(l)).slice(0, 15);
-      setSugg(m); setShow(m.length > 0);
+      const m = locations.filter((x: any) => (x.name||"").toLowerCase().includes(l) || (x.complete_name||"").toLowerCase().includes(l) || (x.barcode||"").toLowerCase().includes(l));
+      // Sort: exact match > starts with > contains
+      m.sort((a: any, b: any) => {
+        const an = (a.name||"").toLowerCase(), bn = (b.name||"").toLowerCase();
+        const ac = (a.complete_name||"").toLowerCase(), bc = (b.complete_name||"").toLowerCase();
+        // Exact match on name
+        const aExact = an === l || an.endsWith("-" + l) ? 0 : 1;
+        const bExact = bn === l || bn.endsWith("-" + l) ? 0 : 1;
+        if (aExact !== bExact) return aExact - bExact;
+        // Starts with or segment starts with (after -)
+        const aStarts = an.startsWith(l) || an.includes("-" + l) ? 0 : 1;
+        const bStarts = bn.startsWith(l) || bn.includes("-" + l) ? 0 : 1;
+        if (aStarts !== bStarts) return aStarts - bStarts;
+        // Shorter name = more precise
+        return an.length - bn.length;
+      });
+      setSugg(m.slice(0, 15)); setShow(m.length > 0);
     } else { setSugg([]); setShow(false); }
   };
   return (
