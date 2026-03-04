@@ -210,21 +210,18 @@ const PICKING_FIELDS = [
 export async function getOutgoingPickings(session: OdooSession) {
   // Find pick picking type(s) — preparation before delivery
   const types = await searchRead(session, "stock.picking.type", [["code", "=", "internal"], ["name", "ilike", "pick"]], ["id", "name"], 10);
-  // Fallback: if no "pick" type found, try sequence_code or all internal
   let typeIds = types.map((t: any) => t.id);
   if (!typeIds.length) {
-    // Try by sequence_code
     const types2 = await searchRead(session, "stock.picking.type", [["sequence_code", "=", "PICK"]], ["id"], 10);
     typeIds = types2.map((t: any) => t.id);
   }
   if (!typeIds.length) {
-    // Last resort: outgoing
     const types3 = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
     typeIds = types3.map((t: any) => t.id);
   }
   if (!typeIds.length) return [];
 
-  return searchRead(
+  const pickings = await searchRead(
     session, "stock.picking",
     [
       ["picking_type_id", "in", typeIds],
@@ -234,6 +231,35 @@ export async function getOutgoingPickings(session: OdooSession) {
     200,
     "date_deadline asc, scheduled_date asc, id asc"
   );
+
+  // Enrich with sale order shipping date (date d'expédition prévue)
+  const origins = Array.from(new Set(pickings.map((p: any) => p.origin).filter(Boolean)));
+  if (origins.length > 0) {
+    const sales = await searchRead(
+      session, "sale.order",
+      [["name", "in", origins]],
+      ["id", "name", "commitment_date", "expected_date", "date_order"],
+      origins.length
+    );
+    const salesMap: Record<string, any> = {};
+    for (const s of sales) salesMap[s.name] = s;
+    for (const p of pickings) {
+      const sale = p.origin ? salesMap[p.origin] : null;
+      if (sale) {
+        // commitment_date = "Date d'expédition prévue" in Odoo
+        p.shipping_date = sale.commitment_date || sale.expected_date || sale.date_order || null;
+      }
+    }
+  }
+
+  // Sort by shipping_date, then date_deadline, then scheduled_date
+  pickings.sort((a: any, b: any) => {
+    const da = a.shipping_date || a.date_deadline || a.scheduled_date || "";
+    const db = b.shipping_date || b.date_deadline || b.scheduled_date || "";
+    return da < db ? -1 : da > db ? 1 : 0;
+  });
+
+  return pickings;
 }
 
 // Get move lines for a picking (what needs to be prepared)
