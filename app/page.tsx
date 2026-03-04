@@ -1710,10 +1710,11 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
 // PREPARATION LIST SCREEN
 // ============================================
 function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefresh, onReport }: any) {
-  // Group by day
+  // Group by date_deadline (date de préparation), fallback to scheduled_date
   const grouped: Record<string, any[]> = {};
   for (const p of pickings) {
-    const d = p.scheduled_date ? new Date(p.scheduled_date).toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }) : "Sans date";
+    const rawDate = p.date_deadline || p.scheduled_date;
+    const d = rawDate ? new Date(rawDate).toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }) : "Sans date";
     if (!grouped[d]) grouped[d] = [];
     grouped[d].push(p);
   }

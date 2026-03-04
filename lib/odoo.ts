@@ -201,7 +201,7 @@ export async function renameLocation(session: OdooSession, locationId: number, n
 // ============================================
 
 const PICKING_FIELDS = [
-  "id", "name", "state", "scheduled_date", "date_deadline",
+  "id", "name", "state", "scheduled_date", "date_deadline", "date",
   "partner_id", "origin", "picking_type_id",
   "move_ids_without_package", "location_id", "location_dest_id",
 ];
@@ -232,7 +232,7 @@ export async function getOutgoingPickings(session: OdooSession) {
     ],
     PICKING_FIELDS,
     200,
-    "scheduled_date asc, id asc"
+    "date_deadline asc, scheduled_date asc, id asc"
   );
 }
 
