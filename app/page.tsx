@@ -1790,6 +1790,9 @@ function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefr
                           <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</div>
                           {p.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{p.partner_id[1]}</div>}
                           {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine: {p.origin}</div>}
+                          <div style={{ fontSize: 9, color: C.orange, fontFamily: "monospace", marginTop: 2 }}>
+                            ship={p.shipping_date || "∅"} · dl={p.date_deadline || "∅"} · sched={p.scheduled_date?.substring(0,10) || "∅"} · grp={p.group_id?.[1] || "∅"}
+                          </div>
                         </div>
                         <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>Prêt</span>
                       </div>
@@ -1910,13 +1913,18 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: isDone ? C.green : C.text }}>{m.product_id[1]}</div>
-                {m.relatedLines.map((ml: any, j: number) => (
+                {m.relatedLines.length > 0 ? m.relatedLines.map((ml: any, j: number) => (
                   <div key={j} style={{ fontSize: 11, color: C.textMuted, display: "flex", gap: 4 }}>
                     <span style={{ color: C.blue }}>📍 {ml.location_id?.[1] || "?"}</span>
                     {ml.lot_id && <span>· Lot {ml.lot_id[1]}</span>}
                     <span>· {ml.qty_done || 0}/{ml.reserved_uom_qty || 0}</span>
                   </div>
-                ))}
+                )) : (
+                  <div style={{ fontSize: 11, color: C.textMuted, display: "flex", gap: 4 }}>
+                    <span style={{ color: C.blue }}>📍 {m.location_id?.[1] || "?"}</span>
+                    <span>· 0/{m.product_uom_qty}</span>
+                  </div>
+                )}
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 15, fontWeight: 800, color: isDone ? C.green : C.text }}>{m.totalDone} / {m.product_uom_qty}</div>

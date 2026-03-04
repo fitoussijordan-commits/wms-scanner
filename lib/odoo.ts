@@ -316,7 +316,7 @@ export async function getPickingMoves(session: OdooSession, pickingId: number) {
   return searchRead(
     session, "stock.move",
     [["picking_id", "=", pickingId]],
-    ["id", "product_id", "product_uom_qty", "quantity_done", "product_uom", "state"],
+    ["id", "product_id", "product_uom_qty", "quantity_done", "product_uom", "state", "location_id", "location_dest_id", "move_line_ids"],
     200,
     "product_id"
   );
