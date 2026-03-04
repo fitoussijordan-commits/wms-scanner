@@ -228,7 +228,7 @@ export async function getOutgoingPickings(session: OdooSession) {
     session, "stock.picking",
     [
       ["picking_type_id", "in", typeIds],
-      ["state", "in", ["confirmed", "assigned"]],
+      ["state", "=", "assigned"],
     ],
     PICKING_FIELDS,
     200,

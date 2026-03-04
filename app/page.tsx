@@ -201,6 +201,8 @@ export default function Page() {
   const [pickingMoves, setPickingMoves] = useState<any[]>([]);
   const [pickingMoveLines, setPickingMoveLines] = useState<any[]>([]);
   const [prepScanned, setPrepScanned] = useState<Set<number>>(new Set());
+  // 2-step preparation: step 1 = scan location, step 2 = scan lot/barcode → +1 qty each scan
+  const [prepStep, setPrepStep] = useState<{ locId: number; locName: string; lineId: number; productName: string; lotName?: string; remaining: number } | null>(null);
 
   // Print modal
   const [printReq, setPrintReq] = useState<PrintRequest | null>(null);
@@ -398,6 +400,7 @@ export default function Page() {
     setLoading(true); setError("");
     setSelectedPicking(picking);
     setPrepScanned(new Set());
+    setPrepStep(null);
     try {
       const moves = await odoo.getPickingMoves(session, picking.id);
       const mlines = await odoo.getPickingMoveLines(session, picking.id);
@@ -417,33 +420,125 @@ export default function Page() {
     setError("");
     try {
       const r = await odoo.smartScan(session, code);
+
+      // STEP 1: No active step → expect a location scan
+      if (!prepStep) {
+        if (r.type === "location") {
+          // Find move lines at this location that still need qty
+          const locId = r.data.id;
+          const pending = pickingMoveLines.filter((ml: any) =>
+            ml.location_id && ml.location_id[0] === locId && (ml.qty_done || 0) < (ml.reserved_uom_qty || 0)
+          );
+          if (pending.length === 0) {
+            showToast(`Aucun article à prendre à ${r.data.name}`);
+            vibrateError();
+            return;
+          }
+          // Lock on first pending line at this location
+          const ml = pending[0];
+          const remaining = (ml.reserved_uom_qty || 0) - (ml.qty_done || 0);
+          setPrepStep({
+            locId, locName: r.data.name, lineId: ml.id,
+            productName: ml.product_id[1], lotName: ml.lot_id?.[1] || undefined,
+            remaining,
+          });
+          vibrateSuccess();
+          showToast(`📍 ${r.data.name} → Scannez ${ml.lot_id ? "lot " + ml.lot_id[1] : ml.product_id[1]}`);
+        } else {
+          showToast("⚠ Scannez d'abord un emplacement source");
+          vibrateError();
+        }
+        return;
+      }
+
+      // STEP 2: Location already scanned → expect product or lot
       if (r.type === "product" || r.type === "lot") {
         const productId = r.type === "product" ? r.data.id : r.data.product?.id;
         const lotId = r.type === "lot" ? r.data.lot.id : null;
+        const lotName = r.type === "lot" ? r.data.lot.name : null;
         if (!productId) { showToast("Produit inconnu"); vibrateError(); return; }
 
-        // Find matching move line not yet scanned
+        // Find matching move line at the locked location
         const ml = pickingMoveLines.find((m: any) =>
-          m.product_id[0] === productId && !prepScanned.has(m.id) &&
+          m.location_id && m.location_id[0] === prepStep.locId &&
+          m.product_id[0] === productId &&
+          (m.qty_done || 0) < (m.reserved_uom_qty || 0) &&
           (!lotId || !m.lot_id || m.lot_id[0] === lotId)
         );
-        if (ml) {
-          const qtyToSet = ml.reserved_uom_qty || 1;
-          await odoo.setMoveLineQtyDone(session, ml.id, qtyToSet, lotId);
-          setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(ml.id); return n; });
-          // Refresh move lines
-          setPickingMoveLines(await odoo.getPickingMoveLines(session, selectedPicking.id));
-          vibrateSuccess();
-          showToast(`✓ ${r.type === "lot" ? r.data.lot.name : r.data.name}`);
-        } else {
-          showToast("Déjà scanné ou pas dans cette commande");
+        if (!ml) {
+          showToast("Pas dans cette commande ou déjà complet");
           vibrateError();
+          return;
         }
+
+        // Increment qty_done by 1
+        const newQty = (ml.qty_done || 0) + 1;
+        await odoo.setMoveLineQtyDone(session, ml.id, newQty, lotId);
+
+        // Refresh
+        const updatedLines = await odoo.getPickingMoveLines(session, selectedPicking.id);
+        setPickingMoveLines(updatedLines);
+
+        // Mark as scanned if fully done
+        if (newQty >= (ml.reserved_uom_qty || 0)) {
+          setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(ml.id); return n; });
+        }
+
+        const remaining = (ml.reserved_uom_qty || 0) - newQty;
+        vibrateSuccess();
+        showToast(`✓ ${lotName || r.data.name} · ${newQty}/${ml.reserved_uom_qty || 0}`);
+
+        // Check if more lines at this location
+        const morePending = updatedLines.filter((m: any) =>
+          m.location_id && m.location_id[0] === prepStep.locId && (m.qty_done || 0) < (m.reserved_uom_qty || 0)
+        );
+        if (morePending.length === 0) {
+          setPrepStep(null); // all done at this location
+          showToast(`✓ Emplacement ${prepStep.locName} terminé`);
+        } else if (remaining <= 0) {
+          // Current line done, move to next at same location
+          const next = morePending[0];
+          const nextRemaining = (next.reserved_uom_qty || 0) - (next.qty_done || 0);
+          setPrepStep({
+            locId: prepStep.locId, locName: prepStep.locName, lineId: next.id,
+            productName: next.product_id[1], lotName: next.lot_id?.[1] || undefined,
+            remaining: nextRemaining,
+          });
+        } else {
+          setPrepStep(prev => prev ? { ...prev, lineId: ml.id, remaining } : null);
+        }
+      } else if (r.type === "location") {
+        // Scanning a new location resets the step
+        setPrepStep(null);
+        doPrepScan(code); // re-enter as step 1
       } else {
-        showToast(`"${code}" non trouvé dans cette commande`);
+        showToast(`"${code}" non trouvé`);
         vibrateError();
       }
     } catch (e: any) { setError(e.message); vibrateError(); }
+  };
+
+  // "Tout prendre" — fill all remaining qty for the current location
+  const prepTakeAll = async () => {
+    if (!session || !selectedPicking || !prepStep) return;
+    setLoading(true);
+    try {
+      const pending = pickingMoveLines.filter((ml: any) =>
+        ml.location_id && ml.location_id[0] === prepStep.locId && (ml.qty_done || 0) < (ml.reserved_uom_qty || 0)
+      );
+      for (const ml of pending) {
+        await odoo.setMoveLineQtyDone(session, ml.id, ml.reserved_uom_qty || 0, ml.lot_id?.[0] || null);
+      }
+      const updatedLines = await odoo.getPickingMoveLines(session, selectedPicking.id);
+      setPickingMoveLines(updatedLines);
+      const done = new Set(Array.from(prepScanned));
+      pending.forEach((ml: any) => done.add(ml.id));
+      setPrepScanned(done);
+      setPrepStep(null);
+      vibrateSuccess();
+      showToast(`✓ Tout pris à ${prepStep.locName}`);
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
   };
 
   const autoFillPicking = async () => {
@@ -723,10 +818,13 @@ export default function Page() {
             scanned={prepScanned}
             loading={loading}
             error={error}
+            prepStep={prepStep}
             onScan={doPrepScan}
+            onTakeAll={prepTakeAll}
+            onCancelStep={() => setPrepStep(null)}
             onAutoFill={autoFillPicking}
             onValidate={validatePrepPicking}
-            onBack={() => { setScreen("prep"); loadPickings(); }}
+            onBack={() => { setScreen("prep"); setPrepStep(null); loadPickings(); }}
             onReport={openPickingReport}
           />
         )}
@@ -1612,25 +1710,27 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
 // PREPARATION LIST SCREEN
 // ============================================
 function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefresh, onReport }: any) {
-  // Group by scheduled_date
+  // Group by day
   const grouped: Record<string, any[]> = {};
   for (const p of pickings) {
-    const d = p.scheduled_date ? new Date(p.scheduled_date).toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" }) : "Sans date";
+    const d = p.scheduled_date ? new Date(p.scheduled_date).toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }) : "Sans date";
     if (!grouped[d]) grouped[d] = [];
     grouped[d].push(p);
   }
-
-  const stateLabel: Record<string, { text: string; color: string; bg: string }> = {
-    confirmed: { text: "En attente", color: C.orange, bg: C.orangeSoft },
-    assigned: { text: "Prêt", color: C.green, bg: C.greenSoft },
-  };
+  const days = Object.keys(grouped);
+  const [openDays, setOpenDays] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {};
+    if (days.length > 0) init[days[0]] = true; // first day open by default
+    return init;
+  });
+  const toggle = (d: string) => setOpenDays(prev => ({ ...prev, [d]: !prev[d] }));
 
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Préparation</h2>
-          <p style={{ fontSize: 12, color: C.textMuted }}>{pickings.length} commande(s) en cours</p>
+          <p style={{ fontSize: 12, color: C.textMuted }}>{pickings.length} commande(s) prête(s)</p>
         </div>
         <button onClick={onRefresh} disabled={loading} style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
@@ -1639,45 +1739,59 @@ function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefr
 
       {error && <Alert type="error">{error}</Alert>}
       {loading && pickings.length === 0 && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement...</div>}
-      {!loading && pickings.length === 0 && <Alert type="info">Aucune commande en attente ou prête</Alert>}
+      {!loading && pickings.length === 0 && <Alert type="info">Aucune commande prête à préparer</Alert>}
 
-      {Object.entries(grouped).map(([date, items]) => (
-        <div key={date} style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, marginBottom: 8, padding: "6px 12px", background: C.blueSoft, borderRadius: 8, display: "inline-block" }}>
-            📅 {date}
-          </div>
-          {items.map((p: any) => {
-            const st = stateLabel[p.state] || stateLabel.confirmed;
-            const moveCount = (p.move_ids_without_package || []).length;
-            return (
-              <div key={p.id} style={{ ...cardStyle, marginBottom: 8 }}>
-                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</div>
-                    {p.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{p.partner_id[1]}</div>}
-                    {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine: {p.origin}</div>}
-                  </div>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: st.color, background: st.bg, padding: "3px 8px", borderRadius: 6 }}>{st.text}</span>
-                </div>
-                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>{moveCount} article(s)</div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => onOpen(p)} style={{ flex: 2, padding: "10px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                    Préparer
-                  </button>
-                  {p.state === "confirmed" && (
-                    <button onClick={() => onCheckAvail(p.id)} style={{ flex: 1, padding: "10px 0", background: C.orangeSoft, color: C.orange, border: `1px solid ${C.orangeBorder}`, borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                      Vérifier
-                    </button>
-                  )}
-                  <button onClick={() => onReport(p.id)} style={{ padding: "10px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-                    🖨
-                  </button>
-                </div>
+      {days.map(date => {
+        const items = grouped[date];
+        const isOpen = !!openDays[date];
+        return (
+          <div key={date} style={{ marginBottom: 12 }}>
+            <button onClick={() => toggle(date)} style={{
+              width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "10px 14px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10,
+              cursor: "pointer", fontFamily: "inherit", boxShadow: C.shadow,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 14 }}>📅</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{date}</span>
               </div>
-            );
-          })}
-        </div>
-      ))}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: C.blue, background: C.blueSoft, padding: "2px 8px", borderRadius: 10 }}>{items.length}</span>
+                <span style={{ fontSize: 12, color: C.textMuted, transition: "transform .2s", transform: isOpen ? "rotate(180deg)" : "rotate(0)" }}>▼</span>
+              </div>
+            </button>
+
+            {isOpen && (
+              <div style={{ marginTop: 8, paddingLeft: 4 }}>
+                {items.map((p: any) => {
+                  const moveCount = (p.move_ids_without_package || []).length;
+                  return (
+                    <div key={p.id} style={{ ...cardStyle, marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</div>
+                          {p.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{p.partner_id[1]}</div>}
+                          {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine: {p.origin}</div>}
+                        </div>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>Prêt</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>{moveCount} article(s)</div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => onOpen(p)} style={{ flex: 2, padding: "10px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                          Préparer
+                        </button>
+                        <button onClick={() => onReport(p.id)} style={{ padding: "10px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+                          🖨
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </>
   );
 }
@@ -1685,9 +1799,9 @@ function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefr
 // ============================================
 // PREPARATION DETAIL SCREEN
 // ============================================
-function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, onScan, onAutoFill, onValidate, onBack, onReport }: any) {
+function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onTakeAll, onCancelStep, onAutoFill, onValidate, onBack, onReport }: any) {
   const totalLines = moveLines.length;
-  const doneLines = moveLines.filter((ml: any) => ml.qty_done > 0).length;
+  const doneLines = moveLines.filter((ml: any) => (ml.qty_done || 0) >= (ml.reserved_uom_qty || 0)).length;
   const progress = totalLines > 0 ? Math.round((doneLines / totalLines) * 100) : 0;
   const allDone = totalLines > 0 && doneLines === totalLines;
 
@@ -1727,13 +1841,38 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>{progress}% préparé</div>
       </Section>
 
-      {/* Scan input */}
+      {/* Scan input — 2 step process */}
       <Section>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Scanner un article</span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+            {!prepStep ? "① Scanner un emplacement" : "② Scanner le lot / produit"}
+          </span>
           {loading && <Spinner />}
         </div>
-        <InputBar onSubmit={onScan} placeholder="Code-barres, réf, lot..." />
+        {prepStep && (
+          <div style={{ background: C.blueSoft, border: `1px solid ${C.blueBorder}`, borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 12 }}>
+            <div style={{ fontWeight: 700, color: C.blue }}>📍 {prepStep.locName}</div>
+            <div style={{ color: C.text, marginTop: 2 }}>
+              → {prepStep.lotName ? `Lot ${prepStep.lotName}` : prepStep.productName}
+              <span style={{ color: C.textMuted }}> · reste {prepStep.remaining}</span>
+            </div>
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+              <button onClick={onTakeAll} disabled={loading} style={{
+                flex: 1, padding: "8px 0", background: C.green, color: "#fff", border: "none", borderRadius: 8,
+                fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit"
+              }}>
+                Tout prendre ({prepStep.locName})
+              </button>
+              <button onClick={onCancelStep} style={{
+                padding: "8px 12px", background: C.bg, color: C.textMuted, border: `1px solid ${C.border}`, borderRadius: 8,
+                fontSize: 11, cursor: "pointer", fontFamily: "inherit"
+              }}>
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+        <InputBar onSubmit={onScan} placeholder={prepStep ? "Lot, code-barres, réf..." : "Scanner l'emplacement source..."} />
       </Section>
 
       {error && <Alert type="error">{error}</Alert>}
@@ -1754,9 +1893,10 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: isDone ? C.green : C.text }}>{m.product_id[1]}</div>
                 {m.relatedLines.map((ml: any, j: number) => (
-                  <div key={j} style={{ fontSize: 11, color: C.textMuted }}>
-                    {ml.lot_id ? `Lot ${ml.lot_id[1]} · ` : ""}
-                    {ml.location_id?.[1] || ""}
+                  <div key={j} style={{ fontSize: 11, color: C.textMuted, display: "flex", gap: 4 }}>
+                    <span style={{ color: C.blue }}>📍 {ml.location_id?.[1] || "?"}</span>
+                    {ml.lot_id && <span>· Lot {ml.lot_id[1]}</span>}
+                    <span>· {ml.qty_done || 0}/{ml.reserved_uom_qty || 0}</span>
                   </div>
                 ))}
               </div>
