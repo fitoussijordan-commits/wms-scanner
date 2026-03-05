@@ -167,7 +167,7 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -616,6 +616,8 @@ export default function Page() {
             <BigButton icon={transferIcon("#fff")} label="Transfert interne" sub="Déplacer du stock entre emplacements" onClick={() => { resetTransfer(); setScreen("transfer"); }} />
             <div style={{ height: 10 }} />
             <BigButton icon={prepIcon} label="Préparation" sub="Commandes à préparer et expédier" color="#7c3aed" onClick={() => { loadPickings(); setScreen("prep"); }} />
+            <div style={{ height: 10 }} />
+            <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0022 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>} label="Arrivage" sub="Importer une packing list WALA" color="#059669" onClick={() => setScreen("arrival")} />
             {history.length > 0 && <>
               <div style={{ height: 10 }} />
               <BigButton icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>} label="Historique" sub={`${history.length} transfert${history.length > 1 ? "s" : ""} enregistré${history.length > 1 ? "s" : ""}`} color="#64748b" onClick={() => setScreen("history")} />
@@ -837,6 +839,10 @@ export default function Page() {
         {/* ===== HISTORY ===== */}
         {screen === "history" && (
           <HistoryScreen history={history} onClear={() => { clearHistory(); setHistory([]); goHome(); }} onBack={goHome} />
+        )}
+
+        {screen === "arrival" && session && (
+          <ArrivalScreen session={session} onBack={goHome} onToast={showToast} />
         )}
       </main>
 
@@ -1478,6 +1484,225 @@ const qtyBtnStyle: React.CSSProperties = {
 };
 
 const printerIconWhite = <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>;
+
+// ============================================
+// ARRIVAL SCREEN — Packing List Import
+// ============================================
+function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+  const [step, setStep] = useState<"upload" | "result">("upload");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [packingData, setPackingData] = useState<any>(null);
+  const [matchData, setMatchData] = useState<Record<string, any>>({});
+  const [locationData, setLocationData] = useState<Record<number, any>>({});
+  const [openPallets, setOpenPallets] = useState<Record<string, boolean>>({});
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoading(true); setError("");
+    try {
+      // 1. Parse PDF
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/packing", { method: "POST", body: formData });
+      if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Erreur parsing PDF"); }
+      const data = await res.json();
+      setPackingData(data);
+
+      // 2. Match supplier refs with Odoo
+      const allRefs = Array.from(new Set(
+        data.pallets.flatMap((p: any) => p.cartons.map((c: any) => c.supplierRef)).filter(Boolean)
+      ));
+      if (allRefs.length > 0 && session) {
+        const matches = await odoo.matchSupplierRefs(session, allRefs);
+        setMatchData(matches);
+
+        // 3. Get stock locations for matched products
+        const productIds = Array.from(new Set(
+          Object.values(matches).map((m: any) => m.product_id).filter(Boolean)
+        )) as number[];
+        if (productIds.length > 0) {
+          const locs = await odoo.getProductLocations(session, productIds);
+          setLocationData(locs);
+        }
+      }
+
+      // Open first pallet by default
+      if (data.pallets.length > 0) {
+        setOpenPallets({ [data.pallets[0].palletNo]: true });
+      }
+      setStep("result");
+      onToast(`✓ ${data.totalPallets} palette(s), ${data.totalCartons} carton(s) importé(s)`);
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const togglePallet = (no: string) => setOpenPallets(prev => ({ ...prev, [no]: !prev[no] }));
+
+  const getMatch = (supplierRef: string) => matchData[supplierRef];
+  const getLocation = (supplierRef: string) => {
+    const match = getMatch(supplierRef);
+    if (match?.product_id) return locationData[match.product_id];
+    return null;
+  };
+
+  // Summary stats
+  const totalRefs = packingData ? Array.from(new Set(packingData.pallets.flatMap((p: any) => p.cartons.map((c: any) => c.supplierRef)))).length : 0;
+  const matchedRefs = Object.keys(matchData).length;
+  const unmatchedRefs = totalRefs - matchedRefs;
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Arrivage</h2>
+          <p style={{ fontSize: 12, color: C.textMuted }}>Importer une packing list WALA</p>
+        </div>
+      </div>
+
+      {step === "upload" && (
+        <Section>
+          <div style={{ textAlign: "center", padding: "30px 20px" }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>📦</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 8 }}>Importer la Packing List</div>
+            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 20 }}>
+              Sélectionne le PDF de la packing list WALA. L'app va parser les palettes, matcher les références fournisseur et suggérer les emplacements de rangement.
+            </div>
+            <label style={{
+              display: "inline-block", padding: "14px 32px", background: "#059669", color: "#fff",
+              borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+            }}>
+              {loading ? "Analyse en cours..." : "Choisir le PDF"}
+              <input type="file" accept=".pdf" onChange={handleUpload} style={{ display: "none" }} disabled={loading} />
+            </label>
+          </div>
+          {error && <Alert type="error">{error}</Alert>}
+        </Section>
+      )}
+
+      {step === "result" && packingData && (
+        <>
+          {/* Summary */}
+          <Section>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Transport {packingData.transportNr || "N/A"}</div>
+                {packingData.date && <div style={{ fontSize: 11, color: C.textMuted }}>{packingData.date}</div>}
+              </div>
+              <button onClick={() => { setStep("upload"); setPackingData(null); setMatchData({}); setLocationData({}); }}
+                style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", fontSize: 11, fontWeight: 600, color: C.textSec, border: `1px solid ${C.border}` }}>
+                Nouveau
+              </button>
+            </div>
+            <div style={{ display: "flex", gap: 1, borderRadius: 10, overflow: "hidden" }}>
+              <StatBox value={packingData.totalPallets} label="PALETTES" color="#059669" />
+              <StatBox value={packingData.totalCartons} label="CARTONS" color={C.blue} />
+              <StatBox value={matchedRefs} label="MATCHÉS" color={C.green} />
+              {unmatchedRefs > 0 && <StatBox value={unmatchedRefs} label="INCONNUS" color={C.red} />}
+            </div>
+          </Section>
+
+          {error && <Alert type="error">{error}</Alert>}
+
+          {/* Palettes */}
+          {packingData.pallets.map((pallet: any, pi: number) => {
+            const isOpen = !!openPallets[pallet.palletNo];
+            // Aggregate products on this pallet
+            const prodSummary: Record<string, { supplierRef: string; desc: string; lot: string; expiry: string; totalQty: number; cartonCount: number }> = {};
+            for (const c of pallet.cartons) {
+              const key = `${c.supplierRef}_${c.lot}`;
+              if (!prodSummary[key]) {
+                prodSummary[key] = { supplierRef: c.supplierRef, desc: c.productDesc, lot: c.lot, expiry: c.expiry, totalQty: 0, cartonCount: 0 };
+              }
+              prodSummary[key].totalQty += c.qtyProduct;
+              prodSummary[key].cartonCount += 1;
+            }
+            const products = Object.values(prodSummary);
+
+            return (
+              <div key={pi} style={{ marginBottom: 10 }}>
+                <button onClick={() => togglePallet(pallet.palletNo)} style={{
+                  width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "12px 14px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10,
+                  cursor: "pointer", fontFamily: "inherit", boxShadow: C.shadow,
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 16 }}>🔷</span>
+                    <div style={{ textAlign: "left" }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Palette {pallet.palletNo}</div>
+                      <div style={{ fontSize: 11, color: C.textMuted }}>{pallet.cartons.length} carton(s) · {products.length} réf(s){pallet.dimensions ? ` · ${pallet.dimensions}` : ""}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 10 }}>{pallet.cartons.length}</span>
+                    <span style={{ fontSize: 12, color: C.textMuted, transition: "transform .2s", transform: isOpen ? "rotate(180deg)" : "rotate(0)" }}>▼</span>
+                  </div>
+                </button>
+
+                {isOpen && (
+                  <div style={{ marginTop: 6 }}>
+                    {products.map((prod, j) => {
+                      const match = getMatch(prod.supplierRef);
+                      const loc = getLocation(prod.supplierRef);
+                      const isMatched = !!match;
+                      return (
+                        <div key={j} style={{ ...cardStyle, marginBottom: 6, borderLeft: `3px solid ${isMatched ? C.green : C.orange}` }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                            <div style={{ flex: 1 }}>
+                              {isMatched ? (
+                                <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{match.product_name}</div>
+                              ) : (
+                                <div style={{ fontSize: 13, fontWeight: 700, color: C.orange }}>{prod.desc} <span style={{ fontSize: 10, fontWeight: 400 }}>(non trouvé)</span></div>
+                              )}
+                              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                                Réf fourn: {prod.supplierRef}
+                                {match?.default_code && <span> · Réf interne: {match.default_code}</span>}
+                              </div>
+                            </div>
+                            <div style={{ textAlign: "right", flexShrink: 0 }}>
+                              <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{prod.totalQty}</div>
+                              <div style={{ fontSize: 10, color: C.textMuted }}>{prod.cartonCount} crt</div>
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                            {prod.lot && (
+                              <span style={{ fontSize: 11, fontWeight: 600, color: C.blue, background: C.blueSoft, padding: "2px 8px", borderRadius: 6 }}>
+                                Lot {prod.lot}
+                              </span>
+                            )}
+                            {prod.expiry && (
+                              <span style={{ fontSize: 11, color: C.textMuted, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>
+                                Exp: {prod.expiry}
+                              </span>
+                            )}
+                            {loc && (
+                              <span style={{ fontSize: 11, fontWeight: 600, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 6 }}>
+                                📍 {loc.location_name} ({loc.quantity} en stock)
+                              </span>
+                            )}
+                            {isMatched && !loc && (
+                              <span style={{ fontSize: 11, color: C.orange, background: C.orangeSoft, padding: "2px 8px", borderRadius: 6 }}>
+                                📍 Nouveau produit — pas d'emplacement
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
+    </>
+  );
+}
 
 // ============================================
 // HISTORY SCREEN

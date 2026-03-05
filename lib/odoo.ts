@@ -421,3 +421,97 @@ export async function validatePicking(session: OdooSession, pickingId: number) {
 
   return result;
 }
+
+// ============================================
+// PACKING LIST — Match supplier refs to internal products
+// ============================================
+
+// Match supplier references to internal products via product.supplierinfo
+export async function matchSupplierRefs(session: OdooSession, supplierRefs: string[]) {
+  if (!supplierRefs.length) return {};
+
+  const supplierInfos = await searchRead(
+    session, "product.supplierinfo",
+    [["product_code", "in", supplierRefs]],
+    ["id", "product_code", "product_id", "product_tmpl_id"],
+    supplierRefs.length * 2
+  );
+
+  const refToProduct: Record<string, any> = {};
+  const productIds = new Set<number>();
+
+  for (const si of supplierInfos) {
+    if (si.product_id) {
+      refToProduct[si.product_code] = { product_id: si.product_id[0], product_name: si.product_id[1] };
+      productIds.add(si.product_id[0]);
+    } else if (si.product_tmpl_id) {
+      refToProduct[si.product_code] = { product_tmpl_id: si.product_tmpl_id[0], product_name: si.product_tmpl_id[1] };
+    }
+  }
+
+  // For template-only matches, find the product.product
+  const tmplOnlyRefs = Object.entries(refToProduct).filter(([_, v]) => v.product_tmpl_id && !v.product_id);
+  if (tmplOnlyRefs.length > 0) {
+    const tmplIds = tmplOnlyRefs.map(([_, v]) => v.product_tmpl_id);
+    const products = await searchRead(
+      session, "product.product",
+      [["product_tmpl_id", "in", tmplIds]],
+      ["id", "name", "product_tmpl_id", "default_code", "barcode"],
+      tmplIds.length * 2
+    );
+    const tmplToProduct: Record<number, any> = {};
+    for (const p of products) tmplToProduct[p.product_tmpl_id[0]] = p;
+
+    for (const [ref, val] of tmplOnlyRefs) {
+      const prod = tmplToProduct[val.product_tmpl_id];
+      if (prod) {
+        refToProduct[ref] = { product_id: prod.id, product_name: prod.name, default_code: prod.default_code, barcode: prod.barcode };
+        productIds.add(prod.id);
+      }
+    }
+  }
+
+  // Enrich product info
+  if (productIds.size > 0) {
+    const products = await searchRead(
+      session, "product.product",
+      [["id", "in", Array.from(productIds)]],
+      ["id", "name", "default_code", "barcode"],
+      productIds.size
+    );
+    const prodMap: Record<number, any> = {};
+    for (const p of products) prodMap[p.id] = p;
+
+    for (const [ref, val] of Object.entries(refToProduct)) {
+      if (val.product_id && prodMap[val.product_id]) {
+        const p = prodMap[val.product_id];
+        refToProduct[ref] = { ...val, product_name: p.name, default_code: p.default_code, barcode: p.barcode };
+      }
+    }
+  }
+
+  return refToProduct;
+}
+
+// Get main stock location for product IDs (where most qty is stored)
+export async function getProductLocations(session: OdooSession, productIds: number[]) {
+  if (!productIds.length) return {};
+
+  const quants = await searchRead(
+    session, "stock.quant",
+    [["product_id", "in", productIds], ["quantity", ">", 0], ["location_id.usage", "=", "internal"]],
+    ["product_id", "location_id", "quantity"],
+    2000,
+    "quantity desc"
+  );
+
+  const prodLocMap: Record<number, { location_id: number; location_name: string; quantity: number }> = {};
+  for (const q of quants) {
+    const pid = q.product_id[0];
+    if (!prodLocMap[pid] || q.quantity > prodLocMap[pid].quantity) {
+      prodLocMap[pid] = { location_id: q.location_id[0], location_name: q.location_id[1], quantity: q.quantity };
+    }
+  }
+
+  return prodLocMap;
+}
