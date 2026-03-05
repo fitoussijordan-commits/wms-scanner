@@ -1502,15 +1502,30 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
     if (!file) return;
     setLoading(true); setError("");
     try {
-      // 1. Parse PDF
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch("/api/packing", { method: "POST", body: formData });
-      if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Erreur parsing PDF"); }
+      // 1. Extract text from PDF client-side using pdfjs-dist
+      const arrayBuffer = await file.arrayBuffer();
+      const pdfjsLib = await import("pdfjs-dist");
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs";
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      let fullText = "";
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const pageText = content.items.map((item: any) => item.str).join(" ");
+        fullText += pageText + "\n";
+      }
+
+      // 2. Send text to API for parsing
+      const res = await fetch("/api/packing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: fullText }),
+      });
+      if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Erreur parsing"); }
       const data = await res.json();
       setPackingData(data);
 
-      // 2. Match supplier refs with Odoo
+      // 3. Match supplier refs with Odoo
       const allRefs = Array.from(new Set(
         data.pallets.flatMap((p: any) => p.cartons.map((c: any) => c.supplierRef)).filter(Boolean)
       )) as string[];
@@ -1518,7 +1533,7 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
         const matches = await odoo.matchSupplierRefs(session, allRefs);
         setMatchData(matches);
 
-        // 3. Get stock locations for matched products
+        // 4. Get stock locations for matched products
         const productIds = Array.from(new Set(
           Object.values(matches).map((m: any) => m.product_id).filter(Boolean)
         )) as number[];

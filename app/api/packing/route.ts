@@ -1,23 +1,17 @@
-// app/api/packing/route.ts — Server-side packing list PDF parser
-// Parses WALA packing list PDFs and returns structured pallet/carton data
+// app/api/packing/route.ts — Server-side packing list text parser
+// PDF text extraction is done client-side with pdfjs-dist
+// This route receives the extracted text and parses the WALA packing list format
 
 import { NextRequest, NextResponse } from "next/server";
 
-// We use pdf-parse (works server-side in Node)
-// Must install: npm install pdf-parse
-
 export async function POST(req: NextRequest) {
   try {
-    const formData = await req.formData();
-    const file = formData.get("file") as File;
-    if (!file) return NextResponse.json({ error: "Aucun fichier envoyé" }, { status: 400 });
+    const body = await req.json();
+    const { text } = body;
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfParse = require("pdf-parse");
-    const data = await pdfParse(buffer);
-    const text = data.text;
+    if (!text || text.length < 50) {
+      return NextResponse.json({ error: "Texte trop court ou vide" }, { status: 400 });
+    }
 
     const parsed = parsePackingList(text);
 
@@ -26,7 +20,7 @@ export async function POST(req: NextRequest) {
       transportNr: parsed.transportNr,
       date: parsed.date,
       totalPallets: parsed.pallets.length,
-      totalCartons: parsed.pallets.reduce((s, p) => s + p.cartons.length, 0),
+      totalCartons: parsed.pallets.reduce((s: number, p: Pallet) => s + p.cartons.length, 0),
       pallets: parsed.pallets,
     });
   } catch (e: any) {
@@ -60,28 +54,22 @@ interface PackingListData {
 }
 
 function parsePackingList(text: string): PackingListData {
-  const lines = text.split("\n").map((l) => l.trim());
+  const lines = text.split("\n").map((l: string) => l.trim());
 
-  // Extract transport number
   let transportNr = "";
   const tnMatch = text.match(/TRANSPORT\s+NR\.?\s*[\n\r]*\s*(\S+)/i);
   if (tnMatch) transportNr = tnMatch[1];
 
-  // Extract date
   let date = "";
-  const dateMatch = text.match(
-    /(?:Bad Boll|Eckwälden)[,\s]+(\d{2}\.\d{2}\.\d{4})/
-  );
+  const dateMatch = text.match(/(\d{2}\.\d{2}\.\d{4})/);
   if (dateMatch) date = dateMatch[1];
 
-  const palletRe =
-    /^(\d{10})\s+(\d{7,})\s+(\d+)\s+x\s+Euro\s+Pallet/i;
+  const palletRe = /^(\d{10})\s+(\d{7,})\s+(\d+)\s+x\s+Euro\s+Pallet/i;
   const boxCountRe = /contains\s+(\d+)\s+box/i;
-  const cartonRe =
-    /^(\d{10})\s+(\d{7,})\s+(\d+)\s+x\s+CARTON\(?S?\)?\s*\(([^)]+)\)/i;
-  const artRe =
-    /Art\.:(\d+)\s+LOT-No\.:([A-Z0-9]+)\s+Expiry\s+Date:(\d{2}\.\d{4})/i;
+  const cartonRe = /^(\d{10})\s+(\d{7,})\s+(\d+)\s+x\s+CARTON/i;
+  const artRe = /Art\.:(\d+)\s+LOT-No\.:([A-Z0-9]+)\s+Expiry\s+Date:(\d{2}\.\d{4})/i;
   const qtyDescRe = /^(\d+)\s{2,}(.+)$/;
+  const dimRe = /\(([^)]*cm)\)/;
   const kgRe = /([\d,.]+)\s+([\d,.]+)\s*$/;
 
   const pallets: Pallet[] = [];
@@ -92,53 +80,34 @@ function parsePackingList(text: string): PackingListData {
     const line = lines[i];
     if (!line) continue;
 
-    // Palette line
     let m = palletRe.exec(line);
     if (m) {
-      currentPallet = {
-        palletNo: m[2],
-        boxCount: 0,
-        dimensions: "",
-        cartons: [],
-      };
-      // Try to extract dimensions from same line
-      const dimMatch = line.match(/\(([^)]+cm)\)/);
+      currentPallet = { palletNo: m[2], boxCount: 0, dimensions: "", cartons: [] };
+      const dimMatch = dimRe.exec(line);
       if (dimMatch) currentPallet.dimensions = dimMatch[1];
       pallets.push(currentPallet);
       currentCarton = null;
       continue;
     }
 
-    // Box count
     const bcm = boxCountRe.exec(line);
     if (bcm && currentPallet) {
       currentPallet.boxCount = parseInt(bcm[1]);
       continue;
     }
 
-    // Carton line
     m = cartonRe.exec(line);
     if (m) {
-      // Extract kg from end of line
       const kgMatch = kgRe.exec(line);
+      const dimMatch = dimRe.exec(line);
       currentCarton = {
-        tracking: m[2],
-        qtyProduct: 0,
-        productDesc: "",
-        supplierRef: "",
-        lot: "",
-        expiry: "",
-        dimensions: m[4],
-        netKg: kgMatch ? kgMatch[1] : "",
-        grossKg: kgMatch ? kgMatch[2] : "",
+        tracking: m[2], qtyProduct: 0, productDesc: "", supplierRef: "", lot: "", expiry: "",
+        dimensions: dimMatch ? dimMatch[1] : "", netKg: kgMatch ? kgMatch[1] : "", grossKg: kgMatch ? kgMatch[2] : "",
       };
-      if (currentPallet) {
-        currentPallet.cartons.push(currentCarton);
-      }
+      if (currentPallet) currentPallet.cartons.push(currentCarton);
       continue;
     }
 
-    // Article info line
     const am = artRe.exec(line);
     if (am && currentCarton) {
       currentCarton.supplierRef = am[1];
@@ -147,7 +116,6 @@ function parsePackingList(text: string): PackingListData {
       continue;
     }
 
-    // Qty + description line (e.g. "4   Display bowl for tester island")
     const qm = qtyDescRe.exec(line);
     if (qm && currentCarton && !currentCarton.productDesc) {
       currentCarton.qtyProduct = parseInt(qm[1]);
