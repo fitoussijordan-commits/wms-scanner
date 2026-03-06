@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
       totalPallets: parsed.pallets.length,
       totalCartons: parsed.pallets.reduce((s: number, p: Pallet) => s + p.cartons.length, 0),
       pallets: parsed.pallets,
-      _debug_textPreview: text.substring(0, 1500),
+      _debug_textPreview: undefined,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

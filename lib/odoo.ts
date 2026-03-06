@@ -515,3 +515,57 @@ export async function getProductLocations(session: OdooSession, productIds: numb
 
   return prodLocMap;
 }
+
+// ============================================
+// PACKING LIST STORAGE — Save/load parsed packing lists via Odoo ir.attachment
+// ============================================
+
+export async function savePackingList(session: OdooSession, name: string, data: any) {
+  // Store as JSON in ir.attachment
+  const jsonStr = JSON.stringify(data);
+  const b64 = typeof btoa !== "undefined" ? btoa(unescape(encodeURIComponent(jsonStr))) : Buffer.from(jsonStr).toString("base64");
+  
+  // Check if one already exists with same name
+  const existing = await searchRead(session, "ir.attachment", [["name", "=", `packing_${name}.json`], ["res_model", "=", "stock.picking"]], ["id"], 1);
+  if (existing.length > 0) {
+    // Update existing
+    await write(session, "ir.attachment", [existing[0].id], { datas: b64 });
+    return existing[0].id;
+  }
+  
+  // Create new
+  return create(session, "ir.attachment", {
+    name: `packing_${name}.json`,
+    type: "binary",
+    datas: b64,
+    res_model: "stock.picking",
+    res_id: 0,
+    mimetype: "application/json",
+  });
+}
+
+export async function loadPackingList(session: OdooSession, name: string) {
+  const attachments = await searchRead(
+    session, "ir.attachment",
+    [["name", "=", `packing_${name}.json`], ["res_model", "=", "stock.picking"]],
+    ["id", "name", "datas", "write_date"],
+    1, "write_date desc"
+  );
+  if (!attachments.length) return null;
+  const b64 = attachments[0].datas;
+  const jsonStr = typeof atob !== "undefined" ? decodeURIComponent(escape(atob(b64))) : Buffer.from(b64, "base64").toString("utf-8");
+  return { ...JSON.parse(jsonStr), _attachmentId: attachments[0].id, _savedAt: attachments[0].write_date };
+}
+
+export async function listPackingLists(session: OdooSession) {
+  return searchRead(
+    session, "ir.attachment",
+    [["name", "ilike", "packing_"], ["name", "ilike", ".json"], ["res_model", "=", "stock.picking"]],
+    ["id", "name", "write_date", "create_date"],
+    50, "write_date desc"
+  );
+}
+
+export async function deletePackingList(session: OdooSession, attachmentId: number) {
+  return callMethod(session, "ir.attachment", "unlink", [[attachmentId]]);
+}

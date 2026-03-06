@@ -1489,22 +1489,49 @@ const printerIconWhite = <svg width="20" height="20" viewBox="0 0 24 24" fill="n
 // ARRIVAL SCREEN — Packing List Import
 // ============================================
 function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
-  const [step, setStep] = useState<"upload" | "result">("upload");
+  const [step, setStep] = useState<"list" | "result">("list");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [packingData, setPackingData] = useState<any>(null);
   const [matchData, setMatchData] = useState<Record<string, any>>({});
   const [locationData, setLocationData] = useState<Record<number, any>>({});
   const [openPallets, setOpenPallets] = useState<Record<string, boolean>>({});
+  const [savedList, setSavedList] = useState<any[]>([]);
+
+  // Load saved packing lists on mount
+  useEffect(() => { loadSavedList(); }, []);
+  const loadSavedList = async () => {
+    if (!session) return;
+    try {
+      const list = await odoo.listPackingLists(session);
+      setSavedList(list);
+    } catch {}
+  };
+
+  // Enrich packing data with Odoo matches
+  const enrichWithOdoo = async (data: any) => {
+    const allRefs = Array.from(new Set(
+      data.pallets.flatMap((p: any) => p.cartons.map((c: any) => c.supplierRef)).filter(Boolean)
+    )) as string[];
+    if (allRefs.length > 0 && session) {
+      const matches = await odoo.matchSupplierRefs(session, allRefs);
+      setMatchData(matches);
+      const productIds = Array.from(new Set(
+        Object.values(matches).map((m: any) => m.product_id).filter(Boolean)
+      )) as number[];
+      if (productIds.length > 0) {
+        const locs = await odoo.getProductLocations(session, productIds);
+        setLocationData(locs);
+      }
+    }
+  };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setLoading(true); setError("");
     try {
-      // 1. Extract text from PDF client-side using pdfjs-dist
       const arrayBuffer = await file.arrayBuffer();
-      // Load pdfjs from CDN (legacy build that works without worker issues)
       const PDFJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174";
       let pdfjsLib = (window as any).pdfjsLib;
       if (!pdfjsLib) {
@@ -1523,7 +1550,6 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
-        // Reconstruct lines using Y position (items on different Y = different lines)
         let lastY: number | null = null;
         let lineText = "";
         for (const item of content.items) {
@@ -1538,10 +1564,9 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
           lastY = y;
         }
         if (lineText.trim()) fullText += lineText.trim() + "\n";
-        fullText += "\n"; // page break
+        fullText += "\n";
       }
 
-      // 2. Send text to API for parsing
       const res = await fetch("/api/packing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1551,32 +1576,44 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
       const data = await res.json();
       setPackingData(data);
 
-      // 3. Match supplier refs with Odoo
-      const allRefs = Array.from(new Set(
-        data.pallets.flatMap((p: any) => p.cartons.map((c: any) => c.supplierRef)).filter(Boolean)
-      )) as string[];
-      if (allRefs.length > 0 && session) {
-        const matches = await odoo.matchSupplierRefs(session, allRefs);
-        setMatchData(matches);
+      // Save to Odoo for sharing across devices
+      const saveName = data.transportNr || `import_${Date.now()}`;
+      await odoo.savePackingList(session, saveName, data);
 
-        // 4. Get stock locations for matched products
-        const productIds = Array.from(new Set(
-          Object.values(matches).map((m: any) => m.product_id).filter(Boolean)
-        )) as number[];
-        if (productIds.length > 0) {
-          const locs = await odoo.getProductLocations(session, productIds);
-          setLocationData(locs);
-        }
-      }
+      await enrichWithOdoo(data);
 
-      // Open first pallet by default
       if (data.pallets.length > 0) {
         setOpenPallets({ [data.pallets[0].palletNo]: true });
       }
       setStep("result");
-      onToast(`✓ ${data.totalPallets} palette(s), ${data.totalCartons} carton(s) importé(s)`);
+      onToast(`✓ ${data.totalPallets} palette(s), ${data.totalCartons} carton(s) — sauvegardé`);
+      loadSavedList();
     } catch (e: any) { setError(e.message); }
     setLoading(false);
+  };
+
+  const loadSaved = async (attachment: any) => {
+    setLoading(true); setError("");
+    try {
+      const name = attachment.name.replace("packing_", "").replace(".json", "");
+      const data = await odoo.loadPackingList(session, name);
+      if (!data) throw new Error("Données introuvables");
+      setPackingData(data);
+      await enrichWithOdoo(data);
+      if (data.pallets?.length > 0) {
+        setOpenPallets({ [data.pallets[0].palletNo]: true });
+      }
+      setStep("result");
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const deleteSaved = async (id: number) => {
+    try {
+      await odoo.deletePackingList(session, id);
+      setSavedList(prev => prev.filter(a => a.id !== id));
+      onToast("✓ Supprimé");
+    } catch {}
   };
 
   const togglePallet = (no: string) => setOpenPallets(prev => ({ ...prev, [no]: !prev[no] }));
@@ -1588,7 +1625,6 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
     return null;
   };
 
-  // Summary stats
   const totalRefs = packingData ? Array.from(new Set(packingData.pallets.flatMap((p: any) => p.cartons.map((c: any) => c.supplierRef)))).length : 0;
   const matchedRefs = Object.keys(matchData).length;
   const unmatchedRefs = totalRefs - matchedRefs;
@@ -1605,24 +1641,51 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
         </div>
       </div>
 
-      {step === "upload" && (
-        <Section>
-          <div style={{ textAlign: "center", padding: "30px 20px" }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>📦</div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 8 }}>Importer la Packing List</div>
-            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 20 }}>
-              Sélectionne le PDF de la packing list WALA. L'app va parser les palettes, matcher les références fournisseur et suggérer les emplacements de rangement.
+      {step === "list" && (
+        <>
+          {/* Upload new */}
+          <Section>
+            <div style={{ textAlign: "center", padding: "20px 16px" }}>
+              <div style={{ fontSize: 36, marginBottom: 12 }}>📦</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Importer une Packing List</div>
+              <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 16 }}>
+                Le PDF sera analysé et partagé sur tous les appareils connectés.
+              </div>
+              <label style={{
+                display: "inline-block", padding: "12px 28px", background: "#059669", color: "#fff",
+                borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                opacity: loading ? 0.6 : 1,
+              }}>
+                {loading ? "Analyse en cours..." : "Choisir le PDF"}
+                <input type="file" accept=".pdf" onChange={handleUpload} style={{ display: "none" }} disabled={loading} />
+              </label>
             </div>
-            <label style={{
-              display: "inline-block", padding: "14px 32px", background: "#059669", color: "#fff",
-              borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
-            }}>
-              {loading ? "Analyse en cours..." : "Choisir le PDF"}
-              <input type="file" accept=".pdf" onChange={handleUpload} style={{ display: "none" }} disabled={loading} />
-            </label>
-          </div>
+          </Section>
+
           {error && <Alert type="error">{error}</Alert>}
-        </Section>
+
+          {/* Saved packing lists */}
+          {savedList.length > 0 && (
+            <Section>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>Packing lists enregistrées</div>
+              {savedList.map((a) => {
+                const name = a.name.replace("packing_", "").replace(".json", "");
+                const dateStr = a.write_date ? new Date(a.write_date).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+                return (
+                  <div key={a.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                    <button onClick={() => loadSaved(a)} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left", flex: 1, padding: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.blue }}>{name}</div>
+                      <div style={{ fontSize: 11, color: C.textMuted }}>{dateStr}</div>
+                    </button>
+                    <button onClick={() => deleteSaved(a.id)} style={{ ...iconBtn, background: C.bg, borderRadius: 6, padding: "4px 8px", fontSize: 11, color: C.red }}>
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
+            </Section>
+          )}
+        </>
       )}
 
       {step === "result" && packingData && (
@@ -1634,7 +1697,7 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                 <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Transport {packingData.transportNr || "N/A"}</div>
                 {packingData.date && <div style={{ fontSize: 11, color: C.textMuted }}>{packingData.date}</div>}
               </div>
-              <button onClick={() => { setStep("upload"); setPackingData(null); setMatchData({}); setLocationData({}); }}
+              <button onClick={() => { setStep("list"); setPackingData(null); setMatchData({}); setLocationData({}); loadSavedList(); }}
                 style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", fontSize: 11, fontWeight: 600, color: C.textSec, border: `1px solid ${C.border}` }}>
                 Nouveau
               </button>
@@ -1645,12 +1708,6 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
               <StatBox value={matchedRefs} label="MATCHÉS" color={C.green} />
               {unmatchedRefs > 0 && <StatBox value={unmatchedRefs} label="INCONNUS" color={C.red} />}
             </div>
-            {packingData._debug_textPreview && (
-              <details style={{ marginTop: 10 }}>
-                <summary style={{ fontSize: 11, color: C.textMuted, cursor: "pointer" }}>Debug: texte extrait (cliquer)</summary>
-                <pre style={{ fontSize: 9, color: C.textMuted, whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 200, overflow: "auto", background: C.bg, padding: 8, borderRadius: 6, marginTop: 4 }}>{packingData._debug_textPreview}</pre>
-              </details>
-            )}
           </Section>
 
           {error && <Alert type="error">{error}</Alert>}
