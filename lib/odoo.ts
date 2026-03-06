@@ -218,6 +218,7 @@ const PICKING_FIELDS = [
   "id", "name", "state", "scheduled_date", "date_deadline", "date",
   "partner_id", "origin", "picking_type_id", "group_id",
   "move_ids_without_package", "location_id", "location_dest_id",
+  "x_studio_date_dexpdition_prvue",
 ];
 
 // Get pick-type pickings in confirmed/assigned state (preparation)
@@ -288,6 +289,11 @@ export async function getOutgoingPickings(session: OdooSession) {
         }
       }
     }
+  }
+
+  // Use x_studio_date_dexpdition_prvue as primary date if available
+  for (const p of pickings) {
+    if (p.x_studio_date_dexpdition_prvue) p.shipping_date = p.x_studio_date_dexpdition_prvue;
   }
 
   // Sort by shipping_date asc, no date → end
