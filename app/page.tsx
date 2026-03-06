@@ -3071,12 +3071,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefr
                           {p.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{p.partner_id[1]}</div>}
                           {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine: {p.origin}</div>}
                         </div>
-                        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 6,
-                          color: p.state === "assigned" ? C.green : p.state === "waiting" ? C.orange : C.textMuted,
-                          background: p.state === "assigned" ? C.greenSoft : p.state === "waiting" ? C.orangeSoft : C.bg,
-                        }}>
-                          {p.state === "assigned" ? "Prêt" : p.state === "waiting" ? "En attente" : "Confirmé"}
-                        </span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>Prêt</span>
                       </div>
                       <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>{moveCount} article(s)</div>
                       <div style={{ display: "flex", gap: 6 }}>

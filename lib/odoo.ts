@@ -218,6 +218,7 @@ const PICKING_FIELDS = [
   "id", "name", "state", "scheduled_date", "date_deadline", "date",
   "partner_id", "origin", "picking_type_id", "group_id",
   "move_ids_without_package", "location_id", "location_dest_id",
+  "note", "x_note_interne", "x_ref_cd",
 ];
 
 // Get pick-type pickings in confirmed/assigned state (preparation)
@@ -239,7 +240,7 @@ export async function getOutgoingPickings(session: OdooSession) {
     session, "stock.picking",
     [
       ["picking_type_id", "in", typeIds],
-      ["state", "in", ["assigned", "waiting", "confirmed"]],
+      ["state", "=", "assigned"],
     ],
     PICKING_FIELDS,
     200,
@@ -290,10 +291,10 @@ export async function getOutgoingPickings(session: OdooSession) {
     }
   }
 
-  // Sort by shipping_date, then date_deadline, then scheduled_date
+  // Sort by shipping_date asc, no date → end
   pickings.sort((a: any, b: any) => {
-    const da = a.shipping_date || a.date_deadline || a.scheduled_date || "";
-    const db = b.shipping_date || b.date_deadline || b.scheduled_date || "";
+    const da = a.shipping_date || a.date_deadline || a.scheduled_date || "9999";
+    const db = b.shipping_date || b.date_deadline || b.scheduled_date || "9999";
     return da < db ? -1 : da > db ? 1 : 0;
   });
 
