@@ -1523,8 +1523,22 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
-        const pageText = content.items.map((item: any) => item.str).join(" ");
-        fullText += pageText + "\n";
+        // Reconstruct lines using Y position (items on different Y = different lines)
+        let lastY: number | null = null;
+        let lineText = "";
+        for (const item of content.items) {
+          const it = item as any;
+          if (!it.str) continue;
+          const y = it.transform ? it.transform[5] : null;
+          if (lastY !== null && y !== null && Math.abs(y - lastY) > 3) {
+            fullText += lineText.trim() + "\n";
+            lineText = "";
+          }
+          lineText += it.str + " ";
+          lastY = y;
+        }
+        if (lineText.trim()) fullText += lineText.trim() + "\n";
+        fullText += "\n"; // page break
       }
 
       // 2. Send text to API for parsing
@@ -1631,6 +1645,12 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
               <StatBox value={matchedRefs} label="MATCHÉS" color={C.green} />
               {unmatchedRefs > 0 && <StatBox value={unmatchedRefs} label="INCONNUS" color={C.red} />}
             </div>
+            {packingData._debug_textPreview && (
+              <details style={{ marginTop: 10 }}>
+                <summary style={{ fontSize: 11, color: C.textMuted, cursor: "pointer" }}>Debug: texte extrait (cliquer)</summary>
+                <pre style={{ fontSize: 9, color: C.textMuted, whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 200, overflow: "auto", background: C.bg, padding: 8, borderRadius: 6, marginTop: 4 }}>{packingData._debug_textPreview}</pre>
+              </details>
+            )}
           </Section>
 
           {error && <Alert type="error">{error}</Alert>}

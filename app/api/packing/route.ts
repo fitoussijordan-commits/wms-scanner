@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
       totalPallets: parsed.pallets.length,
       totalCartons: parsed.pallets.reduce((s: number, p: Pallet) => s + p.cartons.length, 0),
       pallets: parsed.pallets,
+      _debug_textPreview: text.substring(0, 1500),
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
@@ -64,11 +65,11 @@ function parsePackingList(text: string): PackingListData {
   const dateMatch = text.match(/(\d{2}\.\d{2}\.\d{4})/);
   if (dateMatch) date = dateMatch[1];
 
-  const palletRe = /^(\d{10})\s+(\d{7,})\s+(\d+)\s+x\s+Euro\s+Pallet/i;
+  const palletRe = /(\d{10})\s+(\d{7,})\s+(\d+)\s*x\s*Euro\s*Pallet/i;
   const boxCountRe = /contains\s+(\d+)\s+box/i;
-  const cartonRe = /^(\d{10})\s+(\d{7,})\s+(\d+)\s+x\s+CARTON/i;
-  const artRe = /Art\.:(\d+)\s+LOT-No\.:([A-Z0-9]+)\s+Expiry\s+Date:(\d{2}\.\d{4})/i;
-  const qtyDescRe = /^(\d+)\s{2,}(.+)$/;
+  const cartonRe = /(\d{10})\s+(\d{7,})\s+(\d+)\s*x\s*CARTON/i;
+  const artRe = /Art[\.\s]*:?\s*(\d{6,})\s+LOT[\-\s]*No[\.\s]*:?\s*([A-Z0-9]+)\s+Expiry\s*Date\s*:?\s*(\d{2}[\.\/-]\d{4})/i;
+  const qtyDescRe = /^(\d+)\s+(.{3,})$/;
   const dimRe = /\(([^)]*cm)\)/;
   const kgRe = /([\d,.]+)\s+([\d,.]+)\s*$/;
 
