@@ -3117,12 +3117,30 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   const progress = totalLines > 0 ? Math.round((doneLines / totalLines) * 100) : 0;
   const allDone = totalLines > 0 && doneLines === totalLines;
 
-  // Group moves by product for display
+  // Group moves by product + attach related move lines
   const movesByProduct = moves.map((m: any) => {
     const relatedLines = moveLines.filter((ml: any) => ml.product_id[0] === m.product_id[0]);
     const totalDone = relatedLines.reduce((s: number, ml: any) => s + (ml.qty_done || 0), 0);
-    return { ...m, relatedLines, totalDone };
+    // Primary location = first related move line's location
+    const primaryLoc = relatedLines[0]?.location_id?.[1] || m.location_id?.[1] || "ZZZ";
+    return { ...m, relatedLines, totalDone, primaryLoc };
   });
+
+  // Sort by source location alphabetically for logical picking circuit
+  const sortedMoves = [...movesByProduct].sort((a: any, b: any) => {
+    const la = (a.primaryLoc || "ZZZ").toLowerCase();
+    const lb = (b.primaryLoc || "ZZZ").toLowerCase();
+    return la < lb ? -1 : la > lb ? 1 : 0;
+  });
+
+  // Group by location for display
+  const movesByLocation: { locName: string; moves: any[] }[] = [];
+  for (const m of sortedMoves) {
+    const locName = m.primaryLoc || "Emplacement inconnu";
+    const existing = movesByLocation.find(g => g.locName === locName);
+    if (existing) existing.moves.push(m);
+    else movesByLocation.push({ locName, moves: [m] });
+  }
 
   return (
     <>
@@ -3189,41 +3207,43 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 
       {error && <Alert type="error">{error}</Alert>}
 
-      {/* Move lines */}
+      {/* Move lines groupées par emplacement */}
       <Section>
         <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Articles à préparer</div>
-        {movesByProduct.map((m: any, i: number) => {
-          const isDone = m.totalDone >= m.product_uom_qty;
-          return (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: i < movesByProduct.length - 1 ? `1px solid ${C.border}` : "none" }}>
-              <div style={{ width: 32, height: 32, borderRadius: 8, background: isDone ? C.greenSoft : C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                {isDone
-                  ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                  : boxIcon(C.textMuted, 14)
-                }
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: isDone ? C.green : C.text }}>{m.product_id[1]}</div>
-                {m.relatedLines.length > 0 ? m.relatedLines.map((ml: any, j: number) => (
-                  <div key={j} style={{ fontSize: 11, color: C.textMuted, display: "flex", gap: 4 }}>
-                    <span style={{ color: C.blue }}>📍 {ml.location_id?.[1] || "?"}</span>
-                    {ml.lot_id && <span>· Lot {ml.lot_id[1]}</span>}
-                    <span>· {ml.qty_done || 0}/{ml.reserved_uom_qty || 0}</span>
-                  </div>
-                )) : (
-                  <div style={{ fontSize: 11, color: C.textMuted, display: "flex", gap: 4 }}>
-                    <span style={{ color: C.blue }}>📍 {m.location_id?.[1] || "?"}</span>
-                    <span>· 0/{m.product_uom_qty}</span>
-                  </div>
-                )}
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 15, fontWeight: 800, color: isDone ? C.green : C.text }}>{m.totalDone} / {m.product_uom_qty}</div>
-                <div style={{ fontSize: 10, color: C.textMuted }}>{m.product_uom?.[1] || ""}</div>
-              </div>
+        {movesByLocation.map((group: any, gi: number) => (
+          <div key={gi} style={{ marginBottom: 12 }}>
+            {/* Header emplacement */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, padding: "5px 8px", background: C.blueSoft, borderRadius: 8, borderLeft: `3px solid ${C.blue}` }}>
+              <span style={{ fontSize: 11, fontWeight: 800, color: C.blue, letterSpacing: 0.5 }}>📍 {group.locName}</span>
             </div>
-          );
-        })}
+            {/* Articles de cet emplacement */}
+            {group.moves.map((m: any, i: number) => {
+              const isDone = m.totalDone >= m.product_uom_qty;
+              return (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0 8px 8px", borderBottom: i < group.moves.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, background: isDone ? C.greenSoft : C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    {isDone
+                      ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      : boxIcon(C.textMuted, 13)
+                    }
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: isDone ? C.green : C.text }}>{m.product_id[1]}</div>
+                    {m.relatedLines.filter((ml: any) => ml.lot_id).map((ml: any, j: number) => (
+                      <div key={j} style={{ fontSize: 11, color: C.textMuted }}>
+                        Lot {ml.lot_id[1]} · {ml.qty_done || 0}/{ml.reserved_uom_qty || 0}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: isDone ? C.green : C.text }}>{m.totalDone} / {m.product_uom_qty}</div>
+                    <div style={{ fontSize: 10, color: C.textMuted }}>{m.product_uom?.[1] || ""}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
       </Section>
 
       {/* Actions */}
