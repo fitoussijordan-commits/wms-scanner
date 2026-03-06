@@ -1090,7 +1090,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
   const [pal, setPal] = useState({
     senderName: "", senderAddress: "",
     recipientName: "", recipientAddress: "",
-    refs: [{ productName: "", ref: "", lotNumber: "", quantity: 1, unit: "cartons", expiryDate: "", unitWeight: "", weight: "" }],
+    refs: [{ productName: "", ref: "", lotNumber: "", quantity: 1, unit: "cartons", expiryDate: "", unitsPerCarton: "", unitWeight: "", weight: "" }],
     sscc: "", orderRef: "", deliveryRef: "",
   });
 
@@ -1129,8 +1129,9 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
   const applySearchResult = (result: any, refIdx: number) => {
     const newRefs = [...pal.refs];
     const currentQty = Number(newRefs[refIdx].quantity) || 1;
+    const upc = parseFloat(newRefs[refIdx].unitsPerCarton) || 1;
     const unitWeight = result.weight ? String(result.weight) : newRefs[refIdx].unitWeight;
-    const totalWeight = unitWeight && currentQty ? `${(parseFloat(unitWeight) * currentQty).toFixed(2)} kg` : newRefs[refIdx].weight;
+    const totalWeight = unitWeight && currentQty ? `${(parseFloat(unitWeight) * upc * currentQty).toFixed(2)} kg` : newRefs[refIdx].weight;
     newRefs[refIdx] = {
       ...newRefs[refIdx],
       productName: result.name || newRefs[refIdx].productName,
@@ -1146,11 +1147,19 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
     setActiveRefIdx(null);
   };
 
-  const addRef = () => setPal({ ...pal, refs: [...pal.refs, { productName: "", ref: "", lotNumber: "", quantity: 1, unit: "cartons", expiryDate: "", unitWeight: "", weight: "" }] });
+  const addRef = () => setPal({ ...pal, refs: [...pal.refs, { productName: "", ref: "", lotNumber: "", quantity: 1, unit: "cartons", expiryDate: "", unitsPerCarton: "", unitWeight: "", weight: "" }] });
   const removeRef = (i: number) => setPal({ ...pal, refs: pal.refs.filter((_, j) => j !== i) });
   const updateRef = (i: number, key: string, val: any) => {
     const newRefs = [...pal.refs];
-    newRefs[i] = { ...newRefs[i], [key]: val };
+    const updated = { ...newRefs[i], [key]: val };
+    // Recalculate total weight when quantity or unitsPerCarton changes
+    if ((key === "quantity" || key === "unitsPerCarton") && updated.unitWeight) {
+      const qty = Number(key === "quantity" ? val : updated.quantity) || 0;
+      const upc = parseFloat(key === "unitsPerCarton" ? val : updated.unitsPerCarton) || 1;
+      const uw = parseFloat(updated.unitWeight) || 0;
+      updated.weight = `${(uw * upc * qty).toFixed(2)} kg`;
+    }
+    newRefs[i] = updated;
     setPal({ ...pal, refs: newRefs });
   };
 
@@ -1392,11 +1401,18 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
                       style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
                   </div>
                   <div>
+                    <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 3 }}>Unités/carton</div>
+                    <input type="number" min={1} value={ref.unitsPerCarton} onChange={e => updateRef(i, "unitsPerCarton", e.target.value)} placeholder="Ex: 6"
+                      style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+                  </div>
+                  <div>
                     <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 3 }}>Poids unitaire (kg)</div>
                     <input type="number" min={0} step={0.01} value={ref.unitWeight}
                       onChange={e => {
                         const uw = e.target.value;
-                        const total = uw && ref.quantity ? `${(parseFloat(uw) * Number(ref.quantity)).toFixed(2)} kg` : "";
+                        const upc = parseFloat(ref.unitsPerCarton) || 1;
+                        const qty = Number(ref.quantity) || 0;
+                        const total = uw && qty ? `${(parseFloat(uw) * upc * qty).toFixed(2)} kg` : "";
                         const newRefs = [...pal.refs]; newRefs[i] = { ...newRefs[i], unitWeight: uw, weight: total }; setPal({ ...pal, refs: newRefs });
                       }}
                       placeholder="kg/unité"
