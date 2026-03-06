@@ -3219,24 +3219,40 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
             {/* Articles de cet emplacement */}
             {group.moves.map((m: any, i: number) => {
               const isDone = m.totalDone >= m.product_uom_qty;
+              const isOver = m.totalDone > m.product_uom_qty;
+              const isPartial = m.totalDone > 0 && m.totalDone < m.product_uom_qty;
+              const bgColor = isOver ? "#fef2f2" : isDone ? "#f0fdf4" : "#ffffff";
+              const borderColor = isOver ? "#fca5a5" : isDone ? "#86efac" : C.border;
+              const textColor = isOver ? "#dc2626" : isDone ? C.green : C.text;
+              const qtyColor = isOver ? "#dc2626" : isDone ? C.green : isPartial ? C.orange : C.text;
               return (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0 8px 8px", borderBottom: i < group.moves.length - 1 ? `1px solid ${C.border}` : "none" }}>
-                  <div style={{ width: 28, height: 28, borderRadius: 7, background: isDone ? C.greenSoft : C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    {isDone
-                      ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                      : boxIcon(C.textMuted, 13)
+                <div key={i} style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "10px 10px",
+                  marginBottom: i < group.moves.length - 1 ? 4 : 0,
+                  background: bgColor,
+                  border: `1.5px solid ${borderColor}`,
+                  borderRadius: 10,
+                  transition: "background 0.2s, border-color 0.2s"
+                }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, background: isOver ? "#fee2e2" : isDone ? C.greenSoft : C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    {isOver
+                      ? <span style={{ fontSize: 14 }}>⚠️</span>
+                      : isDone
+                        ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                        : boxIcon(C.textMuted, 13)
                     }
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: isDone ? C.green : C.text }}>{m.product_id[1]}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: textColor }}>{m.product_id[1]}</div>
                     {m.relatedLines.filter((ml: any) => ml.lot_id).map((ml: any, j: number) => (
-                      <div key={j} style={{ fontSize: 11, color: C.textMuted }}>
+                      <div key={j} style={{ fontSize: 11, color: isOver ? "#dc2626" : isDone ? C.green : C.textMuted }}>
                         Lot {ml.lot_id[1]} · {ml.qty_done || 0}/{ml.reserved_uom_qty || 0}
                       </div>
                     ))}
                   </div>
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <div style={{ fontSize: 15, fontWeight: 800, color: isDone ? C.green : C.text }}>{m.totalDone} / {m.product_uom_qty}</div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: qtyColor }}>{m.totalDone} / {m.product_uom_qty}</div>
                     <div style={{ fontSize: 10, color: C.textMuted }}>{m.product_uom?.[1] || ""}</div>
                   </div>
                 </div>
