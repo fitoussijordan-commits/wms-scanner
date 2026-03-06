@@ -57,6 +57,7 @@ async function executePrint(req: PrintRequest, copies: number) {
     if (req.type === "product") return pn.printProductLabel(printerId, req.productName || req.title, req.barcode, req.ref, copies);
     if (req.type === "lot") return pn.printLotLabel(printerId, req.lotName || "", req.productName || "", req.barcode, req.expiryDate, copies);
     if (req.type === "location") return pn.printLocationLabel(printerId, req.locationName || req.title, req.barcode, copies);
+    if (req.type === "picking") return pn.printBlankLabel(printerId, { lines: [{ text: req.title, fontSize: 24, align: "C" as "C" }], barcode: req.barcode }, req.title, copies);
   }
   // Fallback popup (single copy)
   printLabelPopup(req.title, req.barcode, req.barcode);
@@ -1945,8 +1946,9 @@ function PrintModal({ req, onClose, onToast }: { req: PrintRequest; onClose: () 
   const [copies, setCopies] = useState(1);
   const [sending, setSending] = useState(false);
 
-  const typeLabels: Record<string, string> = { product: "Produit", lot: "Lot", location: "Emplacement" };
-  const typeColors: Record<string, string> = { product: C.blue, lot: C.green, location: "#7c3aed" };
+  const typeLabels: Record<string, string> = {
+    product: "Produit", lot: "Lot", location: "Emplacement", picking: "Colis" };
+  const typeColors: Record<string, string> = { product: C.blue, lot: C.green, location: "#7c3aed", picking: "#0891b2" };
 
   const doPrint = async () => {
     setSending(true);
@@ -3066,20 +3068,30 @@ function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefr
                   return (
                     <div key={p.id} style={{ ...cardStyle, marginBottom: 8 }}>
                       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
-                        <div>
+                        <div style={{ flex: 1 }}>
                           <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</div>
                           {p.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{p.partner_id[1]}</div>}
                           {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine: {p.origin}</div>}
+                          {p.carrier_id && (
+                            <div style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", display: "inline-block", padding: "2px 8px", borderRadius: 6, marginTop: 4 }}>
+                              🚚 {p.carrier_id[1]}
+                            </div>
+                          )}
                         </div>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>Prêt</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6, flexShrink: 0 }}>Prêt</span>
                       </div>
                       <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>{moveCount} article(s)</div>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button onClick={() => onOpen(p)} style={{ flex: 2, padding: "10px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                           Préparer
                         </button>
+                        <button onClick={() => requestPrint({ type: "picking", title: p.name, barcode: p.name })}
+                          style={{ padding: "10px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}
+                          title="Imprimer code-barres colis">
+                          {printerSmallIcon}
+                        </button>
                         <button onClick={() => onReport(p.id)} style={{ padding: "10px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-                          🖨
+                          📄
                         </button>
                       </div>
                     </div>

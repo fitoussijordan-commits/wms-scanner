@@ -218,7 +218,7 @@ const PICKING_FIELDS = [
   "id", "name", "state", "scheduled_date", "date_deadline", "date",
   "partner_id", "origin", "picking_type_id", "group_id",
   "move_ids_without_package", "location_id", "location_dest_id",
-  "x_studio_date_dexpdition_prvue", "x_studio_etiquettes_commande",
+  "x_studio_date_dexpdition_prvue", "x_studio_etiquettes_commande", "carrier_id",
 ];
 
 // Get pick-type pickings in confirmed/assigned state (preparation)
