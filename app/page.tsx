@@ -168,7 +168,7 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -625,6 +625,7 @@ export default function Page() {
             </>}
             <div style={{ height: 10 }} />
             <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>} label="Impression étiquettes" sub="Palette, vierge, produit" color="#0891b2" onClick={() => setScreen("labels")} />
+            <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>} label="Ajustement inventaire" sub="Corriger les quantités en stock" color="#d97706" onClick={() => setScreen("inventory")} />
           </div>
 
           {/* PrintNode printer config — moved to settings */}
@@ -851,6 +852,11 @@ export default function Page() {
         {/* ===== LABELS ===== */}
         {screen === "labels" && (
           <LabelsScreen onBack={goHome} onToast={showToast} session={session} />
+        )}
+
+        {/* ===== INVENTORY ===== */}
+        {screen === "inventory" && session && (
+          <InventoryScreen session={session} onBack={goHome} onToast={showToast} />
         )}
       </main>
 
@@ -2444,6 +2450,250 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 // ============================================
 // HISTORY SCREEN
 // ============================================
+// ============================================
+// INVENTORY ADJUSTMENT SCREEN
+// ============================================
+function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [quants, setQuants] = useState<any[]>([]);
+  const [loadingQuants, setLoadingQuants] = useState(false);
+  const [adjustments, setAdjustments] = useState<Record<number, string>>({}); // quantId -> new qty string
+  const [saving, setSaving] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const searchProducts = async () => {
+    if (!query.trim()) return;
+    setSearching(true);
+    try {
+      const result = await odoo.smartScan(session, query.trim());
+      if (result.type === "product" || result.type === "lot") {
+        setSearchResults([result]);
+      } else {
+        setSearchResults([]);
+        onToast("Aucun produit trouvé");
+      }
+    } catch (e: any) { onToast("Erreur: " + e.message); }
+    setSearching(false);
+  };
+
+  const selectProduct = async (result: any) => {
+    setSelectedProduct(result);
+    setSearchResults([]);
+    setQuery("");
+    setAdjustments({});
+    setLoadingQuants(true);
+    try {
+      const productId = result.product_id || result.id;
+      const data = await odoo.getQuantsForProduct(session, productId);
+      setQuants(data);
+      // Pre-fill adjustments with current quantities
+      const init: Record<number, string> = {};
+      for (const q of data) init[q.id] = String(q.quantity);
+      setAdjustments(init);
+    } catch (e: any) { onToast("Erreur chargement stock: " + e.message); }
+    setLoadingQuants(false);
+  };
+
+  const hasChanges = quants.some(q => {
+    const newQty = parseFloat(adjustments[q.id] ?? String(q.quantity));
+    return !isNaN(newQty) && newQty !== q.quantity;
+  });
+
+  const changedQuants = quants.filter(q => {
+    const newQty = parseFloat(adjustments[q.id] ?? String(q.quantity));
+    return !isNaN(newQty) && newQty !== q.quantity;
+  });
+
+  const saveAdjustments = async () => {
+    setSaving(true);
+    setConfirmOpen(false);
+    let errors = 0;
+    for (const q of changedQuants) {
+      const newQty = parseFloat(adjustments[q.id]);
+      try {
+        await odoo.applyInventoryAdjustment(session, q.id, newQty);
+        // Update local state
+        setQuants(prev => prev.map(pq => pq.id === q.id ? { ...pq, quantity: newQty } : pq));
+        setAdjustments(prev => ({ ...prev, [q.id]: String(newQty) }));
+      } catch (e: any) { errors++; onToast("Erreur: " + e.message); }
+    }
+    setSaving(false);
+    if (errors === 0) onToast(`✅ ${changedQuants.length} ajustement(s) appliqué(s)`);
+  };
+
+  return (
+    <>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Ajustement inventaire</h2>
+          <p style={{ fontSize: 12, color: C.textMuted }}>Corriger les quantités en stock</p>
+        </div>
+      </div>
+
+      {/* Search */}
+      <Section>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>Rechercher un produit</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            value={query} onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") searchProducts(); }}
+            placeholder="Réf, nom, code-barres, lot..."
+            style={{ flex: 1, padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", outline: "none" }}
+          />
+          <button onClick={searchProducts} disabled={searching}
+            style={{ padding: "10px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            {searching ? "..." : "OK"}
+          </button>
+        </div>
+
+        {/* Results dropdown */}
+        {searchResults.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            {searchResults.map((r, i) => (
+              <button key={i} onClick={() => selectProduct(r)}
+                style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, marginBottom: 4 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.productName}</div>
+                  {r.ref && <div style={{ fontSize: 11, color: C.textMuted }}>Réf: {r.ref}</div>}
+                  {r.lotName && <div style={{ fontSize: 11, color: C.blue }}>Lot: {r.lotName}</div>}
+                </div>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      {/* Selected product + quants */}
+      {selectedProduct && (
+        <>
+          <Section>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{selectedProduct.productName}</div>
+                {selectedProduct.ref && <div style={{ fontSize: 12, color: C.textMuted }}>Réf: {selectedProduct.ref}</div>}
+              </div>
+              <button onClick={() => { setSelectedProduct(null); setQuants([]); setAdjustments({}); }}
+                style={{ fontSize: 11, color: C.textMuted, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>✕ Changer</button>
+            </div>
+
+            {loadingQuants ? (
+              <div style={{ textAlign: "center", padding: 20, color: C.textMuted, fontSize: 13 }}>Chargement du stock...</div>
+            ) : quants.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 20, color: C.orange, fontSize: 13 }}>⚠️ Aucun stock trouvé pour ce produit</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 10 }}>
+                  Stock par emplacement
+                </div>
+                {quants.map((q) => {
+                  const currentQty = q.quantity;
+                  const newQtyStr = adjustments[q.id] ?? String(currentQty);
+                  const newQty = parseFloat(newQtyStr);
+                  const changed = !isNaN(newQty) && newQty !== currentQty;
+                  const diff = isNaN(newQty) ? 0 : newQty - currentQty;
+
+                  return (
+                    <div key={q.id} style={{
+                      padding: "12px 14px", marginBottom: 8, borderRadius: 10,
+                      border: `1.5px solid ${changed ? C.orange : C.border}`,
+                      background: changed ? "#fffbeb" : C.white,
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{q.location_id[1]}</div>
+                          {q.lot_id && <div style={{ fontSize: 11, color: C.blue }}>Lot: {q.lot_id[1]}{q.expiry ? ` · Exp: ${new Date(q.expiry).toLocaleDateString("fr-FR")}` : ""}</div>}
+                          {q.reserved_quantity > 0 && <div style={{ fontSize: 10, color: C.orange }}>Réservé: {q.reserved_quantity}</div>}
+                        </div>
+                        {changed && (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: diff > 0 ? C.green : C.red, background: diff > 0 ? C.greenSoft : "#fef2f2", padding: "2px 8px", borderRadius: 6 }}>
+                            {diff > 0 ? "+" : ""}{diff}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ fontSize: 12, color: C.textMuted, minWidth: 80 }}>
+                          Actuel: <strong>{currentQty}</strong>
+                        </div>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
+                          <button onClick={() => setAdjustments(prev => ({ ...prev, [q.id]: String(Math.max(0, (parseFloat(prev[q.id] ?? String(currentQty)) || 0) - 1) ) }))}
+                            style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, fontSize: 18, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>−</button>
+                          <input
+                            type="number" min={0} value={newQtyStr}
+                            onChange={e => setAdjustments(prev => ({ ...prev, [q.id]: e.target.value }))}
+                            onKeyDown={e => e.stopPropagation()}
+                            style={{ width: 70, padding: "6px 8px", border: `1.5px solid ${changed ? C.orange : C.border}`, borderRadius: 8, fontSize: 16, fontWeight: 700, textAlign: "center" as const, fontFamily: "inherit", background: changed ? "#fffbeb" : C.white }}
+                          />
+                          <button onClick={() => setAdjustments(prev => ({ ...prev, [q.id]: String((parseFloat(prev[q.id] ?? String(currentQty)) || 0) + 1) }))}
+                            style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, fontSize: 18, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>+</button>
+                          {changed && (
+                            <button onClick={() => setAdjustments(prev => ({ ...prev, [q.id]: String(currentQty) }))}
+                              style={{ fontSize: 11, color: C.textMuted, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", marginLeft: 4 }}>↩ Reset</button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </Section>
+
+          {/* Confirm modal */}
+          {confirmOpen && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+              <div style={{ background: C.white, borderRadius: 16, padding: 24, maxWidth: 360, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+                <div style={{ fontSize: 16, fontWeight: 800, color: C.text, marginBottom: 8 }}>Confirmer l'ajustement</div>
+                <div style={{ fontSize: 13, color: C.textSec, marginBottom: 16 }}>
+                  {changedQuants.length} emplacement(s) vont être modifiés dans Odoo :
+                </div>
+                {changedQuants.map(q => {
+                  const newQty = parseFloat(adjustments[q.id]);
+                  const diff = newQty - q.quantity;
+                  return (
+                    <div key={q.id} style={{ padding: "6px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
+                      <span style={{ fontWeight: 700 }}>{q.location_id[1]}</span>
+                      {q.lot_id && <span style={{ color: C.blue }}> · Lot {q.lot_id[1]}</span>}
+                      <span style={{ color: C.textMuted }}> : {q.quantity} → </span>
+                      <span style={{ fontWeight: 700, color: diff > 0 ? C.green : C.red }}>{newQty} ({diff > 0 ? "+" : ""}{diff})</span>
+                    </div>
+                  );
+                })}
+                <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+                  <button onClick={() => setConfirmOpen(false)}
+                    style={{ flex: 1, padding: 12, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", color: C.textSec }}>
+                    Annuler
+                  </button>
+                  <button onClick={saveAdjustments} disabled={saving}
+                    style={{ flex: 2, padding: 12, background: "#d97706", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", color: "#fff" }}>
+                    {saving ? "Application..." : "✅ Confirmer"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Save button */}
+          {hasChanges && !confirmOpen && (
+            <button onClick={() => setConfirmOpen(true)}
+              style={{ width: "100%", padding: 14, background: "#d97706", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", color: "#fff", marginTop: 8 }}>
+              Appliquer {changedQuants.length} ajustement(s) dans Odoo
+            </button>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 function HistoryScreen({ history, onClear, onBack }: { history: HistoryEntry[]; onClear: () => void; onBack: () => void }) {
   const [confirmClear, setConfirmClear] = useState(false);
 

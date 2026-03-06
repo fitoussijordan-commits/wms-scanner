@@ -580,3 +580,61 @@ export async function listPackingLists(session: OdooSession) {
 export async function deletePackingList(session: OdooSession, attachmentId: number) {
   return callMethod(session, "ir.attachment", "unlink", [[attachmentId]]);
 }
+
+// ============================================
+// INVENTORY ADJUSTMENTS
+// ============================================
+
+// Get all stock.quant ids for a product (with optional lot filter)
+export async function getQuantsForProduct(session: OdooSession, productId: number): Promise<any[]> {
+  const quants = await searchRead(
+    session, "stock.quant",
+    [["product_id", "=", productId], ["location_id.usage", "=", "internal"]],
+    ["id", "location_id", "lot_id", "quantity", "reserved_quantity", "inventory_quantity"],
+    500, "location_id"
+  );
+
+  // Enrich lot expiry
+  const lotIds = Array.from(new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0]))) as number[];
+  if (lotIds.length > 0) {
+    const lots = await searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "name", "expiration_date", "use_date"], lotIds.length);
+    const lotMap: Record<number, any> = {};
+    for (const l of lots) lotMap[l.id] = l;
+    for (const q of quants) {
+      if (q.lot_id) {
+        const lot = lotMap[q.lot_id[0]];
+        if (lot) q.expiry = lot.expiration_date || lot.use_date || "";
+      }
+    }
+  }
+
+  return quants;
+}
+
+// Apply inventory adjustment: set inventory_quantity then call action_apply_inventory
+export async function applyInventoryAdjustment(
+  session: OdooSession,
+  quantId: number,
+  newQty: number
+): Promise<void> {
+  await write(session, "stock.quant", [quantId], { inventory_quantity: newQty });
+  await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
+}
+
+// Create a new quant (for products with 0 stock not yet in a location)
+export async function createInventoryAdjustment(
+  session: OdooSession,
+  productId: number,
+  locationId: number,
+  newQty: number,
+  lotId?: number
+): Promise<void> {
+  const vals: any = {
+    product_id: productId,
+    location_id: locationId,
+    inventory_quantity: newQty,
+  };
+  if (lotId) vals.lot_id = lotId;
+  const quantId = await create(session, "stock.quant", vals);
+  await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
+}
