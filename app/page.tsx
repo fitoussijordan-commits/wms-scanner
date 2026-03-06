@@ -625,7 +625,8 @@ export default function Page() {
             </>}
             <div style={{ height: 10 }} />
             <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>} label="Impression étiquettes" sub="Palette, vierge, produit" color="#0891b2" onClick={() => setScreen("labels")} />
-            <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>} label="Ajustement inventaire" sub="Corriger les quantités en stock" color="#d97706" onClick={() => setScreen("inventory")} />
+            <div style={{ height: 10 }} />
+            <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>} label="Ajustement inventaire" sub="Corriger les quantités en stock" color="#8b5cf6" onClick={() => setScreen("inventory")} />
           </div>
 
           {/* PrintNode printer config — moved to settings */}
@@ -2705,7 +2706,7 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
                     Annuler
                   </button>
                   <button onClick={saveAdjustments} disabled={saving}
-                    style={{ flex: 2, padding: 12, background: "#d97706", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", color: "#fff" }}>
+                    style={{ flex: 2, padding: 12, background: "#8b5cf6", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", color: "#fff" }}>
                     {saving ? "Application..." : "✅ Confirmer"}
                   </button>
                 </div>
@@ -2716,7 +2717,7 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
           {/* Save button */}
           {hasChanges && !confirmOpen && (
             <button onClick={() => setConfirmOpen(true)}
-              style={{ width: "100%", padding: 14, background: "#d97706", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", color: "#fff", marginTop: 8 }}>
+              style={{ width: "100%", padding: 14, background: "#8b5cf6", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", color: "#fff", marginTop: 8 }}>
               Appliquer {changedQuants.length} ajustement(s) dans Odoo
             </button>
           )}
