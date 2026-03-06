@@ -2550,7 +2550,7 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
     if (type === "product") r = await pn.printProductLabel(cfg.printerId, "TEST PRODUIT", "3401234567890");
     else if (type === "lot") r = await pn.printLotLabel(cfg.printerId, "LOT-001", "Produit Test", "LOT-001");
     else if (type === "location") r = await pn.printLocationLabel(cfg.printerId, "A42-RKD1", "B-A42");
-    else if (type === "palette") r = await pn.printPaletteLabel(cfg.printerId, { senderName: "TEST", recipientName: "DEST", refs: [{ productName: "Produit Test", ref: "REF001", lotNumber: "LOT001", quantity: 10, unit: "cartons", expiryDate: "", unitsPerCarton: "", unitWeight: "", weight: "50 kg" }], sscc: "000123456789012340", orderRef: "CMD-TEST", deliveryRef: "BL-TEST" });
+    else if (type === "palette") r = await pn.printPaletteLabel(cfg.printerId, { senderName: "TEST", recipientName: "DEST", productName: "Produit Test", ref: "REF001", lotNumber: "LOT001", quantity: 10, unit: "cartons", expiryDate: "", weight: "50 kg", sscc: "000123456789012340", orderRef: "CMD-TEST", deliveryRef: "BL-TEST" });
     else r = await pn.printBlankLabel(cfg.printerId, { lines: [{ text: "TEST VIERGE", fontSize: 30, align: "C" }] });
     setMsg(r?.success ? "✓ Test envoyé" : "✕ " + r?.error);
   };
