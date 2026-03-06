@@ -33,7 +33,7 @@ function vibrateError() { vibrate([100, 30, 100]); }
 // LABEL PRINTING — Modal + PrintNode/fallback
 // ============================================
 interface PrintRequest {
-  type: "product" | "lot" | "location";
+  type: "product" | "lot" | "location" | "picking";
   title: string;
   barcode: string;
   ref?: string;
