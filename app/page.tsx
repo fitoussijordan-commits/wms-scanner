@@ -608,7 +608,7 @@ export default function Page() {
           </Section>
 
           {error && <Alert type="error">{error}</Alert>}
-          {lookupType === "product" && lookupResult && <ProductResult product={lookupResult} stock={lookupStock} />}
+          {lookupType === "product" && lookupResult && <ProductResult product={lookupResult} stock={lookupStock} onRename={rename} />}
           {lookupType === "lot" && lookupResult && <LotResult lot={lookupResult.lot} product={lookupResult.product} stock={lookupStock} />}
           {lookupType === "location" && lookupResult && <LocationResult location={lookupResult} stock={lookupStock} onRename={rename} />}
 
@@ -1227,7 +1227,9 @@ function LocCard({ loc, label, content, color, onRename, onClear }: { loc: any; 
 // ============================================
 // LOOKUP CARDS
 // ============================================
-function ProductResult({ product, stock }: { product: any; stock: any[] }) {
+function ProductResult({ product, stock, onRename }: { product: any; stock: any[]; onRename?: (id: number, name: string) => void }) {
+  const [editingLocId, setEditingLocId] = useState<number | null>(null);
+  const [editLocName, setEditLocName] = useState("");
   const tQ = stock.reduce((s, q) => s + q.quantity, 0);
   const tR = stock.reduce((s, q) => s + (q.reserved_quantity || 0), 0);
   return (
@@ -1253,7 +1255,27 @@ function ProductResult({ product, stock }: { product: any; stock: any[] }) {
       {stock.map((q, i) => (
         <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.location_id[1]}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              {editingLocId === q.location_id[0] ? (
+                <form onSubmit={(e) => { e.preventDefault(); if (onRename && editLocName.trim()) { onRename(q.location_id[0], editLocName.trim()); setEditingLocId(null); } }} style={{ display: "flex", gap: 4, flex: 1 }}>
+                  <input value={editLocName} onChange={e => setEditLocName(e.target.value)} autoFocus
+                    style={{ flex: 1, padding: "4px 8px", border: `1.5px solid ${C.blue}`, borderRadius: 6, fontSize: 12, fontFamily: "inherit", outline: "none" }} />
+                  <button type="submit" style={{ padding: "4px 8px", background: C.blue, color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>OK</button>
+                  <button type="button" onClick={() => setEditingLocId(null)} style={{ padding: "4px 8px", background: C.bg, color: C.textMuted, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, cursor: "pointer" }}>✕</button>
+                </form>
+              ) : (
+                <>
+                  <span style={{ fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.location_id[1]}</span>
+                  {onRename && (
+                    <button onClick={() => { setEditingLocId(q.location_id[0]); setEditLocName(q.location_id[1].split("/").pop() || ""); }}
+                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", flexShrink: 0, display: "inline-flex" }}
+                      title="Renommer l'emplacement">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><path d="M17 3a2.85 2.85 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
             {q.lot_id && (
               <button
                 onClick={() => requestPrint({
