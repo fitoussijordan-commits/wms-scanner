@@ -87,7 +87,14 @@ export async function POST(req: NextRequest) {
       } else if (usePdf) {
         // ZPL → PDF via Labelary (legacy palette path)
         const zpl = Buffer.from(content, "base64").toString("utf-8");
-        finalContent = await zplToPdfBase64(zpl, labelWidthMM || 100, labelHeightMM || 150);
+        console.log("[route] ZPL decoded length:", zpl.length, "first 100:", zpl.substring(0, 100));
+        try {
+          finalContent = await zplToPdfBase64(zpl, labelWidthMM || 100, labelHeightMM || 150);
+          console.log("[route] Labelary OK, pdf base64 length:", finalContent.length);
+        } catch (labelaryErr: any) {
+          console.error("[route] Labelary ERROR:", labelaryErr.message);
+          return NextResponse.json({ error: "Labelary: " + labelaryErr.message }, { status: 500 });
+        }
         contentType = "pdf_base64";
       }
 
