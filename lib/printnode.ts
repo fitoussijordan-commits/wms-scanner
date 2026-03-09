@@ -378,7 +378,7 @@ export function generatePaletteZPL(data: PaletteLabelData): string {
 
   // ── NUMÉRO PALETTE (gros, coin haut droit) ──
   if (data.paletteNumber !== undefined) {
-    lines.push(`^FO${W - 220},5^A0N,210,210^FD P${data.paletteNumber}^FS`);
+    lines.push(`^FO${W - 230},5^A0N,210,210^FB220,1,0,C^FDP${data.paletteNumber}^FS`);
     y = 225; // décale le contenu sous le gros numéro
   }
 
