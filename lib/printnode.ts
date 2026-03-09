@@ -46,8 +46,17 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
 // PRINT JOB (via server proxy)
 // ============================================
 async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1, usePdf: boolean = false, labelWidthMM?: number, labelHeightMM?: number): Promise<number> {
+  // Repeat ZPL blocks for multiple copies (Zebra handles ^XA...^XZ repeated)
   const fullZpl = qty > 1 ? Array(qty).fill(zpl).join("\n") : zpl;
-  console.log("[submitPrintJob] usePdf:", usePdf, "w:", labelWidthMM, "h:", labelHeightMM, "zplLen:", fullZpl.length);
+  // Safe base64 encoding — ZPL is ASCII only (zplSafe handles accents)
+  const encoded = (() => {
+    try { return btoa(fullZpl); } catch {
+      // Fallback for any non-ASCII that slipped through
+      const bytes = new TextEncoder().encode(fullZpl);
+      let bin = ""; bytes.forEach(b => bin += String.fromCharCode(b));
+      return btoa(bin);
+    }
+  })();
   const res = await fetch("/api/printnode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -55,7 +64,7 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
       action: "print",
       printerId,
       title,
-      content: btoa(fullZpl),
+      content: encoded,
       source: "WMS Scanner",
       usePdf,
       labelWidthMM,
