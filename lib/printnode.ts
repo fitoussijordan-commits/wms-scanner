@@ -304,9 +304,9 @@ export function paletteDataToTemplate(data: PaletteLabelData, paletteNumber?: nu
   if (paletteNumber !== undefined) {
     elements.push({
       id: uid(), type: "text",
-      x: W - 22, y: 2, w: 20, h: 20,
+      x: W - 30, y: 1, w: 28, h: 28,
       text: "P" + paletteNumber,
-      fontSize: 22, bold: true, align: "right",
+      fontSize: 44, bold: true, align: "right",
     });
   }
 
