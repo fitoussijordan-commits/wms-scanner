@@ -100,6 +100,7 @@ export async function POST(req: NextRequest) {
           contentType,
           content: finalContent,
           source: source || "WMS Scanner",
+          ...(qty && qty > 1 ? { qty } : {}),
         }),
       });
 
