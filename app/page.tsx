@@ -1448,7 +1448,9 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
           };
           const palTemplate = pn.paletteDataToTemplate(palData, ok + 1);
           const pdfB64 = await generateLabelPDF(palTemplate);
+          console.log("[chain] sending palette", ok + 1, "printer:", chainPrinter, "pdf size:", pdfB64.length);
           const r = await pn.printPdfLabel(chainPrinter, pdfB64, `Palette ${ok + 1} → ${chain.recipientName}`, 1);
+          console.log("[chain] result palette", ok + 1, r);
           if (r.success) ok++; else { onToast("❌ Palette " + (ok + 1) + ": " + (r.error || "erreur")); break; }
           await new Promise(res => setTimeout(res, 800)); // zebra needs time between jobs
         }
