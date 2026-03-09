@@ -1318,13 +1318,19 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
     id: Math.random().toString(36).slice(2, 8),
     lines: [{ ref: "", qty: "", lot: "" }] as { ref: string; qty: string; lot: string }[],
   });
-  const [chain, setChain] = useState({
-    recipientName: "",
-    recipientAddress: "",
-    senderName: "",
-    unit: "cartons",
+  const [chain, setChain] = useState(() => {
+    try {
+      const saved = localStorage.getItem("wms_last_chain");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      recipientName: "",
+      recipientAddress: "",
+      senderName: "",
+      unit: "cartons",
     orderRef: "",
     palettes: [emptyChainPalette()],
+    };
   });
 
   const isDesktop = typeof window !== "undefined" && window.innerWidth >= 1024;
@@ -1444,7 +1450,10 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
           if (r.success) ok++; else { onToast("❌ Palette " + (ok + 1) + ": " + (r.error || "erreur")); break; }
           await new Promise(res => setTimeout(res, 800)); // zebra needs time between jobs
         }
-        if (ok === validPalettes.length) onToast(`✅ ${ok} palette(s) envoyées`);
+        if (ok === validPalettes.length) {
+          onToast(`✅ ${ok} palette(s) envoyées`);
+          try { localStorage.setItem("wms_last_chain", JSON.stringify({ ...chain, _savedAt: Date.now() })); } catch {}
+        }
         setLoading(false); return;
       }
       if (tab === "blank") {
@@ -1782,6 +1791,39 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
               style={{ width: "100%", padding: 10, border: `1px dashed ${C.blue}`, borderRadius: 8, background: C.blueSoft, color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "inherit", marginBottom: 10 }}>
               + Palette {chain.palettes.length + 1}
             </button>
+
+            {/* Dernier envoi */}
+            {(() => {
+              try {
+                const saved = localStorage.getItem("wms_last_chain");
+                if (!saved) return null;
+                const last = JSON.parse(saved);
+                const date = last._savedAt ? new Date(last._savedAt).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+                return (
+                  <div style={{ marginBottom: 10, padding: "10px 12px", background: "#f8faff", border: `1px solid ${C.blueBorder}`, borderRadius: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>
+                        🕐 Dernier envoi{date ? " · " + date : ""}
+                      </div>
+                      <button onClick={() => {
+                        try {
+                          const s = localStorage.getItem("wms_last_chain");
+                          if (s) setChain(JSON.parse(s));
+                          onToast("✅ Dernier envoi rechargé");
+                        } catch {}
+                      }} style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 6, border: `1px solid ${C.blue}`, background: C.blueSoft, color: C.blue, cursor: "pointer", fontFamily: "inherit" }}>
+                        ↩ Recharger
+                      </button>
+                    </div>
+                    <div style={{ fontSize: 12, color: C.textSec }}>
+                      <span style={{ fontWeight: 600 }}>{last.recipientName || "—"}</span>
+                      {last.orderRef ? <span style={{ color: C.textMuted }}> · {last.orderRef}</span> : null}
+                      <span style={{ color: C.textMuted }}> · {last.palettes?.length || 0} palette(s)</span>
+                    </div>
+                  </div>
+                );
+              } catch { return null; }
+            })()}
 
             {/* Packing list button */}
             <button onClick={() => generatePackingListPDF(chain)}
