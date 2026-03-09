@@ -147,7 +147,7 @@ async function generatePackingListPDF(chain: {
     const descFit = doc.splitTextToSize(row.ref, cols[2].w - 3);
     doc.text(descFit[0] || "", colXs[2] + 2, y + 4.8);
     doc.text(row.lot || "", colXs[3] + cols[3].w / 2, y + 4.8, { align: "center" });
-    doc.text(row.qty > 0 ? row.qty.toLocaleString("fr-FR") : "", colXs[4] + cols[4].w / 2, y + 4.8, { align: "center" });
+    doc.text(row.qty > 0 ? String(row.qty) : "", colXs[4] + cols[4].w / 2, y + 4.8, { align: "center" });
 
     y += rowH;
     if (y > 260) { doc.addPage(); y = margin; }
@@ -162,14 +162,14 @@ async function generatePackingListPDF(chain: {
   doc.setFontSize(9);
   doc.setTextColor(...DARK_BLUE);
   doc.text("TOTAL", margin + contentW * 0.52, y + 5.5, { align: "center" });
-  doc.text(totalQty.toLocaleString("fr-FR"), colXs[4] + cols[4].w / 2, y + 5.5, { align: "center" });
+  doc.text(String(totalQty), colXs[4] + cols[4].w / 2, y + 5.5, { align: "center" });
   y += rowH + 9;
 
   // ── Footer stats ──
   const uniqueRefs = new Set(allRows.map(r => r.ref)).size;
   const stats = [
     ["Nombre de références :", String(uniqueRefs)],
-    ["Quantité totale :", totalQty.toLocaleString("fr-FR")],
+    ["Quantité totale :", String(totalQty)],
     ["Unité :", chain.unit || "Unités"],
   ];
   doc.setFontSize(9);
@@ -1422,8 +1422,8 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
         if (!validPalettes.length) { onToast("⚠️ Ajoute au moins une référence"); setLoading(false); return; }
         let ok = 0;
         // Use palette printer (chain uses same config as palette)
-        const chainPrinter = getPrinterForTab("chain");
-        if (!chainPrinter) { onToast("⚠️ Sélectionne une imprimante dans Paramètres > Étiquette palette"); setLoading(false); return; }
+        const chainPrinter = getPrinterForTab("chain") || printerId;
+        if (!chainPrinter) { onToast("⚠️ Sélectionne une imprimante"); setLoading(false); return; }
         for (const p of validPalettes) {
           const sscc = (() => {
             const serial = String(Date.now() + ok).slice(-9);
