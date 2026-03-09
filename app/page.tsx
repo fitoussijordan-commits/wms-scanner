@@ -1424,8 +1424,10 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
         if (!validPalettes.length) { onToast("⚠️ Ajoute au moins une référence"); setLoading(false); return; }
         let ok = 0;
         // Use palette printer (chain uses same config as palette)
-        const chainPrinter = getPrinterForTab("chain") || printerId;
+        // Use the printer currently selected in the UI dropdown
+        const chainPrinter = printerId || getPrinterForTab("chain");
         if (!chainPrinter) { onToast("⚠️ Sélectionne une imprimante"); setLoading(false); return; }
+        console.log("[chain] using printer:", chainPrinter, "printerId state:", printerId);
         for (const p of validPalettes) {
           const sscc = (() => {
             const serial = String(Date.now() + ok).slice(-9);
