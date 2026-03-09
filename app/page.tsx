@@ -1194,14 +1194,22 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
         if (!lines.length) { onToast("⚠️ Ajoute au moins une ligne"); setLoading(false); return; }
         result = await pn.printBlankLabel(printerId, { lines, barcode: blankBarcode || undefined }, "Étiquette vierge", qty);
       } else {
-        if (!pal.sscc) { onToast("⚠️ SSCC requis"); setLoading(false); return; }
+        // Auto-generate SSCC if empty (GS1-128: company prefix 7383773 + serial + check digit)
+        const sscc = pal.sscc || (() => {
+          const serial = String(Date.now()).slice(-9);
+          const raw = "0" + "7383773" + serial;
+          const digits = raw.split("").map(Number);
+          const check = (10 - (digits.reduce((s, d, i) => s + d * (i % 2 === 0 ? 3 : 1), 0) % 10)) % 10;
+          return raw + check;
+        })();
+        if (sscc !== pal.sscc) setPal((p: any) => ({ ...p, sscc }));
         const mainRef = pal.refs[0] || {};
         // Pass all refs as array — ZPL handles multi-product display
         result = await pn.printPaletteLabel(printerId, {
           senderName: pal.senderName, senderAddress: pal.senderAddress,
           recipientName: pal.recipientName, recipientAddress: pal.recipientAddress,
           refs: pal.refs.map((r: any) => ({ ref: r.ref, productName: r.productName, lot: r.lotNumber, qty: r.quantity })),
-          sscc: pal.sscc,
+          sscc: sscc,
           unit: mainRef.unit,
           expiryDate: mainRef.expiryDate,
           weight: pal.refs.find((r: any) => r.weight)?.weight,
