@@ -47,6 +47,11 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
 // ============================================
 async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1): Promise<number> {
   const fullZpl = qty > 1 ? Array(qty).fill(zpl).join("\n") : zpl;
+  // Encode ZPL as UTF-8 bytes, then to base64 (handles accented chars)
+  const bytes = new TextEncoder().encode(fullZpl);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const b64 = btoa(binary);
   const res = await fetch("/api/printnode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -54,7 +59,7 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
       action: "print",
       printerId,
       title,
-      content: btoa(fullZpl),
+      content: b64,
       source: "WMS Scanner",
     }),
   });
@@ -69,6 +74,11 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
 // Palette labels go via Labelary (ZPL→PDF) because Zebra thermal
 // handles PDF better for complex layouts
 async function submitPaletteJob(printerId: number, title: string, zpl: string, labelWidthMM: number, labelHeightMM: number): Promise<number> {
+  // Encode ZPL as UTF-8 bytes, then to base64
+  const bytes = new TextEncoder().encode(zpl);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const b64 = btoa(binary);
   const res = await fetch("/api/printnode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -76,7 +86,7 @@ async function submitPaletteJob(printerId: number, title: string, zpl: string, l
       action: "print",
       printerId,
       title,
-      content: btoa(unescape(encodeURIComponent(zpl))),
+      content: b64,
       source: "WMS Scanner",
       usePdf: true,
       labelWidthMM,
