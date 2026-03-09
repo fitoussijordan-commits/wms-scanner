@@ -47,6 +47,7 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
 // ============================================
 async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1, usePdf: boolean = false, labelWidthMM?: number, labelHeightMM?: number): Promise<number> {
   const fullZpl = qty > 1 ? Array(qty).fill(zpl).join("\n") : zpl;
+  console.log("[submitPrintJob] usePdf:", usePdf, "w:", labelWidthMM, "h:", labelHeightMM, "zplLen:", fullZpl.length);
   const res = await fetch("/api/printnode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -560,10 +561,16 @@ export async function printPaletteLabel(
 ): Promise<{ success: boolean; jobId?: number; error?: string }> {
   try {
     const zpl = generatePaletteZPL(data);
-    const cfg = getLabelTypeConfig("palette");
-    const jobId = await submitPrintJob(printerId, `Palette: ${data.productName} → ${data.recipientName}`, zpl, qty, true, cfg.labelSize.widthMM, cfg.labelSize.heightMM);
+    // Always use 100x150mm for palette labels
+    const W = 100, H = 150;
+    console.log("[printPaletteLabel] zpl length:", zpl.length, "printer:", printerId, "size:", W+"x"+H);
+    console.log("[printPaletteLabel] ZPL preview:", zpl.substring(0, 200));
+    const jobId = await submitPrintJob(printerId, `Palette: ${data.recipientName || "dest"}`, zpl, qty, true, W, H);
     return { success: true, jobId };
-  } catch (e: any) { return { success: false, error: e.message }; }
+  } catch (e: any) {
+    console.error("[printPaletteLabel] error:", e.message);
+    return { success: false, error: e.message };
+  }
 }
 
 export async function printBlankLabel(
