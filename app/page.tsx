@@ -1583,7 +1583,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
           </div>
         )}
 
-      {/* Preview modal — desktop only, palette tab only */
+      {/* Preview modal — desktop only, palette tab only */}
       {showPreview && tab === "palette" && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
           <div style={{ background: C.white, borderRadius: 16, width: "100%", maxWidth: 680, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
