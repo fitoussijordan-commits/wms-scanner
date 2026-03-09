@@ -276,6 +276,7 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
   // Drag
   const onMouseDown = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    e.preventDefault();
     setSelected(id);
     const el = template.elements.find(el => el.id === id)!;
     setDragging({ id, ox: e.clientX - mm2px(el.x), oy: e.clientY - mm2px(el.y) });
@@ -381,6 +382,7 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
                 <div
                   key={el.id}
                   onMouseDown={e => onMouseDown(e, el.id)}
+                  onClick={e => e.stopPropagation()}
                   style={{
                     position: "absolute",
                     left: el.x * PX_PER_MM * scale,
