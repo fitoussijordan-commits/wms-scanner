@@ -1245,7 +1245,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
             recipientAddress: chain.recipientAddress, refs, sscc, unit: chain.unit,
             orderRef: chain.orderRef,
           };
-          const palTemplate = pn.paletteDataToTemplate(palData);
+          const palTemplate = pn.paletteDataToTemplate(palData, ok + 1);
           const pdfB64 = await generateLabelPDF(palTemplate);
           const r = await pn.printPdfLabel(printerId, pdfB64, `Palette ${ok + 1} → ${chain.recipientName}`, 1);
           if (r.success) ok++; else { onToast("❌ Palette " + (ok + 1) + ": " + (r.error || "erreur")); break; }
@@ -1542,11 +1542,11 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
               <div key={pal2.id} style={{ background: C.bg, border: `1.5px solid ${C.border}`, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
                 {/* Header palette avec grand numéro */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: C.white, borderBottom: `1px solid ${C.border}` }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 8, background: C.blue, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 900 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ width: 56, height: 56, borderRadius: 12, background: C.blue, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, fontWeight: 900, letterSpacing: -1, boxShadow: "0 2px 8px rgba(37,99,235,0.4)" }}>
                       P{pi + 1}
                     </div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Palette {pi + 1}</div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>Palette {pi + 1}</div>
                   </div>
                   {chain.palettes.length > 1 && (
                     <button onClick={() => setChain({ ...chain, palettes: chain.palettes.filter((_, j) => j !== pi) })}
@@ -1613,7 +1613,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
                 return (
                   <div key={p.id} style={{ flex: "0 0 auto" }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, marginBottom: 6, textAlign: "center" as const }}>P{pi + 1}</div>
-                    <PalettePreview pal={palData} />
+                    <PalettePreview pal={{ ...palData, _paletteNumber: pi + 1 }} />
                   </div>
                 );
               })}

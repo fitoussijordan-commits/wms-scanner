@@ -294,11 +294,21 @@ function zplSafe(s: string): string {
 }
 
 // Convert PaletteLabelData to LabelTemplate for jsPDF rendering
-export function paletteDataToTemplate(data: PaletteLabelData): import("@/components/LabelEditor").LabelTemplate {
+export function paletteDataToTemplate(data: PaletteLabelData, paletteNumber?: number): import("@/components/LabelEditor").LabelTemplate {
   const W = 100, H = 150;
   const elements: import("@/components/LabelEditor").LabelElement[] = [];
   let y = 4;
   const uid = () => Math.random().toString(36).slice(2, 8);
+
+  // Big palette number — top right
+  if (paletteNumber !== undefined) {
+    elements.push({
+      id: uid(), type: "text",
+      x: W - 22, y: 2, w: 20, h: 20,
+      text: "P" + paletteNumber,
+      fontSize: 22, bold: true, align: "right",
+    });
+  }
 
   const addText = (text: string, fontSize: number, bold = false, align: "left"|"center"|"right" = "left", h = fontSize * 0.4) => {
     if (!text) return;
