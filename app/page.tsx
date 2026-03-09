@@ -1092,13 +1092,6 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
   };
   const [labelTemplate, setLabelTemplate] = useState<LabelTemplate>(getDefaultTemplate);
 
-  // Sync canvas size when label size changes in settings
-  useEffect(() => {
-    if (tab === "blank") {
-      const cfg = pn.getLabelTypeConfig("blank");
-      setLabelTemplate(prev => ({ ...prev, widthMM: cfg.labelSize.widthMM, heightMM: cfg.labelSize.heightMM }));
-    }
-  }, [labelSize, tab]);
   // Update printer/size when tab changes to reflect per-type settings
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   // Use per-type config from settings (palette & blank have their own)
@@ -1112,6 +1105,13 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
   };
   const [printerId, setPrinterId] = useState<number | null>(() => getPrinterForTab("blank"));
   const [labelSize, setLabelSize] = useState<pn.LabelSize>(() => getSizeForTab("blank"));
+
+  // Sync canvas size when label size changes
+  useEffect(() => {
+    if (tab === "blank") {
+      setLabelTemplate(prev => ({ ...prev, widthMM: labelSize.widthMM, heightMM: labelSize.heightMM }));
+    }
+  }, [labelSize, tab]);
   const [qty, setQty] = useState(1);
   const [loading, setLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
