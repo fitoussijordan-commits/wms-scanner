@@ -1318,10 +1318,12 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
     id: Math.random().toString(36).slice(2, 8),
     lines: [{ ref: "", qty: "", lot: "" }] as { ref: string; qty: string; lot: string }[],
   });
-  const [chain, setChain] = useState(() => {
+  type ChainState = { recipientName: string; recipientAddress: string; senderName: string; unit: string; orderRef: string; palettes: { id: string; lines: { ref: string; qty: string; lot: string }[] }[]; _savedAt?: number };
+  const defaultChain: ChainState = { recipientName: "", recipientAddress: "", senderName: "", unit: "cartons", orderRef: "", palettes: [emptyChainPalette()] };
+  const [chain, setChain] = useState<ChainState>(() => {
     try {
       const saved = localStorage.getItem("wms_last_chain");
-      if (saved) return JSON.parse(saved);
+      if (saved) return JSON.parse(saved) as ChainState;
     } catch {}
     return {
       recipientName: "",
@@ -1424,7 +1426,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
       if (tab === "chain") {
         // Impression en chaîne — une palette à la fois
         if (!chain.recipientName) { onToast("⚠️ Destinataire requis"); setLoading(false); return; }
-        const validPalettes = chain.palettes.filter(p => p.lines.some(l => l.ref.trim()));
+        const validPalettes = chain.palettes.filter((p: any) => p.lines.some((l: any) => l.ref.trim()));
         if (!validPalettes.length) { onToast("⚠️ Ajoute au moins une référence"); setLoading(false); return; }
         let ok = 0;
         // Use palette printer (chain uses same config as palette)
