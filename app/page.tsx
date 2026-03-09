@@ -2886,6 +2886,7 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 // INVENTORY ADJUSTMENT SCREEN
 // ============================================
 function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
@@ -2922,6 +2923,7 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
     setQuery("");
     setAdjustments({});
     setLoadingQuants(true);
+    setTimeout(() => searchInputRef.current?.focus(), 300);
     if (result.kind === "location") {
       setSelectedLocation(result);
       setSelectedProduct(null);
@@ -2991,9 +2993,11 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
         <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>Rechercher un produit</div>
         <div style={{ display: "flex", gap: 8 }}>
           <input
+            ref={searchInputRef}
+            autoFocus
             value={query} onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") searchProducts(); }}
-            placeholder="Réf, nom, code-barres, lot..."
+            onKeyDown={e => { if (e.key === "Enter") searchProducts(); }}
+            placeholder="Scanner ou taper Réf, lot, code-barres..."
             style={{ flex: 1, padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", outline: "none" }}
           />
           <button onClick={searchProducts} disabled={searching}
