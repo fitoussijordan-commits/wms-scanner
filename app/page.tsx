@@ -1096,11 +1096,11 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   // Use per-type config from settings (palette & blank have their own)
   const getPrinterForTab = (t: "blank" | "palette" | "chain") => {
-    const cfg = pn.getLabelTypeConfig(t);
+    const cfg = pn.getLabelTypeConfig(t === "chain" ? "palette" : t);
     return cfg.printerId || pn.getSavedPrinterId();
   };
   const getSizeForTab = (t: "blank" | "palette" | "chain") => {
-    const cfg = pn.getLabelTypeConfig(t);
+    const cfg = pn.getLabelTypeConfig(t === "chain" ? "palette" : t);
     return cfg.labelSize;
   };
   const [printerId, setPrinterId] = useState<number | null>(() => getPrinterForTab("blank"));
