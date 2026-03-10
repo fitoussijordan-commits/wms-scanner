@@ -2312,7 +2312,7 @@ function LocationResult({ location, stock, onRename }: { location: any; stock: a
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{location.barcode || location.complete_name} · {stock.length} réf</div>
         </div>
         {location.barcode && (
-          <button onClick={() => requestPrint({ type: "location", title: location.name, barcode: location.barcode, locationName: location.name })}
+          <button onClick={() => requestPrint({ type: "location", title: location.name.split("-")[0], barcode: location.barcode, locationName: location.name.split("-")[0] })}
             style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", marginLeft: 8, flexShrink: 0 }}
             title="Imprimer étiquette emplacement">
             {printerIcon}
