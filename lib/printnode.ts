@@ -232,7 +232,9 @@ export function generateLotZPL(lotName: string, productName: string, lotBarcode:
     y += expBlock;
   }
 
-  lines.push(barcodeZPL(lotBarcode, W, y, bcH, barW));
+  // Code-barres lot: utilise lotBarcode ou lotName si barcode est un chemin
+  const cleanLotBarcode = lotBarcode.includes("/") ? lotName : lotBarcode;
+  lines.push(barcodeZPL(cleanLotBarcode, W, y, bcH, barW));
   lines.push("^XZ");
 
   return lines.join("\n");
@@ -257,15 +259,17 @@ export function generateLocationZPL(locationName: string, locationBarcode: strin
   let y = startY;
   const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
 
-  // Prend le dernier segment du chemin complet
-  // "WH/Stock/Picking/Allée 1/A12-RKC1-RKC11-RKC21" → "A12"
+  // Nom affiché: dernier segment du chemin, premier mot avant "-"
+  // "WH/Stock/.../A12-RKC1" → "A12" | "B-A12" → "A12"
   const lastSegment = locationName.split("/").pop() || locationName;
-  const shortName = lastSegment.split("-")[0];
+  const shortName = lastSegment.replace(/^B-/i, "").split("-")[0];
+  // Code-barres: idem shortName (reconnu par Odoo)
+  const locBarcode = locationBarcode
+    ? locationBarcode.replace(/^B-/i, "").split("-")[0]
+    : shortName;
   lines.push(`^FO10,${y}^A0N,40,40^FB${cW},1,0,C^FD${shortName}^FS`);
   y += nameBlock;
-
-  // Code-barres: toujours shortName pour que le scan soit reconnu dans Odoo
-  lines.push(barcodeZPL(shortName, W, y, bcH, barW));
+  lines.push(barcodeZPL(locBarcode, W, y, bcH, barW));
   lines.push("^XZ");
 
   return lines.join("\n");

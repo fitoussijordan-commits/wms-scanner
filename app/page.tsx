@@ -2416,7 +2416,7 @@ function PrintModal({ req, onClose, onToast }: { req: PrintRequest; onClose: () 
             <div style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace", marginTop: 4 }}>{req.barcode}</div>
           </>}
           {req.type === "location" && <>
-            <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 2 }}>{req.locationName || req.title}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 2 }}>{(req.locationName || req.title || "").split("/").pop()?.split("-")[0] || req.title}</div>
             <div style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace" }}>{req.barcode}</div>
           </>}
         </div>
@@ -2854,7 +2854,7 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                             )}
                             {loc && (
                               <button
-                                onClick={() => requestPrint({ type: "location", title: loc.location_name.split("-")[0], barcode: loc.location_name.split("-")[0], locationName: loc.location_name.split("-")[0] })}
+                                onClick={() => { const _s = (loc.location_name.split("/").pop() || loc.location_name).split("-")[0]; requestPrint({ type: "location", title: _s, barcode: _s, locationName: loc.location_name }); }}
                                 title="Imprimer étiquette emplacement"
                                 style={{ fontSize: 11, fontWeight: 600, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 6, border: "1px solid #059669", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
                                 📍 {loc.location_name} ({loc.quantity} en stock)
