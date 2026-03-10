@@ -2212,11 +2212,7 @@ function ProductResult({ product, stock, onRename }: { product: any; stock: any[
               ) : (
                 <>
                   <span style={{ fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.location_id[1]}</span>
-                  <button onClick={() => requestPrint({ type: "location", title: q.location_id[1].split("-")[0], barcode: q.location_id[1].split("-")[0], locationName: q.location_id[1].split("-")[0] })}
-                    style={{ background: "none", border: "none", padding: "0 2px", cursor: "pointer", flexShrink: 0, display: "inline-flex" }}
-                    title="Imprimer étiquette emplacement">
-                    {printerSmallIcon}
-                  </button>
+
                   {onRename && (
                     <button onClick={() => { setEditingLocId(q.location_id[0]); setEditLocName(q.location_id[1].split("/").pop() || ""); }}
                       style={{ background: "none", border: "none", padding: 0, cursor: "pointer", flexShrink: 0, display: "inline-flex" }}
@@ -2274,11 +2270,7 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
         <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ fontWeight: 600 }}>{q.location_id[1]}</span>
-            <button onClick={() => requestPrint({ type: "location", title: q.location_id[1].split("-")[0], barcode: q.location_id[1].split("-")[0], locationName: q.location_id[1].split("-")[0] })}
-              style={{ background: "none", border: "none", padding: "0 2px", cursor: "pointer", display: "inline-flex" }}
-              title="Imprimer étiquette emplacement">
-              {printerSmallIcon}
-            </button>
+
           </div>
           <span style={{ fontWeight: 700, color: C.green }}>{q.quantity - (q.reserved_quantity||0)}</span>
         </div>
@@ -2311,13 +2303,7 @@ function LocationResult({ location, stock, onRename }: { location: any; stock: a
           )}
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{location.barcode || location.complete_name} · {stock.length} réf</div>
         </div>
-        {location.barcode && (
-          <button onClick={() => requestPrint({ type: "location", title: location.name.split("-")[0], barcode: location.barcode, locationName: location.name.split("-")[0] })}
-            style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", marginLeft: 8, flexShrink: 0 }}
-            title="Imprimer étiquette emplacement">
-            {printerIcon}
-          </button>
-        )}
+
       </div>
       {stock.map((q, i) => (
         <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
@@ -2853,12 +2839,9 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                               </span>
                             )}
                             {loc && (
-                              <button
-                                onClick={() => { const _s = (loc.location_name.split("/").pop() || loc.location_name).split("-")[0]; requestPrint({ type: "location", title: _s, barcode: _s, locationName: loc.location_name }); }}
-                                title="Imprimer étiquette emplacement"
-                                style={{ fontSize: 11, fontWeight: 600, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 6, border: "1px solid #059669", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                              <span style={{ fontSize: 11, fontWeight: 600, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 6, border: "1px solid #059669", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
                                 📍 {loc.location_name} ({loc.quantity} en stock)
-                              </button>
+                              </span>
                             )}
                             {isMatched && !loc && (
                               <span style={{ fontSize: 11, color: C.orange, background: C.orangeSoft, padding: "2px 8px", borderRadius: 6 }}>
