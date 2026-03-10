@@ -3023,7 +3023,7 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
                 {selectedLocation ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <div style={{ fontSize: 15, fontWeight: 800, color: "#059669" }}>📍 {selectedLocation.locationName}</div>
-                    <button onClick={() => { const newName = prompt("Renommer l'emplacement:", selectedLocation.locationName); if (newName && newName.trim()) rename(selectedLocation.id, newName.trim()); }}
+                    <button onClick={() => { const newName = prompt("Renommer l'emplacement:", selectedLocation.locationName); if (newName && newName.trim()) { odoo.renameLocation(session, selectedLocation.id, newName.trim()).then(() => onToast("Emplacement renommé")).catch(() => onToast("Erreur renommage")); } }}
                       style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "inline-flex", opacity: 0.5 }}
                       title="Renommer l'emplacement">
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
