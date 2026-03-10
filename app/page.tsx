@@ -2212,7 +2212,7 @@ function ProductResult({ product, stock, onRename }: { product: any; stock: any[
               ) : (
                 <>
                   <span style={{ fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.location_id[1]}</span>
-                  <button onClick={() => requestPrint({ type: "location", title: q.location_id[1], barcode: q.location_id[1], locationName: q.location_id[1] })}
+                  <button onClick={() => requestPrint({ type: "location", title: q.location_id[1].split("-")[0], barcode: q.location_id[1].split("-")[0], locationName: q.location_id[1].split("-")[0] })}
                     style={{ background: "none", border: "none", padding: "0 2px", cursor: "pointer", flexShrink: 0, display: "inline-flex" }}
                     title="Imprimer étiquette emplacement">
                     {printerSmallIcon}
@@ -2274,7 +2274,7 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
         <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ fontWeight: 600 }}>{q.location_id[1]}</span>
-            <button onClick={() => requestPrint({ type: "location", title: q.location_id[1], barcode: q.location_id[1], locationName: q.location_id[1] })}
+            <button onClick={() => requestPrint({ type: "location", title: q.location_id[1].split("-")[0], barcode: q.location_id[1].split("-")[0], locationName: q.location_id[1].split("-")[0] })}
               style={{ background: "none", border: "none", padding: "0 2px", cursor: "pointer", display: "inline-flex" }}
               title="Imprimer étiquette emplacement">
               {printerSmallIcon}
@@ -2854,7 +2854,7 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                             )}
                             {loc && (
                               <button
-                                onClick={() => requestPrint({ type: "location", title: loc.location_name, barcode: loc.location_name, locationName: loc.location_name })}
+                                onClick={() => requestPrint({ type: "location", title: loc.location_name.split("-")[0], barcode: loc.location_name.split("-")[0], locationName: loc.location_name.split("-")[0] })}
                                 title="Imprimer étiquette emplacement"
                                 style={{ fontSize: 11, fontWeight: 600, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 6, border: "1px solid #059669", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
                                 📍 {loc.location_name} ({loc.quantity} en stock)
