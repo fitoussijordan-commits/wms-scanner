@@ -1,6 +1,7 @@
 // app/api/sendcloud/route.ts — Server-side proxy for SendCloud API
 import { NextRequest, NextResponse } from "next/server";
 
+const V3 = "https://panel.sendcloud.sc/api/v3";
 const V2 = "https://panel.sendcloud.sc/api/v2";
 
 function getAuth(): string {
@@ -14,9 +15,9 @@ async function scFetch(url: string, auth: string) {
   const res = await fetch(url, { headers: { "Authorization": auth } });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`SendCloud ${res.status}: ${text.substring(0, 200)}`);
+    throw new Error(`SendCloud ${res.status}: ${text.substring(0, 300)}`);
   }
-  return res.json();
+  return res;
 }
 
 export async function GET(req: NextRequest) {
@@ -27,10 +28,23 @@ export async function GET(req: NextRequest) {
   const action = searchParams.get("action");
 
   try {
-    // List parcels
+    // List parcels — try v3 first, fallback v2
     if (action === "parcels") {
-      const data = await scFetch(`${V2}/parcels?limit=500`, auth);
-      return NextResponse.json({ parcels: data.parcels || data.results || [] });
+      let parcels: any[] = [];
+
+      try {
+        // v3: /parcels returns { results: [...], next: ... }
+        const res = await scFetch(`${V3}/parcels?limit=500`, auth);
+        const data = await res.json();
+        parcels = data.results || data.parcels || [];
+      } catch {
+        // Fallback v2
+        const res = await scFetch(`${V2}/parcels?limit=500`, auth);
+        const data = await res.json();
+        parcels = data.parcels || data.results || [];
+      }
+
+      return NextResponse.json({ parcels });
     }
 
     // Get label PDF for a parcel
@@ -38,17 +52,25 @@ export async function GET(req: NextRequest) {
       const id = searchParams.get("id");
       if (!id) return NextResponse.json({ error: "id requis" }, { status: 400 });
 
-      const data = await scFetch(`${V2}/parcels/${id}`, auth);
-      const parcel = data.parcel || data;
+      // Get parcel info (try v2 for label — v2 has label URLs directly)
+      let parcel: any = null;
+      try {
+        const res = await scFetch(`${V2}/parcels/${id}`, auth);
+        const data = await res.json();
+        parcel = data.parcel || data;
+      } catch {
+        const res = await scFetch(`${V3}/parcels/${id}`, auth);
+        parcel = await res.json();
+      }
 
-      // Try label_printer first (ZPL-sized), then normal_printer
+      // Find label URL
       const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
-      if (!labelUrl) return NextResponse.json({ error: "Pas d'étiquette disponible" }, { status: 404 });
+      if (!labelUrl) return NextResponse.json({ error: "Pas d'étiquette disponible pour ce parcel" }, { status: 404 });
 
-      const labelRes = await fetch(labelUrl, { headers: { "Authorization": auth } });
-      if (!labelRes.ok) return NextResponse.json({ error: `Erreur étiquette: ${labelRes.status}` }, { status: labelRes.status });
-
+      // Download label PDF
+      const labelRes = await scFetch(labelUrl, auth);
       const pdfBuffer = Buffer.from(await labelRes.arrayBuffer());
+
       return NextResponse.json({
         parcelId: parcel.id,
         tracking: parcel.tracking_number || "",
@@ -61,23 +83,41 @@ export async function GET(req: NextRequest) {
     if (action === "search") {
       const q = searchParams.get("order_number") || "";
       if (!q) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
-      const data = await scFetch(`${V2}/parcels?order_number=${encodeURIComponent(q)}`, auth);
-      return NextResponse.json({ parcels: data.parcels || [] });
+
+      let parcels: any[] = [];
+      try {
+        const res = await scFetch(`${V2}/parcels?order_number=${encodeURIComponent(q)}`, auth);
+        const data = await res.json();
+        parcels = data.parcels || [];
+      } catch {
+        const res = await scFetch(`${V3}/parcels?order_number=${encodeURIComponent(q)}`, auth);
+        const data = await res.json();
+        parcels = data.results || [];
+      }
+
+      return NextResponse.json({ parcels });
     }
 
-    // Debug — returns raw response so we can see structure
+    // Debug — raw response from both v2 and v3
     if (action === "debug") {
-      const parcelsData = await scFetch(`${V2}/parcels?limit=5`, auth);
-      // Show first 2 parcels with all fields for debugging
-      const sample = (parcelsData.parcels || parcelsData.results || []).slice(0, 2);
-      return NextResponse.json({
-        _keys: Object.keys(parcelsData),
-        _sampleCount: sample.length,
-        _sample: sample,
-      });
+      const results: any = {};
+
+      try {
+        const res2 = await scFetch(`${V2}/parcels?limit=3`, auth);
+        const data2 = await res2.json();
+        results.v2 = { keys: Object.keys(data2), count: (data2.parcels || []).length, sample: (data2.parcels || []).slice(0, 1) };
+      } catch (e: any) { results.v2 = { error: e.message }; }
+
+      try {
+        const res3 = await scFetch(`${V3}/parcels?limit=3`, auth);
+        const data3 = await res3.json();
+        results.v3 = { keys: Object.keys(data3), count: (data3.results || data3.parcels || []).length, sample: (data3.results || data3.parcels || []).slice(0, 1) };
+      } catch (e: any) { results.v3 = { error: e.message }; }
+
+      return NextResponse.json(results);
     }
 
-    return NextResponse.json({ error: "Action inconnue. Actions: parcels, label, search, debug" }, { status: 400 });
+    return NextResponse.json({ error: "Actions: parcels, label, search, debug" }, { status: 400 });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
