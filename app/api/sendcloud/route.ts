@@ -1,15 +1,22 @@
 // app/api/sendcloud/route.ts — Server-side proxy for SendCloud API
-// Keys stay server-side, never exposed to the browser
-
 import { NextRequest, NextResponse } from "next/server";
 
-const BASE_URL = "https://panel.sendcloud.sc/api/v2";
+const V2 = "https://panel.sendcloud.sc/api/v2";
 
 function getAuth(): string {
   const pub = process.env.SENDCLOUD_PUBLIC_KEY || "";
   const sec = process.env.SENDCLOUD_SECRET_KEY || "";
   if (!pub || !sec) return "";
   return "Basic " + Buffer.from(`${pub}:${sec}`).toString("base64");
+}
+
+async function scFetch(url: string, auth: string) {
+  const res = await fetch(url, { headers: { "Authorization": auth } });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`SendCloud ${res.status}: ${text.substring(0, 200)}`);
+  }
+  return res.json();
 }
 
 export async function GET(req: NextRequest) {
@@ -20,116 +27,62 @@ export async function GET(req: NextRequest) {
   const action = searchParams.get("action");
 
   try {
-    // List parcels — optionally filtered by status
+    // List parcels
     if (action === "parcels") {
-      const status = searchParams.get("status") || "";
-      const limit = searchParams.get("limit") || "100";
-      const cursor = searchParams.get("cursor") || "";
-
-      let url = `${BASE_URL}/parcels?limit=${limit}`;
-      if (cursor) url += `&cursor=${cursor}`;
-
-      const res = await fetch(url, {
-        headers: { "Authorization": auth },
-      });
-      if (!res.ok) return NextResponse.json({ error: `SendCloud ${res.status}: ${await res.text()}` }, { status: res.status });
-      const data = await res.json();
-
-      // Filter by status client-side if needed (SendCloud API filtering is limited)
-      let parcels = data.parcels || [];
-      if (status) {
-        const statuses = status.split(",").map(s => s.trim().toLowerCase());
-        parcels = parcels.filter((p: any) =>
-          statuses.includes(p.status?.message?.toLowerCase()) ||
-          statuses.includes(String(p.status?.id))
-        );
-      }
-
-      return NextResponse.json({
-        parcels,
-        next: data.next || null,
-      });
+      const data = await scFetch(`${V2}/parcels?limit=500`, auth);
+      return NextResponse.json({ parcels: data.parcels || data.results || [] });
     }
 
-    // Get single parcel
-    if (action === "parcel") {
-      const id = searchParams.get("id");
-      if (!id) return NextResponse.json({ error: "id requis" }, { status: 400 });
-
-      const res = await fetch(`${BASE_URL}/parcels/${id}`, {
-        headers: { "Authorization": auth },
-      });
-      if (!res.ok) return NextResponse.json({ error: `SendCloud ${res.status}` }, { status: res.status });
-      return NextResponse.json(await res.json());
-    }
-
-    // Get label PDF
+    // Get label PDF for a parcel
     if (action === "label") {
       const id = searchParams.get("id");
       if (!id) return NextResponse.json({ error: "id requis" }, { status: 400 });
 
-      // First get parcel to find label URL
-      const parcelRes = await fetch(`${BASE_URL}/parcels/${id}`, {
-        headers: { "Authorization": auth },
-      });
-      if (!parcelRes.ok) return NextResponse.json({ error: `SendCloud ${parcelRes.status}` }, { status: parcelRes.status });
-      const parcelData = await parcelRes.json();
-      const parcel = parcelData.parcel;
+      const data = await scFetch(`${V2}/parcels/${id}`, auth);
+      const parcel = data.parcel || data;
 
+      // Try label_printer first (ZPL-sized), then normal_printer
       const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
-      if (!labelUrl) return NextResponse.json({ error: "Pas d'étiquette disponible pour ce parcel" }, { status: 404 });
+      if (!labelUrl) return NextResponse.json({ error: "Pas d'étiquette disponible" }, { status: 404 });
 
-      // Download label PDF
-      const labelRes = await fetch(labelUrl, {
-        headers: { "Authorization": auth },
-      });
-      if (!labelRes.ok) return NextResponse.json({ error: `Erreur téléchargement étiquette: ${labelRes.status}` }, { status: labelRes.status });
+      const labelRes = await fetch(labelUrl, { headers: { "Authorization": auth } });
+      if (!labelRes.ok) return NextResponse.json({ error: `Erreur étiquette: ${labelRes.status}` }, { status: labelRes.status });
 
       const pdfBuffer = Buffer.from(await labelRes.arrayBuffer());
-      const pdfBase64 = pdfBuffer.toString("base64");
-
       return NextResponse.json({
         parcelId: parcel.id,
         tracking: parcel.tracking_number || "",
         carrier: parcel.carrier?.code || "",
-        labelBase64: pdfBase64,
+        labelBase64: pdfBuffer.toString("base64"),
       });
     }
 
-    // Search parcels by order number
+    // Search by order number
     if (action === "search") {
-      const orderNumber = searchParams.get("order_number");
-      if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
-
-      const res = await fetch(`${BASE_URL}/parcels?order_number=${encodeURIComponent(orderNumber)}`, {
-        headers: { "Authorization": auth },
-      });
-      if (!res.ok) return NextResponse.json({ error: `SendCloud ${res.status}` }, { status: res.status });
-      return NextResponse.json(await res.json());
+      const q = searchParams.get("order_number") || "";
+      if (!q) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
+      const data = await scFetch(`${V2}/parcels?order_number=${encodeURIComponent(q)}`, auth);
+      return NextResponse.json({ parcels: data.parcels || [] });
     }
 
-    return NextResponse.json({ error: "Action inconnue" }, { status: 400 });
+    // Debug — returns raw response so we can see structure
+    if (action === "debug") {
+      const parcelsData = await scFetch(`${V2}/parcels?limit=5`, auth);
+      // Show first 2 parcels with all fields for debugging
+      const sample = (parcelsData.parcels || parcelsData.results || []).slice(0, 2);
+      return NextResponse.json({
+        _keys: Object.keys(parcelsData),
+        _sampleCount: sample.length,
+        _sample: sample,
+      });
+    }
+
+    return NextResponse.json({ error: "Action inconnue. Actions: parcels, label, search, debug" }, { status: 400 });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
-  const auth = getAuth();
-  if (!auth) return NextResponse.json({ error: "SendCloud non configuré" }, { status: 500 });
-
-  try {
-    const body = await req.json();
-    const { action } = body;
-
-    // Update parcel status (e.g., mark as shipped)
-    if (action === "update_status") {
-      // Not directly supported — SendCloud status changes happen via label creation
-      return NextResponse.json({ error: "Utilisez l'interface SendCloud pour changer le statut" }, { status: 400 });
-    }
-
-    return NextResponse.json({ error: "Action inconnue" }, { status: 400 });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+  return NextResponse.json({ error: "POST non supporté" }, { status: 405 });
 }
