@@ -2873,6 +2873,54 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
+  const queryRef = useRef("");
+
+  // Scanner buffer: accumulate chars and auto-search on Enter
+  useEffect(() => {
+    let buffer = "";
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const handleKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLInputElement;
+      if (target.tagName === "INPUT" && target.type === "number") return;
+      if (e.key === "Enter") {
+        if (buffer.trim()) {
+          const val = buffer.trim();
+          queryRef.current = val;
+          setQuery(val);
+          setTimeout(async () => {
+            if (!val) return;
+            setSearching(true);
+            try {
+              const result = await odoo.smartScan(session, val);
+              if (result.type === "product") {
+                setSearchResults([{ kind: "product", productName: result.data.name, ref: result.data.default_code, id: result.data.id, barcode: result.data.barcode }]);
+              } else if (result.type === "lot") {
+                const prod = result.data.product;
+                setSearchResults([{ kind: "product", productName: prod?.name || result.data.lot.product_id[1], ref: prod?.default_code, id: prod?.id || result.data.lot.product_id[0], lotName: result.data.lot.name }]);
+              } else if (result.type === "location") {
+                setSearchResults([{ kind: "location", locationName: result.data.complete_name || result.data.name, id: result.data.id }]);
+              } else {
+                setSearchResults([]);
+                onToast("Aucun résultat trouvé");
+              }
+            } catch (e: any) { onToast("Erreur: " + e.message); }
+            setSearching(false);
+          }, 50);
+        }
+        buffer = "";
+        if (timer) clearTimeout(timer);
+        return;
+      }
+      if (e.key.length === 1) {
+        buffer += e.key;
+        searchInputRef.current?.focus();
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => { buffer = ""; }, 500);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [session]);
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
