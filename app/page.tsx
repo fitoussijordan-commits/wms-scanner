@@ -2514,8 +2514,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       const data = await res.json();
       const allParcels = (data.parcels || []).filter((p: any) => {
         const sid = p.status?.id;
-        // 1 = Announced (label created, ready to ship)
-        return sid === 1;
+        // 1000 = Ready to send
+        return sid === 1000;
       });
       setParcels(allParcels);
 
