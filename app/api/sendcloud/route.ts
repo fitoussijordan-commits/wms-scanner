@@ -146,33 +146,26 @@ export async function GET(req: NextRequest) {
     if (action === "packingslip") {
       const orderNumber = searchParams.get("order_number");
       if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
-      // Find parcel first, then get packing slip from parcel label
+
+      // Get parcel to find its id
       const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
       const parcel = (parcelsData.parcels || [])[0];
-      if (!parcel) return NextResponse.json({ error: `Aucun colis trouvé pour ${orderNumber}` }, { status: 404 });
+      if (!parcel) return NextResponse.json({ error: `Aucun colis trouvé — imprime d'abord l'étiquette` }, { status: 404 });
 
-      // Packing slip URL is on the parcel object
-      const psUrl = parcel?.label?.normal_printer?.[0]
-        || parcel?.label?.label_printer
-        || parcel?.documents?.find((d: any) => d.type === "packing-slip")?.link;
-
-      // Fallback: try dedicated endpoint with parcel id
-      const tryUrls = [
-        psUrl,
-        `${V2}/packing-slips?parcel_id=${parcel.id}`,
-        `https://panel.sendcloud.sc/api/v2/packing-slips/${parcel.id}`,
-      ].filter(Boolean);
-
-      for (const url of tryUrls) {
-        const res = await scFetch(url, auth);
-        if (!res.ok) continue;
-        const ct = res.headers.get("content-type") || "";
-        if (ct.includes("pdf")) {
-          const pdfBuffer = Buffer.from(await res.arrayBuffer());
-          return NextResponse.json({ pdfBase64: pdfBuffer.toString("base64") });
-        }
-        const json = await res.json().catch(() => null);
-        if (json) return NextResponse.json({ debug: json, parcelId: parcel.id });
+      // Packing slip endpoint: GET /api/v2/packing-slips?parcel_id=XXX
+      const psRes = await scFetch(`${V2}/packing-slips?parcel_id=${parcel.id}`, auth);
+      if (!psRes.ok) {
+        const errText = await psRes.text().catch(() => "");
+        return NextResponse.json({ error: `BL ${psRes.status}: ${errText.substring(0, 200)}` }, { status: psRes.status });
+      }
+      const ct = psRes.headers.get("content-type") || "";
+      if (ct.includes("pdf")) {
+        const pdfBuffer = Buffer.from(await psRes.arrayBuffer());
+        return NextResponse.json({ pdfBase64: pdfBuffer.toString("base64") });
+      }
+      // JSON response — log it to understand structure
+      const psJson = await psRes.json().catch(() => null);
+      return NextResponse.json({ debug: psJson, parcelId: parcel.id });
       }
       return NextResponse.json({ error: `BL introuvable pour colis ${parcel.id}`, parcelId: parcel.id }, { status: 404 });
     }
