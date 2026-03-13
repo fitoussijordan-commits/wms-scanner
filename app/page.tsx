@@ -2509,9 +2509,10 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   useEffect(() => {
     if (!session) return;
     odoo.getConfigParam(session, "wms_eshop_chariot_skus").then(val => {
+      console.log("[chariot] val from Odoo:", val);
       if (val) { try { const p = JSON.parse(val); setChariotSkus(p); setChariotSkusLocal(p); } catch {} }
       setChariotLoaded(true);
-    }).catch(() => setChariotLoaded(true));
+    }).catch((e) => { console.log("[chariot] error:", e); setChariotLoaded(true); });
     odoo.getConfigParam(session, "wms_eshop_prepared").then(val => {
       if (val) { try { setPreparedIds(new Set(JSON.parse(val))); } catch {} }
     });
@@ -2665,8 +2666,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     // Refresh chariot SKUs from Odoo each time we open a parcel
     if (session) {
       try {
-        const val = await odoo.getConfigParam(session, "wms_eshop_chariot_skus");
-        if (val) { const parsed = JSON.parse(val); setChariotSkus(parsed); setChariotSkusLocal(parsed); }
+        const parsed = await odoo.loadChariotSkus(session); setChariotSkus(parsed); setChariotSkusLocal(parsed);
       } catch {}
     }
     setSelectedParcel(p);
@@ -3750,13 +3750,13 @@ let _chariotSkusCache: string[] | null = null;
 
 function getChariotSkusLocal(): string[] {
   if (_chariotSkusCache !== null) return _chariotSkusCache;
-  try { const v = localStorage.getItem(ESHOP_CHARIOT_KEY); _chariotSkusCache = v ? JSON.parse(v) : []; } catch { _chariotSkusCache = []; }
+  _chariotSkusCache = [];
   return _chariotSkusCache!;
 }
 
 function setChariotSkusLocal(skus: string[]) {
   _chariotSkusCache = skus;
-  try { localStorage.setItem(ESHOP_CHARIOT_KEY, JSON.stringify(skus)); } catch {}
+
 }
 
 function EshopChariotSkus({ session }: { session: any }) {
@@ -3766,19 +3766,20 @@ function EshopChariotSkus({ session }: { session: any }) {
 
   useEffect(() => {
     if (!session) return;
-    odoo.getConfigParam(session, "wms_eshop_chariot_skus").then(val => {
-      const parsed = val ? JSON.parse(val) : [];
-      setSkus(parsed);
-      setChariotSkusLocal(parsed);
-    }).catch(() => {});
+odoo.loadChariotSkus(session).then(p => { setSkus(p); setChariotSkusLocal(p); }).catch(() => {});
   }, [session]);
 
   const save = async (updated: string[]) => {
     setSkus(updated);
     setChariotSkusLocal(updated);
     setSaving(true);
-    try { await odoo.setConfigParam(session, "wms_eshop_chariot_skus", JSON.stringify(updated)); } catch {}
-    setSaving(false);
+    try {
+await odoo.saveChariotSkus(session, updated);
+    } catch(e) {
+      console.error("[chariot] save error:", e);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const add = () => {
