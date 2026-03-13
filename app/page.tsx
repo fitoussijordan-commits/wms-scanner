@@ -6,6 +6,218 @@ import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
 
+
+// ── E-shop Packing Slip PDF (reproduit le format SendCloud) ────────────────────
+async function generateEshopPackingSlipPDF(order: {
+  order_number: string;
+  order_date?: string;
+  shipping_method?: string;
+  recipient_name: string;
+  recipient_address: string;
+  recipient_postal: string;
+  recipient_city: string;
+  recipient_country: string;
+  items: Array<{ name: string; sku: string; quantity: number; properties?: string }>;
+}): Promise<string> {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const W = 210; const M = 14;
+
+  const BLACK = [0, 0, 0] as [number,number,number];
+  const GRAY  = [100, 100, 100] as [number,number,number];
+  const WHITE = [255, 255, 255] as [number,number,number];
+  const BORDER = [180, 180, 180] as [number,number,number];
+  const DARK = [30, 30, 30] as [number,number,number];
+
+  let y = M;
+
+  // ── Logo zone ──
+  // Dr. Hauschka logo text (bold, large)
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(22);
+  doc.setTextColor(...BLACK);
+  doc.text("Dr. Hauschka", M, y + 10);
+
+  // WALA logo circle symbol (simulate with ellipse lines)
+  const cx = M + 6; const cy = y + 20;
+  doc.setDrawColor(...BLACK);
+  doc.setLineWidth(0.8);
+  doc.ellipse(cx, cy, 5.5, 5.5);
+  // Inner swirl lines to simulate WALA logo
+  doc.setLineWidth(0.5);
+  doc.ellipse(cx, cy, 3, 5);
+  doc.ellipse(cx, cy, 5.5, 3);
+
+  // WALA France bold under logo
+  doc.setFontSize(13);
+  doc.setFont("helvetica", "bold");
+  doc.text("WALA France", M, y + 30);
+
+  // ── Barcode (right side) ──
+  const bcW = 65; const bcH = 18;
+  const bcX = W - M - bcW; const bcY = y;
+  doc.setDrawColor(...BLACK);
+  // Draw barcode bars
+  const bars = 80;
+  for (let i = 0; i < bars; i++) {
+    const thick = (i % 5 === 0 || i % 7 === 0) ? 1.2 : (i % 3 === 0 ? 0.6 : 0.3);
+    doc.setLineWidth(thick);
+    const x = bcX + (i / bars) * bcW;
+    if (i % 2 === 0) doc.line(x, bcY, x, bcY + bcH);
+  }
+  // Barcode number under
+  doc.setLineWidth(0.3);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(...BLACK);
+  doc.text(`PS${order.order_number.padStart(16, "0")}`, bcX + bcW / 2, bcY + bcH + 4.5, { align: "center" });
+
+  y += 36;
+
+  // ── 3-column info table ──
+  // Full-width bordered table
+  const tW = W - M * 2;
+  const col1W = 50; const col2W = 65; const col3W = tW - col1W - col2W;
+  const col1X = M; const col2X = M + col1W; const col3X = M + col1W + col2W;
+  const tH = 52;
+
+  // Draw table border
+  doc.setDrawColor(...BORDER);
+  doc.setLineWidth(0.5);
+  doc.rect(col1X, y, tW, tH);
+  // Vertical separators
+  doc.line(col2X, y, col2X, y + tH);
+  doc.line(col3X, y, col3X, y + tH);
+
+  let iy = y + 5;
+
+  // Row 1 headers
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.setTextColor(...DARK);
+  doc.text("Date de la
+commande", col1X + 3, iy, { lineHeightFactor: 1.4 });
+  doc.text("Expéditeur", col2X + 3, iy);
+  doc.text("Destinataire", col3X + 3, iy);
+  iy += 10;
+
+  // Date value
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  const dateStr = order.order_date || new Date().toLocaleDateString("fr-FR", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  doc.text(dateStr, col1X + 3, iy);
+  // Expéditeur value (bold name, normal rest)
+  doc.setFont("helvetica", "bold");
+  doc.text("WALA France", col2X + 3, iy);
+  // Destinataire value (bold name)
+  doc.text(order.recipient_name, col3X + 3, iy);
+  iy += 5;
+
+  // "Numéro de commande" label
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("Numéro de
+commande", col1X + 3, iy, { lineHeightFactor: 1.4 });
+  // Expéditeur continued
+  doc.setFont("helvetica", "normal");
+  doc.text("+33143553242", col2X + 3, iy);
+  // Destinataire address
+  doc.text(order.recipient_address, col3X + 3, iy);
+  iy += 9;
+
+  // Order number value
+  doc.setFont("helvetica", "normal");
+  doc.text(order.order_number, col1X + 3, iy);
+  doc.text("35 Rue d'Hauteville", col2X + 3, iy);
+  doc.text(order.recipient_postal, col3X + 3, iy);
+  iy += 5;
+
+  // Shipping method label
+  doc.setFont("helvetica", "bold");
+  doc.text("Méthode
+d'expédition", col1X + 3, iy, { lineHeightFactor: 1.4 });
+  doc.setFont("helvetica", "normal");
+  doc.text("75010", col2X + 3, iy);
+  doc.text(order.recipient_city, col3X + 3, iy);
+  iy += 9;
+
+  // Shipping method value
+  if (order.shipping_method) {
+    const methodLines = doc.splitTextToSize(order.shipping_method, col1W - 6);
+    methodLines.forEach((l: string, i: number) => doc.text(l, col1X + 3, iy + i * 4.5));
+  }
+  doc.text("Paris", col2X + 3, iy);
+  doc.text("France", col3X + 3, iy);
+  iy += 5;
+  doc.text("France", col2X + 3, iy);
+
+  y += tH + 10;
+
+  // ── Articles table header ──
+  const artTW = W - M * 2;
+  const qtyW = 20;
+  const artW = artTW - qtyW;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(...BLACK);
+  doc.text("Article", M, y);
+  doc.text("QTÉ", W - M - qtyW + 3, y);
+  y += 3;
+
+  // Bold separator line under header
+  doc.setDrawColor(...BLACK);
+  doc.setLineWidth(0.8);
+  doc.line(M, y, W - M, y);
+  y += 5;
+
+  // ── Article rows ──
+  doc.setLineWidth(0.4);
+  doc.setDrawColor(...BORDER);
+
+  for (const item of order.items) {
+    const nameLines = doc.splitTextToSize(item.name, artW - 6);
+    const hasProps = !!item.properties;
+    const rowH = nameLines.length * 5 + (hasProps ? 5 : 0) + 6;
+
+    // Article name — bold
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9.5);
+    doc.setTextColor(...BLACK);
+    nameLines.forEach((l: string, i: number) => doc.text(l, M, y + i * 5));
+
+    // Properties — normal gray
+    if (hasProps) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(...GRAY);
+      doc.text(item.properties!, M, y + nameLines.length * 5);
+    }
+
+    // Quantity — right aligned
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9.5);
+    doc.setTextColor(...BLACK);
+    doc.text(String(item.quantity), W - M - qtyW + 3, y);
+
+    y += rowH;
+
+    // Separator line
+    doc.setDrawColor(...BORDER);
+    doc.line(M, y, W - M, y);
+    y += 4;
+  }
+
+  // ── Page footer ──
+  y = 287 - M; // near bottom
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.setTextColor(...BLACK);
+  doc.text("Page 1 / 1", M, y);
+
+  return doc.output("datauristring").split(",")[1];
+}
+
 // ── Packing list PDF (A4, client-side via jsPDF) ──────────────────────────────
 async function generatePackingListPDF(chain: {
   recipientName: string; recipientAddress: string;
@@ -2541,6 +2753,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           description: item.name,
           quantity: item.quantity,
           value: item.unit_price?.value ?? 0,
+          properties: Object.entries(item.properties || {}).map(([k, v]) => `${k}: ${v}`).join(", ") || undefined,
         })),
         status: { id: 1000, message: o.order_details?.status?.message || "Ouvert" },
         _raw: o,
@@ -2576,19 +2789,40 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   useEffect(() => { loadParcels(); }, []);
 
   // Print SendCloud label
-  const printPackingSlip = async (orderNumber: string) => {
+  const printPackingSlip = async (p: any) => {
     try {
-      const res = await fetch(`/api/sendcloud?action=packingslip&order_number=${orderNumber}`);
-      if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Erreur BL"); }
-      const data = await res.json();
+      const items = (p.parcel_items || []).map((item: any) => {
+        const match = matchData[item.sku];
+        return {
+          name: match?.product_name || item.description || item.sku,
+          sku: item.sku,
+          quantity: item.quantity || 1,
+          properties: item.properties || undefined,
+        };
+      });
+      const raw = p._raw || {};
+      const addr = raw.shipping_address || {};
+      const pdfBase64 = await generateEshopPackingSlipPDF({
+        order_number: p.order_number,
+        order_date: raw.order_details?.order_created_at ? new Date(raw.order_details.order_created_at).toLocaleDateString("fr-FR", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : undefined,
+        shipping_method: raw.shipping_details?.delivery_indicator,
+        recipient_name: addr.name || p.name,
+        recipient_address: addr.address_line_1 || p.address,
+        recipient_postal: addr.postal_code || p.postal_code,
+        recipient_city: addr.city || p.city,
+        recipient_country: addr.country_code || "FR",
+        items,
+      });
       const psCfg = pn.getLabelTypeConfig("packingslip");
       const printerId = psCfg.printerId || pn.getSavedPrinterId();
-      if (printerId && data.pdfBase64) {
-        await pn.printPdfLabel(printerId, data.pdfBase64, `BL ${orderNumber}`);
-      } else if (data.pdfBase64) {
-        const byteArray = Uint8Array.from(atob(data.pdfBase64), c => c.charCodeAt(0));
+      if (printerId) {
+        await pn.printPdfLabel(printerId, pdfBase64, `BL ${p.order_number}`);
+        onToast(`✓ BL ${p.order_number} imprimé`);
+      } else {
+        const byteArray = Uint8Array.from(atob(pdfBase64), c => c.charCodeAt(0));
         const blob = new Blob([byteArray], { type: "application/pdf" });
         window.open(URL.createObjectURL(blob), "_blank");
+        onToast("BL ouvert dans un nouvel onglet");
       }
     } catch (e: any) { onToast(`⚠ BL: ${e.message}`); }
   };
@@ -2878,7 +3112,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             style={{ flex: 1, padding: 12, background: C.blueSoft, color: C.blue, border: `1px solid ${C.blueBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
             {printing ? "⏳" : "🚚 Étiquette"}
           </button>
-          <button onClick={() => printPackingSlip(p.order_number)} disabled={printing}
+          <button onClick={() => printPackingSlip(p)} disabled={printing}
             style={{ flex: 1, padding: 12, background: C.greenSoft, color: C.green, border: `1px solid ${C.greenBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
             📄 BL
           </button>
@@ -2893,7 +3127,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             onClick={async () => {
               onToast("⏳ Impression étiquette + BL...");
               await printLabel(p);
-              await printPackingSlip(p.order_number);
+              await printPackingSlip(p);
               await markPrepared(p.order_number);
               setSelectedParcel(null);
               onToast("✓ Préparation confirmée");
