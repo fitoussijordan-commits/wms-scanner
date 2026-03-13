@@ -1050,7 +1050,7 @@ export default function Page() {
 
         {/* ===== SETTINGS ===== */}
         {screen === "settings" && (
-          <SettingsScreen onBack={goHome} />
+          <SettingsScreen onBack={goHome} session={session} />
         )}
 
         {/* ===== HISTORY ===== */}
@@ -2603,15 +2603,17 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   // Detail view
   if (selectedParcel) {
     const p = selectedParcel;
-    const excludedSkus = getExcludedSkus();
+    const chariotSkus = getChariotSkusLocal();
     const items = (p.parcel_items || []).filter((item: any) => {
       const val = parseFloat(item.value || "0");
       const sku = (item.sku || "").toLowerCase();
-      // Exclude: negative values, promo/discount lines, user-excluded SKUs
+      // Exclude: negative values, promo/discount lines
       if (val < 0 || sku.startsWith("offre_") || item.description === "Bon de réduction") return false;
-      if (excludedSkus.some(ex => ex.toLowerCase() === sku || (item.sku && item.sku === ex))) return false;
       return true;
-    });
+    }).map((item: any) => ({
+      ...item,
+      _isChariot: chariotSkus.some(ex => ex.toLowerCase() === (item.sku || "").toLowerCase()),
+    }));
     const isPrepared = preparedIds.has(p.id);
 
     return (
@@ -2664,14 +2666,17 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                     SKU: {item.sku || "N/A"}
                     {match?.default_code && <span> · Réf: {match.default_code}</span>}
                   </div>
-                  {loc && (
+                  {item._isChariot ? (
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", marginTop: 4 }}>
+                      🛒 Chariot Eshop
+                    </div>
+                  ) : loc ? (
                     <div style={{ fontSize: 11, fontWeight: 600, color: "#059669", marginTop: 4 }}>
                       📍 {loc.location_name} <span style={{ fontWeight: 400, color: C.textMuted }}>({loc.quantity} en stock)</span>
                     </div>
-                  )}
-                  {!loc && match && (
+                  ) : match ? (
                     <div style={{ fontSize: 11, color: C.orange, marginTop: 4 }}>⚠ Pas de stock trouvé</div>
-                  )}
+                  ) : null}
                   {!match && item.sku && (
                     <div style={{ fontSize: 11, color: C.orange, marginTop: 4 }}>⚠ Réf non trouvée dans Odoo</div>
                   )}
@@ -3559,61 +3564,74 @@ function HistoryScreen({ history, onClear, onBack }: { history: HistoryEntry[]; 
 // ============================================
 // E-SHOP EXCLUDED SKUS (stored in localStorage)
 // ============================================
-const ESHOP_EXCLUDED_KEY = "wms_eshop_excluded_skus";
+const ESHOP_CHARIOT_KEY = "wms_eshop_chariot_skus";
 
-function getExcludedSkus(): string[] {
-  try { const v = localStorage.getItem(ESHOP_EXCLUDED_KEY); return v ? JSON.parse(v) : []; } catch { return []; }
+// Local cache for chariot SKUs loaded from Odoo
+let _chariotSkusCache: string[] | null = null;
+
+function getChariotSkusLocal(): string[] {
+  if (_chariotSkusCache !== null) return _chariotSkusCache;
+  try { const v = localStorage.getItem(ESHOP_CHARIOT_KEY); _chariotSkusCache = v ? JSON.parse(v) : []; } catch { _chariotSkusCache = []; }
+  return _chariotSkusCache!;
 }
 
-function saveExcludedSkus(skus: string[]) {
-  try { localStorage.setItem(ESHOP_EXCLUDED_KEY, JSON.stringify(skus)); } catch {}
+function setChariotSkusLocal(skus: string[]) {
+  _chariotSkusCache = skus;
+  try { localStorage.setItem(ESHOP_CHARIOT_KEY, JSON.stringify(skus)); } catch {}
 }
 
-function EshopExcludedSkus() {
-  const [skus, setSkus] = useState<string[]>(() => getExcludedSkus());
+function EshopChariotSkus({ session }: { session: any }) {
+  const [skus, setSkus] = useState<string[]>(() => getChariotSkusLocal());
   const [newSku, setNewSku] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!session) return;
+    odoo.getConfigParam(session, "wms_eshop_chariot_skus").then(val => {
+      const parsed = val ? JSON.parse(val) : [];
+      setSkus(parsed);
+      setChariotSkusLocal(parsed);
+    }).catch(() => {});
+  }, [session]);
+
+  const save = async (updated: string[]) => {
+    setSkus(updated);
+    setChariotSkusLocal(updated);
+    setSaving(true);
+    try { await odoo.setConfigParam(session, "wms_eshop_chariot_skus", JSON.stringify(updated)); } catch {}
+    setSaving(false);
+  };
 
   const add = () => {
     const s = newSku.trim();
-    if (s && !skus.includes(s)) {
-      const updated = [...skus, s];
-      setSkus(updated);
-      saveExcludedSkus(updated);
-      setNewSku("");
-    }
-  };
-
-  const remove = (sku: string) => {
-    const updated = skus.filter(s => s !== sku);
-    setSkus(updated);
-    saveExcludedSkus(updated);
+    if (s && !skus.includes(s)) { save([...skus, s]); setNewSku(""); }
   };
 
   return (
     <Section>
-      <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 8 }}>🛒 E-shop — Articles exclus</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>🛒 E-shop — Chariot Eshop</div>
       <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>
-        Ces SKU ne seront pas affichés dans la préparation e-shop (échantillons, articles hors stock, etc.)
+        Ces SKU seront affichés avec l'emplacement <strong>Chariot Eshop</strong> (partagé entre tous les utilisateurs)
       </div>
       <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
         <input value={newSku} onChange={e => setNewSku(e.target.value)}
           onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") add(); }}
-          placeholder="SKU à exclure..."
+          placeholder="SKU..."
           style={{ flex: 1, padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontFamily: "inherit", outline: "none" }} />
-        <button onClick={add} style={{ padding: "8px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>+</button>
+        <button onClick={add} style={{ padding: "8px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>{saving ? "..." : "+"}</button>
       </div>
-      {skus.length === 0 && <div style={{ fontSize: 11, color: C.textMuted }}>Aucun SKU exclu</div>}
+      {skus.length === 0 && <div style={{ fontSize: 11, color: C.textMuted }}>Aucun SKU configuré</div>}
       {skus.map(sku => (
         <div key={sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.border}` }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: C.text, fontFamily: "monospace" }}>{sku}</span>
-          <button onClick={() => remove(sku)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✕</button>
+          <button onClick={() => save(skus.filter(s => s !== sku))} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✕</button>
         </div>
       ))}
     </Section>
   );
 }
 
-function SettingsScreen({ onBack }: { onBack: () => void }) {
+function SettingsScreen({ onBack, session }: { onBack: () => void; session: any }) {
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   const [loadingP, setLoadingP] = useState(false);
   const [msg, setMsg] = useState("");
@@ -3811,7 +3829,7 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
       )}
 
       {/* E-shop excluded SKUs */}
-      <EshopExcludedSkus />
+      <EshopChariotSkus session={session} />
     </>
   );
 }

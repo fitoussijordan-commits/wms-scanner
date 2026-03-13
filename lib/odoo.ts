@@ -660,3 +660,21 @@ export async function createInventoryAdjustment(
   const quantId = await create(session, "stock.quant", vals);
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 }
+
+// ============================================
+// CONFIG PARAMETERS (shared settings via Odoo)
+// ============================================
+
+export async function getConfigParam(session: OdooSession, key: string): Promise<string | null> {
+  const res = await searchRead(session, "ir.config_parameter", [["key", "=", key]], ["value"], 1);
+  return res.length ? res[0].value : null;
+}
+
+export async function setConfigParam(session: OdooSession, key: string, value: string): Promise<void> {
+  const res = await searchRead(session, "ir.config_parameter", [["key", "=", key]], ["id"], 1);
+  if (res.length) {
+    await write(session, "ir.config_parameter", [res[0].id], { value });
+  } else {
+    await create(session, "ir.config_parameter", { key, value });
+  }
+}

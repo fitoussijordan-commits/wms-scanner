@@ -34,7 +34,8 @@ export async function GET(req: NextRequest) {
     // List parcels with optional status filter
     if (action === "parcels") {
       const statusFilter = searchParams.get("status") || "";
-      const data = await scJson(`${V2}/parcels?limit=500`, auth);
+      // Filter by integration 527093 (Dr. Hauschka Shop FR-FR)
+      const data = await scJson(`${V2}/parcels?limit=500&integration_id=527093`, auth);
       let parcels = data.parcels || [];
       if (statusFilter) {
         const ids = statusFilter.split(",").map((s: string) => parseInt(s.trim()));
@@ -72,7 +73,7 @@ export async function GET(req: NextRequest) {
 
       // 1. Parcels endpoint — get all statuses
       try {
-        const data = await scJson(`${V2}/parcels?limit=500`, auth);
+        const data = await scJson(`${V2}/parcels?limit=500&integration_id=527093`, auth);
         const parcels = data.parcels || [];
         const statusMap: Record<string, number> = {};
         for (const p of parcels) {
