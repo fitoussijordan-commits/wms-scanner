@@ -2563,18 +2563,20 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   useEffect(() => { loadParcels(); }, []);
 
   // Print SendCloud label
-  const printLabel = async (parcelId: number) => {
+  const printLabel = async (p: any) => {
     setPrinting(true);
     try {
-      const res = await fetch(`/api/sendcloud?action=label&id=${parcelId}`);
+      const orderId = p._raw?.order_id || p.id;
+      const orderNumber = p.order_number;
+      const res = await fetch(`/api/sendcloud?action=label&order_id=${orderId}&order_number=${orderNumber}`);
       if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Erreur étiquette"); }
       const data = await res.json();
 
       const printerId = pn.getSavedPrinterId();
       if (printerId && data.labelBase64) {
-        const result = await pn.printPdfLabel(printerId, data.labelBase64, `SendCloud ${parcelId}`);
+        const result = await pn.printPdfLabel(printerId, data.labelBase64, `SendCloud ${orderNumber}`);
         if (result.success) {
-          onToast(`✓ Étiquette ${data.tracking || parcelId} imprimée`);
+          onToast(`✓ Étiquette ${data.tracking || orderNumber} imprimée`);
           vibrateSuccess();
         } else {
           throw new Error(result.error || "Erreur impression");
@@ -2717,7 +2719,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
         {/* Actions */}
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <button onClick={() => printLabel(p.id)} disabled={printing}
+          <button onClick={() => printLabel(p)} disabled={printing}
             style={{ flex: 1, padding: 12, background: C.blueSoft, color: C.blue, border: `1px solid ${C.blueBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
             {printing ? "Impression..." : "🖨 Imprimer étiquette"}
           </button>

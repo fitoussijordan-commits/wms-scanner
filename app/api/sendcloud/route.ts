@@ -11,12 +11,12 @@ function getAuth(): string {
   return "Basic " + Buffer.from(`${pub}:${sec}`).toString("base64");
 }
 
-async function scFetch(url: string, auth: string): Promise<Response> {
-  return fetch(url, { headers: { "Authorization": auth } });
+async function scFetch(url: string, auth: string, options?: RequestInit): Promise<Response> {
+  return fetch(url, { ...options, headers: { "Authorization": auth, "Content-Type": "application/json", ...(options?.headers || {}) } });
 }
 
-async function scJson(url: string, auth: string) {
-  const res = await scFetch(url, auth);
+async function scJson(url: string, auth: string, options?: RequestInit) {
+  const res = await scFetch(url, auth, options);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`SendCloud ${res.status}: ${text.substring(0, 300)}`);
@@ -47,9 +47,19 @@ export async function GET(req: NextRequest) {
 
     // V3 orders — open orders not yet converted to parcels
     if (action === "orders") {
-      // /api/v3/orders returns {data: [...]} with open orders from Shopware integration
       const data = await scJson(`${V3}/orders?integration_id=527093&page_size=100`, auth);
-      const orders = data.data || data.results || data.orders || [];
+      let orders = data.data || data.results || data.orders || [];
+      // If order_items not in list response, fetch each order individually
+      const sample = orders[0] || {};
+      if (!sample.order_items && !sample.order_details?.order_items) {
+        orders = await Promise.all(
+          orders.map((o: any) =>
+            scJson(`${V3}/orders/${o.order_id}`, auth)
+              .then((d: any) => d.data || d)
+              .catch(() => o)
+          )
+        );
+      }
       return NextResponse.json({ orders });
     }
 
@@ -76,14 +86,25 @@ export async function GET(req: NextRequest) {
 
     // Get label PDF for a parcel
     if (action === "label") {
-      const id = searchParams.get("id");
-      if (!id) return NextResponse.json({ error: "id requis" }, { status: 400 });
+      const orderId = searchParams.get("order_id");
+      const orderNumber = searchParams.get("order_number");
+      if (!orderId) return NextResponse.json({ error: "order_id requis" }, { status: 400 });
 
-      const data = await scJson(`${V2}/parcels/${id}`, auth);
-      const parcel = data.parcel || data;
+      // Step 1: create label via V3 async (creates parcel + label)
+      const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
+        method: "POST",
+        body: JSON.stringify({ order_ids: [parseInt(orderId)] }),
+      });
+
+      // Step 2: find the parcel via V2 by order_number
+      await new Promise(r => setTimeout(r, 2000)); // wait for async label creation
+      const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
+      const parcels = parcelsData.parcels || [];
+      const parcel = parcels[0];
+      if (!parcel) return NextResponse.json({ error: "Colis non trouvé après création étiquette" }, { status: 404 });
 
       const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
-      if (!labelUrl) return NextResponse.json({ error: "Pas d'étiquette disponible" }, { status: 404 });
+      if (!labelUrl) return NextResponse.json({ error: "Étiquette non disponible (création en cours?)" }, { status: 404 });
 
       const labelRes = await scFetch(labelUrl, auth);
       if (!labelRes.ok) return NextResponse.json({ error: `Erreur étiquette: ${labelRes.status}` }, { status: labelRes.status });
