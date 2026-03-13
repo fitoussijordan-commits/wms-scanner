@@ -67,7 +67,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ 
         keys: Object.keys(data), 
         count: data.count ?? data.total ?? "?",
-        sample: (data.data || data.results || data.orders || []).slice(0, 2)
+        sample: (data.data || data.results || data.orders || []).slice(0, 2),
+        first_order_keys: Object.keys((data.data || data.results || data.orders || [])[0] || {})
       });
     }
 
