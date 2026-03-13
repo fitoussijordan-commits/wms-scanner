@@ -2791,7 +2791,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                 {/* Status icon */}
                 <div style={{
                   width: 36, height: 36, borderRadius: 8, flexShrink: 0,
-                  background: done ? C.greenSoft : C.bgSec,
+                  background: done ? C.greenSoft : C.border,
                   display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
                 }}>
                   {done ? "✅" : item._isChariot ? "🛒" : "⬜"}
