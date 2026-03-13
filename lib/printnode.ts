@@ -263,10 +263,8 @@ export function generateLocationZPL(locationName: string, locationBarcode: strin
   // "WH/Stock/.../A12-RKC1" → "A12" | "B-A12" → "A12"
   const lastSegment = locationName.split("/").pop() || locationName;
   const shortName = lastSegment.replace(/^B-/i, "").split("-")[0];
-  // Code-barres: idem shortName (reconnu par Odoo)
-  const locBarcode = locationBarcode
-    ? locationBarcode.replace(/^B-/i, "").split("-")[0]
-    : shortName;
+  // Code-barres: valeur complète Odoo (ex: "B-A12") — ne pas stripper
+  const locBarcode = locationBarcode || shortName;
   lines.push(`^FO10,${y}^A0N,40,40^FB${cW},1,0,C^FD${shortName}^FS`);
   y += nameBlock;
   lines.push(barcodeZPL(locBarcode, W, y, bcH, barW));
