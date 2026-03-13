@@ -2868,7 +2868,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           <button onClick={() => printLabel(p)} disabled={printing}
             style={{ flex: 1, padding: 12, background: C.blueSoft, color: C.blue, border: `1px solid ${C.blueBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-            {printing ? "Impression..." : "🖨 Imprimer étiquette"}
+            {printing ? "⏳" : "🚚 Étiquette"}
+          </button>
+          <button onClick={() => printPackingSlip(p.order_number)} disabled={printing}
+            style={{ flex: 1, padding: 12, background: C.greenSoft, color: C.green, border: `1px solid ${C.greenBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            📄 BL
           </button>
         </div>
 

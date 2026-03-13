@@ -131,9 +131,25 @@ export async function GET(req: NextRequest) {
     if (action === "packingslip") {
       const orderNumber = searchParams.get("order_number");
       if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
-      const psRes = await scFetch(`${V2}/packing-slips?order_number=${orderNumber}`, auth);
-      if (!psRes.ok) return NextResponse.json({ error: `Erreur packing slip: ${psRes.status}` }, { status: psRes.status });
-      const pdfBuffer = Buffer.from(await psRes.arrayBuffer());
+      // V2 packing-slips endpoint — try with normal_printer format
+      const psRes = await scFetch(`${V2}/packing-slips?order_number=${orderNumber}&format=normal_printer`, auth);
+      if (!psRes.ok) {
+        const errText = await psRes.text().catch(() => "");
+        return NextResponse.json({ error: `Erreur packing slip ${psRes.status}: ${errText.substring(0, 200)}` }, { status: psRes.status });
+      }
+      const contentType = psRes.headers.get("content-type") || "";
+      if (contentType.includes("application/pdf")) {
+        // Direct PDF response
+        const pdfBuffer = Buffer.from(await psRes.arrayBuffer());
+        return NextResponse.json({ pdfBase64: pdfBuffer.toString("base64") });
+      }
+      // JSON response with URL
+      const psData = await psRes.json();
+      const pdfUrl = psData?.normal_printer || psData?.label?.normal_printer?.[0] || psData?.url;
+      if (!pdfUrl) return NextResponse.json({ error: `BL non disponible: ${JSON.stringify(psData).substring(0, 200)}` }, { status: 404 });
+      const pdfRes = await scFetch(pdfUrl, auth);
+      if (!pdfRes.ok) return NextResponse.json({ error: `Erreur téléchargement BL: ${pdfRes.status}` }, { status: pdfRes.status });
+      const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
       return NextResponse.json({ pdfBase64: pdfBuffer.toString("base64") });
     }
 
