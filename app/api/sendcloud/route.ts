@@ -90,10 +90,18 @@ export async function GET(req: NextRequest) {
       const orderNumber = searchParams.get("order_number");
       if (!orderId) return NextResponse.json({ error: "order_id requis" }, { status: 400 });
 
-      // Step 1: create label via V3 async (creates parcel + label)
+      // Step 1: create label via V3 async — JSON:API format required
       const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
         method: "POST",
-        body: JSON.stringify({ order_ids: [parseInt(orderId)] }),
+        body: JSON.stringify({
+          data: {
+            type: "label",
+            attributes: {
+              integration_id: 527093,
+              order_ids: [parseInt(orderId)],
+            }
+          }
+        }),
       });
 
       // Step 2: find the parcel via V2 by order_number
