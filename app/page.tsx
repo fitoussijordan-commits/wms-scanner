@@ -3763,28 +3763,30 @@ function EshopChariotSkus({ session }: { session: any }) {
   const [skus, setSkus] = useState<string[]>([]);
   const [newSku, setNewSku] = useState("");
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  // Use ref to always have latest skus for Odoo save even if component unmounts
+  const skusRef = React.useRef<string[]>([]);
 
   useEffect(() => {
     if (!session) return;
-odoo.loadChariotSkus(session).then(p => { setSkus(p); setChariotSkusLocal(p); }).catch(() => {});
+    odoo.loadChariotSkus(session).then(p => { setSkus(p); skusRef.current = p; setChariotSkusLocal(p); }).catch(() => {});
   }, [session]);
 
-  const save = async (updated: string[]) => {
+  const save = (updated: string[]) => {
+    skusRef.current = updated;
     setSkus(updated);
     setChariotSkusLocal(updated);
     setSaving(true);
-    try {
-await odoo.saveChariotSkus(session, updated);
-    } catch(e) {
-      console.error("[chariot] save error:", e);
-    } finally {
-      setSaving(false);
-    }
+    setSaved(false);
+    // Fire and forget — use the ref value so unmount doesn't matter
+    odoo.saveChariotSkus(session, updated)
+      .then(() => { setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000); })
+      .catch(e => { console.error("[chariot] save error:", e); setSaving(false); });
   };
 
   const add = () => {
     const s = newSku.trim();
-    if (s && !skus.includes(s)) { save([...skus, s]); setNewSku(""); }
+    if (s && !skusRef.current.includes(s)) { save([...skusRef.current, s]); setNewSku(""); }
   };
 
   return (
@@ -3798,13 +3800,13 @@ await odoo.saveChariotSkus(session, updated);
           onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") add(); }}
           placeholder="SKU..."
           style={{ flex: 1, padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontFamily: "inherit", outline: "none" }} />
-        <button onClick={add} style={{ padding: "8px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>{saving ? "..." : "+"}</button>
+        <button onClick={add} style={{ padding: "8px 14px", background: saving ? C.textMuted : C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>{saving ? "⏳" : saved ? "✓" : "+"}</button>
       </div>
       {skus.length === 0 && <div style={{ fontSize: 11, color: C.textMuted }}>Aucun SKU configuré</div>}
       {skus.map(sku => (
         <div key={sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.border}` }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: C.text, fontFamily: "monospace" }}>{sku}</span>
-          <button onClick={() => save(skus.filter(s => s !== sku))} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✕</button>
+          <button onClick={() => save(skusRef.current.filter(s => s !== sku))} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✕</button>
         </div>
       ))}
     </Section>
