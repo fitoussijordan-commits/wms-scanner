@@ -95,8 +95,7 @@ async function generateEshopPackingSlipPDF(order: {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9);
   doc.setTextColor(...DARK);
-  doc.text("Date de la
-commande", col1X + 3, iy, { lineHeightFactor: 1.4 });
+  doc.text("Date de la\ncommande", col1X + 3, iy, { lineHeightFactor: 1.4 });
   doc.text("Expéditeur", col2X + 3, iy);
   doc.text("Destinataire", col3X + 3, iy);
   iy += 10;
