@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const V2 = "https://panel.sendcloud.sc/api/v2";
+const V3 = "https://panel.sendcloud.sc/api/v3";
 
 function getAuth(): string {
   const pub = process.env.SENDCLOUD_PUBLIC_KEY || "";
@@ -42,6 +43,21 @@ export async function GET(req: NextRequest) {
         parcels = parcels.filter((p: any) => ids.includes(p.status?.id));
       }
       return NextResponse.json({ parcels });
+    }
+
+    // V3: open orders (statut "ouvert" / non encore expédiés)
+    if (action === "orders") {
+      const page = searchParams.get("page") || "1";
+      const data = await scJson(`${V3}/shipping/orders?integration_id=527093&page_size=100&page=${page}`, auth);
+      return NextResponse.json({ orders: data.results || [], count: data.count || 0 });
+    }
+
+    // V3: single order details
+    if (action === "order") {
+      const id = searchParams.get("id");
+      if (!id) return NextResponse.json({ error: "id requis" }, { status: 400 });
+      const data = await scJson(`${V3}/shipping/orders/${id}`, auth);
+      return NextResponse.json({ order: data });
     }
 
     // Get label PDF for a parcel
@@ -88,7 +104,16 @@ export async function GET(req: NextRequest) {
         }));
       } catch (e: any) { results.parcels_error = e.message; }
 
-      // 2. Try /integrations endpoint (for open orders)
+      // 2. Try V3 orders
+      try {
+        const data = await scJson(`${V3}/shipping/orders?integration_id=527093&page_size=5`, auth);
+        results.v3_orders_count = data.count || 0;
+        results.v3_orders_sample = (data.results || []).slice(0, 2).map((o: any) => ({
+          id: o.id, order_number: o.order_number, status: o.status, items: (o.lines || []).length
+        }));
+      } catch (e: any) { results.v3_orders_error = e.message; }
+
+      // 3. Try /integrations endpoint (for open orders)
       try {
         const data = await scJson(`${V2}/integrations`, auth);
         const integrations = data.integrations || data;

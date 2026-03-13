@@ -2504,24 +2504,19 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     try { localStorage.setItem("wms_eshop_prepared", JSON.stringify(Array.from(ids))); } catch {}
   };
 
-  // Load parcels from SendCloud
+  // Load orders from SendCloud V3
   const loadParcels = async () => {
     setLoading(true); setError("");
     try {
-      // Only fetch parcels with status "Announced" (id=1) — label created, ready to prepare
-      const res = await fetch("/api/sendcloud?action=parcels&limit=200");
+      const res = await fetch("/api/sendcloud?action=orders");
       if (!res.ok) { const err = await res.json(); throw new Error(err.error || `Erreur ${res.status}`); }
       const data = await res.json();
-      const allParcels = (data.parcels || []).filter((p: any) => {
-        const sid = p.status?.id;
-        // 1000 = Ready to send
-        return sid === 1000;
-      });
+      const allParcels = data.orders || [];
       setParcels(allParcels);
 
-      // Match product refs with Odoo
+      // Match product refs with Odoo — V3 uses order.lines[].sku
       const allRefs = Array.from(new Set(
-        allParcels.flatMap((p: any) => (p.parcel_items || []).map((item: any) => item.sku)).filter(Boolean)
+        allParcels.flatMap((o: any) => (o.lines || o.parcel_items || []).map((item: any) => item.sku)).filter(Boolean)
       )) as string[];
       if (allRefs.length > 0 && session) {
         const matches = await odoo.matchSupplierRefs(session, allRefs);
@@ -2604,7 +2599,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   if (selectedParcel) {
     const p = selectedParcel;
     const chariotSkus = getChariotSkusLocal();
-    const items = (p.parcel_items || []).filter((item: any) => {
+    const items = (p.lines || p.parcel_items || []).filter((item: any) => {
       const val = parseFloat(item.value || "0");
       const sku = (item.sku || "").toLowerCase();
       // Exclude: negative values, promo/discount lines
@@ -2755,7 +2750,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
       {filteredParcels.map((p: any) => {
         const isPrepared = preparedIds.has(p.id);
-        const items = p.parcel_items || [];
+        const items = p.lines || p.parcel_items || [];
         const statusMsg = p.status?.message || "";
         return (
           <div key={p.id} style={{ ...cardStyle, marginBottom: 8, borderLeft: `3px solid ${isPrepared ? C.green : "#f59e0b"}`, cursor: "pointer" }}
