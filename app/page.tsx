@@ -2498,6 +2498,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   });
   const [printing, setPrinting] = useState(false);
   const [filter, setFilter] = useState<"pending" | "prepared" | "all">("pending");
+  const [chariotSkus, setChariotSkus] = useState<string[]>(() => getChariotSkusLocal());
 
   const savePrepared = (ids: Set<number>) => {
     setPreparedIds(ids);
@@ -2505,6 +2506,20 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   };
 
   // Load orders from SendCloud V3
+  // Load chariot SKUs from Odoo on mount
+  useEffect(() => {
+    if (!session) return;
+    odoo.getConfigParam(session, "wms_eshop_chariot_skus").then(val => {
+      if (val) {
+        try {
+          const parsed = JSON.parse(val);
+          setChariotSkus(parsed);
+          setChariotSkusLocal(parsed);
+        } catch {}
+      }
+    });
+  }, [session]);
+
   const loadParcels = async () => {
     setLoading(true); setError("");
     try {
@@ -2572,7 +2587,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Erreur étiquette"); }
       const data = await res.json();
 
-      const printerId = pn.getSavedPrinterId();
+      const scCfg = pn.getLabelTypeConfig("sendcloud");
+      const printerId = scCfg.printerId || pn.getSavedPrinterId();
       if (printerId && data.labelBase64) {
         const result = await pn.printPdfLabel(printerId, data.labelBase64, `SendCloud ${orderNumber}`);
         if (result.success) {
@@ -2628,7 +2644,6 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   if (selectedParcel) {
     const p = selectedParcel;
     console.log("[eshop] parcel_items:", p.parcel_items, "order_items:", p._raw?.order_items, "full:", JSON.stringify(p).substring(0, 300));
-    const chariotSkus = getChariotSkusLocal();
     const items = (p.parcel_items || p.lines || []).filter((item: any) => {
       const val = parseFloat(item.value || "0");
       const sku = (item.sku || "").toLowerCase();
@@ -3671,6 +3686,7 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
     { key: "palette", label: "Étiquette palette", icon: "🏭", hasSize: true },
     { key: "blank", label: "Étiquette vierge", icon: "✏️", hasSize: true },
     { key: "picking", label: "Étiquette colis (picking)", icon: "📦", hasSize: true },
+    { key: "sendcloud", label: "Étiquette SendCloud", icon: "🚚", hasSize: false },
   ];
 
   const [configs, setConfigs] = useState<Record<LabelType, pn.LabelTypeConfig>>(() => pn.getAllLabelTypeConfigs());

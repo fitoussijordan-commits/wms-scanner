@@ -645,7 +645,7 @@ export function isConfigured(): boolean {
 // ============================================
 // PER-TYPE LABEL CONFIG
 // ============================================
-export type LabelType = "product" | "lot" | "location" | "palette" | "blank" | "picking";
+export type LabelType = "product" | "lot" | "location" | "palette" | "blank" | "picking" | "sendcloud";
 
 export interface LabelTypeConfig {
   printerId: number | null;
@@ -670,7 +670,7 @@ export function saveLabelTypeConfig(type: LabelType, config: Partial<LabelTypeCo
 }
 
 export function getAllLabelTypeConfigs(): Record<LabelType, LabelTypeConfig> {
-  const types: LabelType[] = ["product", "lot", "location", "palette", "blank", "picking"];
+  const types: LabelType[] = ["product", "lot", "location", "palette", "blank", "picking", "sendcloud"];
   const result = {} as Record<LabelType, LabelTypeConfig>;
   for (const t of types) result[t] = getLabelTypeConfig(t);
   return result;
