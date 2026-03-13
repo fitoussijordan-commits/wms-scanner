@@ -2493,15 +2493,15 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [selectedParcel, setSelectedParcel] = useState<any>(null);
   const [matchData, setMatchData] = useState<Record<string, any>>({});
   const [locationData, setLocationData] = useState<Record<number, any>>({});
-  const [preparedIds, setPreparedIds] = useState<Set<number>>(new Set());
+  const [preparedIds, setPreparedIds] = useState<Set<string>>(new Set());
   const [printing, setPrinting] = useState(false);
   const [filter, setFilter] = useState<"pending" | "prepared" | "all">("pending");
   const [chariotSkus, setChariotSkus] = useState<string[]>([]);
   const [chariotLoaded, setChariotLoaded] = useState(false);
 
-  const savePrepared = async (ids: Set<number>) => {
+  const savePrepared = async (ids: Set<string>) => {
     setPreparedIds(ids);
-    try { await odoo.setConfigParam(session, "wms_eshop_prepared", JSON.stringify(Array.from(ids))); } catch {}
+    try { await odoo.savePreparedOrders(session, Array.from(ids)); } catch(e) { console.error("savePrepared:", e); }
   };
 
   // Load orders from SendCloud V3
@@ -2513,9 +2513,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       if (val) { try { const p = JSON.parse(val); setChariotSkus(p); setChariotSkusLocal(p); } catch {} }
       setChariotLoaded(true);
     }).catch((e) => { console.log("[chariot] error:", e); setChariotLoaded(true); });
-    odoo.getConfigParam(session, "wms_eshop_prepared").then(val => {
-      if (val) { try { setPreparedIds(new Set(JSON.parse(val))); } catch {} }
-    });
+    odoo.loadPreparedOrders(session).then(orders => {
+      if (orders.length) setPreparedIds(new Set<string>(orders));
+    }).catch(() => {});
   }, [session]);
 
   const loadParcels = async () => {
@@ -2624,7 +2624,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     setPrinting(false);
   };
 
-  const markPrepared = async (parcelId: number) => {
+  const markPrepared = async (parcelId: string) => {
     const newSet = new Set(Array.from(preparedIds));
     newSet.add(parcelId);
     savePrepared(newSet);
@@ -2632,7 +2632,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     onToast("✓ Marqué préparé");
   };
 
-  const unmarkPrepared = async (parcelId: number) => {
+  const unmarkPrepared = async (parcelId: string) => {
     const newSet = new Set(Array.from(preparedIds));
     newSet.delete(parcelId);
     savePrepared(newSet);
@@ -2645,15 +2645,23 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     return null;
   };
 
-  // Filter parcels
-  const filteredParcels = parcels.filter(p => {
-    if (filter === "pending") return !preparedIds.has(p.id);
-    if (filter === "prepared") return preparedIds.has(p.id);
+  // Include prepared orders that may no longer appear in SendCloud open list
+  const allVisibleParcels = [
+    ...parcels,
+    // Add prepared orders not already in parcels list (fetched from prepared state)
+    ...Array.from(preparedIds)
+      .filter(on => !parcels.find((p: any) => p.order_number === on))
+      .map(on => ({ order_number: on, _preparedOnly: true, id: on, name: "—", city: "", parcel_items: [] }))
+  ];
+
+  const filteredParcels = allVisibleParcels.filter((p: any) => {
+    if (filter === "pending") return !preparedIds.has(p.order_number);
+    if (filter === "prepared") return preparedIds.has(p.order_number);
     return true;
   });
 
-  const pendingCount = parcels.filter(p => !preparedIds.has(p.id)).length;
-  const preparedCount = parcels.filter(p => preparedIds.has(p.id)).length;
+  const pendingCount = allVisibleParcels.filter((p: any) => !preparedIds.has(p.order_number)).length;
+  const preparedCount = preparedIds.size;
 
   // Detail view — scan-based preparation
   const [scannedSkus, setScannedSkus] = useState<Record<string, number>>({});
@@ -2706,7 +2714,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     if (newCount >= required) { vibrateSuccess(); onToast(`✓ ${matched.description || matched.sku}`); }
   };
 
-  useScannerListener(handleEshopScan, !!selectedParcel && !preparedIds.has(selectedParcel?.id));
+  useScannerListener(handleEshopScan, !!selectedParcel && !preparedIds.has(selectedParcel?.order_number));
 
   if (selectedParcel) {
     const p = selectedParcel;
@@ -2719,7 +2727,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       ...item,
       _isChariot: chariotSkus.some(ex => ex.toLowerCase() === (item.sku || "").toLowerCase()),
     }));
-    const isPrepared = preparedIds.has(p.id);
+    const isPrepared = preparedIds.has(p.order_number);
 
     // Sort items by location for optimal picking path
     items.sort((a: any, b: any) => {
@@ -2886,7 +2894,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
               onToast("⏳ Impression étiquette + BL...");
               await printLabel(p);
               await printPackingSlip(p.order_number);
-              await markPrepared(p.id);
+              await markPrepared(p.order_number);
               setSelectedParcel(null);
               onToast("✓ Préparation confirmée");
             }}
@@ -2896,7 +2904,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>}
             label="Annuler la préparation"
             color={C.orange}
-            onClick={async () => { await unmarkPrepared(p.id); setSelectedParcel(null); }}
+            onClick={async () => { await unmarkPrepared(p.order_number); setSelectedParcel(null); }}
           />
         )}
       </>
@@ -2937,7 +2945,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       {!loading && parcels.length === 0 && <Alert type="info">Aucune commande trouvée. Vérifie les clés API SendCloud dans les variables Vercel.</Alert>}
 
       {filteredParcels.map((p: any) => {
-        const isPrepared = preparedIds.has(p.id);
+        const isPrepared = preparedIds.has(p.order_number);
         const items = p.parcel_items || p.lines || [];
         const statusMsg = p.status?.message || "";
         return (

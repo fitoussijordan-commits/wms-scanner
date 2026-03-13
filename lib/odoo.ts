@@ -539,6 +539,39 @@ export async function getProductLocations(session: OdooSession, productIds: numb
 }
 
 // ============================================
+// ESHOP PREPARED ORDERS — shared via ir.attachment, reset daily
+// ============================================
+
+export async function savePreparedOrders(session: OdooSession, orderNumbers: string[]) {
+  const today = new Date().toISOString().split("T")[0];
+  const jsonStr = JSON.stringify({ date: today, orders: orderNumbers });
+  const bytes = new TextEncoder().encode(jsonStr);
+  let b64 = "";
+  for (let i = 0; i < bytes.length; i += 8192)
+    b64 += String.fromCharCode(...Array.from(bytes.slice(i, i + 8192)));
+  b64 = btoa(b64);
+  const fileName = "eshop_prepared_orders.json";
+  const existing = await searchRead(session, "ir.attachment", [["name", "=", fileName]], ["id"], 1);
+  if (existing.length > 0) {
+    await write(session, "ir.attachment", [existing[0].id], { datas: b64 });
+  } else {
+    await create(session, "ir.attachment", { name: fileName, type: "binary", datas: b64, mimetype: "application/json", public: true });
+  }
+}
+
+export async function loadPreparedOrders(session: OdooSession): Promise<string[]> {
+  const today = new Date().toISOString().split("T")[0];
+  const attachments = await searchRead(session, "ir.attachment", [["name", "=", "eshop_prepared_orders.json"]], ["datas"], 1);
+  if (!attachments.length || !attachments[0].datas) return [];
+  const binary = atob(attachments[0].datas);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const data = JSON.parse(new TextDecoder().decode(bytes));
+  // Reset if not today
+  if (data.date !== today) return [];
+  return data.orders || [];
+}
+
 // ESHOP CHARIOT SKUS — shared list via ir.attachment
 // ============================================
 
