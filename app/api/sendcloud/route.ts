@@ -118,6 +118,16 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Packing slip PDF from V2
+    if (action === "packingslip") {
+      const orderNumber = searchParams.get("order_number");
+      if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
+      const psRes = await scFetch(`${V2}/packing-slips?order_number=${orderNumber}`, auth);
+      if (!psRes.ok) return NextResponse.json({ error: `Erreur packing slip: ${psRes.status}` }, { status: psRes.status });
+      const pdfBuffer = Buffer.from(await psRes.arrayBuffer());
+      return NextResponse.json({ pdfBase64: pdfBuffer.toString("base64") });
+    }
+
     // Debug — show all distinct statuses and try multiple endpoints
     if (action === "debug") {
       const results: any = {};

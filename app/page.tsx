@@ -2578,6 +2578,23 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   useEffect(() => { loadParcels(); }, []);
 
   // Print SendCloud label
+  const printPackingSlip = async (orderNumber: string) => {
+    try {
+      const res = await fetch(`/api/sendcloud?action=packingslip&order_number=${orderNumber}`);
+      if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Erreur BL"); }
+      const data = await res.json();
+      const psCfg = pn.getLabelTypeConfig("packingslip");
+      const printerId = psCfg.printerId || pn.getSavedPrinterId();
+      if (printerId && data.pdfBase64) {
+        await pn.printPdfLabel(printerId, data.pdfBase64, `BL ${orderNumber}`);
+      } else if (data.pdfBase64) {
+        const byteArray = Uint8Array.from(atob(data.pdfBase64), c => c.charCodeAt(0));
+        const blob = new Blob([byteArray], { type: "application/pdf" });
+        window.open(URL.createObjectURL(blob), "_blank");
+      }
+    } catch (e: any) { onToast(`⚠ BL: ${e.message}`); }
+  };
+
   const printLabel = async (p: any) => {
     setPrinting(true);
     try {
@@ -2850,7 +2867,14 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             label={allScanned ? "Confirmer la préparation" : "Forcer comme préparé"}
             sub={allScanned ? `${items.length} article(s) tous scannés` : `${items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length}/${items.length} scannés`}
             color={allScanned ? C.green : C.orange}
-            onClick={() => { markPrepared(p.id); setSelectedParcel(null); }}
+            onClick={async () => {
+              markPrepared(p.id);
+              setSelectedParcel(null);
+              onToast("⏳ Impression étiquette + BL...");
+              await printLabel(p);
+              await printPackingSlip(p.order_number);
+              onToast("✓ Étiquette + BL imprimés");
+            }}
           />
         ) : (
           <BigButton
@@ -3791,6 +3815,7 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
     { key: "blank", label: "Étiquette vierge", icon: "✏️", hasSize: true },
     { key: "picking", label: "Étiquette colis (picking)", icon: "📦", hasSize: true },
     { key: "sendcloud", label: "Étiquette SendCloud", icon: "🚚", hasSize: false },
+    { key: "packingslip", label: "Bon de livraison (BL)", icon: "📄", hasSize: false },
   ];
 
   const [configs, setConfigs] = useState<Record<LabelType, pn.LabelTypeConfig>>(() => pn.getAllLabelTypeConfigs());
