@@ -5,7 +5,7 @@ import * as odoo from "@/lib/odoo";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface StockAlert { productId: number; ref: string; name: string; qty: number; threshold: number; }
-interface ConsoRow { ref: string; name: string; months: Record<string, number>; total: number; }
+interface ConsoRow { ref: string; name: string; months: Record<string, number>; total: number; avg: number; }
 interface DeliveryRow { date: string; count: number; lines: number; }
 interface MoveRow { date: string; type: string; ref: string; qty: number; lot: string; from: string; to: string; picking: string; }
 
@@ -85,6 +85,7 @@ export default function Dashboard() {
   const [consoMonths, setConsoMonths] = useState(6);
   const [delStart, setDelStart] = useState(() => { const d = new Date(); d.setDate(1); return d.toISOString().split("T")[0]; });
   const [delEnd, setDelEnd] = useState(() => new Date().toISOString().split("T")[0]);
+  const [consoSearch, setConsoSearch] = useState("");
   const [moveRef, setMoveRef] = useState("");
   const [moveSearched, setMoveSearched] = useState(false);
   const [editThresh, setEditThresh] = useState<number | null>(null);
@@ -208,8 +209,14 @@ export default function Dashboard() {
       const rows: ConsoRow[] = Object.entries(byProd).map(([, v]) => ({
         ref: v.ref, name: v.name, months: v.months,
         total: Object.values(v.months).reduce((s, n) => s + n, 0),
+        avg: 0,
       }));
       rows.sort((a, b) => b.total - a.total);
+      // compute avg over months with activity
+      rows.forEach(r => {
+        const activeMonths = Object.values(r.months).filter(v => v > 0).length;
+        r.avg = activeMonths > 0 ? Math.round(r.total / activeMonths) : 0;
+      });
       setConso(rows);
     } catch (e: any) { setError(e.message); }
     finally { setLoading(false); }
@@ -257,18 +264,29 @@ export default function Dashboard() {
       const rawMoves = await odoo.searchRead(session, "stock.move", [
         ["product_id", "=", productId],
         ["state", "=", "done"],
-      ], ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids", "picking_type_code"], 200, "date desc");
+      ], ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids"], 200, "date desc");
 
-      const rows: MoveRow[] = rawMoves.map((m: any) => ({
-        date: m.date,
-        type: m.picking_type_code === "outgoing" ? "Sortie" : m.picking_type_code === "incoming" ? "Entrée" : "Interne",
-        ref: prods[0].default_code || "",
-        qty: m.product_qty,
-        lot: m.lot_ids?.join(", ") || "—",
-        from: m.location_id?.[1] || "—",
-        to: m.location_dest_id?.[1] || "—",
-        picking: m.picking_id?.[1] || "—",
-      }));
+      // Determine type from location usage
+      const locIds = [...new Set(rawMoves.flatMap((m: any) => [m.location_id?.[0], m.location_dest_id?.[0]]).filter(Boolean))];
+      const locs = locIds.length ? await odoo.searchRead(session, "stock.location", [["id", "in", locIds]], ["id", "usage"], 200) : [];
+      const locUsage: Record<number, string> = Object.fromEntries(locs.map((l: any) => [l.id, l.usage]));
+
+      const rows: MoveRow[] = rawMoves.map((m: any) => {
+        const fromUsage = locUsage[m.location_id?.[0]] || "";
+        const toUsage = locUsage[m.location_dest_id?.[0]] || "";
+        const type = fromUsage === "supplier" || toUsage === "internal" && fromUsage !== "internal" ? "Entrée"
+          : toUsage === "customer" || fromUsage === "internal" && toUsage !== "internal" ? "Sortie" : "Interne";
+        return {
+          date: m.date,
+          type,
+          ref: prods[0].default_code || "",
+          qty: m.product_qty,
+          lot: Array.isArray(m.lot_ids) ? m.lot_ids.join(", ") || "—" : "—",
+          from: m.location_id?.[1] || "—",
+          to: m.location_dest_id?.[1] || "—",
+          picking: m.picking_id?.[1] || "—",
+        };
+      });
       setMoves(rows);
     } catch (e: any) { setError(e.message); }
     finally { setLoading(false); }
@@ -277,7 +295,7 @@ export default function Dashboard() {
   // Auto-load on tab change
   useEffect(() => {
     if (!session) return;
-    if (tab === "alerts") loadAlerts();
+    if (tab === "alerts") { loadAlerts(); if (conso.length === 0) loadConso(); }
     if (tab === "conso") loadConso();
     if (tab === "deliveries") loadDeliveries();
   }, [tab, session]);
@@ -353,57 +371,89 @@ export default function Dashboard() {
         {/* ══ ALERTES STOCK ══ */}
         {tab === "alerts" && (
           <>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
               <div>
                 <h2 style={{ fontSize: 20, fontWeight: 800, color: C.text, margin: "0 0 4px" }}>Alertes stock</h2>
-                <p style={{ fontSize: 14, color: C.textMuted, margin: 0 }}>Définissez vos seuils min par produit. Les alertes se déclenchent quand le stock est ≤ au seuil.</p>
+                <p style={{ fontSize: 14, color: C.textMuted, margin: 0 }}>Définissez vos seuils min. Les jours restants sont estimés d'après la conso moyenne.</p>
               </div>
               <button onClick={loadAlerts} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
                 {loading ? <Spinner /> : "↻"} Actualiser
               </button>
             </div>
 
-            {/* Alertes actives */}
+            {/* ── Alertes actives ── */}
             {alerts.length > 0 && (
               <div style={{ marginBottom: 28 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: C.orange, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>🔴 {alerts.length} article(s) en alerte</div>
-                {alerts.map(a => {
-                  const ratio = a.qty / a.threshold;
-                  const color = ratio <= 0.25 ? C.red : ratio <= 0.75 ? C.orange : C.green;
-                  return (
-                    <div key={a.productId} style={{ background: C.card, border: `1.5px solid ${color}22`, borderRadius: 12, padding: "14px 18px", marginBottom: 8, display: "flex", alignItems: "center", gap: 16 }}>
-                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>[{a.ref}] {a.name}</div>
-                        <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>Stock actuel : <strong style={{ color }}>{a.qty}</strong> · Seuil : {a.threshold}</div>
-                        <div style={{ height: 4, background: `${color}22`, borderRadius: 2, marginTop: 6, overflow: "hidden" }}>
-                          <div style={{ height: "100%", width: `${Math.min(ratio * 100, 100)}%`, background: color, borderRadius: 2 }} />
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.red, marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.8, display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.red, animation: "pulse 1.5s ease-in-out infinite" }} />
+                  {alerts.length} article(s) en alerte
+                </div>
+                <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} } @keyframes spin { to{transform:rotate(360deg)} }`}</style>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {alerts.map(a => {
+                    const ratio = a.qty / a.threshold;
+                    const color = ratio <= 0.25 ? C.red : ratio <= 0.75 ? C.orange : "#ca8a04";
+                    const bgColor = ratio <= 0.25 ? C.redSoft : ratio <= 0.75 ? C.orangeSoft : "#fefce8";
+                    const borderColor = ratio <= 0.25 ? C.redBorder : ratio <= 0.75 ? C.orangeBorder : "#fde68a";
+                    // Estimate days remaining from conso avg
+                    const consoRow = conso.find(c => c.ref === a.ref);
+                    const dailyAvg = consoRow ? consoRow.avg / 30 : 0;
+                    const daysLeft = dailyAvg > 0 ? Math.round(a.qty / dailyAvg) : null;
+                    const daysLabel = daysLeft === null ? "Conso inconnue" : daysLeft <= 0 ? "Rupture imminente" : daysLeft === 1 ? "1 jour restant" : `${daysLeft} jours restants`;
+                    const status = daysLeft === null ? "⚠️" : daysLeft <= 7 ? "🔴" : daysLeft <= 30 ? "🟠" : "🟡";
+                    return (
+                      <div key={a.productId} style={{ background: bgColor, border: `1.5px solid ${borderColor}`, borderRadius: 14, padding: "16px 20px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>
+                              {a.ref && <span style={{ color: C.blue, marginRight: 6 }}>[{a.ref}]</span>}
+                              {a.name}
+                            </div>
+                            <div style={{ display: "flex", gap: 16, marginTop: 6, flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 13, color: C.textSec }}>Stock : <strong style={{ color, fontSize: 15 }}>{a.qty}</strong></span>
+                              <span style={{ fontSize: 13, color: C.textSec }}>Seuil : <strong>{a.threshold}</strong></span>
+                              {consoRow && <span style={{ fontSize: 13, color: C.textSec }}>Moy : <strong>{consoRow.avg}/mois</strong></span>}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: "right", flexShrink: 0 }}>
+                            <div style={{ fontSize: 20 }}>{status}</div>
+                            <div style={{ fontSize: 12, fontWeight: 700, color, marginTop: 2, whiteSpace: "nowrap" }}>{daysLabel}</div>
+                          </div>
+                        </div>
+                        {/* Barre de stock */}
+                        <div style={{ height: 6, background: `${color}22`, borderRadius: 3, marginTop: 12, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${Math.min(ratio * 100, 100)}%`, background: color, borderRadius: 3, transition: "width .5s" }} />
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+                          <span style={{ fontSize: 11, color: C.textMuted }}>0</span>
+                          <span style={{ fontSize: 11, color: C.textMuted }}>Seuil : {a.threshold}</span>
                         </div>
                       </div>
-                      <button onClick={() => { setEditThresh(a.productId); setEditVal(String(a.threshold)); }} style={{ padding: "6px 12px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit", color: C.textSec }}>
-                        Modifier seuil
-                      </button>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             )}
 
-            {/* Gestion des seuils */}
+            {alerts.length === 0 && Object.keys(stockMap).length > 0 && (
+              <div style={{ background: C.greenSoft, border: `1.5px solid ${C.greenBorder}`, borderRadius: 14, padding: "20px 24px", marginBottom: 24, display: "flex", alignItems: "center", gap: 16 }}>
+                <div style={{ fontSize: 32 }}>✅</div>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: C.green }}>Tous les stocks sont OK</div>
+                  <div style={{ fontSize: 13, color: C.textMuted, marginTop: 2 }}>Aucun article n'a atteint son seuil d'alerte.</div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Gérer les seuils ── */}
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 20 }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>Gérer les seuils</div>
-              <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 16 }}>Définissez un seuil minimum pour chaque produit que vous voulez surveiller.</div>
-              <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-                <input value={editVal} onChange={e => setEditVal(e.target.value)} placeholder="Seuil minimum (ex: 50)"
-                  type="number" min="0"
-                  style={{ flex: 1, padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.bg }} />
-              </div>
-              {/* Product list with thresholds */}
+              <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 14 }}>Cliquez sur "+ Seuil" pour surveiller un article.</div>
               <input value={stockSearch} onChange={e => setStockSearch(e.target.value)}
                 placeholder="Filtrer par référence ou nom..."
                 style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: C.bg, marginBottom: 12, boxSizing: "border-box" }} />
               <div style={{ maxHeight: 400, overflowY: "auto" }}>
-                {Object.entries(stockMap).length === 0 && !loading && (
+                {Object.keys(stockMap).length === 0 && !loading && (
                   <div style={{ color: C.textMuted, fontSize: 14, textAlign: "center", padding: 20 }}>Cliquez sur "Actualiser" pour charger les produits</div>
                 )}
                 {Object.entries(stockMap).filter(([, data]) => !stockSearch || data.ref.toLowerCase().includes(stockSearch.toLowerCase()) || data.name.toLowerCase().includes(stockSearch.toLowerCase())).map(([pidStr, data]) => {
@@ -413,32 +463,32 @@ export default function Dashboard() {
                   const isAlert = thresh !== undefined && qty <= thresh;
                   return (
                     <div key={pid} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, color: C.text, fontWeight: thresh !== undefined ? 600 : 400 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, color: C.text, fontWeight: thresh !== undefined ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {ref && <span style={{ color: C.blue, fontWeight: 700, marginRight: 6 }}>[{ref}]</span>}
                           {name}
                         </div>
-                        <div style={{ fontSize: 12, color: isAlert ? C.red : C.textMuted }}>Stock : {qty}{thresh !== undefined ? ` · Seuil : ${thresh}` : ""}</div>
+                        <div style={{ fontSize: 12, color: isAlert ? C.red : C.textMuted }}>
+                          Stock : <strong>{qty}</strong>{thresh !== undefined ? ` · Seuil : ${thresh}` : ""}
+                          {isAlert && <span style={{ marginLeft: 6, color: C.red, fontWeight: 700 }}>⚠ Alerte</span>}
+                        </div>
                       </div>
                       {editThresh === pid ? (
-                        <div style={{ display: "flex", gap: 6 }}>
+                        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                           <input value={editVal} onChange={e => setEditVal(e.target.value)} type="number" min="0"
                             style={{ width: 80, padding: "6px 8px", border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit" }}
                             autoFocus onKeyDown={e => {
-                              if (e.key === "Enter") {
-                                const v = Number(editVal);
-                                if (!isNaN(v) && v >= 0) { saveThresholds({ ...thresholds, [pid]: v }); }
-                                setEditThresh(null);
-                              }
+                              if (e.key === "Enter") { const v = Number(editVal); if (!isNaN(v) && v >= 0) saveThresholds({ ...thresholds, [pid]: v }); setEditThresh(null); }
+                              if (e.key === "Escape") setEditThresh(null);
                             }} />
                           <button onClick={() => { const v = Number(editVal); if (!isNaN(v) && v >= 0) saveThresholds({ ...thresholds, [pid]: v }); setEditThresh(null); }}
                             style={{ padding: "6px 10px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>✓</button>
-                          <button onClick={() => setEditThresh(null)}
-                            style={{ padding: "6px 10px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>✕</button>
+                          <button onClick={() => { if (thresh !== undefined) { const t = {...thresholds}; delete t[pid]; saveThresholds(t); } setEditThresh(null); }}
+                            style={{ padding: "6px 10px", background: C.bg, color: C.red, border: `1px solid ${C.redBorder}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>🗑</button>
                         </div>
                       ) : (
                         <button onClick={() => { setEditThresh(pid); setEditVal(thresh !== undefined ? String(thresh) : ""); }}
-                          style={{ padding: "6px 12px", background: thresh !== undefined ? C.orangeSoft : C.bg, color: thresh !== undefined ? C.orange : C.textMuted, border: `1px solid ${thresh !== undefined ? C.orangeBorder : C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: thresh !== undefined ? 700 : 400 }}>
+                          style={{ flexShrink: 0, padding: "6px 12px", background: thresh !== undefined ? (isAlert ? C.redSoft : C.orangeSoft) : C.bg, color: thresh !== undefined ? (isAlert ? C.red : C.orange) : C.textMuted, border: `1px solid ${thresh !== undefined ? (isAlert ? C.redBorder : C.orangeBorder) : C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: thresh !== undefined ? 700 : 400 }}>
                           {thresh !== undefined ? `Seuil: ${thresh}` : "+ Seuil"}
                         </button>
                       )}
@@ -450,7 +500,7 @@ export default function Dashboard() {
           </>
         )}
 
-        {/* ══ CONSO MENSUELLE ══ */}
+                {/* ══ CONSO MENSUELLE ══ */}
         {tab === "conso" && (
           <>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
@@ -470,6 +520,13 @@ export default function Dashboard() {
             </div>
 
             {conso.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <input value={consoSearch} onChange={e => setConsoSearch(e.target.value)}
+                  placeholder="Filtrer par référence ou désignation..."
+                  style={{ width: "100%", padding: "10px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.card, boxSizing: "border-box" }} />
+              </div>
+            )}
+            {conso.length > 0 && (
               <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, overflow: "hidden" }}>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", fontSize: 13 }}>
@@ -478,11 +535,12 @@ export default function Dashboard() {
                         <th style={{ padding: "12px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", position: "sticky", left: 0, background: C.bg }}>Référence</th>
                         <th style={{ padding: "12px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}`, minWidth: 200 }}>Désignation</th>
                         {months.map(m => <th key={m} style={{ padding: "12px 12px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}`, textAlign: "center", whiteSpace: "nowrap" }}>{fmtMonth(m)}</th>)}
+                        <th style={{ padding: "12px 12px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}`, textAlign: "center", whiteSpace: "nowrap" }}>Moy/mois</th>
                         <th style={{ padding: "12px 16px", fontWeight: 700, color: C.text, borderBottom: `1px solid ${C.border}`, textAlign: "center" }}>Total</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {conso.map((row, i) => {
+                      {conso.filter(row => !consoSearch || row.ref.toLowerCase().includes(consoSearch.toLowerCase()) || row.name.toLowerCase().includes(consoSearch.toLowerCase())).map((row, i) => {
                         const max = Math.max(...months.map(m => row.months[m] || 0));
                         return (
                           <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -497,6 +555,7 @@ export default function Dashboard() {
                                 </td>
                               );
                             })}
+                            <td style={{ padding: "11px 12px", textAlign: "center", fontWeight: 600, color: C.purple }}>{row.avg > 0 ? row.avg : "—"}</td>
                             <td style={{ padding: "11px 16px", textAlign: "center", fontWeight: 800, color: C.text }}>{row.total}</td>
                           </tr>
                         );
