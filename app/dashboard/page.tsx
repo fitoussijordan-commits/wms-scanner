@@ -290,7 +290,7 @@ export default function Dashboard() {
       ], ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids"], 200, "date desc");
 
       // Determine type from location usage
-      const locIds = [...new Set(rawMoves.flatMap((m: any) => [m.location_id?.[0], m.location_dest_id?.[0]]).filter(Boolean))];
+      const locIds = Array.from(new Set(rawMoves.flatMap((m: any) => [m.location_id?.[0], m.location_dest_id?.[0]]).filter(Boolean))) as number[];
       const locs = locIds.length ? await odoo.searchRead(session, "stock.location", [["id", "in", locIds]], ["id", "usage"], 200) : [];
       const locUsage: Record<number, string> = Object.fromEntries(locs.map((l: any) => [l.id, l.usage]));
 
