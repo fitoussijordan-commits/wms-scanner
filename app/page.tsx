@@ -961,7 +961,24 @@ export default function Page() {
     setLoading(false);
   };
 
-  const validatePrepPicking = async () => {
+  // +1 / -1 / tout mettre sur une move line
+  const adjustMoveLineQty = async (moveLineId: number, newQty: number) => {
+    if (!session) return;
+    setLoading(true);
+    try {
+      const ml = pickingMoveLines.find((m: any) => m.id === moveLineId);
+      if (!ml) return;
+      const clamped = Math.max(0, Math.min(newQty, ml.reserved_uom_qty || 0));
+      await odoo.setMoveLineQtyDone(session, moveLineId, clamped, ml.lot_id?.[0] || null);
+      const updatedLines = await odoo.getPickingMoveLines(session, selectedPicking!.id);
+      setPickingMoveLines(updatedLines);
+      if (clamped >= (ml.reserved_uom_qty || 0)) {
+        setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(moveLineId); return n; });
+        vibrateSuccess();
+      }
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
     if (!session || !selectedPicking) return;
     setLoading(true); setError("");
     try {
@@ -1252,6 +1269,7 @@ export default function Page() {
             onTakeAll={prepTakeAll}
             onCancelStep={() => setPrepStep(null)}
             onAutoFill={autoFillPicking}
+            onAdjustQty={adjustMoveLineQty}
             onValidate={validatePrepPicking}
             onBack={() => { setScreen("prep"); setPrepStep(null); loadPickings(); }}
             onReport={openPickingReport}
@@ -4368,7 +4386,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefr
 // ============================================
 // PREPARATION DETAIL SCREEN
 // ============================================
-function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onTakeAll, onCancelStep, onAutoFill, onValidate, onBack, onReport }: any) {
+function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, onValidate, onBack, onReport }: any) {
   // ── Colis state (local) ──
   const [colis, setColis] = useState<{ id: number; lines: number[] }[]>([]);
   const [currentColisId, setCurrentColisId] = useState<number | null>(null);
@@ -4540,12 +4558,38 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
             </div>
           )}
 
-          {/* Quantité */}
-          <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 8 }}>
-            <span style={{ fontSize: 32, fontWeight: 900, color: C.text }}>{currentLine.qty_done || 0}</span>
-            <span style={{ fontSize: 20, color: C.textMuted }}>/</span>
-            <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{currentLine.reserved_uom_qty || 0}</span>
-            <span style={{ fontSize: 13, color: C.textMuted, marginLeft: 4 }}>{currentLine.product_uom_id?.[1] || ""}</span>
+          {/* Quantité + contrôles */}
+          <div style={{ marginTop: 12 }}>
+            {/* Compteur +/- */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+              <button
+                onClick={() => onAdjustQty(currentLine.id, (currentLine.qty_done || 0) - 1)}
+                disabled={loading || (currentLine.qty_done || 0) <= 0}
+                style={{ width: 44, height: 44, borderRadius: 12, border: `1.5px solid ${C.border}`, background: C.bg, fontSize: 22, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", opacity: (currentLine.qty_done || 0) <= 0 ? 0.3 : 1 }}>
+                −
+              </button>
+              <div style={{ flex: 1, textAlign: "center" }}>
+                <span style={{ fontSize: 38, fontWeight: 900, color: C.text }}>{currentLine.qty_done || 0}</span>
+                <span style={{ fontSize: 20, color: C.textMuted, margin: "0 6px" }}>/</span>
+                <span style={{ fontSize: 22, fontWeight: 700, color: C.textSec }}>{currentLine.reserved_uom_qty || 0}</span>
+                <span style={{ fontSize: 13, color: C.textMuted, marginLeft: 4 }}>{currentLine.product_uom_id?.[1] || ""}</span>
+              </div>
+              <button
+                onClick={() => onAdjustQty(currentLine.id, (currentLine.qty_done || 0) + 1)}
+                disabled={loading || (currentLine.qty_done || 0) >= (currentLine.reserved_uom_qty || 0)}
+                style={{ width: 44, height: 44, borderRadius: 12, border: `1.5px solid ${C.border}`, background: C.bg, fontSize: 22, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", opacity: (currentLine.qty_done || 0) >= (currentLine.reserved_uom_qty || 0) ? 0.3 : 1 }}>
+                +
+              </button>
+            </div>
+            {/* Bouton "Tout mettre" — visible dès qu'on a scanné au moins 1 */}
+            {locOk && (currentLine.qty_done || 0) > 0 && (currentLine.qty_done || 0) < (currentLine.reserved_uom_qty || 0) && (
+              <button
+                onClick={() => onAdjustQty(currentLine.id, currentLine.reserved_uom_qty || 0)}
+                disabled={loading}
+                style={{ width: "100%", padding: "11px 0", borderRadius: 12, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(34,197,94,0.35)", letterSpacing: 0.3 }}>
+                ✓ Tout mettre — {currentLine.reserved_uom_qty || 0} {currentLine.product_uom_id?.[1] || ""}
+              </button>
+            )}
           </div>
         </div>
       ) : null}
