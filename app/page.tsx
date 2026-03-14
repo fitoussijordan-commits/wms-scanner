@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as odoo from "@/lib/odoo";
 import * as pn from "@/lib/printnode";
 
@@ -4369,170 +4369,83 @@ function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefr
 // PREPARATION DETAIL SCREEN
 // ============================================
 function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onTakeAll, onCancelStep, onAutoFill, onValidate, onBack, onReport }: any) {
-  const totalLines = moveLines.length;
-  const doneLines = moveLines.filter((ml: any) => (ml.qty_done || 0) >= (ml.reserved_uom_qty || 0)).length;
-  const progress = totalLines > 0 ? Math.round((doneLines / totalLines) * 100) : 0;
+  // ── Colis state (local) ──
+  const [colis, setColis] = useState<{ id: number; lines: number[] }[]>([]);
+  const [currentColisId, setCurrentColisId] = useState<number | null>(null);
+  const [colisLines, setColisLines] = useState<Set<number>>(new Set());
+  const [showColisSummary, setShowColisSummary] = useState(false);
+  const [locOk, setLocOk] = useState(false);
+
+  // ── Compute sorted move lines one per card ──
+  const allLines = useMemo(() => {
+    return [...moveLines].sort((a: any, b: any) => {
+      const la = (a.location_id?.[1] || "").toLowerCase();
+      const lb = (b.location_id?.[1] || "").toLowerCase();
+      return la < lb ? -1 : la > lb ? 1 : 0;
+    });
+  }, [moveLines]);
+
+  const currentLine = useMemo(() => {
+    return allLines.find((ml: any) => (ml.qty_done || 0) < (ml.reserved_uom_qty || 0));
+  }, [allLines]);
+
+  const doneLines = allLines.filter((ml: any) => (ml.qty_done || 0) >= (ml.reserved_uom_qty || 0)).length;
+  const totalLines = allLines.length;
   const allDone = totalLines > 0 && doneLines === totalLines;
+  const progress = totalLines > 0 ? Math.round((doneLines / totalLines) * 100) : 0;
 
-  // Group moves by product + attach related move lines
-  const movesByProduct = moves.map((m: any) => {
-    const relatedLines = moveLines.filter((ml: any) => ml.product_id[0] === m.product_id[0]);
-    const totalDone = relatedLines.reduce((s: number, ml: any) => s + (ml.qty_done || 0), 0);
-    // Primary location = first related move line's location
-    const primaryLoc = relatedLines[0]?.location_id?.[1] || m.location_id?.[1] || "ZZZ";
-    return { ...m, relatedLines, totalDone, primaryLoc };
-  });
+  // When a new line becomes current, reset locOk
+  const currentLineId = currentLine?.id;
+  useEffect(() => { setLocOk(false); }, [currentLineId]);
 
-  // Sort by source location alphabetically for logical picking circuit
-  const sortedMoves = [...movesByProduct].sort((a: any, b: any) => {
-    const la = (a.primaryLoc || "ZZZ").toLowerCase();
-    const lb = (b.primaryLoc || "ZZZ").toLowerCase();
-    return la < lb ? -1 : la > lb ? 1 : 0;
-  });
+  // Track when loc scan succeeds via prepStep changes
+  useEffect(() => {
+    if (prepStep) setLocOk(true);
+  }, [prepStep?.locId]);
 
-  // Group by location for display
-  const movesByLocation: { locName: string; moves: any[] }[] = [];
-  for (const m of sortedMoves) {
-    const locName = m.primaryLoc || "Emplacement inconnu";
-    const existing = movesByLocation.find(g => g.locName === locName);
-    if (existing) existing.moves.push(m);
-    else movesByLocation.push({ locName, moves: [m] });
-  }
+  // ── Colis helpers ──
+  const openNewColis = () => {
+    const newId = colis.length + 1;
+    setColis(prev => [...prev, { id: newId, lines: [] }]);
+    setCurrentColisId(newId);
+  };
+  const closeColis = () => {
+    if (currentColisId === null) return;
+    setCurrentColisId(null);
+  };
+  const addLineToColis = (lineId: number) => {
+    if (currentColisId === null) return;
+    setColisLines(prev => { const s = new Set(Array.from(prev)); s.add(lineId); return s; });
+    setColis(prev => prev.map(c => c.id === currentColisId ? { ...c, lines: [...c.lines, lineId] } : c));
+  };
 
-  return (
+  // ── Emplacement display helper ──
+  const shortLoc = (fullName: string) => (fullName || "").split("/").pop() || fullName;
+
+  if (showColisSummary) return (
     <>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-        <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+        <button onClick={() => setShowColisSummary(false)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{picking.name}</div>
-          {picking.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{picking.partner_id[1]}</div>}
-          {picking.origin && <div style={{ fontSize: 11, color: C.textMuted }}>{picking.origin}</div>}
-        </div>
-        <button onClick={() => onReport(picking.id)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-        </button>
+        <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>Récapitulatif colis</div>
       </div>
-
-      {/* Progress */}
-      <Section>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Progression</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: allDone ? C.green : C.blue }}>{doneLines}/{totalLines}</span>
+      {colis.length === 0 && <div style={{ color: C.textMuted, fontSize: 14, textAlign: "center", padding: 20 }}>Aucun colis créé</div>}
+      {colis.map(c => (
+        <div key={c.id} style={{ background: C.bg, border: `1.5px solid ${C.border}`, borderRadius: 14, padding: 14, marginBottom: 10 }}>
+          <div style={{ fontWeight: 700, color: C.text, marginBottom: 8 }}>📦 Colis {c.id}</div>
+          {c.lines.length === 0
+            ? <div style={{ fontSize: 12, color: C.textMuted }}>Vide</div>
+            : c.lines.map(lid => {
+                const ml = allLines.find((l: any) => l.id === lid);
+                if (!ml) return null;
+                return <div key={lid} style={{ fontSize: 12, color: C.text, paddingBottom: 4, borderBottom: `1px solid ${C.border}`, marginBottom: 4 }}>
+                  {ml.product_id[1]}{ml.lot_id ? ` · Lot ${ml.lot_id[1]}` : ""} · {ml.qty_done || 0} u
+                </div>;
+              })
+          }
         </div>
-        <div style={{ height: 8, borderRadius: 4, background: C.bg, overflow: "hidden" }}>
-          <div style={{ height: "100%", width: `${progress}%`, borderRadius: 4, background: allDone ? C.green : C.blue, transition: "width .3s" }} />
-        </div>
-        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>{progress}% préparé</div>
-      </Section>
-
-      {/* Scan input — 2 step process */}
-      <Section>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-            {!prepStep ? "① Scanner un emplacement" : "② Scanner le lot / produit"}
-          </span>
-          {loading && <Spinner />}
-        </div>
-        {prepStep && (
-          <div style={{ background: C.blueSoft, border: `1px solid ${C.blueBorder}`, borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 12 }}>
-            <div style={{ fontWeight: 700, color: C.blue }}>📍 {prepStep.locName}</div>
-            <div style={{ color: C.text, marginTop: 2 }}>
-              → {prepStep.lotName ? `Lot ${prepStep.lotName}` : prepStep.productName}
-              <span style={{ color: C.textMuted }}> · reste {prepStep.remaining}</span>
-            </div>
-            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              <button onClick={onTakeAll} disabled={loading} style={{
-                flex: 1, padding: "8px 0", background: C.green, color: "#fff", border: "none", borderRadius: 8,
-                fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit"
-              }}>
-                Tout prendre ({prepStep.locName})
-              </button>
-              <button onClick={onCancelStep} style={{
-                padding: "8px 12px", background: C.bg, color: C.textMuted, border: `1px solid ${C.border}`, borderRadius: 8,
-                fontSize: 11, cursor: "pointer", fontFamily: "inherit"
-              }}>
-                ✕
-              </button>
-            </div>
-          </div>
-        )}
-        <InputBar onSubmit={onScan} placeholder={prepStep ? "Lot, code-barres, réf..." : "Scanner l'emplacement source..."} />
-      </Section>
-
-      {error && <Alert type="error">{error}</Alert>}
-
-      {/* Move lines groupées par emplacement */}
-      <Section>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Articles à préparer</div>
-        {movesByLocation.map((group: any, gi: number) => (
-          <div key={gi} style={{ marginBottom: 12 }}>
-            {/* Articles de cet emplacement — chacun avec son emplacement inclus */}
-            {group.moves.map((m: any, i: number) => {
-              const isDone = m.totalDone >= m.product_uom_qty;
-              const isOver = m.totalDone > m.product_uom_qty;
-              const isPartial = m.totalDone > 0 && m.totalDone < m.product_uom_qty;
-              const bgColor = isOver ? "#fef2f2" : isDone ? "#f0fdf4" : "#ffffff";
-              const borderColor = isOver ? "#fca5a5" : isDone ? "#86efac" : C.border;
-              const locColor = isOver ? "#dc2626" : isDone ? C.green : C.blue;
-              const locBg = isOver ? "#fee2e2" : isDone ? C.greenSoft : C.blueSoft;
-              const textColor = isOver ? "#dc2626" : isDone ? C.green : C.text;
-              const qtyColor = isOver ? "#dc2626" : isDone ? C.green : isPartial ? C.orange : C.text;
-              return (
-                <div key={i} style={{
-                  marginBottom: i < group.moves.length - 1 ? 8 : 0,
-                  background: bgColor,
-                  border: `1.5px solid ${borderColor}`,
-                  borderRadius: 12,
-                  overflow: "hidden",
-                  transition: "background 0.2s, border-color 0.2s"
-                }}>
-                  {/* Emplacement dans le rectangle */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", background: locBg, borderBottom: `1px solid ${borderColor}` }}>
-                    <span style={{ fontSize: 10, fontWeight: 800, color: locColor, letterSpacing: 0.3 }}>📍 {group.locName}</span>
-                  </div>
-                  {/* Contenu article */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 10px" }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 7, background: isOver ? "#fee2e2" : isDone ? C.greenSoft : C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      {isOver
-                        ? <span style={{ fontSize: 14 }}>⚠️</span>
-                        : isDone
-                          ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                          : boxIcon(C.textMuted, 13)
-                      }
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: textColor }}>{m.product_id[1]}</div>
-                      {m.relatedLines.filter((ml: any) => ml.lot_id).map((ml: any, j: number) => (
-                        <div key={j} style={{ fontSize: 11, color: isOver ? "#dc2626" : isDone ? C.green : C.textMuted }}>
-                          Lot {ml.lot_id[1]} · {ml.qty_done || 0}/{ml.reserved_uom_qty || 0}
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: qtyColor }}>{m.totalDone} / {m.product_uom_qty}</div>
-                      <div style={{ fontSize: 10, color: C.textMuted }}>{m.product_uom?.[1] || ""}</div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ))}
-      </Section>
-
-      {/* Actions */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <button onClick={onAutoFill} disabled={loading || allDone} style={{ flex: 1, padding: 12, background: C.blueSoft, color: C.blue, border: `1px solid ${C.blueBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: allDone ? 0.5 : 1 }}>
-          Tout remplir
-        </button>
-        <button onClick={() => onReport(picking.id)} style={{ padding: "12px 16px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-          Bon de livraison
-        </button>
-      </div>
-
+      ))}
       <BigButton
         icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
         label={loading ? "Envoi..." : "Valider la préparation"}
@@ -4543,7 +4456,165 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
       />
     </>
   );
+
+  return (
+    <>
+      {/* ── Header ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{picking.name}</div>
+          {picking.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{picking.partner_id[1]}</div>}
+        </div>
+        <button onClick={() => onReport(picking.id)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        </button>
+      </div>
+
+      {/* ── Progress bar ── */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Progression</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: allDone ? C.green : C.blue }}>{doneLines}/{totalLines}</span>
+        </div>
+        <div style={{ height: 8, borderRadius: 4, background: C.bg, overflow: "hidden", border: `1px solid ${C.border}` }}>
+          <div style={{ height: "100%", width: `${progress}%`, borderRadius: 4, background: allDone ? C.green : C.blue, transition: "width .3s" }} />
+        </div>
+      </div>
+
+      {/* ── Colis indicator ── */}
+      {currentColisId !== null && (
+        <div style={{ background: "#fff7ed", border: "1.5px solid #fed7aa", borderRadius: 12, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#c2410c" }}>
+            📦 Colis {currentColisId} en cours — {colis.find(c => c.id === currentColisId)?.lines.length || 0} article(s)
+          </div>
+          <button onClick={closeColis} style={{ fontSize: 11, fontWeight: 700, color: "#c2410c", background: "#fed7aa", border: "none", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontFamily: "inherit" }}>
+            Fermer colis
+          </button>
+        </div>
+      )}
+
+      {/* ── Carte article courant ── */}
+      {allDone ? (
+        <div style={{ background: C.greenSoft, border: `2px solid ${C.green}`, borderRadius: 20, padding: 32, textAlign: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>✅</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: C.green }}>Tout préparé !</div>
+          <div style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>{totalLines} articles scannés</div>
+        </div>
+      ) : currentLine ? (
+        <div style={{
+          background: locOk && prepStep ? "#f0fdf4" : "#f8fafc",
+          border: `2px solid ${locOk && prepStep ? C.green : C.blue}`,
+          borderRadius: 20, padding: 20, marginBottom: 16,
+          transition: "background .3s, border-color .3s"
+        }}>
+          {/* Étape */}
+          <div style={{ fontSize: 11, fontWeight: 700, color: locOk && prepStep ? C.green : C.blue, letterSpacing: 0.5, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            {!locOk
+              ? <><span style={{ background: C.blue, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>1</span> SCANNER L'EMPLACEMENT</>
+              : <><span style={{ background: C.green, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>✓</span> EMPLACEMENT OK — SCANNER LE LOT</>
+            }
+          </div>
+
+          {/* Emplacement */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+            <div style={{ background: locOk ? C.greenSoft : C.blueSoft, border: `1px solid ${locOk ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "6px 12px", fontSize: 18, fontWeight: 900, color: locOk ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center" }}>
+              📍 {shortLoc(currentLine.location_id?.[1] || "—")}
+            </div>
+            {locOk && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>}
+          </div>
+
+          {/* Produit */}
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b", marginBottom: 6, lineHeight: 1.3 }}>
+            {currentLine.product_id[1]}
+          </div>
+
+          {/* Lot */}
+          {currentLine.lot_id && (
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 700, color: "#475569", marginBottom: 10 }}>
+              🏷️ Lot {currentLine.lot_id[1]}
+            </div>
+          )}
+
+          {/* Quantité */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 8 }}>
+            <span style={{ fontSize: 32, fontWeight: 900, color: C.text }}>{currentLine.qty_done || 0}</span>
+            <span style={{ fontSize: 20, color: C.textMuted }}>/</span>
+            <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{currentLine.reserved_uom_qty || 0}</span>
+            <span style={{ fontSize: 13, color: C.textMuted, marginLeft: 4 }}>{currentLine.product_uom_id?.[1] || ""}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Input scan ── */}
+      {!allDone && (
+        <div style={{ marginBottom: 12 }}>
+          <InputBar
+            onSubmit={(code: string) => {
+              onScan(code);
+              if (currentLine && locOk) {
+                // Line will be done after scan — add to current colis
+                const newQty = (currentLine.qty_done || 0) + 1;
+                if (newQty >= (currentLine.reserved_uom_qty || 0)) {
+                  addLineToColis(currentLine.id);
+                }
+              }
+            }}
+            placeholder={!locOk ? "Scanner l'emplacement..." : "Scanner le lot / produit..."}
+          />
+          {error && <Alert type="error">{error}</Alert>}
+        </div>
+      )}
+
+      {/* ── Actions colis + validation ── */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        {currentColisId === null ? (
+          <button onClick={openNewColis} style={{ flex: 1, padding: 12, background: "#fff7ed", color: "#c2410c", border: "1.5px solid #fed7aa", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            📦 Nouveau colis
+          </button>
+        ) : (
+          <button onClick={closeColis} style={{ flex: 1, padding: 12, background: "#fff7ed", color: "#c2410c", border: "1.5px solid #fed7aa", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            ✓ Fermer colis {currentColisId}
+          </button>
+        )}
+        <button onClick={() => setShowColisSummary(true)} style={{ padding: "12px 14px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+          {colis.length > 0 ? `📦 ${colis.length} colis` : "Colis"}
+        </button>
+      </div>
+
+      {/* ── Liste rapide des articles restants ── */}
+      {!allDone && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Restant ({totalLines - doneLines})
+          </div>
+          {allLines.filter((ml: any) => (ml.qty_done || 0) < (ml.reserved_uom_qty || 0)).slice(0, 8).map((ml: any, i: number) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${C.border}`, opacity: ml.id === currentLine?.id ? 1 : 0.5 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: ml.id === currentLine?.id ? C.blue : C.border, flexShrink: 0 }} />
+              <div style={{ flex: 1, fontSize: 12, color: C.text, fontWeight: ml.id === currentLine?.id ? 700 : 400 }}>{ml.product_id[1]}</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>{shortLoc(ml.location_id?.[1] || "")}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.textSec }}>{ml.qty_done || 0}/{ml.reserved_uom_qty || 0}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <BigButton
+        icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
+        label={loading ? "Envoi..." : "Valider la préparation"}
+        sub={allDone ? "Tout préparé — prêt à valider" : `${doneLines}/${totalLines} articles préparés`}
+        color={allDone ? C.green : C.orange}
+        onClick={onValidate}
+        disabled={loading || doneLines === 0}
+      />
+    </>
+  );
 }
+
 
 function Login({ onLogin, loading, error }: { onLogin: (u: string, d: string, l: string, p: string) => void; loading: boolean; error: string }) {
   const cfg = typeof window !== "undefined" ? loadCfg() : null;

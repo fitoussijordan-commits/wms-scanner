@@ -740,3 +740,40 @@ export async function setConfigParam(session: OdooSession, key: string, value: s
     await create(session, "ir.config_parameter", { key, value });
   }
 }
+
+// ============================================
+// COLIS / PUT IN PACK
+// ============================================
+
+export async function putInPack(session: OdooSession, pickingId: number, moveLineIds: number[]): Promise<any> {
+  // Set result_package_id to create a new package for selected lines
+  // First call action_put_in_pack on the picking with selected move line ids
+  const result = await call(session, "/web/dataset/call_kw", {
+    model: "stock.picking",
+    method: "action_put_in_pack",
+    args: [[pickingId]],
+    kwargs: {
+      context: { default_move_line_ids: moveLineIds },
+    },
+  });
+  return result;
+}
+
+export async function getPickingPackages(session: OdooSession, pickingId: number): Promise<any[]> {
+  const lines = await searchRead(
+    session,
+    "stock.move.line",
+    [["picking_id", "=", pickingId], ["result_package_id", "!=", false]],
+    ["result_package_id", "product_id", "lot_id", "qty_done", "reserved_uom_qty"],
+    200
+  );
+  // Group by package
+  const packages: Record<number, any> = {};
+  for (const line of lines) {
+    const pkgId = line.result_package_id[0];
+    const pkgName = line.result_package_id[1];
+    if (!packages[pkgId]) packages[pkgId] = { id: pkgId, name: pkgName, lines: [] };
+    packages[pkgId].lines.push(line);
+  }
+  return Object.values(packages);
+}
