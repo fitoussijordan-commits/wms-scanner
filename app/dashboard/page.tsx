@@ -77,7 +77,7 @@ export default function Dashboard() {
   const [conso, setConso] = useState<ConsoRow[]>([]);
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [moves, setMoves] = useState<MoveRow[]>([]);
-  const [stockMap, setStockMap] = useState<Record<number, number>>({});
+  const [stockMap, setStockMap] = useState<Record<number, { qty: number; name: string; ref: string }>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -88,6 +88,7 @@ export default function Dashboard() {
   const [moveRef, setMoveRef] = useState("");
   const [moveSearched, setMoveSearched] = useState(false);
   const [editThresh, setEditThresh] = useState<number | null>(null);
+  const [stockSearch, setStockSearch] = useState("");
   const [editVal, setEditVal] = useState("");
 
   // ── Load session ──
@@ -150,7 +151,7 @@ export default function Dashboard() {
         for (const p of prods) if (byProduct[p.id]) byProduct[p.id].ref = p.default_code || "";
       }
 
-      setStockMap(Object.fromEntries(Object.entries(byProduct).map(([id, v]) => [id, v.qty])));
+      setStockMap(Object.fromEntries(Object.entries(byProduct).map(([id, v]) => [id, { qty: v.qty, name: v.name, ref: v.ref }])));
 
       // Build alerts based on thresholds
       const alertList: StockAlert[] = [];
@@ -398,20 +399,24 @@ export default function Dashboard() {
                   style={{ flex: 1, padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.bg }} />
               </div>
               {/* Product list with thresholds */}
+              <input value={stockSearch} onChange={e => setStockSearch(e.target.value)}
+                placeholder="Filtrer par référence ou nom..."
+                style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: C.bg, marginBottom: 12, boxSizing: "border-box" }} />
               <div style={{ maxHeight: 400, overflowY: "auto" }}>
                 {Object.entries(stockMap).length === 0 && !loading && (
                   <div style={{ color: C.textMuted, fontSize: 14, textAlign: "center", padding: 20 }}>Cliquez sur "Actualiser" pour charger les produits</div>
                 )}
-                {Object.entries(stockMap).map(([pidStr, qty]) => {
+                {Object.entries(stockMap).filter(([, data]) => !stockSearch || data.ref.toLowerCase().includes(stockSearch.toLowerCase()) || data.name.toLowerCase().includes(stockSearch.toLowerCase())).map(([pidStr, data]) => {
                   const pid = Number(pidStr);
+                  const { qty, name, ref } = data;
                   const thresh = thresholds[pid];
                   const isAlert = thresh !== undefined && qty <= thresh;
                   return (
                     <div key={pid} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: 13, color: C.text, fontWeight: thresh !== undefined ? 600 : 400 }}>
-                          {alerts.find(a => a.productId === pid)?.ref && <span style={{ color: C.textMuted, marginRight: 6 }}>[{alerts.find(a => a.productId === pid)?.ref}]</span>}
-                          {alerts.find(a => a.productId === pid)?.name || `Produit #${pid}`}
+                          {ref && <span style={{ color: C.blue, fontWeight: 700, marginRight: 6 }}>[{ref}]</span>}
+                          {name}
                         </div>
                         <div style={{ fontSize: 12, color: isAlert ? C.red : C.textMuted }}>Stock : {qty}{thresh !== undefined ? ` · Seuil : ${thresh}` : ""}</div>
                       </div>
