@@ -338,7 +338,7 @@ export default function Dashboard() {
           <p style={{ fontSize: 14, color: C.textMuted, margin: 0 }}>Rapports & Alertes stock</p>
         </div>
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24 }}>
-          {[{ label: "URL Odoo", val: url, set: setUrl, ph: "https://..." }, { label: "Base de données", val: db, set: setDb, ph: "nom_base" }, { label: "Identifiant", val: user, set: setUser, ph: "admin@..." }, { label: "Mot de passe", val: pw, set: setPw, ph: "••••••", type: "password" }].map(f => (
+          {([{ label: "URL Odoo", val: url, set: setUrl, ph: "https://..." }, { label: "Base de données", val: db, set: setDb, ph: "nom_base" }, { label: "Identifiant", val: user, set: setUser, ph: "admin@..." }, { label: "Mot de passe", val: pw, set: setPw, ph: "••••••", type: "password" }] as { label: string; val: string; set: (v: string) => void; ph: string; type?: string }[]).map(f => (
             <div key={f.label} style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: C.textSec, display: "block", marginBottom: 5 }}>{f.label}</label>
               <input type={f.type || "text"} value={f.val} onChange={e => f.set(e.target.value)}
@@ -353,6 +353,23 @@ export default function Dashboard() {
         </div>
       </div>
     </div>
+  );
+
+  const moveTypeOptions = ["all", ...Array.from(new Set(moves.map(m => m.type)))];
+  const filteredMoves = moves
+    .filter(m => moveTypeFilter === "all" || m.type === moveTypeFilter)
+    .sort((a, b) => {
+      const dir = moveSortDir === "asc" ? 1 : -1;
+      if (moveSort === "date") return dir * a.date.localeCompare(b.date);
+      if (moveSort === "type") return dir * a.type.localeCompare(b.type);
+      if (moveSort === "picking") return dir * a.picking.localeCompare(b.picking);
+      return 0;
+    });
+  const sortHeader = (col: string, label: string) => (
+    <th key={col} onClick={() => { if (moveSort === col) setMoveSortDir(d => d === "asc" ? "desc" : "asc"); else { setMoveSort(col as any); setMoveSortDir("desc"); } }}
+      style={{ padding: "11px 16px", fontWeight: 700, color: moveSort === col ? C.blue : C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", cursor: "pointer", userSelect: "none" }}>
+      {label}{moveSort === col ? (moveSortDir === "asc" ? " ↑" : " ↓") : ""}
+    </th>
   );
 
   return (
@@ -710,75 +727,57 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {moves.length > 0 && (() => {
-              const typeOptions = ["all", ...Array.from(new Set(moves.map(m => m.type)))];
-              const filtered = moves
-                .filter(m => moveTypeFilter === "all" || m.type === moveTypeFilter)
-                .sort((a, b) => {
-                  const dir = moveSortDir === "asc" ? 1 : -1;
-                  if (moveSort === "date") return dir * a.date.localeCompare(b.date);
-                  if (moveSort === "type") return dir * a.type.localeCompare(b.type);
-                  if (moveSort === "picking") return dir * a.picking.localeCompare(b.picking);
-                  return 0;
-                });
-              const SortTh = ({ col, label }: { col: string; label: string }) => (
-                <th onClick={() => { if (moveSort === col) setMoveSortDir(d => d === "asc" ? "desc" : "asc"); else { setMoveSort(col as any); setMoveSortDir("desc"); } }}
-                  style={{ padding: "11px 16px", fontWeight: 700, color: moveSort === col ? C.blue : C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", cursor: "pointer", userSelect: "none" }}>
-                  {label} {moveSort === col ? (moveSortDir === "asc" ? "↑" : "↓") : ""}
-                </th>
-              );
-              return (
-                <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, overflow: "hidden" }}>
-                  <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{filtered.length} / {moves.length} mouvement(s)</span>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      {typeOptions.map(t => (
-                        <button key={t} onClick={() => setMoveTypeFilter(t)} style={{
-                          padding: "5px 12px", borderRadius: 8, border: `1px solid ${moveTypeFilter === t ? C.blue : C.border}`,
-                          background: moveTypeFilter === t ? C.blueSoft : C.bg,
-                          color: moveTypeFilter === t ? C.blue : C.textSec,
-                          fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit"
-                        }}>{t === "all" ? "Tous" : t}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", fontSize: 13 }}>
-                      <thead>
-                        <tr style={{ background: C.bg }}>
-                          <SortTh col="date" label="Date" />
-                          <SortTh col="type" label="Type" />
-                          <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}` }}>Qté</th>
-                          <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}` }}>Lot</th>
-                          <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>De</th>
-                          <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>Vers</th>
-                          <SortTh col="picking" label="BL/Transfert" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filtered.map((m, i) => {
-                          const typeColor = m.type === "Sortie" ? C.red : m.type === "Entrée" ? C.green : C.blue;
-                          const typeBg = m.type === "Sortie" ? C.redSoft : m.type === "Entrée" ? C.greenSoft : C.blueSoft;
-                          return (
-                            <tr key={i} style={{ borderBottom: `1px solid ${C.border}`, background: i % 2 === 0 ? C.card : C.bg }}>
-                              <td style={{ padding: "11px 16px", color: C.textSec, whiteSpace: "nowrap" }}>{fmtDate(m.date)}</td>
-                              <td style={{ padding: "11px 16px" }}>
-                                <span style={{ background: typeBg, color: typeColor, borderRadius: 6, padding: "3px 8px", fontSize: 12, fontWeight: 700 }}>{m.type}</span>
-                              </td>
-                              <td style={{ padding: "11px 16px", fontWeight: 800, color: C.text }}>{m.qty}</td>
-                              <td style={{ padding: "11px 16px", color: C.textSec, fontFamily: "monospace", fontSize: 12 }}>{m.lot}</td>
-                              <td style={{ padding: "11px 16px", color: C.textMuted, fontSize: 12, whiteSpace: "nowrap" }}>{m.from}</td>
-                              <td style={{ padding: "11px 16px", color: C.textMuted, fontSize: 12, whiteSpace: "nowrap" }}>{m.to}</td>
-                              <td style={{ padding: "11px 16px", color: C.blue, fontSize: 12, fontWeight: 600 }}>{m.picking}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+            {moves.length > 0 && (
+              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, overflow: "hidden" }}>
+                <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{filteredMoves.length} / {moves.length} mouvement(s)</span>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {moveTypeOptions.map(t => (
+                      <button key={t} onClick={() => setMoveTypeFilter(t)} style={{
+                        padding: "5px 12px", borderRadius: 8, border: `1px solid ${moveTypeFilter === t ? C.blue : C.border}`,
+                        background: moveTypeFilter === t ? C.blueSoft : C.bg,
+                        color: moveTypeFilter === t ? C.blue : C.textSec,
+                        fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit"
+                      }}>{t === "all" ? "Tous" : t}</button>
+                    ))}
                   </div>
                 </div>
-              );
-            })()}
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: C.bg }}>
+                        {sortHeader("date", "Date")}
+                        {sortHeader("type", "Type")}
+                        <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}` }}>Qté</th>
+                        <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}` }}>Lot</th>
+                        <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>De</th>
+                        <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>Vers</th>
+                        {sortHeader("picking", "BL/Transfert")}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredMoves.map((m, i) => {
+                        const typeColor = m.type === "Sortie" ? C.red : m.type === "Entrée" ? C.green : C.blue;
+                        const typeBg = m.type === "Sortie" ? C.redSoft : m.type === "Entrée" ? C.greenSoft : C.blueSoft;
+                        return (
+                          <tr key={i} style={{ borderBottom: `1px solid ${C.border}`, background: i % 2 === 0 ? C.card : C.bg }}>
+                            <td style={{ padding: "11px 16px", color: C.textSec, whiteSpace: "nowrap" }}>{fmtDate(m.date)}</td>
+                            <td style={{ padding: "11px 16px" }}>
+                              <span style={{ background: typeBg, color: typeColor, borderRadius: 6, padding: "3px 8px", fontSize: 12, fontWeight: 700 }}>{m.type}</span>
+                            </td>
+                            <td style={{ padding: "11px 16px", fontWeight: 800, color: C.text }}>{m.qty}</td>
+                            <td style={{ padding: "11px 16px", color: C.textSec, fontFamily: "monospace", fontSize: 12 }}>{m.lot}</td>
+                            <td style={{ padding: "11px 16px", color: C.textMuted, fontSize: 12, whiteSpace: "nowrap" }}>{m.from}</td>
+                            <td style={{ padding: "11px 16px", color: C.textMuted, fontSize: 12, whiteSpace: "nowrap" }}>{m.to}</td>
+                            <td style={{ padding: "11px 16px", color: C.blue, fontSize: 12, fontWeight: 600 }}>{m.picking}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
             {moves.length === 0 && moveSearched && !loading && (
               <div style={{ textAlign: "center", padding: 60, color: C.textMuted, fontSize: 15 }}>Aucun mouvement trouvé pour "{moveRef}"</div>
             )}
