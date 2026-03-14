@@ -181,20 +181,43 @@ export default function Dashboard() {
       const startDate = months[0] + "-01";
       const endDate = new Date().toISOString().split("T")[0];
 
-      // Outgoing moves (done) from internal locations
-      const moves = await odoo.searchRead(session, "stock.move", [
-        ["state", "=", "done"],
-        ["location_id.usage", "=", "internal"],
-        ["location_dest_id.usage", "!=", "internal"],
-        ["date", ">=", startDate + " 00:00:00"],
-        ["date", "<=", endDate + " 23:59:59"],
-      ], ["product_id", "product_qty", "date"], 5000);
+      // Get outgoing picking type IDs (reliable vs dotted domain)
+      const outTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 50);
+      const outTypeIds = outTypes.map((t: any) => t.id);
 
-      // Aggregate by product + month
+      // Get validated outgoing pickings in date range
+      const pickings = await odoo.searchRead(session, "stock.picking", [
+        ["state", "=", "done"],
+        ["picking_type_id", "in", outTypeIds],
+        ["date_done", ">=", startDate + " 00:00:00"],
+        ["date_done", "<=", endDate + " 23:59:59"],
+      ], ["id", "date_done"], 2000);
+
+      const pickingIds = pickings.map((p: any) => p.id);
+      const pickingDateMap: Record<number, string> = Object.fromEntries(pickings.map((p: any) => [p.id, p.date_done]));
+
+      if (!pickingIds.length) { setConso([]); setLoading(false); return; }
+
+      // Get all moves for these pickings in batches of 500 ids
+      const batchSize = 500;
+      let allMoves: any[] = [];
+      for (let i = 0; i < pickingIds.length; i += batchSize) {
+        const batch = pickingIds.slice(i, i + batchSize);
+        const batchMoves = await odoo.searchRead(session, "stock.move", [
+          ["picking_id", "in", batch],
+          ["state", "=", "done"],
+        ], ["product_id", "product_qty", "picking_id"], 10000);
+        allMoves = allMoves.concat(batchMoves);
+      }
+      const moves = allMoves;
+
+      // Aggregate by product + month (using picking date for accuracy)
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
       for (const m of moves) {
         const pid = m.product_id[0];
-        const month = m.date.substring(0, 7);
+        const pickingDate = pickingDateMap[m.picking_id?.[0]] || "";
+        const month = pickingDate.substring(0, 7);
+        if (!month) continue;
         if (!byProd[pid]) byProd[pid] = { name: m.product_id[1], ref: "", months: {} };
         byProd[pid].months[month] = (byProd[pid].months[month] || 0) + m.product_qty;
       }
