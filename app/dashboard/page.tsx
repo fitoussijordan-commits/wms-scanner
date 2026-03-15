@@ -706,15 +706,36 @@ export default function Dashboard() {
         {error && <div style={{ background: "var(--danger-soft)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "14px 18px", fontSize: 14, color: "var(--danger)", marginBottom: 24, display: "flex", alignItems: "center", gap: 10, animation: "fadeIn .3s ease both" }}>{I.alert}<span style={{ flex: 1 }}>{error}</span><button onClick={() => setError("")} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer", fontSize: 18, padding: 4 }}>×</button></div>}
 
         {/* ══════════ ALERTES ══════════ */}
-        {tab === "alerts" && (
+        {tab === "alerts" && (() => {
+          // Compute overstock items (>180 days of stock based on conso)
+          const OVERSTOCK_DAYS = 180;
+          const overstockItems = Object.entries(stockMap)
+            .map(([pidStr, data]) => {
+              const pid = Number(pidStr);
+              const thresh = thresholds[pid];
+              if (thresh === undefined) return null;
+              if (data.qty <= thresh) return null; // already in alert, skip
+              const consoRow = conso.find((c) => c.ref === data.ref);
+              const dailyAvg = consoRow ? consoRow.avg / 30 : 0;
+              if (dailyAvg <= 0) return null;
+              const daysOfStock = Math.round(data.qty / dailyAvg);
+              if (daysOfStock <= OVERSTOCK_DAYS) return null;
+              return { pid, ref: data.ref, name: data.name, qty: data.qty, thresh, daysOfStock, avg: consoRow!.avg };
+            })
+            .filter(Boolean) as { pid: number; ref: string; name: string; qty: number; thresh: number; daysOfStock: number; avg: number }[];
+          overstockItems.sort((a, b) => b.daysOfStock - a.daysOfStock);
+
+          return (
           <div style={{ animation: "fadeIn .3s ease both" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}>
               <div><h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Alertes stock</h2><p style={{ fontSize: 13, color: "var(--text-muted)" }}>Seuils min. configurables — jours restants estimés via la consommation moyenne</p></div>
               <button className="wms-btn wms-btn-primary" onClick={loadAlerts} disabled={loading}>{loading ? <Spinner /> : I.refresh} Actualiser</button>
             </div>
+
+            {/* Under-stock alerts */}
             {alerts.length > 0 && (
-              <div style={{ marginBottom: 32 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--danger)", marginBottom: 14, textTransform: "uppercase", letterSpacing: "1px", display: "flex", alignItems: "center", gap: 8 }}><div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--danger)", animation: "pulse-dot 1.5s ease-in-out infinite" }} />{alerts.length} article{alerts.length > 1 ? "s" : ""} en alerte</div>
+              <div style={{ marginBottom: 28 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--danger)", marginBottom: 14, textTransform: "uppercase", letterSpacing: "1px", display: "flex", alignItems: "center", gap: 8 }}><div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--danger)", animation: "pulse-dot 1.5s ease-in-out infinite" }} />{alerts.length} article{alerts.length > 1 ? "s" : ""} en sous-stock</div>
                 <div style={{ display: "grid", gap: 10 }}>
                   {alerts.map((a, idx) => {
                     const ratio = a.qty / a.threshold; const color = ratio <= .25 ? "var(--danger)" : ratio <= .75 ? "var(--warning)" : "var(--orange)"; const bg = ratio <= .25 ? "var(--danger-soft)" : ratio <= .75 ? "var(--warning-soft)" : "rgba(249,115,22,.08)";
@@ -738,7 +759,40 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
-            {alerts.length === 0 && Object.keys(stockMap).length > 0 && <div style={{ background: "var(--success-soft)", border: "1px solid var(--success-border)", borderRadius: 12, padding: "22px 28px", marginBottom: 28, display: "flex", alignItems: "center", gap: 16, animation: "fadeIn .4s ease both" }}>{I.check}<div><div style={{ fontSize: 15, fontWeight: 700, color: "var(--success)" }}>Tous les stocks sont OK</div><div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>Aucun article n&apos;a atteint son seuil.</div></div></div>}
+
+            {/* Overstock alerts — calmer styling */}
+            {overstockItems.length > 0 && (
+              <div style={{ marginBottom: 28 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--purple)", marginBottom: 14, textTransform: "uppercase", letterSpacing: "1px", display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--purple)" }} />
+                  {overstockItems.length} article{overstockItems.length > 1 ? "s" : ""} en surstock ({`>${OVERSTOCK_DAYS}j`})
+                </div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  {overstockItems.map((item, idx) => (
+                    <div key={item.pid} style={{ background: "var(--purple-soft)", borderLeft: "3px solid var(--purple-border)", borderRadius: 10, padding: "14px 18px", animation: "fadeIn .3s ease both", animationDelay: `${idx * 40}ms` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600 }}>
+                            {item.ref && <span style={{ fontFamily: MONO, color: "var(--accent)", marginRight: 8, fontSize: 12 }}>[{item.ref}]</span>}{item.name}
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4, display: "flex", gap: 16, flexWrap: "wrap" }}>
+                            <span>Stock : <strong style={{ color: "var(--text-secondary)" }}>{item.qty}</strong></span>
+                            <span>Seuil : <strong>{item.thresh}</strong></span>
+                            <span>Moy : <strong>{item.avg}/mois</strong></span>
+                          </div>
+                        </div>
+                        <div style={{ textAlign: "right", flexShrink: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--purple)", fontFamily: MONO }}>{item.daysOfStock}j de stock</div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>+{item.daysOfStock - OVERSTOCK_DAYS}j au-dessus</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {alerts.length === 0 && overstockItems.length === 0 && Object.keys(stockMap).length > 0 && <div style={{ background: "var(--success-soft)", border: "1px solid var(--success-border)", borderRadius: 12, padding: "22px 28px", marginBottom: 28, display: "flex", alignItems: "center", gap: 16, animation: "fadeIn .4s ease both" }}>{I.check}<div><div style={{ fontSize: 15, fontWeight: 700, color: "var(--success)" }}>Tous les stocks sont OK</div><div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>Aucun article en sous-stock ou surstock.</div></div></div>}
             {/* Threshold manager */}
             <div className="wms-card" style={{ padding: 24 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
@@ -781,7 +835,8 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* ══════════ CONSO ══════════ */}
         {tab === "conso" && (
