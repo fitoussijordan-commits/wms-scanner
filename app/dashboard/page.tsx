@@ -474,58 +474,34 @@ export default function Dashboard() {
 
   /*
    * loadConso — Consommation mensuelle
-   * Simple and reliable: get all outgoing pickings (BL) done in the period,
-   * then sum product_uom_qty from their stock.moves, grouped by product+month.
-   * This matches exactly what Odoo shows in the stock pivot view.
+   * Direct query on stock.move: outgoing moves done in period.
+   * Uses picking_code relational filter to get only outgoing (delivery) moves.
+   * product_uom_qty = demanded qty = what Odoo shows in pivot for outgoing pickings.
    */
   const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
     try {
       const months = monthsBack(consoMonths);
-      const startDate = months[0] + "-01";
-      const endDate = new Date().toISOString().split("T")[0];
+      const startDate = months[0] + "-01 00:00:00";
+      const endDate = new Date().toISOString().split("T")[0] + " 23:59:59";
 
-      // 1. Get all outgoing pickings done in the period
-      const pickings = await odoo.searchRead(session, "stock.picking", [
+      // Single query: outgoing done moves in period
+      const allMoves = await odoo.searchRead(session, "stock.move", [
         ["state", "=", "done"],
-        ["picking_type_code", "=", "outgoing"],
-        ["date_done", ">=", startDate + " 00:00:00"],
-        ["date_done", "<=", endDate + " 23:59:59"],
-      ], ["id", "date_done", "move_ids"], 5000);
+        ["picking_code", "=", "outgoing"],
+        ["date", ">=", startDate],
+        ["date", "<=", endDate],
+      ], ["product_id", "product_uom_qty", "date"], 10000);
 
-      // 2. Collect all move IDs from those pickings
-      const allMoveIds: number[] = [];
-      const pickingMonth: Record<number, string> = {}; // pickingId -> "YYYY-MM"
-      for (const p of pickings) {
-        const month = (p.date_done || "").substring(0, 7);
-        if (p.move_ids) {
-          for (const mid of p.move_ids) {
-            allMoveIds.push(mid);
-            pickingMonth[mid] = month;
-          }
-        }
-      }
-
-      // 3. Get the move details in batches
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
-      const batchSize = 500;
-      for (let i = 0; i < allMoveIds.length; i += batchSize) {
-        const batch = allMoveIds.slice(i, i + batchSize);
-        const moves = await odoo.searchRead(session, "stock.move", [
-          ["id", "in", batch],
-          ["state", "=", "done"],
-        ], ["id", "product_id", "product_uom_qty"], batch.length);
-
-        for (const m of moves) {
-          const pid = m.product_id[0];
-          const month = pickingMonth[m.id];
-          if (!month) continue;
-          if (!byProd[pid]) byProd[pid] = { name: m.product_id[1], ref: "", months: {} };
-          byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (m.product_uom_qty || 0);
-        }
+      for (const m of allMoves) {
+        const pid = m.product_id[0];
+        const month = (m.date || "").substring(0, 7);
+        if (!month) continue;
+        if (!byProd[pid]) byProd[pid] = { name: m.product_id[1], ref: "", months: {} };
+        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (m.product_uom_qty || 0);
       }
 
-      // 4. Get product refs
       const prodIds = Object.keys(byProd).map(Number);
       if (prodIds.length) {
         const prods = await odoo.searchRead(session, "product.product", [["id", "in", prodIds]], ["id", "default_code"], 2000);
