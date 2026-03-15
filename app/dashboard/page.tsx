@@ -33,6 +33,7 @@ interface MoveRow {
   from: string;
   to: string;
   picking: string;
+  partner: string;
 }
 interface StockProduct {
   qty: number;
@@ -293,6 +294,17 @@ function ColumnFilter({ values, selected, onApply, onClose, sortDir, onSort }: {
   }, [onClose]);
   const filtered = values.filter((v) => v.toLowerCase().includes(search.toLowerCase()));
   const allChecked = filtered.length > 0 && filtered.every((v) => local.has(v));
+
+  // Enter in search box → select only matching items and apply immediately
+  const applySearch = () => {
+    if (search.trim()) {
+      onApply(new Set(filtered));
+    } else {
+      onApply(local);
+    }
+    onClose();
+  };
+
   return (
     <div className="col-filter-popup" ref={ref} onClick={(e) => e.stopPropagation()}>
       <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
@@ -303,7 +315,7 @@ function ColumnFilter({ values, selected, onApply, onClose, sortDir, onSort }: {
           {I.sortDesc} Z→A
         </button>
       </div>
-      <input type="text" placeholder="Rechercher..." value={search} onChange={(e) => setSearch(e.target.value)} autoFocus />
+      <input type="text" placeholder="Rechercher (Entrée = filtrer)..." value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applySearch()} autoFocus />
       <div className="col-filter-list wms-scrollbar">
         <label className="col-filter-item" style={{ fontWeight: 600, color: "var(--text-primary)" }}>
           <input type="checkbox" checked={allChecked} onChange={() => { const n = new Set(local); if (allChecked) filtered.forEach((v) => n.delete(v)); else filtered.forEach((v) => n.add(v)); setLocal(n); }} />
@@ -318,7 +330,7 @@ function ColumnFilter({ values, selected, onApply, onClose, sortDir, onSort }: {
       </div>
       <div className="col-filter-actions">
         <button onClick={() => { onApply(new Set(values)); onClose(); }} style={{ background: "var(--bg-surface)", color: "var(--text-secondary)" }}>Réinitialiser</button>
-        <button onClick={() => { onApply(local); onClose(); }} style={{ background: "var(--accent)", color: "#fff" }}>Appliquer</button>
+        <button onClick={applySearch} style={{ background: "var(--accent)", color: "#fff" }}>Appliquer</button>
       </div>
     </div>
   );
@@ -411,6 +423,8 @@ export default function Dashboard() {
   const [delEnd, setDelEnd] = useState(() => new Date().toISOString().split("T")[0]);
   const [moveRef, setMoveRef] = useState("");
   const [moveSearched, setMoveSearched] = useState(false);
+  const [moveStart, setMoveStart] = useState("");
+  const [moveEnd, setMoveEnd] = useState("");
   const [editThresh, setEditThresh] = useState<number | null>(null);
   const [editVal, setEditVal] = useState("");
   const [stockSearch, setStockSearch] = useState("");
@@ -450,12 +464,11 @@ export default function Dashboard() {
 
   /*
    * loadConso — Consommation mensuelle
-   * Uses stock.move.line (not stock.move) to match Odoo's pivot view "Fait" column.
-   * stock.move.product_qty can differ from the sum of move line quantities when
-   * moves are split across lots, partial transfers, or backorders.
-   * Filters: state=done, location_id=internal, location_dest_id=customer.
-   * Field: quantity (= qty_done in Odoo 17+, previously qty_done in older versions)
-   * avg = total / number of months with activity (not total selected months)
+   * Uses stock.move with quantity_done field (= "Fait" in Odoo 16 UI).
+   * stock.move.product_qty is the "demand" qty, quantity_done is what was actually done.
+   * stock.move.line location filters don't work the same (sub-locations vs usage-based).
+   * Filters: state=done, location_id usage=internal, location_dest_id usage=customer.
+   * avg = total / number of months with activity
    */
   const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
@@ -469,34 +482,32 @@ export default function Dashboard() {
       const custLocIds = custLocs.map((l: any) => l.id);
       const intLocIds = intLocs.map((l: any) => l.id);
 
-      // Batch by 3-month windows to stay within Odoo RPC result limits
       const batchDateSize = 3;
-      let allLines: any[] = [];
+      let allMoves: any[] = [];
       for (let i = 0; i < months.length; i += batchDateSize) {
         const batchStart = months[i] + "-01";
         const batchEnd = i + batchDateSize >= months.length
           ? endDate
           : (() => { const d = new Date(months[i + batchDateSize] + "-01"); d.setDate(0); return d.toISOString().split("T")[0]; })();
 
-        const batchLines = await odoo.searchRead(session, "stock.move.line", [
+        const batchMoves = await odoo.searchRead(session, "stock.move", [
           ["state", "=", "done"],
           ["location_id", "in", intLocIds],
           ["location_dest_id", "in", custLocIds],
           ["date", ">=", batchStart + " 00:00:00"],
           ["date", "<=", batchEnd + " 23:59:59"],
-        ], ["product_id", "qty_done", "date"], 10000);
-        allLines = allLines.concat(batchLines);
+        ], ["product_id", "quantity_done", "date"], 10000);
+        allMoves = allMoves.concat(batchMoves);
       }
 
-      // Aggregate by product + month
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
-      for (const ml of allLines) {
-        const pid = ml.product_id[0];
-        const month = (ml.date || "").substring(0, 7);
+      for (const m of allMoves) {
+        const pid = m.product_id[0];
+        const month = (m.date || "").substring(0, 7);
         if (!month) continue;
-        if (!byProd[pid]) byProd[pid] = { name: ml.product_id[1], ref: "", months: {} };
-        // "qty_done" on stock.move.line = Odoo "Fait" column (Odoo 16 field name)
-        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (ml.qty_done || ml.quantity || 0);
+        if (!byProd[pid]) byProd[pid] = { name: m.product_id[1], ref: "", months: {} };
+        // quantity_done = actual "Fait" qty on stock.move (Odoo 16)
+        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (m.quantity_done || 0);
       }
 
       const prodIds = Object.keys(byProd).map(Number);
@@ -535,18 +546,43 @@ export default function Dashboard() {
       let prods = await odoo.searchRead(session, "product.product", [["default_code", "=ilike", moveRef.trim()]], ["id", "name", "default_code"], 5);
       if (!prods.length) prods = await odoo.searchRead(session, "product.product", [["barcode", "=", moveRef.trim()]], ["id", "name", "default_code"], 5);
       if (!prods.length) { setError(`Référence "${moveRef}" introuvable`); setMoves([]); setLoading(false); return; }
-      const rawMoves = await odoo.searchRead(session, "stock.move", [["product_id", "=", prods[0].id], ["state", "=", "done"]], ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids", "name"], 500, "date desc");
+
+      // Build domain with optional date range
+      const domain: any[] = [["product_id", "=", prods[0].id], ["state", "=", "done"]];
+      if (moveStart) domain.push(["date", ">=", moveStart + " 00:00:00"]);
+      if (moveEnd) domain.push(["date", "<=", moveEnd + " 23:59:59"]);
+
+      const rawMoves = await odoo.searchRead(session, "stock.move", domain,
+        ["date", "picking_id", "location_id", "location_dest_id", "quantity_done", "product_qty", "lot_ids", "name"], 500, "date desc");
+
+      // Get location usages
       const locIds = Array.from(new Set(rawMoves.flatMap((m: any) => [m.location_id?.[0], m.location_dest_id?.[0]]).filter(Boolean))) as number[];
       const locs = locIds.length ? await odoo.searchRead(session, "stock.location", [["id", "in", locIds]], ["id", "usage"], 200) : [];
       const locUsage: Record<number, string> = Object.fromEntries(locs.map((l: any) => [l.id, l.usage]));
+
+      // Get partner names from pickings
+      const pickingIds = Array.from(new Set(rawMoves.map((m: any) => m.picking_id?.[0]).filter(Boolean))) as number[];
+      const pickings = pickingIds.length ? await odoo.searchRead(session, "stock.picking", [["id", "in", pickingIds]], ["id", "partner_id"], 500) : [];
+      const pickingPartner: Record<number, string> = {};
+      for (const p of pickings) { pickingPartner[p.id] = p.partner_id ? p.partner_id[1] : "—"; }
+
       setMoves(rawMoves.map((m: any) => {
         const fromU = locUsage[m.location_id?.[0]] || ""; const toU = locUsage[m.location_dest_id?.[0]] || "";
-        const type = fromU === "supplier" || toU === "internal" && fromU !== "internal" ? "Entrée" : toU === "customer" || fromU === "internal" && toU !== "internal" ? "Sortie" : "Interne";
-        return { date: m.date, type, qty: m.product_qty, lot: Array.isArray(m.lot_ids) ? m.lot_ids.join(", ") || "—" : "—", from: m.location_id?.[1] || "—", to: m.location_dest_id?.[1] || "—", picking: m.picking_id?.[1] || "—" };
+        const type = fromU === "supplier" || (toU === "internal" && fromU !== "internal") ? "Entrée"
+          : toU === "customer" || (fromU === "internal" && toU !== "internal") ? "Sortie" : "Interne";
+        const qty = m.quantity_done != null ? m.quantity_done : m.product_qty;
+        const pickId = m.picking_id?.[0];
+        return {
+          date: m.date, type, qty,
+          lot: Array.isArray(m.lot_ids) ? m.lot_ids.join(", ") || "—" : "—",
+          from: m.location_id?.[1] || "—", to: m.location_dest_id?.[1] || "—",
+          picking: m.picking_id?.[1] || "—",
+          partner: pickId ? (pickingPartner[pickId] || "—") : "—",
+        };
       }));
       setMoveColFilters({}); setMoveColSort({ col: "date", dir: "desc" });
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [session, moveRef]);
+  }, [session, moveRef, moveStart, moveEnd]);
 
   useEffect(() => { if (!session) return; if (tab === "alerts") { loadAlerts(); if (conso.length === 0) loadConso(); } if (tab === "conso") loadConso(); if (tab === "deliveries") loadDeliveries(); }, [tab, session]);
 
@@ -554,8 +590,18 @@ export default function Dashboard() {
   const months = useMemo(() => monthsBack(consoMonths), [consoMonths]);
   const filteredMoves = useMemo(() => {
     let r = [...moves];
-    for (const [col, allowed] of Object.entries(moveColFilters)) { if (!allowed.size) continue; r = r.filter((m) => { const v = col === "date" ? fmtDate(m.date) : col === "qty" ? String(m.qty) : (m as any)[col] || ""; return allowed.has(v); }); }
-    if (moveColSort.dir) { const d = moveColSort.dir === "asc" ? 1 : -1; const c = moveColSort.col; r.sort((a, b) => c === "qty" ? d * (a.qty - b.qty) : d * String(c === "date" ? a.date : (a as any)[c] || "").localeCompare(String(c === "date" ? b.date : (b as any)[c] || ""))); }
+    for (const [col, allowed] of Object.entries(moveColFilters)) {
+      if (!allowed.size) continue;
+      r = r.filter((m) => {
+        const v = col === "date" ? fmtDate(m.date) : col === "qty" ? String(m.qty) : (m as any)[col] || "";
+        return allowed.has(v);
+      });
+    }
+    if (moveColSort.dir) {
+      const d = moveColSort.dir === "asc" ? 1 : -1;
+      const c = moveColSort.col;
+      r.sort((a, b) => c === "qty" ? d * (a.qty - b.qty) : d * String(c === "date" ? a.date : (a as any)[c] || "").localeCompare(String(c === "date" ? b.date : (b as any)[c] || "")));
+    }
     return r;
   }, [moves, moveColFilters, moveColSort]);
 
@@ -825,24 +871,31 @@ export default function Dashboard() {
             <div style={{ marginBottom: 24 }}>
               <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Historique des mouvements</h2>
               <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>Recherchez par référence article ou code-barres</p>
-              <div style={{ display: "flex", gap: 10 }}>
-                <input className="wms-input" value={moveRef} onChange={(e) => setMoveRef(e.target.value)} placeholder="Référence ou code-barres..." onKeyDown={(e) => e.key === "Enter" && loadMoves()} style={{ flex: 1 }} />
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <input className="wms-input" value={moveRef} onChange={(e) => setMoveRef(e.target.value)} placeholder="Référence ou code-barres..." onKeyDown={(e) => e.key === "Enter" && loadMoves()} style={{ flex: 1, minWidth: 200 }} />
+                <input className="wms-input" type="date" value={moveStart} onChange={(e) => setMoveStart(e.target.value)} style={{ width: "auto" }} title="Date début (optionnel)" />
+                <span style={{ color: "var(--text-muted)" }}>→</span>
+                <input className="wms-input" type="date" value={moveEnd} onChange={(e) => setMoveEnd(e.target.value)} style={{ width: "auto" }} title="Date fin (optionnel)" />
                 <button className="wms-btn wms-btn-primary" onClick={loadMoves} disabled={loading || !moveRef.trim()} style={{ opacity: !moveRef.trim() ? .5 : 1 }}>{loading ? <Spinner /> : I.search} Rechercher</button>
               </div>
+              {(moveStart || moveEnd) && <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 8 }}>Période : {moveStart || "…"} → {moveEnd || "…"}</div>}
             </div>
             {moves.length > 0 && (
               <div className="wms-card">
-                <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                   <span style={{ fontSize: 13, fontWeight: 700, fontFamily: MONO }}>{filteredMoves.length}/{moves.length} mouvement{filteredMoves.length > 1 ? "s" : ""}</span>
-                  {Object.keys(moveColFilters).some((k) => moveColFilters[k]?.size < new Set(moves.map((m) => { const v = k === "date" ? fmtDate(m.date) : k === "qty" ? String(m.qty) : (m as any)[k]; return v; })).size) && (
-                    <button className="wms-btn wms-btn-ghost" onClick={() => setMoveColFilters({})} style={{ padding: "5px 12px", fontSize: 11 }}>{I.filter} Réinitialiser filtres</button>
-                  )}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {Object.keys(moveColFilters).some((k) => moveColFilters[k]?.size < new Set(moves.map((m) => { const v = k === "date" ? fmtDate(m.date) : k === "qty" ? String(m.qty) : (m as any)[k]; return v; })).size) && (
+                      <button className="wms-btn wms-btn-ghost" onClick={() => setMoveColFilters({})} style={{ padding: "5px 12px", fontSize: 11 }}>{I.filter} Réinitialiser filtres</button>
+                    )}
+                  </div>
                 </div>
                 <div className="wms-scrollbar" style={{ overflowX: "auto" }}>
                   <table className="wms-table">
                     <thead><tr>
                       <FilterableHeader label="Date" colKey="date" values={moves.map((m) => fmtDate(m.date))} filterState={moveColFilters} setFilterState={setMoveColFilters} sortState={moveColSort} setSortState={setMoveColSort} />
                       <FilterableHeader label="Type" colKey="type" values={moves.map((m) => m.type)} filterState={moveColFilters} setFilterState={setMoveColFilters} sortState={moveColSort} setSortState={setMoveColSort} />
+                      <FilterableHeader label="Client" colKey="partner" values={moves.map((m) => m.partner)} filterState={moveColFilters} setFilterState={setMoveColFilters} sortState={moveColSort} setSortState={setMoveColSort} />
                       <FilterableHeader label="BL/Transfert" colKey="picking" values={moves.map((m) => m.picking)} filterState={moveColFilters} setFilterState={setMoveColFilters} sortState={moveColSort} setSortState={setMoveColSort} />
                       <FilterableHeader label="Qté" colKey="qty" values={moves.map((m) => String(m.qty))} filterState={moveColFilters} setFilterState={setMoveColFilters} sortState={moveColSort} setSortState={setMoveColSort} />
                       <FilterableHeader label="Lot" colKey="lot" values={moves.map((m) => m.lot)} filterState={moveColFilters} setFilterState={setMoveColFilters} sortState={moveColSort} setSortState={setMoveColSort} />
@@ -856,6 +909,7 @@ export default function Dashboard() {
                           <tr key={i}>
                             <td style={{ fontFamily: MONO, fontSize: 12, whiteSpace: "nowrap" }}>{fmtDate(m.date)}</td>
                             <td><span className="wms-badge" style={{ background: tc.bg, color: tc.c }}>{m.type}</span></td>
+                            <td style={{ fontSize: 12, whiteSpace: "nowrap", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }} title={m.partner}>{m.partner}</td>
                             <td style={{ color: "var(--accent)", fontFamily: MONO, fontSize: 12, fontWeight: 600 }}>{m.picking}</td>
                             <td style={{ fontWeight: 800, fontFamily: MONO }}>{m.qty}</td>
                             <td style={{ fontFamily: MONO, fontSize: 12 }}>{m.lot}</td>
