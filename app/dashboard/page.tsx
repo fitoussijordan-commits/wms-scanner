@@ -42,7 +42,6 @@ interface StockProduct {
   ref: string;
 }
 
-type ThemeMode = "dark" | "light";
 type SortDir = "asc" | "desc" | null;
 
 // ─────────────────────────────────────────────
@@ -74,19 +73,6 @@ function clearSession() {
     localStorage.removeItem("wms_dash_s");
   } catch {}
 }
-function loadTheme(): ThemeMode {
-  try {
-    return (localStorage.getItem("wms_theme") as ThemeMode) || "dark";
-  } catch {
-    return "dark";
-  }
-}
-function saveTheme(t: ThemeMode) {
-  try {
-    localStorage.setItem("wms_theme", t);
-  } catch {}
-}
-
 function monthsBack(n: number): string[] {
   const months: string[] = [];
   for (let i = n - 1; i >= 0; i--) {
@@ -121,38 +107,8 @@ function fmtDate(s: string): string {
 const GLOBAL_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700;0,9..40,800;1,9..40,400&family=JetBrains+Mono:wght@400;600&display=swap');
 
-[data-theme="dark"] {
-  --bg-base: #0c0e12;
-  --bg-raised: #13161c;
-  --bg-surface: #191d25;
-  --bg-hover: #1e2330;
-  --bg-input: #111419;
-  --border: #232830;
-  --text-primary: #e8ecf4;
-  --text-secondary: #8a93a6;
-  --text-muted: #555d6e;
-  --accent: #3b82f6;
-  --accent-soft: rgba(59,130,246,0.12);
-  --accent-border: rgba(59,130,246,0.25);
-  --success: #22c55e;
-  --success-soft: rgba(34,197,94,0.10);
-  --success-border: rgba(34,197,94,0.25);
-  --warning: #f59e0b;
-  --warning-soft: rgba(245,158,11,0.10);
-  --warning-border: rgba(245,158,11,0.25);
-  --danger: #ef4444;
-  --danger-soft: rgba(239,68,68,0.10);
-  --danger-border: rgba(239,68,68,0.25);
-  --purple: #a855f7;
-  --purple-soft: rgba(168,85,247,0.10);
-  --purple-border: rgba(168,85,247,0.25);
-  --orange: #f97316;
-  --shadow-popup: 0 8px 32px rgba(0,0,0,0.6);
-  --table-row-alt: rgba(255,255,255,0.015);
-  --heat-color: 59,130,246;
-}
 
-[data-theme="light"] {
+:root {
   --bg-base: #f4f6f9;
   --bg-raised: #ffffff;
   --bg-surface: #f8f9fb;
@@ -244,8 +200,6 @@ th, td { text-align:left; }
 .col-filter-actions { display:flex; gap:6px; padding-top:6px; margin-top:4px; border-top:1px solid var(--border); }
 .col-filter-actions button { flex:1; padding:6px; border-radius:6px; border:none; font-size:11px; font-weight:600; cursor:pointer; font-family:inherit; }
 
-.theme-toggle { width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; background:var(--bg-surface); border:1px solid var(--border); cursor:pointer; color:var(--text-secondary); transition:all .18s; }
-.theme-toggle:hover { background:var(--bg-hover); color:var(--text-primary); }
 
 /* Resizable columns */
 .wms-table th.resizable { position:relative; }
@@ -274,8 +228,6 @@ const I = {
   upload: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
   check: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>,
   scanner: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>,
-  sun: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
-  moon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
   chevronDown: <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"/></svg>,
   filter: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
   sortAsc: <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>,
@@ -285,7 +237,7 @@ const I = {
 const TABS = [
   { key: "alerts", label: "Alertes stock", icon: I.alert },
   { key: "conso", label: "Consommation", icon: I.chart },
-  { key: "deliveries", label: "Livraisons", icon: I.truck },
+  { key: "deliveries", label: "Livraisons & Prépa.", icon: I.truck },
   { key: "moves", label: "Historique", icon: I.history },
 ] as const;
 
@@ -409,9 +361,6 @@ function MiniBarChart({ data, max }: { data: number[]; max: number }) {
 // MAIN DASHBOARD
 // ═════════════════════════════════════════════
 export default function Dashboard() {
-  const [theme, setTheme] = useState<ThemeMode>("dark");
-  const toggleTheme = () => { const t = theme === "dark" ? "light" : "dark"; setTheme(t); saveTheme(t); };
-
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState("");
@@ -445,9 +394,12 @@ export default function Dashboard() {
   const [moveColSort, setMoveColSort] = useState<{ col: string; dir: SortDir }>({ col: "date", dir: "desc" });
   const [delColFilters, setDelColFilters] = useState<Record<string, Set<string>>>({});
   const [delColSort, setDelColSort] = useState<{ col: string; dir: SortDir }>({ col: "date", dir: "desc" });
+  const [delPickingType, setDelPickingType] = useState<"all" | "out" | "pick">("all");
+  const [prepStats, setPrepStats] = useState<{ name: string; picking: number; emballage: number; total: number }[]>([]);
+  const [prepStatsLoading, setPrepStatsLoading] = useState(false);
   const [consoColSort, setConsoColSort] = useState<{ col: string; dir: SortDir }>({ col: "total", dir: "desc" });
 
-  useEffect(() => { setTheme(loadTheme()); const s = loadSession(); if (s) setSession(s); const cfg = loadCfg(); if (cfg) { setUrl(cfg.u); setDb(cfg.d); } }, []);
+  useEffect(() => { const s = loadSession(); if (s) setSession(s); const cfg = loadCfg(); if (cfg) { setUrl(cfg.u); setDb(cfg.d); } }, []);
   useEffect(() => { try { const t = localStorage.getItem("wms_thresholds"); if (t) setThresholds(JSON.parse(t)); } catch {} }, []);
 
   const login = async () => { if (!url || !db || !user || !pw) return; setLoginLoading(true); setLoginError(""); try { const s = await odoo.authenticate({ url, db }, user, pw); saveSession(s); setSession(s); } catch (e: any) { setLoginError(e.message); } setLoginLoading(false); };
@@ -539,12 +491,41 @@ export default function Dashboard() {
   }, [session, consoMonths, consoSearch]);
 
   const loadDeliveries = useCallback(async () => {
-    if (!session) return; setLoading(true); setError("");
+    if (!session) return; setLoading(true); setError(""); setPrepStats([]);
     try {
-      const pickings = await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_code", "=", "outgoing"], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "partner_id", "move_ids"], 1000, "date_done desc");
+      // Get picking type IDs for OUT and PICK
+      const pickingTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "in", ["outgoing", "internal"]]], ["id", "code", "sequence_code", "name"], 50);
+      const outTypeIds = pickingTypes.filter((t: any) => t.code === "outgoing").map((t: any) => t.id);
+      const pickTypeIds = pickingTypes.filter((t: any) => t.sequence_code?.toLowerCase().includes("pick") || t.name?.toLowerCase().includes("pick")).map((t: any) => t.id);
+
+      // Load OUT pickings
+      const outPickings = outTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", outTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "partner_id", "move_ids", "user_id"], 2000, "date_done desc") : [];
+
+      // Load PICK pickings
+      const pickPickings = pickTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", pickTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "move_ids", "user_id"], 2000, "date_done desc") : [];
+
+      const allPickings = [...outPickings.map((p: any) => ({ ...p, pickKind: "out" })), ...pickPickings.map((p: any) => ({ ...p, pickKind: "pick" }))];
+
       const byDate: Record<string, { count: number; lines: number }> = {};
-      for (const p of pickings) { const date = (p.date_done || "").substring(0, 10); if (!byDate[date]) byDate[date] = { count: 0, lines: 0 }; byDate[date].count++; byDate[date].lines += (p.move_ids || []).length; }
+      for (const p of allPickings) {
+        const date = (p.date_done || "").substring(0, 10);
+        if (!byDate[date]) byDate[date] = { count: 0, lines: 0 };
+        byDate[date].count++;
+        byDate[date].lines += (p.move_ids || []).length;
+      }
       setDeliveries(Object.entries(byDate).sort(([a], [b]) => b.localeCompare(a)).map(([date, v]) => ({ date, ...v })));
+
+      // Stats préparateurs
+      const prepByUser: Record<string, { picking: number; emballage: number }> = {};
+      for (const p of allPickings) {
+        const name = p.user_id ? p.user_id[1] : "Inconnu";
+        if (!prepByUser[name]) prepByUser[name] = { picking: 0, emballage: 0 };
+        if (p.pickKind === "pick") prepByUser[name].picking++;
+        else prepByUser[name].emballage++;
+      }
+      const stats = Object.entries(prepByUser).map(([name, v]) => ({ name, ...v, total: v.picking + v.emballage }))
+        .sort((a, b) => b.total - a.total);
+      setPrepStats(stats);
       setDelColFilters({});
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, [session, delStart, delEnd]);
@@ -656,10 +637,9 @@ export default function Dashboard() {
   // LOGIN
   // ═══════════════════════════════════════
   if (!session) return (
-    <div className="wms-root" data-theme={theme}><style>{GLOBAL_CSS}</style>
+    <div className="wms-root" data-theme="light"><style>{GLOBAL_CSS}</style>
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ position: "absolute", top: 16, right: 16 }}><button className="theme-toggle" onClick={toggleTheme}>{theme === "dark" ? I.sun : I.moon}</button></div>
-        <div style={{ width: "100%", maxWidth: 420, padding: 24, animation: "fadeIn .5s ease both" }}>
+<div style={{ width: "100%", maxWidth: 420, padding: 24, animation: "fadeIn .5s ease both" }}>
           <div style={{ textAlign: "center", marginBottom: 36 }}>
             <div style={{ width: 56, height: 56, borderRadius: 12, background: "linear-gradient(135deg,var(--accent),#6366f1)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 18px", boxShadow: "0 8px 32px var(--accent-soft)", color: "#fff" }}>{I.warehouse}</div>
             <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>WMS Dashboard</h1>
@@ -684,20 +664,19 @@ export default function Dashboard() {
   // MAIN
   // ═══════════════════════════════════════
   return (
-    <div className="wms-root" data-theme={theme}><style>{GLOBAL_CSS}</style>
+    <div className="wms-root" data-theme="light"><style>{GLOBAL_CSS}</style>
 
       {/* HEADER */}
       <header style={{ background: "var(--bg-raised)", borderBottom: "1px solid var(--border)", padding: "0 28px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60, position: "sticky", top: 0, zIndex: 20 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <a href="/" style={{ display: "flex", alignItems: "center", gap: 14, textDecoration: "none", color: "inherit" }}>
           <div style={{ width: 34, height: 34, borderRadius: 8, background: "linear-gradient(135deg,var(--accent),#6366f1)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", flexShrink: 0 }}>{I.warehouse}</div>
           <div>
             <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "-.2px", lineHeight: 1.2 }}>WMS Dashboard</div>
             <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: MONO }}>{session.name} · {session.config?.url?.replace("https://", "")}</div>
           </div>
-        </div>
+        </a>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button className="theme-toggle" onClick={toggleTheme} title={theme === "dark" ? "Mode clair" : "Mode sombre"}>{theme === "dark" ? I.sun : I.moon}</button>
-          <a href="/" className="wms-btn wms-btn-ghost" style={{ textDecoration: "none", padding: "8px 14px", fontSize: 13 }}>{I.scanner} Scanner</a>
+<a href="/" className="wms-btn wms-btn-ghost" style={{ textDecoration: "none", padding: "8px 14px", fontSize: 13 }}>{I.scanner} Scanner</a>
           <button className="wms-btn wms-btn-danger" onClick={logout} style={{ padding: "8px 14px", fontSize: 13 }}>{I.logout} Déco.</button>
         </div>
       </header>
@@ -929,6 +908,21 @@ export default function Dashboard() {
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                 <select className="wms-select" value={consoMonths} onChange={(e) => setConsoMonths(Number(e.target.value))}>{[3, 6, 9, 12].map((n) => <option key={n} value={n}>{n} mois</option>)}</select>
                 <button className="wms-btn wms-btn-primary" onClick={loadConso} disabled={loading}>{loading ? <Spinner /> : I.refresh} Charger</button>
+                {conso.length > 0 && (
+                  <button className="wms-btn wms-btn-ghost" onClick={async () => {
+                    const XLSX = await import("xlsx");
+                    const rows = sortedConso.map(r => {
+                      const obj: any = { "Référence": r.ref, "Désignation": r.name };
+                      months.forEach(m => { obj[fmtMonth(m)] = r.months[m] || 0; });
+                      obj["Moy/mois"] = r.avg; obj["Total"] = r.total;
+                      return obj;
+                    });
+                    const ws = XLSX.utils.json_to_sheet(rows);
+                    const wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, ws, "Conso");
+                    XLSX.writeFile(wb, `conso_${consoMonths}mois_${new Date().toISOString().split("T")[0]}.xlsx`);
+                  }} style={{ padding: "10px 14px", fontSize: 13 }}>📥 Export Excel</button>
+                )}
               </div>
             </div>
             <input className="wms-input" value={consoSearch} onChange={(e) => setConsoSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && loadConso()} placeholder="Référence ou nom produit (Entrée pour chercher, vide = tout)..." style={{ marginBottom: 16 }} />
@@ -985,31 +979,84 @@ export default function Dashboard() {
         {/* ══════════ LIVRAISONS ══════════ */}
         {tab === "deliveries" && (
           <div style={{ animation: "fadeIn .3s ease both" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
-              <div><h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Livraisons par période</h2><p style={{ fontSize: 13, color: "var(--text-muted)" }}>Bons de livraison validés, groupés par jour</p></div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+              <div><h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Livraisons & Préparations</h2><p style={{ fontSize: 13, color: "var(--text-muted)" }}>Statistiques par période — Picking + Emballage</p></div>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <input className="wms-input" type="date" value={delStart} onChange={(e) => setDelStart(e.target.value)} style={{ width: "auto" }} />
                 <span style={{ color: "var(--text-muted)" }}>→</span>
                 <input className="wms-input" type="date" value={delEnd} onChange={(e) => setDelEnd(e.target.value)} style={{ width: "auto" }} />
                 <button className="wms-btn wms-btn-primary" onClick={loadDeliveries} disabled={loading}>{loading ? <Spinner /> : I.refresh} Charger</button>
+                {deliveries.length > 0 && (
+                  <button className="wms-btn wms-btn-ghost" onClick={async () => {
+                    const XLSX = await import("xlsx");
+                    const wb = XLSX.utils.book_new();
+                    const wsD = XLSX.utils.json_to_sheet(filteredDel.map(d => ({ Date: fmtDate(d.date), Préparations: d.count, "Lignes articles": d.lines })));
+                    XLSX.utils.book_append_sheet(wb, wsD, "Par jour");
+                    if (prepStats.length) {
+                      const wsP = XLSX.utils.json_to_sheet(prepStats.map(s => ({ Préparateur: s.name, Picking: s.picking, Emballage: s.emballage, Total: s.total })));
+                      XLSX.utils.book_append_sheet(wb, wsP, "Préparateurs");
+                    }
+                    XLSX.writeFile(wb, `livraisons_${new Date().toISOString().split("T")[0]}.xlsx`);
+                  }} style={{ padding: "10px 14px", fontSize: 13 }}>📥 Export Excel</button>
+                )}
               </div>
             </div>
+
             {deliveries.length > 0 && <>
+              {/* Stat cards */}
               <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
                 <StatCard label="Jours" value={filteredDel.length} color="var(--accent)" delay={0} />
-                <StatCard label="Livraisons" value={filteredDel.reduce((s, d) => s + d.count, 0)} color="var(--success)" delay={50} />
+                <StatCard label="Total prépa." value={filteredDel.reduce((s, d) => s + d.count, 0)} color="var(--success)" delay={50} />
                 <StatCard label="Lignes totales" value={filteredDel.reduce((s, d) => s + d.lines, 0)} color="var(--purple)" delay={100} />
                 <StatCard label="Moy./jour" value={filteredDel.length > 0 ? Math.round(filteredDel.reduce((s, d) => s + d.count, 0) / filteredDel.length) : 0} color="var(--warning)" delay={150} />
               </div>
+
+              {/* Stats préparateurs */}
+              {prepStats.length > 0 && (
+                <div className="wms-card" style={{ marginBottom: 20 }}>
+                  <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>👷 Stats par préparateur</div>
+                    <div style={{ display: "flex", gap: 16, fontSize: 12, color: "var(--text-muted)" }}>
+                      <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "var(--accent)", marginRight: 5 }} />Picking (PICK)</span>
+                      <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "var(--success)", marginRight: 5 }} />Emballage (OUT)</span>
+                    </div>
+                  </div>
+                  <div style={{ padding: "16px 20px", display: "grid", gap: 12 }}>
+                    {prepStats.map((s, i) => {
+                      const maxTotal = Math.max(...prepStats.map(x => x.total), 1);
+                      return (
+                        <div key={i} style={{ animation: `fadeIn .3s ease ${i * 40}ms both` }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                            <span style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</span>
+                            <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
+                              <span style={{ color: "var(--accent)" }}>Picking: <strong>{s.picking}</strong></span>
+                              <span style={{ color: "var(--success)" }}>Emballage: <strong>{s.emballage}</strong></span>
+                              <span style={{ color: "var(--text-secondary)", fontWeight: 700 }}>Total: <strong>{s.total}</strong></span>
+                            </div>
+                          </div>
+                          <div style={{ height: 8, background: "var(--bg-surface)", borderRadius: 4, overflow: "hidden", display: "flex" }}>
+                            <div style={{ width: `${(s.picking / maxTotal) * 100}%`, background: "var(--accent)", borderRadius: "4px 0 0 4px", transition: "width .6s ease" }} />
+                            <div style={{ width: `${(s.emballage / maxTotal) * 100}%`, background: "var(--success)", borderRadius: "0 4px 4px 0", transition: "width .6s ease" }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Mini bar chart */}
               <div className="wms-card" style={{ padding: "18px 20px", marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 10, textTransform: "uppercase", letterSpacing: ".5px" }}>Livraisons / jour</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 10, textTransform: "uppercase", letterSpacing: ".5px" }}>Préparations / jour</div>
                 <MiniBarChart data={[...filteredDel].reverse().map((d) => d.count)} max={Math.max(...filteredDel.map((d) => d.count), 1)} />
               </div>
+
+              {/* Table */}
               <div className="wms-card"><div className="wms-scrollbar" style={{ overflowX: "auto" }}>
                 <table className="wms-table">
                   <thead><tr>
                     <FilterableHeader label="Date" colKey="date" values={deliveries.map((d) => fmtDate(d.date))} filterState={delColFilters} setFilterState={setDelColFilters} sortState={delColSort} setSortState={setDelColSort} />
-                    <FilterableHeader label="Livraisons" colKey="count" values={deliveries.map((d) => String(d.count))} filterState={delColFilters} setFilterState={setDelColFilters} sortState={delColSort} setSortState={setDelColSort} align="center" />
+                    <FilterableHeader label="Préparations" colKey="count" values={deliveries.map((d) => String(d.count))} filterState={delColFilters} setFilterState={setDelColFilters} sortState={delColSort} setSortState={setDelColSort} align="center" />
                     <FilterableHeader label="Lignes articles" colKey="lines" values={deliveries.map((d) => String(d.lines))} filterState={delColFilters} setFilterState={setDelColFilters} sortState={delColSort} setSortState={setDelColSort} align="center" />
                   </tr></thead>
                   <tbody>
@@ -1041,6 +1088,19 @@ export default function Dashboard() {
                 <span style={{ color: "var(--text-muted)" }}>→</span>
                 <input className="wms-input" type="date" value={moveEnd} onChange={(e) => setMoveEnd(e.target.value)} style={{ width: "auto" }} />
                 <button className="wms-btn wms-btn-primary" onClick={loadMoves} disabled={loading || (!moveRef.trim() && !moveStart && !moveEnd)} style={{ opacity: (!moveRef.trim() && !moveStart && !moveEnd) ? .5 : 1 }}>{loading ? <Spinner /> : I.search} Rechercher</button>
+                {moves.length > 0 && (
+                  <button className="wms-btn wms-btn-ghost" onClick={async () => {
+                    const XLSX = await import("xlsx");
+                    const rows = filteredMoves.map(m => ({
+                      Date: fmtDate(m.date), Type: m.type, Produit: m.product,
+                      Client: m.partner, "BL/Transfert": m.picking, Qté: m.qty, Lot: m.lot, De: m.from, Vers: m.to
+                    }));
+                    const ws = XLSX.utils.json_to_sheet(rows);
+                    const wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, ws, "Mouvements");
+                    XLSX.writeFile(wb, `mouvements_${new Date().toISOString().split("T")[0]}.xlsx`);
+                  }} style={{ padding: "10px 14px", fontSize: 13 }}>📥 Export Excel</button>
+                )}
               </div>
             </div>
             {moves.length > 0 && (
@@ -1084,6 +1144,25 @@ export default function Dashboard() {
                         );
                       })}
                     </tbody>
+                    {filteredMoves.length > 0 && (
+                      <tfoot>
+                        <tr style={{ background: "var(--bg-surface)", borderTop: "2px solid var(--border)" }}>
+                          <td style={{ padding: "10px 16px", fontWeight: 700, fontSize: 12, color: "var(--text-secondary)" }}>{filteredMoves.length} mouv.</td>
+                          {!moveRef.trim() && <td />}
+                          <td />
+                          <td />
+                          <td />
+                          <td style={{ padding: "10px 16px", fontWeight: 800, fontFamily: MONO, color: "var(--accent)", textAlign: "right" }}>
+                            {filteredMoves.reduce((s, m) => s + m.qty, 0).toLocaleString("fr-FR")}
+                          </td>
+                          <td colSpan={3} style={{ padding: "10px 16px", fontSize: 11, color: "var(--text-muted)" }}>
+                            Entrées: <strong style={{ color: "var(--success)" }}>{filteredMoves.filter(m => m.type === "Entrée").reduce((s,m) => s+m.qty,0).toLocaleString("fr-FR")}</strong>
+                            {" · "}Sorties: <strong style={{ color: "var(--danger)" }}>{filteredMoves.filter(m => m.type === "Sortie").reduce((s,m) => s+m.qty,0).toLocaleString("fr-FR")}</strong>
+                            {" · "}Internes: <strong>{filteredMoves.filter(m => m.type === "Interne").reduce((s,m) => s+m.qty,0).toLocaleString("fr-FR")}</strong>
+                          </td>
+                        </tr>
+                      </tfoot>
+                    )}
                   </table>
                 </div>
               </div>
