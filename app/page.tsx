@@ -1,10 +1,219 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as odoo from "@/lib/odoo";
 import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
+
+
+// ── E-shop Packing Slip PDF (reproduit le format SendCloud) ────────────────────
+async function generateEshopPackingSlipPDF(order: {
+  order_number: string;
+  order_date?: string;
+  shipping_method?: string;
+  recipient_name: string;
+  recipient_address: string;
+  recipient_postal: string;
+  recipient_city: string;
+  recipient_country: string;
+  items: Array<{ name: string; sku: string; quantity: number; properties?: string }>;
+}): Promise<string> {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const W = 210; const M = 14;
+
+  const BLACK = [0, 0, 0] as [number,number,number];
+  const GRAY  = [100, 100, 100] as [number,number,number];
+  const WHITE = [255, 255, 255] as [number,number,number];
+  const BORDER = [180, 180, 180] as [number,number,number];
+  const DARK = [30, 30, 30] as [number,number,number];
+
+  let y = M;
+
+  // ── Logo zone ──
+  // Dr. Hauschka logo text (bold, large)
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(22);
+  doc.setTextColor(...BLACK);
+  doc.text("Dr. Hauschka", M, y + 10);
+
+  // WALA logo circle symbol (simulate with ellipse lines)
+  const cx = M + 6; const cy = y + 20;
+  doc.setDrawColor(...BLACK);
+  doc.setLineWidth(0.8);
+  doc.ellipse(cx, cy, 5.5, 5.5);
+  // Inner swirl lines to simulate WALA logo
+  doc.setLineWidth(0.5);
+  doc.ellipse(cx, cy, 3, 5);
+  doc.ellipse(cx, cy, 5.5, 3);
+
+  // WALA France bold under logo
+  doc.setFontSize(13);
+  doc.setFont("helvetica", "bold");
+  doc.text("WALA France", M, y + 30);
+
+  // ── Barcode (right side) ──
+  const bcW = 65; const bcH = 18;
+  const bcX = W - M - bcW; const bcY = y;
+  doc.setDrawColor(...BLACK);
+  // Draw barcode bars
+  const bars = 80;
+  for (let i = 0; i < bars; i++) {
+    const thick = (i % 5 === 0 || i % 7 === 0) ? 1.2 : (i % 3 === 0 ? 0.6 : 0.3);
+    doc.setLineWidth(thick);
+    const x = bcX + (i / bars) * bcW;
+    if (i % 2 === 0) doc.line(x, bcY, x, bcY + bcH);
+  }
+  // Barcode number under
+  doc.setLineWidth(0.3);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(...BLACK);
+  doc.text(`PS${order.order_number.padStart(16, "0")}`, bcX + bcW / 2, bcY + bcH + 4.5, { align: "center" });
+
+  y += 36;
+
+  // ── 3-column info table ──
+  // Full-width bordered table
+  const tW = W - M * 2;
+  const col1W = 50; const col2W = 65; const col3W = tW - col1W - col2W;
+  const col1X = M; const col2X = M + col1W; const col3X = M + col1W + col2W;
+  const tH = 52;
+
+  // Draw table border
+  doc.setDrawColor(...BORDER);
+  doc.setLineWidth(0.5);
+  doc.rect(col1X, y, tW, tH);
+  // Vertical separators
+  doc.line(col2X, y, col2X, y + tH);
+  doc.line(col3X, y, col3X, y + tH);
+
+  let iy = y + 5;
+
+  // Row 1 headers
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.setTextColor(...DARK);
+  doc.text("Date de la\ncommande", col1X + 3, iy, { lineHeightFactor: 1.4 });
+  doc.text("Expéditeur", col2X + 3, iy);
+  doc.text("Destinataire", col3X + 3, iy);
+  iy += 10;
+
+  // Date value
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  const dateStr = order.order_date || new Date().toLocaleDateString("fr-FR", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  doc.text(dateStr, col1X + 3, iy);
+  // Expéditeur value (bold name, normal rest)
+  doc.setFont("helvetica", "bold");
+  doc.text("WALA France", col2X + 3, iy);
+  // Destinataire value (bold name)
+  doc.text(order.recipient_name, col3X + 3, iy);
+  iy += 5;
+
+  // "Numéro de commande" label
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("Numéro de\ncommande", col1X + 3, iy, { lineHeightFactor: 1.4 });
+  // Expéditeur continued
+  doc.setFont("helvetica", "normal");
+  doc.text("+33143553242", col2X + 3, iy);
+  // Destinataire address
+  doc.text(order.recipient_address, col3X + 3, iy);
+  iy += 9;
+
+  // Order number value
+  doc.setFont("helvetica", "normal");
+  doc.text(order.order_number, col1X + 3, iy);
+  doc.text("35 Rue d'Hauteville", col2X + 3, iy);
+  doc.text(order.recipient_postal, col3X + 3, iy);
+  iy += 5;
+
+  // Shipping method label
+  doc.setFont("helvetica", "bold");
+  doc.text("Méthode\nd'expédition", col1X + 3, iy, { lineHeightFactor: 1.4 });
+  doc.setFont("helvetica", "normal");
+  doc.text("75010", col2X + 3, iy);
+  doc.text(order.recipient_city, col3X + 3, iy);
+  iy += 9;
+
+  // Shipping method value
+  if (order.shipping_method) {
+    const methodLines = doc.splitTextToSize(order.shipping_method, col1W - 6);
+    methodLines.forEach((l: string, i: number) => doc.text(l, col1X + 3, iy + i * 4.5));
+  }
+  doc.text("Paris", col2X + 3, iy);
+  doc.text("France", col3X + 3, iy);
+  iy += 5;
+  doc.text("France", col2X + 3, iy);
+
+  y += tH + 10;
+
+  // ── Articles table header ──
+  const artTW = W - M * 2;
+  const qtyW = 20;
+  const artW = artTW - qtyW;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(...BLACK);
+  doc.text("Article", M, y);
+  doc.text("QTÉ", W - M - qtyW + 3, y);
+  y += 3;
+
+  // Bold separator line under header
+  doc.setDrawColor(...BLACK);
+  doc.setLineWidth(0.8);
+  doc.line(M, y, W - M, y);
+  y += 5;
+
+  // ── Article rows ──
+  doc.setLineWidth(0.4);
+  doc.setDrawColor(...BORDER);
+
+  for (const item of order.items) {
+    const nameLines = doc.splitTextToSize(item.name, artW - 6);
+    const hasProps = !!item.properties;
+    const rowH = nameLines.length * 5 + (hasProps ? 5 : 0) + 6;
+
+    // Article name — bold
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9.5);
+    doc.setTextColor(...BLACK);
+    nameLines.forEach((l: string, i: number) => doc.text(l, M, y + i * 5));
+
+    // Properties — normal gray
+    if (hasProps) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(...GRAY);
+      doc.text(item.properties!, M, y + nameLines.length * 5);
+    }
+
+    // Quantity — right aligned
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9.5);
+    doc.setTextColor(...BLACK);
+    doc.text(String(item.quantity), W - M - qtyW + 3, y);
+
+    y += rowH;
+
+    // Separator line
+    doc.setDrawColor(...BORDER);
+    doc.line(M, y, W - M, y);
+    y += 4;
+  }
+
+  // ── Page footer ──
+  y = 287 - M; // near bottom
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.setTextColor(...BLACK);
+  doc.text("Page 1 / 1", M, y);
+
+  return doc.output("datauristring").split(",")[1];
+}
 
 // ── Packing list PDF (A4, client-side via jsPDF) ──────────────────────────────
 async function generatePackingListPDF(chain: {
@@ -409,14 +618,12 @@ export default function Page() {
     vibrate();
     showToast(`⚡ ${code}`);
     if (screen === "home") doLookup(code);
-    else if (screen === "prep") {
-      // Scan WH/PICK/xxx directly from prep list → open picking
-      if (/^WH\/PICK\//i.test(code) || /^WH\/OUT\//i.test(code)) { openPickingByName(code); return; }
-      doLookup(code);
-    }
     else if (screen === "transfer") {
       if (transferMode === "classic") doClassicScan(code);
       else doQuickScan(code);
+    }
+    else if (screen === "prep") {
+      if (/^WH\//i.test(code)) { openPickingByName(code); return; }
     }
     else if (screen === "prepDetail") doPrepScan(code);
     setTimeout(() => {
@@ -597,11 +804,11 @@ export default function Page() {
 
   const openPickingByName = async (name: string) => {
     if (!session) return;
-    const trimmed = name.trim().toUpperCase();
-    // Search in already loaded pickings first
-    const found = pickings.find((p: any) => (p.name || "").toUpperCase() === trimmed);
+    const trimmed = name.trim();
+    // Search in already loaded pickings first (case-insensitive)
+    const found = pickings.find((p: any) => (p.name || "").toUpperCase() === trimmed.toUpperCase());
     if (found) { openPicking(found); return; }
-    // Not in list — search Odoo directly (handles case where prep list isn't loaded yet)
+    // Fallback: search Odoo directly
     setLoading(true); setError("");
     try {
       const results = await odoo.searchRead(
@@ -610,12 +817,8 @@ export default function Page() {
         ["id", "name", "partner_id", "scheduled_date", "state", "priority", "date_deadline", "shipping_date"],
         1
       );
-      if (results.length) {
-        openPicking(results[0]);
-      } else {
-        showToast(`❌ "${trimmed}" introuvable`);
-        setLoading(false);
-      }
+      if (results.length) { openPicking(results[0]); }
+      else { showToast(`❌ "${trimmed}" introuvable`); setLoading(false); }
     } catch (e: any) { setError(e.message); setLoading(false); }
   };
 
@@ -781,6 +984,34 @@ export default function Page() {
     setLoading(false);
   };
 
+  // Optimistic qty override: { [moveLineId]: qty }
+  const [qtyOverrides, setQtyOverrides] = useState<Record<number, number>>({});
+  const debounceTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+
+  // +1 / -1 / tout mettre — optimistic update + debounced Odoo sync
+  const adjustMoveLineQty = (moveLineId: number, newQty: number) => {
+    const ml = pickingMoveLines.find((m: any) => m.id === moveLineId);
+    if (!ml || !session) return;
+    const clamped = Math.max(0, Math.min(newQty, ml.reserved_uom_qty || 0));
+    // Update display immediately
+    setQtyOverrides(prev => ({ ...prev, [moveLineId]: clamped }));
+    if (clamped >= (ml.reserved_uom_qty || 0)) vibrateSuccess();
+    // Debounce Odoo write — 800ms after last action
+    clearTimeout(debounceTimers.current[moveLineId]);
+    debounceTimers.current[moveLineId] = setTimeout(async () => {
+      try {
+        await odoo.setMoveLineQtyDone(session, moveLineId, clamped, ml.lot_id?.[0] || null);
+        // Refresh only this line silently
+        const updatedLines = await odoo.getPickingMoveLines(session, selectedPicking!.id);
+        setPickingMoveLines(updatedLines);
+        setQtyOverrides(prev => { const n = { ...prev }; delete n[moveLineId]; return n; });
+        if (clamped >= (ml.reserved_uom_qty || 0)) {
+          setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(moveLineId); return n; });
+        }
+      } catch (e: any) { setError(e.message); }
+    }, 800);
+  };
+
   const validatePrepPicking = async () => {
     if (!session || !selectedPicking) return;
     setLoading(true); setError("");
@@ -843,7 +1074,12 @@ export default function Page() {
             <div style={{ height: 10 }} />
             <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0022 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>} label="Arrivage" sub="Importer une packing list WALA" color="#059669" onClick={() => setScreen("arrival")} />
             <div style={{ height: 10 }} />
+            <a href="/dashboard" style={{ textDecoration: "none", display: "block" }}>
+              <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>} label="Dashboard" sub="Alertes stock, consommation, livraisons" color="#1d4ed8" onClick={() => {}} />
+            </a>
+            {/* HIDDEN: E-shop button — pas au point
             <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>} label="E-shop" sub="Préparer les commandes SendCloud" color="#f59e0b" onClick={() => setScreen("eshop")} />
+            */}
             {history.length > 0 && <>
               <div style={{ height: 10 }} />
               <BigButton icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>} label="Historique" sub={`${history.length} transfert${history.length > 1 ? "s" : ""} enregistré${history.length > 1 ? "s" : ""}`} color="#64748b" onClick={() => setScreen("history")} />
@@ -995,8 +1231,10 @@ export default function Page() {
                 <span style={{ marginLeft: 8, background: C.blue, color: "#fff", padding: "2px 8px", borderRadius: 10, fontSize: 11 }}>{lines.length}</span>
               </div>
               {lines.map((l, i) => (
-                <LineItem key={i} line={l} onDelete={() => setLines(p => p.filter((_, j) => j !== i))}
-                  onUpdate={(updated) => setLines(p => p.map((x, j) => j === i ? { ...x, ...updated } : x))} />
+                <EditableLine key={i} line={l}
+                  onDelete={() => setLines(p => p.filter((_, j) => j !== i))}
+                  onUpdate={(u: any) => setLines(p => p.map((x, j) => j === i ? { ...x, ...u } : x))}
+                />
               ))}
             </Section>
           )}
@@ -1066,6 +1304,8 @@ export default function Page() {
             onTakeAll={prepTakeAll}
             onCancelStep={() => setPrepStep(null)}
             onAutoFill={autoFillPicking}
+            onAdjustQty={adjustMoveLineQty}
+            qtyOverrides={qtyOverrides}
             onValidate={validatePrepPicking}
             onBack={() => { setScreen("prep"); setPrepStep(null); loadPickings(); }}
             onReport={openPickingReport}
@@ -1074,7 +1314,7 @@ export default function Page() {
 
         {/* ===== SETTINGS ===== */}
         {screen === "settings" && (
-          <SettingsScreen onBack={goHome} />
+          <SettingsScreen onBack={goHome} session={session} />
         )}
 
         {/* ===== HISTORY ===== */}
@@ -1096,10 +1336,11 @@ export default function Page() {
           <InventoryScreen session={session} onBack={goHome} onToast={showToast} />
         )}
 
-        {/* ===== E-SHOP ===== */}
+        {/* HIDDEN: E-shop screen — pas au point
         {screen === "eshop" && session && (
           <EshopScreen session={session} onBack={goHome} onToast={showToast} />
         )}
+        */}
       </main>
 
       {/* Print Modal — rendered at root level for z-index */}
@@ -1125,11 +1366,10 @@ function groupStockByLocation(stock: any[]) {
 // ============================================
 // LOCATION DROPDOWN
 // ============================================
-
 // ============================================
-// EDITABLE LINE ITEM
+// EDITABLE LINE
 // ============================================
-function LineItem({ line, onDelete, onUpdate }: { line: any; onDelete: () => void; onUpdate: (u: any) => void }) {
+function EditableLine({ line, onDelete, onUpdate }: { line: any; onDelete: () => void; onUpdate: (u: any) => void }) {
   const [editing, setEditing] = useState(false);
   const [qty, setQty] = useState(String(line.qty));
   const [lotName, setLotName] = useState(line.lotName || "");
@@ -1141,20 +1381,20 @@ function LineItem({ line, onDelete, onUpdate }: { line: any; onDelete: () => voi
   };
 
   if (editing) return (
-    <div style={{ padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+    <div style={{ padding: "12px 0", borderBottom: `1px solid ${C.border}` }}>
       <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 8 }}>{line.productName}</div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 80 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div style={{ display: "flex", flexDirection: "column" as const, gap: 4, flex: 1, minWidth: 80 }}>
           <span style={{ fontSize: 11, color: C.textMuted }}>Qté</span>
-          <input style={inputStyle} type="number" value={qty} onChange={e => setQty(e.target.value)} min="0.01" step="0.01" autoFocus />
+          <input style={inputStyle} type="number" value={qty} onChange={e => setQty(e.target.value)} autoFocus />
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 2, minWidth: 120 }}>
-          <span style={{ fontSize: 11, color: C.textMuted }}>Lot (optionnel)</span>
+        <div style={{ display: "flex", flexDirection: "column" as const, gap: 4, flex: 2, minWidth: 120 }}>
+          <span style={{ fontSize: 11, color: C.textMuted }}>Lot</span>
           <input style={inputStyle} value={lotName} onChange={e => setLotName(e.target.value)} placeholder="N° de lot..." />
         </div>
-        <div style={{ display: "flex", gap: 6, alignSelf: "flex-end" }}>
-          <button onClick={save} style={{ padding: "10px 14px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>✓</button>
-          <button onClick={() => setEditing(false)} style={{ padding: "10px 14px", background: C.border, color: C.text, border: "none", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>✕</button>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={save} style={{ padding: "10px 14px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>✓</button>
+          <button onClick={() => setEditing(false)} style={{ padding: "10px 14px", background: C.border, color: C.text, border: "none", borderRadius: 8, cursor: "pointer" }}>✕</button>
         </div>
       </div>
     </div>
@@ -1163,7 +1403,7 @@ function LineItem({ line, onDelete, onUpdate }: { line: any; onDelete: () => voi
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
       <div style={{ width: 32, height: 32, borderRadius: 8, background: C.blueSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{boxIcon(C.blue, 14)}</div>
-      <div style={{ flex: 1 }} onClick={() => setEditing(true)}>
+      <div style={{ flex: 1 }} onClick={() => setEditing(true)} role="button">
         <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{line.productName}</div>
         <div style={{ fontSize: 11, color: C.textMuted }}>{line.productCode} · <strong>{line.qty}</strong> {line.uomName}{line.lotName ? ` · ${line.lotName}` : ""}</div>
       </div>
@@ -1182,31 +1422,31 @@ function LocationDropdown({ locations, onSelect, excludeId }: { locations: any[]
     !search || (l.name || "").toLowerCase().includes(search.toLowerCase()) || (l.complete_name || "").toLowerCase().includes(search.toLowerCase()) || (l.barcode || "").toLowerCase().includes(search.toLowerCase())
   ));
 
-  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    e.stopPropagation();
-    if (e.key === "Enter") {
-      // Exact barcode match first
-      const exact = locations.find(l => l.id !== excludeId && l.barcode && l.barcode.toLowerCase() === search.trim().toLowerCase());
-      if (exact) { onSelect(exact); setSearch(""); return; }
-      // Single result → auto-select
-      if (filtered.length === 1) { onSelect(filtered[0]); setSearch(""); return; }
-    }
-  };
+  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 80); }, []);
 
-  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 100); }, []);
+  const trySelect = (val: string) => {
+    // Exact barcode match → auto-select
+    const exact = locations.find(l => l.id !== excludeId && l.barcode && l.barcode.toLowerCase() === val.trim().toLowerCase());
+    if (exact) { onSelect(exact); setSearch(""); return true; }
+    return false;
+  };
 
   return (
     <div>
-      <input ref={inputRef} style={{ ...inputStyle, borderColor: C.blue }} value={search}
-        onChange={e => {
-          const val = e.target.value;
-          setSearch(val);
-          // Auto-select on exact barcode match (barcode scanner sends value then Enter, but some send just value)
-          const exact = locations.find(l => l.id !== excludeId && l.barcode && l.barcode.toLowerCase() === val.trim().toLowerCase());
-          if (exact) { onSelect(exact); setSearch(""); }
+      <input
+        ref={inputRef}
+        style={{ ...inputStyle, borderColor: C.blue }}
+        value={search}
+        onChange={e => { const v = e.target.value; setSearch(v); trySelect(v); }}
+        onKeyDown={e => {
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            if (trySelect(search)) return;
+            if (filtered.length === 1) { onSelect(filtered[0]); setSearch(""); }
+          }
         }}
-        onKeyDown={handleKey}
-        placeholder="📷 Scanner ou taper l'emplacement..." />
+        placeholder="📷 Scanner ou taper l'emplacement..."
+      />
       {search.length > 0 && (
         <div style={{ maxHeight: 220, overflowY: "auto", marginTop: 8, borderRadius: 10, border: `1px solid ${C.border}` }}>
           {filtered.slice(0, 50).map(loc => (
@@ -1217,7 +1457,7 @@ function LocationDropdown({ locations, onSelect, excludeId }: { locations: any[]
               <span style={{ fontWeight: 600 }}>{loc.name}</span>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 {loc.barcode && <span style={{ color: C.textMuted, fontSize: 11 }}>{loc.barcode}</span>}
-                <span style={{ color: C.blue, fontSize: 16 }}>→</span>
+                <span style={{ color: C.blue }}>→</span>
               </div>
             </button>
           ))}
@@ -1227,6 +1467,10 @@ function LocationDropdown({ locations, onSelect, excludeId }: { locations: any[]
     </div>
   );
 }
+
+// ============================================
+// PRODUCT PICKER with +/- buttons
+// ============================================
 function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName, loading: parentLoading }: any) {
   const [qty, setQty] = useState(1);
   const [selLot, setSelLot] = useState<{ id: number; name: string } | null>(lot ? { id: lot.id, name: lot.name } : null);
@@ -2590,33 +2834,69 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [selectedParcel, setSelectedParcel] = useState<any>(null);
   const [matchData, setMatchData] = useState<Record<string, any>>({});
   const [locationData, setLocationData] = useState<Record<number, any>>({});
-  const [preparedIds, setPreparedIds] = useState<Set<number>>(() => {
-    try { const v = localStorage.getItem("wms_eshop_prepared"); return v ? new Set(JSON.parse(v)) : new Set(); } catch { return new Set(); }
-  });
+  const [preparedIds, setPreparedIds] = useState<Set<string>>(new Set());
   const [printing, setPrinting] = useState(false);
   const [filter, setFilter] = useState<"pending" | "prepared" | "all">("pending");
+  const [chariotSkus, setChariotSkus] = useState<string[]>([]);
+  const [chariotLoaded, setChariotLoaded] = useState(false);
 
-  const savePrepared = (ids: Set<number>) => {
+  const savePrepared = async (ids: Set<string>) => {
     setPreparedIds(ids);
-    try { localStorage.setItem("wms_eshop_prepared", JSON.stringify(Array.from(ids))); } catch {}
+    try { await odoo.savePreparedOrders(session, Array.from(ids)); } catch(e) { console.error("savePrepared:", e); }
   };
 
-  // Load parcels from SendCloud
+  // Load orders from SendCloud V3
+  // Load shared state from Odoo on mount
+  useEffect(() => {
+    if (!session) return;
+    odoo.getConfigParam(session, "wms_eshop_chariot_skus").then(val => {
+      console.log("[chariot] val from Odoo:", val);
+      if (val) { try { const p = JSON.parse(val); setChariotSkus(p); setChariotSkusLocal(p); } catch {} }
+      setChariotLoaded(true);
+    }).catch((e) => { console.log("[chariot] error:", e); setChariotLoaded(true); });
+    odoo.loadPreparedOrders(session).then(orders => {
+      if (orders.length) setPreparedIds(new Set<string>(orders));
+    }).catch(() => {});
+  }, [session]);
+
   const loadParcels = async () => {
     setLoading(true); setError("");
     try {
-      // Only fetch parcels with status "Announced" (id=1) — label created, ready to prepare
-      const res = await fetch("/api/sendcloud?action=parcels&limit=200");
+      const res = await fetch("/api/sendcloud?action=orders");
       if (!res.ok) { const err = await res.json(); throw new Error(err.error || `Erreur ${res.status}`); }
       const data = await res.json();
-      const allParcels = (data.parcels || []).filter((p: any) => {
-        const sid = p.status?.id;
-        // 1 = Announced (label created, ready to ship)
-        return sid === 1;
+      // Normalize V3 order structure to match UI expectations
+      const allParcels = (data.orders || []).map((o: any) => ({
+        id: o.id,
+        order_number: o.order_number,
+        name: o.shipping_address?.name || "",
+        company_name: o.shipping_address?.company_name || "",
+        address: [o.shipping_address?.address_line_1, o.shipping_address?.house_number].filter(Boolean).join(" "),
+        postal_code: o.shipping_address?.postal_code || "",
+        city: o.shipping_address?.city || "",
+        country: { name: o.shipping_address?.country_code || "" },
+        email: o.shipping_address?.email || "",
+        telephone: o.shipping_address?.phone_number || "",
+        parcel_items: (o.order_items || o.order_details?.order_items || []).map((item: any) => ({
+          sku: item.sku,
+          description: item.name,
+          quantity: item.quantity,
+          value: item.unit_price?.value ?? 0,
+          properties: Object.entries(item.properties || {}).map(([k, v]) => `${k}: ${v}`).join(", ") || undefined,
+        })),
+        status: { id: 1000, message: o.order_details?.status?.message || "Ouvert" },
+        _raw: o,
+      }));
+      // Filter: status "Ouvert" (code "0") + exclude Unstamped letter
+      const allowedParcels = allParcels.filter((o: any) => {
+        const statusCode = o._raw?.order_details?.status?.code ?? o._raw?.status?.code;
+        if (statusCode !== "0") return false;
+        const delivery = (o._raw?.shipping_details?.delivery_indicator || "").toLowerCase();
+        return !delivery.includes("unstamped") && !delivery.includes("letter") && !delivery.includes("briefmarke");
       });
-      setParcels(allParcels);
+      setParcels(allowedParcels);
 
-      // Match product refs with Odoo
+      // Match SKUs with Odoo
       const allRefs = Array.from(new Set(
         allParcels.flatMap((p: any) => (p.parcel_items || []).map((item: any) => item.sku)).filter(Boolean)
       )) as string[];
@@ -2638,18 +2918,59 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   useEffect(() => { loadParcels(); }, []);
 
   // Print SendCloud label
-  const printLabel = async (parcelId: number) => {
+  const printPackingSlip = async (p: any) => {
+    try {
+      const items = (p.parcel_items || []).map((item: any) => {
+        const match = matchData[item.sku];
+        return {
+          name: match?.product_name || item.description || item.sku,
+          sku: item.sku,
+          quantity: item.quantity || 1,
+          properties: item.properties || undefined,
+        };
+      });
+      const raw = p._raw || {};
+      const addr = raw.shipping_address || {};
+      const pdfBase64 = await generateEshopPackingSlipPDF({
+        order_number: p.order_number,
+        order_date: raw.order_details?.order_created_at ? new Date(raw.order_details.order_created_at).toLocaleDateString("fr-FR", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : undefined,
+        shipping_method: raw.shipping_details?.delivery_indicator,
+        recipient_name: addr.name || p.name,
+        recipient_address: addr.address_line_1 || p.address,
+        recipient_postal: addr.postal_code || p.postal_code,
+        recipient_city: addr.city || p.city,
+        recipient_country: addr.country_code || "FR",
+        items,
+      });
+      const psCfg = pn.getLabelTypeConfig("packingslip");
+      const printerId = psCfg.printerId || pn.getSavedPrinterId();
+      if (printerId) {
+        await pn.printPdfLabel(printerId, pdfBase64, `BL ${p.order_number}`);
+        onToast(`✓ BL ${p.order_number} imprimé`);
+      } else {
+        const byteArray = Uint8Array.from(atob(pdfBase64), c => c.charCodeAt(0));
+        const blob = new Blob([byteArray], { type: "application/pdf" });
+        window.open(URL.createObjectURL(blob), "_blank");
+        onToast("BL ouvert dans un nouvel onglet");
+      }
+    } catch (e: any) { onToast(`⚠ BL: ${e.message}`); }
+  };
+
+  const printLabel = async (p: any) => {
     setPrinting(true);
     try {
-      const res = await fetch(`/api/sendcloud?action=label&id=${parcelId}`);
+      const orderId = p._raw?.order_id || p.id;
+      const orderNumber = p.order_number;
+      const res = await fetch(`/api/sendcloud?action=label&order_id=${orderId}&order_number=${orderNumber}`);
       if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Erreur étiquette"); }
       const data = await res.json();
 
-      const printerId = pn.getSavedPrinterId();
+      const scCfg = pn.getLabelTypeConfig("sendcloud");
+      const printerId = scCfg.printerId || pn.getSavedPrinterId();
       if (printerId && data.labelBase64) {
-        const result = await pn.printPdfLabel(printerId, data.labelBase64, `SendCloud ${parcelId}`);
+        const result = await pn.printPdfLabel(printerId, data.labelBase64, `SendCloud ${orderNumber}`);
         if (result.success) {
-          onToast(`✓ Étiquette ${data.tracking || parcelId} imprimée`);
+          onToast(`✓ Étiquette ${data.tracking || orderNumber} imprimée`);
           vibrateSuccess();
         } else {
           throw new Error(result.error || "Erreur impression");
@@ -2666,7 +2987,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     setPrinting(false);
   };
 
-  const markPrepared = (parcelId: number) => {
+  const markPrepared = async (parcelId: string) => {
     const newSet = new Set(Array.from(preparedIds));
     newSet.add(parcelId);
     savePrepared(newSet);
@@ -2674,7 +2995,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     onToast("✓ Marqué préparé");
   };
 
-  const unmarkPrepared = (parcelId: number) => {
+  const unmarkPrepared = async (parcelId: string) => {
     const newSet = new Set(Array.from(preparedIds));
     newSet.delete(parcelId);
     savePrepared(newSet);
@@ -2687,29 +3008,130 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     return null;
   };
 
-  // Filter parcels
-  const filteredParcels = parcels.filter(p => {
-    if (filter === "pending") return !preparedIds.has(p.id);
-    if (filter === "prepared") return preparedIds.has(p.id);
+  // Include prepared orders that may no longer appear in SendCloud open list
+  const allVisibleParcels = [
+    ...parcels,
+    // Add prepared orders not already in parcels list (fetched from prepared state)
+    ...Array.from(preparedIds)
+      .filter(on => !parcels.find((p: any) => p.order_number === on))
+      .map(on => ({ order_number: on, _preparedOnly: true, id: on, name: "—", city: "", parcel_items: [] }))
+  ];
+
+  const filteredParcels = allVisibleParcels.filter((p: any) => {
+    if (filter === "pending") return !preparedIds.has(p.order_number);
+    if (filter === "prepared") return preparedIds.has(p.order_number);
     return true;
   });
 
-  const pendingCount = parcels.filter(p => !preparedIds.has(p.id)).length;
-  const preparedCount = parcels.filter(p => preparedIds.has(p.id)).length;
+  const pendingCount = allVisibleParcels.filter((p: any) => !preparedIds.has(p.order_number)).length;
+  const preparedCount = preparedIds.size;
 
-  // Detail view
-  if (selectedParcel) {
+  // Detail view — scan-based preparation
+  const [scannedSkus, setScannedSkus] = useState<Record<string, number>>({});
+  const [scanError, setScanError] = useState("");
+
+  // Reset scan state when opening a new parcel
+  const openParcel = async (p: any) => {
+    setScannedSkus({});
+    setScanError("");
+    // Refresh chariot SKUs from Odoo each time we open a parcel
+    if (session) {
+      try {
+        const parsed = await odoo.loadChariotSkus(session); setChariotSkus(parsed); setChariotSkusLocal(parsed);
+      } catch {}
+    }
+    setSelectedParcel(p);
+  };
+
+  const handleEshopScan = (code: string) => {
+    if (!selectedParcel) return;
     const p = selectedParcel;
-    const excludedSkus = getExcludedSkus();
-    const items = (p.parcel_items || []).filter((item: any) => {
+    const items = (p.parcel_items || p.lines || []).filter((item: any) => {
       const val = parseFloat(item.value || "0");
       const sku = (item.sku || "").toLowerCase();
-      // Exclude: negative values, promo/discount lines, user-excluded SKUs
       if (val < 0 || sku.startsWith("offre_") || item.description === "Bon de réduction") return false;
-      if (excludedSkus.some(ex => ex.toLowerCase() === sku || (item.sku && item.sku === ex))) return false;
       return true;
+    }).map((item: any) => ({
+      ...item,
+      _isChariot: chariotSkus.some(ex => ex.toLowerCase() === (item.sku || "").toLowerCase()),
+    }));
+    setScanError("");
+    const trimmed = code.trim();
+    const matched = items.find((item: any) => {
+      const match = getMatch(item.sku);
+      return item.sku === trimmed || match?.default_code === trimmed || match?.barcode === trimmed;
     });
-    const isPrepared = preparedIds.has(p.id);
+    if (!matched) {
+      setScanError(`❌ "${trimmed}" — article non trouvé dans cette commande`);
+      vibrateError();
+      return;
+    }
+    const required = matched.quantity || 1;
+    const current = scannedSkus[matched.sku] || 0;
+    if (current >= required) {
+      setScanError(`⚠ "${matched.description || matched.sku}" déjà scanné (${required}/${required})`);
+      return;
+    }
+    const newCount = current + 1;
+    setScannedSkus(prev => ({ ...prev, [matched.sku]: newCount }));
+    if (newCount >= required) { vibrateSuccess(); onToast(`✓ ${matched.description || matched.sku}`); }
+  };
+
+  useScannerListener(handleEshopScan, !!selectedParcel && !preparedIds.has(selectedParcel?.order_number));
+
+  if (selectedParcel) {
+    const p = selectedParcel;
+    const items = (p.parcel_items || p.lines || []).filter((item: any) => {
+      const val = parseFloat(item.value || "0");
+      const sku = (item.sku || "").toLowerCase();
+      if (val < 0 || sku.startsWith("offre_") || item.description === "Bon de réduction") return false;
+      return true;
+    }).map((item: any) => ({
+      ...item,
+      _isChariot: chariotSkus.some(ex => ex.toLowerCase() === (item.sku || "").toLowerCase()),
+    }));
+    const isPrepared = preparedIds.has(p.order_number);
+
+    // Sort items by location for optimal picking path
+    items.sort((a: any, b: any) => {
+      const locA = getLocation(a.sku)?.location_name || "zzz";
+      const locB = getLocation(b.sku)?.location_name || "zzz";
+      return locA.localeCompare(locB);
+    });
+
+    // For each item: qty required vs qty scanned (chariot items auto-validated)
+    const getScanned = (item: any) => item._isChariot ? (item.quantity || 1) : (scannedSkus[item.sku] || 0);
+    const allScanned = items.length > 0 && items.every((item: any) => getScanned(item) >= (item.quantity || 1));
+
+    // Scan handler — match by SKU or Odoo default_code or barcode
+    const handleScan = (code: string) => {
+      setScanError("");
+      const trimmed = code.trim();
+      // Find item by SKU or odoo ref
+      const matched = items.find((item: any) => {
+        const match = getMatch(item.sku);
+        return item.sku === trimmed
+          || match?.default_code === trimmed
+          || match?.barcode === trimmed;
+      });
+      if (!matched) {
+        setScanError(`❌ "${trimmed}" — article non trouvé dans cette commande`);
+        vibrateError();
+        return;
+      }
+      const required = matched.quantity || 1;
+      const current = scannedSkus[matched.sku] || 0;
+      if (current >= required) {
+        setScanError(`⚠ "${matched.description || matched.sku}" déjà scanné (${required}/${required})`);
+        return;
+      }
+      const newCount = current + 1;
+      setScannedSkus(prev => ({ ...prev, [matched.sku]: newCount }));
+      if (newCount >= required) {
+        vibrateSuccess();
+        onToast(`✓ ${matched.description || matched.sku}`);
+      }
+    };
 
     return (
       <>
@@ -2719,41 +3141,59 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           </button>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{p.order_number || `#${p.id}`}</div>
-            <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.address?.replace(/\n/g, ", ") || `${p.city}, ${p.country?.name || ""}`}</div>
+            <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
           </div>
-          {isPrepared && <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>Préparé</span>}
+          {isPrepared
+            ? <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>✓ Préparé</span>
+            : allScanned
+              ? <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>✓ Prêt</span>
+              : <span style={{ fontSize: 11, fontWeight: 700, color: C.orange, background: C.orangeSoft, padding: "3px 8px", borderRadius: 6 }}>{items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length}/{items.length} scannés</span>
+          }
         </div>
 
         {/* Customer info */}
         <Section>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>Client</div>
           <div style={{ fontSize: 12, color: C.textSec }}>
             <div style={{ fontWeight: 600 }}>{p.name}</div>
             {p.company_name && <div>{p.company_name}</div>}
-            <div>{p.address} {p.house_number}</div>
+            <div>{p.address}</div>
             <div>{p.postal_code} {p.city}</div>
-            <div>{p.country?.name || p.country_iso_2 || ""}</div>
             {p.email && <div style={{ color: C.blue, marginTop: 4 }}>{p.email}</div>}
             {p.telephone && <div>{p.telephone}</div>}
           </div>
-          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-            {p.carrier?.code && <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "2px 8px", borderRadius: 6 }}>🚚 {p.carrier.code}</span>}
-            {p.tracking_number && <span style={{ fontSize: 11, color: C.textMuted, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>📦 {p.tracking_number}</span>}
-            {p.weight && <span style={{ fontSize: 11, color: C.textMuted, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{p.weight} kg</span>}
+          <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+            {p._raw?.shipping_details?.delivery_indicator && (
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "2px 8px", borderRadius: 6 }}>
+                🚚 {p._raw.shipping_details.delivery_indicator}
+              </span>
+            )}
           </div>
         </Section>
 
-        {/* Products to pick */}
+        {/* Articles */}
         <Section>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Articles à préparer</div>
           {items.length === 0 && <div style={{ fontSize: 12, color: C.textMuted }}>Aucun article détaillé</div>}
           {items.map((item: any, i: number) => {
             const match = getMatch(item.sku);
             const loc = getLocation(item.sku);
+            const required = item.quantity || 1;
+            const scanned = getScanned(item);
+            const done = scanned >= required;
             return (
-              <div key={i} style={{ padding: "10px 0", borderBottom: i < items.length - 1 ? `1px solid ${C.border}` : "", display: "flex", gap: 10, alignItems: "flex-start" }}>
-                <div style={{ width: 36, height: 36, borderRadius: 8, background: loc ? C.greenSoft : C.orangeSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>
-                  {loc ? "📍" : "❓"}
+              <div key={i} style={{
+                padding: "10px 0",
+                borderBottom: i < items.length - 1 ? `1px solid ${C.border}` : "",
+                display: "flex", gap: 10, alignItems: "flex-start",
+                opacity: done ? 0.6 : 1,
+              }}>
+                {/* Status icon */}
+                <div style={{
+                  width: 36, height: 36, borderRadius: 8, flexShrink: 0,
+                  background: done ? C.greenSoft : C.border,
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
+                }}>
+                  {done ? "✅" : item._isChariot ? "🛒" : "⬜"}
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{match?.product_name || item.description || item.sku}</div>
@@ -2761,51 +3201,73 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                     SKU: {item.sku || "N/A"}
                     {match?.default_code && <span> · Réf: {match.default_code}</span>}
                   </div>
-                  {loc && (
+                  {item._isChariot ? (
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", marginTop: 4 }}>🛒 Chariot Eshop</div>
+                  ) : loc ? (
                     <div style={{ fontSize: 11, fontWeight: 600, color: "#059669", marginTop: 4 }}>
                       📍 {loc.location_name} <span style={{ fontWeight: 400, color: C.textMuted }}>({loc.quantity} en stock)</span>
                     </div>
-                  )}
-                  {!loc && match && (
+                  ) : match ? (
                     <div style={{ fontSize: 11, color: C.orange, marginTop: 4 }}>⚠ Pas de stock trouvé</div>
-                  )}
-                  {!match && item.sku && (
-                    <div style={{ fontSize: 11, color: C.orange, marginTop: 4 }}>⚠ Réf non trouvée dans Odoo</div>
-                  )}
+                  ) : null}
                 </div>
+                {/* Qty counter */}
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{item.quantity || 1}</div>
-                  <div style={{ fontSize: 10, color: C.textMuted }}>pcs</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: done ? C.green : C.text }}>
+                    {scanned}<span style={{ fontSize: 12, color: C.textMuted }}>/{required}</span>
+                  </div>
+                  {!done && !item._isChariot && !isPrepared && (
+                    <button onClick={() => handleEshopScan(item.sku)}
+                      style={{ fontSize: 10, color: C.blue, background: C.blueSoft, border: "none", borderRadius: 4, padding: "2px 6px", cursor: "pointer", marginTop: 2, fontFamily: "inherit" }}>
+                      +1
+                    </button>
+                  )}
                 </div>
               </div>
             );
           })}
         </Section>
 
+        {scanError && (
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", marginBottom: 8, fontSize: 12, color: "#dc2626" }}>
+            {scanError}
+          </div>
+        )}
         {error && <Alert type="error">{error}</Alert>}
 
         {/* Actions */}
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <button onClick={() => printLabel(p.id)} disabled={printing}
+          <button onClick={() => printLabel(p)} disabled={printing}
             style={{ flex: 1, padding: 12, background: C.blueSoft, color: C.blue, border: `1px solid ${C.blueBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-            {printing ? "Impression..." : "🖨 Imprimer étiquette"}
+            {printing ? "⏳" : "🚚 Étiquette"}
+          </button>
+          <button onClick={() => printPackingSlip(p)} disabled={printing}
+            style={{ flex: 1, padding: 12, background: C.greenSoft, color: C.green, border: `1px solid ${C.greenBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            📄 BL
           </button>
         </div>
 
         {!isPrepared ? (
           <BigButton
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
-            label="Marquer comme préparé"
-            sub={`${items.length} article(s)`}
-            color={C.green}
-            onClick={() => { markPrepared(p.id); setSelectedParcel({ ...p, _prepared: true }); }}
+            label={allScanned ? "Confirmer la préparation" : "Forcer comme préparé"}
+            sub={allScanned ? `${items.length} article(s) tous scannés` : `${items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length}/${items.length} scannés`}
+            color={allScanned ? C.green : C.orange}
+            onClick={async () => {
+              onToast("⏳ Impression étiquette + BL...");
+              await printLabel(p);
+              await printPackingSlip(p);
+              await markPrepared(p.order_number);
+              setSelectedParcel(null);
+              onToast("✓ Préparation confirmée");
+            }}
           />
         ) : (
           <BigButton
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>}
             label="Annuler la préparation"
             color={C.orange}
-            onClick={() => { unmarkPrepared(p.id); setSelectedParcel({ ...p, _prepared: false }); }}
+            onClick={async () => { await unmarkPrepared(p.order_number); setSelectedParcel(null); }}
           />
         )}
       </>
@@ -2846,12 +3308,12 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       {!loading && parcels.length === 0 && <Alert type="info">Aucune commande trouvée. Vérifie les clés API SendCloud dans les variables Vercel.</Alert>}
 
       {filteredParcels.map((p: any) => {
-        const isPrepared = preparedIds.has(p.id);
-        const items = p.parcel_items || [];
+        const isPrepared = preparedIds.has(p.order_number);
+        const items = p.parcel_items || p.lines || [];
         const statusMsg = p.status?.message || "";
         return (
           <div key={p.id} style={{ ...cardStyle, marginBottom: 8, borderLeft: `3px solid ${isPrepared ? C.green : "#f59e0b"}`, cursor: "pointer" }}
-            onClick={() => setSelectedParcel(p)}>
+            onClick={() => openParcel(p)}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.order_number || `#${p.id}`}</div>
@@ -3656,61 +4118,77 @@ function HistoryScreen({ history, onClear, onBack }: { history: HistoryEntry[]; 
 // ============================================
 // E-SHOP EXCLUDED SKUS (stored in localStorage)
 // ============================================
-const ESHOP_EXCLUDED_KEY = "wms_eshop_excluded_skus";
+const ESHOP_CHARIOT_KEY = "wms_eshop_chariot_skus";
 
-function getExcludedSkus(): string[] {
-  try { const v = localStorage.getItem(ESHOP_EXCLUDED_KEY); return v ? JSON.parse(v) : []; } catch { return []; }
+// Local cache for chariot SKUs loaded from Odoo
+let _chariotSkusCache: string[] | null = null;
+
+function getChariotSkusLocal(): string[] {
+  if (_chariotSkusCache !== null) return _chariotSkusCache;
+  _chariotSkusCache = [];
+  return _chariotSkusCache!;
 }
 
-function saveExcludedSkus(skus: string[]) {
-  try { localStorage.setItem(ESHOP_EXCLUDED_KEY, JSON.stringify(skus)); } catch {}
+function setChariotSkusLocal(skus: string[]) {
+  _chariotSkusCache = skus;
+
 }
 
-function EshopExcludedSkus() {
-  const [skus, setSkus] = useState<string[]>(() => getExcludedSkus());
+function EshopChariotSkus({ session }: { session: any }) {
+  const [skus, setSkus] = useState<string[]>([]);
   const [newSku, setNewSku] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  // Use ref to always have latest skus for Odoo save even if component unmounts
+  const skusRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    if (!session) return;
+    odoo.loadChariotSkus(session).then(p => { setSkus(p); skusRef.current = p; setChariotSkusLocal(p); }).catch(() => {});
+  }, [session]);
+
+  const save = (updated: string[]) => {
+    skusRef.current = updated;
+    setSkus(updated);
+    setChariotSkusLocal(updated);
+    setSaving(true);
+    setSaved(false);
+    // Fire and forget — use the ref value so unmount doesn't matter
+    odoo.saveChariotSkus(session, updated)
+      .then(() => { setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000); })
+      .catch(e => { console.error("[chariot] save error:", e); setSaving(false); });
+  };
 
   const add = () => {
     const s = newSku.trim();
-    if (s && !skus.includes(s)) {
-      const updated = [...skus, s];
-      setSkus(updated);
-      saveExcludedSkus(updated);
-      setNewSku("");
-    }
-  };
-
-  const remove = (sku: string) => {
-    const updated = skus.filter(s => s !== sku);
-    setSkus(updated);
-    saveExcludedSkus(updated);
+    if (s && !skusRef.current.includes(s)) { save([...skusRef.current, s]); setNewSku(""); }
   };
 
   return (
     <Section>
-      <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 8 }}>🛒 E-shop — Articles exclus</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>🛒 E-shop — Chariot Eshop</div>
       <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>
-        Ces SKU ne seront pas affichés dans la préparation e-shop (échantillons, articles hors stock, etc.)
+        Ces SKU seront affichés avec l'emplacement <strong>Chariot Eshop</strong> (partagé entre tous les utilisateurs)
       </div>
       <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
         <input value={newSku} onChange={e => setNewSku(e.target.value)}
           onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") add(); }}
-          placeholder="SKU à exclure..."
+          placeholder="SKU..."
           style={{ flex: 1, padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontFamily: "inherit", outline: "none" }} />
-        <button onClick={add} style={{ padding: "8px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>+</button>
+        <button onClick={add} style={{ padding: "8px 14px", background: saving ? C.textMuted : C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>{saving ? "⏳" : saved ? "✓" : "+"}</button>
       </div>
-      {skus.length === 0 && <div style={{ fontSize: 11, color: C.textMuted }}>Aucun SKU exclu</div>}
+      {skus.length === 0 && <div style={{ fontSize: 11, color: C.textMuted }}>Aucun SKU configuré</div>}
       {skus.map(sku => (
         <div key={sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.border}` }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: C.text, fontFamily: "monospace" }}>{sku}</span>
-          <button onClick={() => remove(sku)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✕</button>
+          <button onClick={() => save(skusRef.current.filter(s => s !== sku))} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✕</button>
         </div>
       ))}
     </Section>
   );
 }
 
-function SettingsScreen({ onBack }: { onBack: () => void }) {
+function SettingsScreen({ onBack, session }: { onBack: () => void; session: any }) {
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   const [loadingP, setLoadingP] = useState(false);
   const [msg, setMsg] = useState("");
@@ -3725,6 +4203,9 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
     { key: "palette", label: "Étiquette palette", icon: "🏭", hasSize: true },
     { key: "blank", label: "Étiquette vierge", icon: "✏️", hasSize: true },
     { key: "picking", label: "Étiquette colis (picking)", icon: "📦", hasSize: true },
+    // HIDDEN: E-shop — pas au point
+    // { key: "sendcloud", label: "Étiquette SendCloud", icon: "🚚", hasSize: false },
+    // { key: "packingslip", label: "Bon de livraison (BL)", icon: "📄", hasSize: false },
   ];
 
   const [configs, setConfigs] = useState<Record<LabelType, pn.LabelTypeConfig>>(() => pn.getAllLabelTypeConfigs());
@@ -3907,8 +4388,9 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
         }}>{msg}</div>
       )}
 
-      {/* E-shop excluded SKUs */}
-      <EshopExcludedSkus />
+      {/* HIDDEN: E-shop chariot — pas au point
+      <EshopChariotSkus session={session} />
+      */}
     </>
   );
 }
@@ -3935,7 +4417,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onScanPicking, onChe
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Préparation</h2>
           <p style={{ fontSize: 12, color: C.textMuted }}>{pickings.length} commande(s) prête(s)</p>
@@ -3945,23 +4427,20 @@ function PrepListScreen({ pickings, loading, error, onOpen, onScanPicking, onChe
         </button>
       </div>
 
-      {/* Scan picking by name — WH/PICK/xxxxx */}
-      <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
+      {/* Scan direct par nom WH/PICK/xxxxx */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input
           style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed" }}
           value={scanCode}
           onChange={e => setScanCode(e.target.value)}
           onKeyDown={e => {
-            if (e.key === "Enter" && scanCode.trim()) {
-              onScanPicking(scanCode.trim());
-              setScanCode("");
-            }
+            if (e.key === "Enter" && scanCode.trim()) { onScanPicking(scanCode.trim()); setScanCode(""); }
           }}
           placeholder="📷 Scanner WH/PICK/... pour ouvrir directement"
         />
         <button
           onClick={() => { if (scanCode.trim()) { onScanPicking(scanCode.trim()); setScanCode(""); } }}
-          style={{ padding: "10px 16px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap" }}>
+          style={{ padding: "10px 16px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap" as const }}>
           Ouvrir
         </button>
       </div>
@@ -4038,171 +4517,87 @@ function PrepListScreen({ pickings, loading, error, onOpen, onScanPicking, onChe
 // ============================================
 // PREPARATION DETAIL SCREEN
 // ============================================
-function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onTakeAll, onCancelStep, onAutoFill, onValidate, onBack, onReport }: any) {
-  const totalLines = moveLines.length;
-  const doneLines = moveLines.filter((ml: any) => (ml.qty_done || 0) >= (ml.reserved_uom_qty || 0)).length;
-  const progress = totalLines > 0 ? Math.round((doneLines / totalLines) * 100) : 0;
+function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, qtyOverrides, onValidate, onBack, onReport }: any) {
+  // ── qty helper: overrides take priority over moveLines data ──
+  const getQty = (ml: any) => qtyOverrides?.[ml.id] !== undefined ? qtyOverrides[ml.id] : (ml.qty_done || 0);
+
+  // ── Colis state (local) ──
+  const [colis, setColis] = useState<{ id: number; lines: number[] }[]>([]);
+  const [currentColisId, setCurrentColisId] = useState<number | null>(null);
+  const [colisLines, setColisLines] = useState<Set<number>>(new Set());
+  const [showColisSummary, setShowColisSummary] = useState(false);
+  const [locOk, setLocOk] = useState(false);
+
+  // ── Compute sorted move lines one per card ──
+  const allLines = useMemo(() => {
+    return [...moveLines].sort((a: any, b: any) => {
+      const la = (a.location_id?.[1] || "").toLowerCase();
+      const lb = (b.location_id?.[1] || "").toLowerCase();
+      return la < lb ? -1 : la > lb ? 1 : 0;
+    });
+  }, [moveLines]);
+
+  const currentLine = useMemo(() => {
+    return allLines.find((ml: any) => getQty(ml) < (ml.reserved_uom_qty || 0));
+  }, [allLines]);
+
+  const doneLines = allLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).length;
+  const totalLines = allLines.length;
   const allDone = totalLines > 0 && doneLines === totalLines;
+  const progress = totalLines > 0 ? Math.round((doneLines / totalLines) * 100) : 0;
 
-  // Group moves by product + attach related move lines
-  const movesByProduct = moves.map((m: any) => {
-    const relatedLines = moveLines.filter((ml: any) => ml.product_id[0] === m.product_id[0]);
-    const totalDone = relatedLines.reduce((s: number, ml: any) => s + (ml.qty_done || 0), 0);
-    // Primary location = first related move line's location
-    const primaryLoc = relatedLines[0]?.location_id?.[1] || m.location_id?.[1] || "ZZZ";
-    return { ...m, relatedLines, totalDone, primaryLoc };
-  });
+  // When a new line becomes current, reset locOk
+  const currentLineId = currentLine?.id;
+  useEffect(() => { setLocOk(false); }, [currentLineId]);
 
-  // Sort by source location alphabetically for logical picking circuit
-  const sortedMoves = [...movesByProduct].sort((a: any, b: any) => {
-    const la = (a.primaryLoc || "ZZZ").toLowerCase();
-    const lb = (b.primaryLoc || "ZZZ").toLowerCase();
-    return la < lb ? -1 : la > lb ? 1 : 0;
-  });
+  // Track when loc scan succeeds via prepStep changes
+  useEffect(() => {
+    if (prepStep) setLocOk(true);
+  }, [prepStep?.locId]);
 
-  // Group by location for display
-  const movesByLocation: { locName: string; moves: any[] }[] = [];
-  for (const m of sortedMoves) {
-    const locName = m.primaryLoc || "Emplacement inconnu";
-    const existing = movesByLocation.find(g => g.locName === locName);
-    if (existing) existing.moves.push(m);
-    else movesByLocation.push({ locName, moves: [m] });
-  }
+  // ── Colis helpers ──
+  const openNewColis = () => {
+    const newId = colis.length + 1;
+    setColis(prev => [...prev, { id: newId, lines: [] }]);
+    setCurrentColisId(newId);
+  };
+  const closeColis = () => {
+    if (currentColisId === null) return;
+    setCurrentColisId(null);
+  };
+  const addLineToColis = (lineId: number) => {
+    if (currentColisId === null) return;
+    setColisLines(prev => { const s = new Set(Array.from(prev)); s.add(lineId); return s; });
+    setColis(prev => prev.map(c => c.id === currentColisId ? { ...c, lines: [...c.lines, lineId] } : c));
+  };
 
-  return (
+  // ── Emplacement display helper ──
+  const shortLoc = (fullName: string) => (fullName || "").split("/").pop() || fullName;
+
+  if (showColisSummary) return (
     <>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-        <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+        <button onClick={() => setShowColisSummary(false)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{picking.name}</div>
-          {picking.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{picking.partner_id[1]}</div>}
-          {picking.origin && <div style={{ fontSize: 11, color: C.textMuted }}>{picking.origin}</div>}
-        </div>
-        <button onClick={() => onReport(picking.id)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-        </button>
+        <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>Récapitulatif colis</div>
       </div>
-
-      {/* Progress */}
-      <Section>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Progression</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: allDone ? C.green : C.blue }}>{doneLines}/{totalLines}</span>
+      {colis.length === 0 && <div style={{ color: C.textMuted, fontSize: 14, textAlign: "center", padding: 20 }}>Aucun colis créé</div>}
+      {colis.map(c => (
+        <div key={c.id} style={{ background: C.bg, border: `1.5px solid ${C.border}`, borderRadius: 14, padding: 14, marginBottom: 10 }}>
+          <div style={{ fontWeight: 700, color: C.text, marginBottom: 8 }}>📦 Colis {c.id}</div>
+          {c.lines.length === 0
+            ? <div style={{ fontSize: 12, color: C.textMuted }}>Vide</div>
+            : c.lines.map(lid => {
+                const ml = allLines.find((l: any) => l.id === lid);
+                if (!ml) return null;
+                return <div key={lid} style={{ fontSize: 12, color: C.text, paddingBottom: 4, borderBottom: `1px solid ${C.border}`, marginBottom: 4 }}>
+                  {ml.product_id[1]}{ml.lot_id ? ` · Lot ${ml.lot_id[1]}` : ""} · {ml.qty_done || 0} u
+                </div>;
+              })
+          }
         </div>
-        <div style={{ height: 8, borderRadius: 4, background: C.bg, overflow: "hidden" }}>
-          <div style={{ height: "100%", width: `${progress}%`, borderRadius: 4, background: allDone ? C.green : C.blue, transition: "width .3s" }} />
-        </div>
-        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>{progress}% préparé</div>
-      </Section>
-
-      {/* Scan input — 2 step process */}
-      <Section>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-            {!prepStep ? "① Scanner un emplacement" : "② Scanner le lot / produit"}
-          </span>
-          {loading && <Spinner />}
-        </div>
-        {prepStep && (
-          <div style={{ background: C.blueSoft, border: `1px solid ${C.blueBorder}`, borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 12 }}>
-            <div style={{ fontWeight: 700, color: C.blue }}>📍 {prepStep.locName}</div>
-            <div style={{ color: C.text, marginTop: 2 }}>
-              → {prepStep.lotName ? `Lot ${prepStep.lotName}` : prepStep.productName}
-              <span style={{ color: C.textMuted }}> · reste {prepStep.remaining}</span>
-            </div>
-            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              <button onClick={onTakeAll} disabled={loading} style={{
-                flex: 1, padding: "8px 0", background: C.green, color: "#fff", border: "none", borderRadius: 8,
-                fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit"
-              }}>
-                Tout prendre ({prepStep.locName})
-              </button>
-              <button onClick={onCancelStep} style={{
-                padding: "8px 12px", background: C.bg, color: C.textMuted, border: `1px solid ${C.border}`, borderRadius: 8,
-                fontSize: 11, cursor: "pointer", fontFamily: "inherit"
-              }}>
-                ✕
-              </button>
-            </div>
-          </div>
-        )}
-        <InputBar onSubmit={onScan} placeholder={prepStep ? "Lot, code-barres, réf..." : "Scanner l'emplacement source..."} />
-      </Section>
-
-      {error && <Alert type="error">{error}</Alert>}
-
-      {/* Move lines groupées par emplacement */}
-      <Section>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Articles à préparer</div>
-        {movesByLocation.map((group: any, gi: number) => (
-          <div key={gi} style={{ marginBottom: 12 }}>
-            {/* Articles de cet emplacement — chacun avec son emplacement inclus */}
-            {group.moves.map((m: any, i: number) => {
-              const isDone = m.totalDone >= m.product_uom_qty;
-              const isOver = m.totalDone > m.product_uom_qty;
-              const isPartial = m.totalDone > 0 && m.totalDone < m.product_uom_qty;
-              const bgColor = isOver ? "#fef2f2" : isDone ? "#f0fdf4" : "#ffffff";
-              const borderColor = isOver ? "#fca5a5" : isDone ? "#86efac" : C.border;
-              const locColor = isOver ? "#dc2626" : isDone ? C.green : C.blue;
-              const locBg = isOver ? "#fee2e2" : isDone ? C.greenSoft : C.blueSoft;
-              const textColor = isOver ? "#dc2626" : isDone ? C.green : C.text;
-              const qtyColor = isOver ? "#dc2626" : isDone ? C.green : isPartial ? C.orange : C.text;
-              return (
-                <div key={i} style={{
-                  marginBottom: i < group.moves.length - 1 ? 8 : 0,
-                  background: bgColor,
-                  border: `1.5px solid ${borderColor}`,
-                  borderRadius: 12,
-                  overflow: "hidden",
-                  transition: "background 0.2s, border-color 0.2s"
-                }}>
-                  {/* Emplacement dans le rectangle */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", background: locBg, borderBottom: `1px solid ${borderColor}` }}>
-                    <span style={{ fontSize: 10, fontWeight: 800, color: locColor, letterSpacing: 0.3 }}>📍 {group.locName}</span>
-                  </div>
-                  {/* Contenu article */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 10px" }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 7, background: isOver ? "#fee2e2" : isDone ? C.greenSoft : C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      {isOver
-                        ? <span style={{ fontSize: 14 }}>⚠️</span>
-                        : isDone
-                          ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                          : boxIcon(C.textMuted, 13)
-                      }
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: textColor }}>{m.product_id[1]}</div>
-                      {m.relatedLines.filter((ml: any) => ml.lot_id).map((ml: any, j: number) => (
-                        <div key={j} style={{ fontSize: 11, color: isOver ? "#dc2626" : isDone ? C.green : C.textMuted }}>
-                          Lot {ml.lot_id[1]} · {ml.qty_done || 0}/{ml.reserved_uom_qty || 0}
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: qtyColor }}>{m.totalDone} / {m.product_uom_qty}</div>
-                      <div style={{ fontSize: 10, color: C.textMuted }}>{m.product_uom?.[1] || ""}</div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ))}
-      </Section>
-
-      {/* Actions */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <button onClick={onAutoFill} disabled={loading || allDone} style={{ flex: 1, padding: 12, background: C.blueSoft, color: C.blue, border: `1px solid ${C.blueBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: allDone ? 0.5 : 1 }}>
-          Tout remplir
-        </button>
-        <button onClick={() => onReport(picking.id)} style={{ padding: "12px 16px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-          Bon de livraison
-        </button>
-      </div>
-
+      ))}
       <BigButton
         icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
         label={loading ? "Envoi..." : "Valider la préparation"}
@@ -4213,7 +4608,192 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
       />
     </>
   );
+
+  return (
+    <>
+      {/* ── Header ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{picking.name}</div>
+          {picking.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{picking.partner_id[1]}</div>}
+        </div>
+        <button onClick={() => onReport(picking.id)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        </button>
+      </div>
+
+      {/* ── Progress bar ── */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Progression</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: allDone ? C.green : C.blue }}>{doneLines}/{totalLines}</span>
+        </div>
+        <div style={{ height: 8, borderRadius: 4, background: C.bg, overflow: "hidden", border: `1px solid ${C.border}` }}>
+          <div style={{ height: "100%", width: `${progress}%`, borderRadius: 4, background: allDone ? C.green : C.blue, transition: "width .3s" }} />
+        </div>
+      </div>
+
+      {/* ── Colis indicator ── */}
+      {currentColisId !== null && (
+        <div style={{ background: "#fff7ed", border: "1.5px solid #fed7aa", borderRadius: 12, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#c2410c" }}>
+            📦 Colis {currentColisId} en cours — {colis.find(c => c.id === currentColisId)?.lines.length || 0} article(s)
+          </div>
+          <button onClick={closeColis} style={{ fontSize: 11, fontWeight: 700, color: "#c2410c", background: "#fed7aa", border: "none", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontFamily: "inherit" }}>
+            Fermer colis
+          </button>
+        </div>
+      )}
+
+      {/* ── Carte article courant ── */}
+      {allDone ? (
+        <div style={{ background: C.greenSoft, border: `2px solid ${C.green}`, borderRadius: 20, padding: 32, textAlign: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>✅</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: C.green }}>Tout préparé !</div>
+          <div style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>{totalLines} articles scannés</div>
+        </div>
+      ) : currentLine ? (
+        <div style={{
+          background: locOk && prepStep ? "#f0fdf4" : "#f8fafc",
+          border: `2px solid ${locOk && prepStep ? C.green : C.blue}`,
+          borderRadius: 20, padding: 20, marginBottom: 16,
+          transition: "background .3s, border-color .3s"
+        }}>
+          {/* Étape */}
+          <div style={{ fontSize: 11, fontWeight: 700, color: locOk && prepStep ? C.green : C.blue, letterSpacing: 0.5, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            {!locOk
+              ? <><span style={{ background: C.blue, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>1</span> SCANNER L'EMPLACEMENT</>
+              : <><span style={{ background: C.green, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>✓</span> EMPLACEMENT OK — SCANNER LE LOT</>
+            }
+          </div>
+
+          {/* Emplacement */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+            <div style={{ background: locOk ? C.greenSoft : C.blueSoft, border: `1px solid ${locOk ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "6px 12px", fontSize: 18, fontWeight: 900, color: locOk ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center" }}>
+              📍 {shortLoc(currentLine.location_id?.[1] || "—")}
+            </div>
+            {locOk && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>}
+          </div>
+
+          {/* Produit */}
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b", marginBottom: 6, lineHeight: 1.3 }}>
+            {currentLine.product_id[1]}
+          </div>
+
+          {/* Lot */}
+          {currentLine.lot_id && (
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 700, color: "#475569", marginBottom: 10 }}>
+              🏷️ Lot {currentLine.lot_id[1]}
+            </div>
+          )}
+
+          {/* Quantité + contrôles */}
+          <div style={{ marginTop: 12 }}>
+            {/* Compteur +/- */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+              <button
+                onClick={() => onAdjustQty(currentLine.id, getQty(currentLine) - 1)}
+                disabled={loading || (currentLine.qty_done || 0) <= 0}
+                style={{ width: 44, height: 44, borderRadius: 12, border: `1.5px solid ${C.border}`, background: C.bg, fontSize: 22, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", opacity: getQty(currentLine) <= 0 ? 0.3 : 1 }}>
+                −
+              </button>
+              <div style={{ flex: 1, textAlign: "center" }}>
+                <span style={{ fontSize: 38, fontWeight: 900, color: C.text }}>{getQty(currentLine)}</span>
+                <span style={{ fontSize: 20, color: C.textMuted, margin: "0 6px" }}>/</span>
+                <span style={{ fontSize: 22, fontWeight: 700, color: C.textSec }}>{currentLine.reserved_uom_qty || 0}</span>
+                <span style={{ fontSize: 13, color: C.textMuted, marginLeft: 4 }}>{currentLine.product_uom_id?.[1] || ""}</span>
+              </div>
+              <button
+                onClick={() => onAdjustQty(currentLine.id, getQty(currentLine) + 1)}
+                disabled={loading || (currentLine.qty_done || 0) >= (currentLine.reserved_uom_qty || 0)}
+                style={{ width: 44, height: 44, borderRadius: 12, border: `1.5px solid ${C.border}`, background: C.bg, fontSize: 22, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", opacity: getQty(currentLine) >= (currentLine.reserved_uom_qty || 0) ? 0.3 : 1 }}>
+                +
+              </button>
+            </div>
+            {/* Bouton "Tout mettre" — visible dès qu'on a scanné au moins 1 */}
+            {locOk && getQty(currentLine) > 0 && getQty(currentLine) < (currentLine.reserved_uom_qty || 0) && (
+              <button
+                onClick={() => onAdjustQty(currentLine.id, currentLine.reserved_uom_qty || 0)}
+                disabled={loading}
+                style={{ width: "100%", padding: "11px 0", borderRadius: 12, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(34,197,94,0.35)", letterSpacing: 0.3 }}>
+                ✓ Tout mettre — {currentLine.reserved_uom_qty || 0} {currentLine.product_uom_id?.[1] || ""}
+              </button>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Input scan ── */}
+      {!allDone && (
+        <div style={{ marginBottom: 12 }}>
+          <InputBar
+            onSubmit={(code: string) => {
+              onScan(code);
+              if (currentLine && locOk) {
+                // Line will be done after scan — add to current colis
+                const newQty = (currentLine.qty_done || 0) + 1;
+                if (newQty >= (currentLine.reserved_uom_qty || 0)) {
+                  addLineToColis(currentLine.id);
+                }
+              }
+            }}
+            placeholder={!locOk ? "Scanner l'emplacement..." : "Scanner le lot / produit..."}
+          />
+          {error && <Alert type="error">{error}</Alert>}
+        </div>
+      )}
+
+      {/* ── Actions colis + validation ── */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        {currentColisId === null ? (
+          <button onClick={openNewColis} style={{ flex: 1, padding: 12, background: "#fff7ed", color: "#c2410c", border: "1.5px solid #fed7aa", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            📦 Nouveau colis
+          </button>
+        ) : (
+          <button onClick={closeColis} style={{ flex: 1, padding: 12, background: "#fff7ed", color: "#c2410c", border: "1.5px solid #fed7aa", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            ✓ Fermer colis {currentColisId}
+          </button>
+        )}
+        <button onClick={() => setShowColisSummary(true)} style={{ padding: "12px 14px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+          {colis.length > 0 ? `📦 ${colis.length} colis` : "Colis"}
+        </button>
+      </div>
+
+      {/* ── Liste rapide des articles restants ── */}
+      {!allDone && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Restant ({totalLines - doneLines})
+          </div>
+          {allLines.filter((ml: any) => getQty(ml) < (ml.reserved_uom_qty || 0)).slice(0, 8).map((ml: any, i: number) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${C.border}`, opacity: ml.id === currentLine?.id ? 1 : 0.5 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: ml.id === currentLine?.id ? C.blue : C.border, flexShrink: 0 }} />
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: ml.id === currentLine?.id ? C.blue : C.border, flexShrink: 0 }} />
+              <div style={{ flex: 1, fontSize: 12, color: C.text, fontWeight: ml.id === currentLine?.id ? 700 : 400 }}>{ml.product_id[1]}</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>{shortLoc(ml.location_id?.[1] || "")}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.textSec }}>{getQty(ml)}/{ml.reserved_uom_qty || 0}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <BigButton
+        icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
+        label={loading ? "Envoi..." : "Valider la préparation"}
+        sub={allDone ? "Tout préparé — prêt à valider" : `${doneLines}/${totalLines} articles préparés`}
+        color={allDone ? C.green : C.orange}
+        onClick={onValidate}
+        disabled={loading || doneLines === 0}
+      />
+    </>
+  );
 }
+
 
 function Login({ onLogin, loading, error }: { onLogin: (u: string, d: string, l: string, p: string) => void; loading: boolean; error: string }) {
   const cfg = typeof window !== "undefined" ? loadCfg() : null;
