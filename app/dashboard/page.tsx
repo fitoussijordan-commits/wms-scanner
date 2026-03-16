@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import * as odoo from "@/lib/odoo";
+import * as supa from "@/lib/supabase";
 
 // ─────────────────────────────────────────────
 // TYPES
@@ -387,6 +388,7 @@ export default function Dashboard() {
   const [editThresh, setEditThresh] = useState<number | null>(null);
   const [editVal, setEditVal] = useState("");
   const [stockSearch, setStockSearch] = useState("");
+  const [thresholdsByRef, setThresholdsByRef] = useState<Record<string, number>>({});
   const [consoSearch, setConsoSearch] = useState("");
 
   // Excel-like column filter states
@@ -403,29 +405,104 @@ export default function Dashboard() {
   const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
 
   useEffect(() => { const s = loadSession(); if (s) setSession(s); const cfg = loadCfg(); if (cfg) { setUrl(cfg.u); setDb(cfg.d); } }, []);
-  useEffect(() => { try { const t = localStorage.getItem("wms_thresholds"); if (t) setThresholds(JSON.parse(t)); } catch {} }, []);
+  // Load thresholds from Supabase on login
+  useEffect(() => {
+    if (!session) return;
+    supa.loadThresholds().then(t => {
+      // t is keyed by odoo_ref (string), we need to match to product ids after stock loads
+      // Store temporarily as ref-keyed
+      setThresholdsByRef(t);
+      setSupaReady(true);
+    }).catch(e => {
+      setSupaError("Supabase: " + e.message);
+      // Fallback to localStorage
+      try { const t = localStorage.getItem("wms_thresholds"); if (t) setThresholds(JSON.parse(t)); } catch {}
+    });
+    // Load cache ages
+    supa.getStockCacheAge().then(d => setStockSyncedAt(d));
+    supa.getConsoCacheAge().then(d => setConsoSyncedAt(d));
+  }, [session]);
 
   const login = async () => { if (!url || !db || !user || !pw) return; setLoginLoading(true); setLoginError(""); try { const s = await odoo.authenticate({ url, db }, user, pw); saveSession(s); setSession(s); } catch (e: any) { setLoginError(e.message); } setLoginLoading(false); };
   const logout = () => { clearSession(); setSession(null); setAlerts([]); setConso([]); setDeliveries([]); setMoves([]); };
-  const saveThresholdsLocal = (t: Record<number, number>) => { setThresholds(t); try { localStorage.setItem("wms_thresholds", JSON.stringify(t)); } catch {} };
+  const [supaReady, setSupaReady] = useState(false);
+  const [supaError, setSupaError] = useState("");
+  const [stockSyncedAt, setStockSyncedAt] = useState<Date | null>(null);
+  const [consoSyncedAt, setConsoSyncedAt] = useState<Date | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  const saveThresholdsLocal = async (t: Record<number, number>) => {
+    setThresholds(t);
+    // Also persist to Supabase (fire and forget with error handling)
+    try {
+      const items = Object.entries(t).map(([pid, threshold]) => {
+        const prod = stockMap[Number(pid)];
+        return { odoo_ref: prod?.ref || String(pid), threshold, product_name: prod?.name || "" };
+      }).filter(i => i.odoo_ref && i.odoo_ref !== "0");
+      await supa.saveThresholdsBulk(items);
+    } catch (e: any) { console.warn("Supabase save failed:", e.message); }
+  };
 
   // ── DATA LOADERS (logic 100% identical to original) ──
+
+  const syncStockFromOdoo = useCallback(async () => {
+    if (!session) return;
+    setSyncing(true);
+    try {
+      const quants = await odoo.searchRead(session, "stock.quant", [["location_id.usage", "=", "internal"], ["quantity", ">", 0]], ["product_id", "quantity"], 2000);
+      const byProduct: Record<number, { name: string; qty: number }> = {};
+      for (const q of quants) { const pid = q.product_id[0]; if (!byProduct[pid]) byProduct[pid] = { name: q.product_id[1], qty: 0 }; byProduct[pid].qty += q.quantity; }
+      const pids = Object.keys(byProduct).map(Number);
+      let refs: Record<number, string> = {};
+      if (pids.length) { const prods = await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code"], 2000); refs = Object.fromEntries(prods.map((p: any) => [p.id, p.default_code || ""])); }
+      const items = Object.entries(byProduct).map(([id, v]) => ({ odoo_product_id: Number(id), odoo_ref: refs[Number(id)] || "", product_name: v.name, qty_on_hand: v.qty }));
+      await supa.saveStockCache(items);
+      const now = new Date(); setStockSyncedAt(now);
+      return items;
+    } catch (e: any) { console.warn("Stock sync failed:", e.message); return null; }
+    finally { setSyncing(false); }
+  }, [session]);
 
   const loadAlerts = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
     try {
-      const quants = await odoo.searchRead(session, "stock.quant", [["location_id.usage", "=", "internal"], ["quantity", ">", 0]], ["product_id", "quantity", "location_id"], 2000);
-      const byProduct: Record<number, { name: string; ref: string; qty: number }> = {};
-      for (const q of quants) { const pid = q.product_id[0]; if (!byProduct[pid]) byProduct[pid] = { name: q.product_id[1], ref: "", qty: 0 }; byProduct[pid].qty += q.quantity; }
-      const pids = Object.keys(byProduct).map(Number);
-      if (pids.length) { const prods = await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code"], 2000); for (const p of prods) if (byProduct[p.id]) byProduct[p.id].ref = p.default_code || ""; }
-      setStockMap(Object.fromEntries(Object.entries(byProduct).map(([id, v]) => [id, { qty: v.qty, name: v.name, ref: v.ref }])));
+      let stockItems: supa.WmsStockCache[] | null = null;
+
+      // Use cache if fresh (< 30 min), else sync from Odoo
+      const cacheAge = await supa.getStockCacheAge();
+      if (!supa.isCacheStale(cacheAge, 30)) {
+        stockItems = await supa.loadStockCache();
+        setStockSyncedAt(cacheAge);
+      } else {
+        const synced = await syncStockFromOdoo();
+        if (synced) stockItems = synced.map(s => ({ ...s, synced_at: new Date().toISOString() }));
+        else stockItems = await supa.loadStockCache(); // fallback to stale cache
+      }
+
+      if (!stockItems) { setLoading(false); return; }
+
+      // Build stockMap from cache
+      const byPid: Record<number, { qty: number; name: string; ref: string }> = {};
+      for (const s of stockItems) byPid[s.odoo_product_id] = { qty: s.qty_on_hand, name: s.product_name, ref: s.odoo_ref };
+      setStockMap(byPid);
+
+      // Match thresholdsByRef to productIds now that we have refs
+      const t: Record<number, number> = {};
+      for (const [pid, data] of Object.entries(byPid)) {
+        if (data.ref && thresholdsByRef[data.ref] !== undefined) t[Number(pid)] = thresholdsByRef[data.ref];
+      }
+      setThresholds(t);
+
       const alertList: StockAlert[] = [];
-      for (const [idStr, data] of Object.entries(byProduct)) { const pid = Number(idStr); const thresh = thresholds[pid]; if (thresh !== undefined && data.qty <= thresh) alertList.push({ productId: pid, ref: data.ref, name: data.name, qty: data.qty, threshold: thresh }); }
+      for (const [pidStr, data] of Object.entries(byPid)) {
+        const pid = Number(pidStr);
+        const thresh = t[pid];
+        if (thresh !== undefined && data.qty <= thresh) alertList.push({ productId: pid, ref: data.ref, name: data.name, qty: data.qty, threshold: thresh });
+      }
       alertList.sort((a, b) => (a.qty / a.threshold) - (b.qty / b.threshold));
       setAlerts(alertList);
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [session, thresholds]);
+  }, [session, thresholdsByRef, syncStockFromOdoo]);
 
   /*
    * loadConso — Consommation mensuelle
@@ -436,61 +513,77 @@ export default function Dashboard() {
    * This exactly matches the Odoo pivot at:
    * stock.move.line > pivot > measure "Fait" > filtered outgoing
    */
+  const syncConsoFromOdoo = useCallback(async (nMonths: number) => {
+    if (!session) return null;
+    setSyncing(true);
+    try {
+      const months = monthsBack(nMonths);
+      const startDate = months[0] + "-01 00:00:00";
+      const endDate = new Date().toISOString().split("T")[0] + " 23:59:59";
+      const allLines = await odoo.searchRead(session, "stock.move.line", [
+        ["state", "=", "done"], ["location_id.usage", "=", "internal"], ["location_dest_id.usage", "=", "customer"],
+        ["date", ">=", startDate], ["date", "<=", endDate],
+      ], ["product_id", "qty_done", "date"], 10000);
+
+      const byRef: Record<string, { name: string; months: Record<string, number> }> = {};
+      const pidToRef: Record<number, string> = {};
+      const pids = Array.from(new Set(allLines.map((ml: any) => ml.product_id[0]))) as number[];
+      if (pids.length) {
+        const prods = await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code", "name"], 2000);
+        for (const p of prods) pidToRef[p.id] = p.default_code || String(p.id);
+      }
+      for (const ml of allLines) {
+        const ref = pidToRef[ml.product_id[0]] || ""; if (!ref) continue;
+        const month = (ml.date || "").substring(0, 7); if (!month) continue;
+        if (!byRef[ref]) byRef[ref] = { name: ml.product_id[1], months: {} };
+        byRef[ref].months[month] = (byRef[ref].months[month] || 0) + (ml.qty_done || 0);
+      }
+      const items: supa.WmsConsoCache[] = [];
+      for (const [ref, v] of Object.entries(byRef)) for (const [month, qty] of Object.entries(v.months)) items.push({ odoo_ref: ref, product_name: v.name, month, qty });
+      await supa.saveConsoCache(items);
+      const now = new Date(); setConsoSyncedAt(now);
+      return items;
+    } catch (e: any) { console.warn("Conso sync failed:", e.message); return null; }
+    finally { setSyncing(false); }
+  }, [session]);
+
   const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
     try {
       const months = monthsBack(consoMonths);
-      const startDate = months[0] + "-01 00:00:00";
-      const endDate = new Date().toISOString().split("T")[0] + " 23:59:59";
+      let cacheItems: supa.WmsConsoCache[] = [];
 
-      const domain: any[] = [
-        ["state", "=", "done"],
-        ["location_id.usage", "=", "internal"],
-        ["location_dest_id.usage", "=", "customer"],
-        ["date", ">=", startDate],
-        ["date", "<=", endDate],
-      ];
-
-      if (consoSearch.trim()) {
-        const prods = await odoo.searchRead(session, "product.product", [
-          "|",
-          ["default_code", "=ilike", "%" + consoSearch.trim() + "%"],
-          ["name", "=ilike", "%" + consoSearch.trim() + "%"],
-        ], ["id"], 50);
-        const searchedProdIds = prods.map((p: any) => p.id);
-        if (!searchedProdIds.length) { setConso([]); setLoading(false); return; }
-        domain.push(["product_id", "in", searchedProdIds]);
+      // Use cache if fresh (< 2h), else sync from Odoo
+      const cacheAge = await supa.getConsoCacheAge();
+      if (!supa.isCacheStale(cacheAge, 120)) {
+        cacheItems = await supa.loadConsoCache(months);
+        setConsoSyncedAt(cacheAge);
+      } else {
+        const synced = await syncConsoFromOdoo(consoMonths);
+        if (synced) cacheItems = synced;
+        else cacheItems = await supa.loadConsoCache(months);
       }
 
-      const allLines = await odoo.searchRead(session, "stock.move.line", domain,
-        ["product_id", "qty_done", "date"], 10000);
-
-      const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
-      for (const ml of allLines) {
-        const pid = ml.product_id[0];
-        const month = (ml.date || "").substring(0, 7);
-        if (!month) continue;
-        if (!byProd[pid]) byProd[pid] = { name: ml.product_id[1], ref: "", months: {} };
-        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (ml.qty_done || 0);
+      // Build rows from cache
+      const byRef: Record<string, { name: string; months: Record<string, number> }> = {};
+      for (const item of cacheItems) {
+        if (!byRef[item.odoo_ref]) byRef[item.odoo_ref] = { name: item.product_name, months: {} };
+        byRef[item.odoo_ref].months[item.month] = item.qty;
       }
 
-      const prodIds = Object.keys(byProd).map(Number);
-      if (prodIds.length) {
-        const prods = await odoo.searchRead(session, "product.product", [["id", "in", prodIds]], ["id", "default_code"], 2000);
-        for (const p of prods) if (byProd[p.id]) byProd[p.id].ref = p.default_code || "";
-      }
-
-      const rows: ConsoRow[] = Object.entries(byProd).map(([, v]) => ({
-        ref: v.ref, name: v.name, months: v.months,
-        total: Object.values(v.months).reduce((s, n) => s + n, 0), avg: 0,
-      }));
+      // Apply search filter client-side
+      const search = consoSearch.trim().toLowerCase();
+      let rows: ConsoRow[] = Object.entries(byRef)
+        .filter(([ref, v]) => !search || ref.toLowerCase().includes(search) || v.name.toLowerCase().includes(search))
+        .map(([ref, v]) => ({
+          ref, name: v.name, months: v.months,
+          total: Object.values(v.months).reduce((s, n) => s + n, 0), avg: 0,
+        }));
       rows.sort((a, b) => b.total - a.total);
-      rows.forEach(r => {
-        r.avg = consoMonths > 0 ? Math.round(r.total / consoMonths) : 0;
-      });
+      rows.forEach(r => { r.avg = consoMonths > 0 ? Math.round(r.total / consoMonths) : 0; });
       setConso(rows);
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [session, consoMonths, consoSearch]);
+  }, [session, consoMonths, consoSearch, syncConsoFromOdoo]);
 
   const loadDeliveries = useCallback(async () => {
     if (!session) return; setLoading(true); setError(""); setPrepStats([]);
@@ -690,6 +783,7 @@ export default function Dashboard() {
 
       {/* CONTENT */}
       <main style={{ maxWidth: 1260, margin: "0 auto", padding: "28px 28px 60px" }}>
+        {supaError && <div style={{ background: "var(--warning-soft)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 16px", fontSize: 13, color: "var(--warning)", marginBottom: 12 }}>⚠ {supaError} — mode dégradé localStorage</div>}
         {error && <div style={{ background: "var(--danger-soft)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "14px 18px", fontSize: 14, color: "var(--danger)", marginBottom: 24, display: "flex", alignItems: "center", gap: 10, animation: "fadeIn .3s ease both" }}>{I.alert}<span style={{ flex: 1 }}>{error}</span><button onClick={() => setError("")} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer", fontSize: 18, padding: 4 }}>×</button></div>}
 
         {/* ══════════ ALERTES ══════════ */}
@@ -907,7 +1001,7 @@ export default function Dashboard() {
                             <input className="wms-input" value={editVal} onChange={(e) => setEditVal(e.target.value)} type="number" min="0" style={{ width: 80, padding: "6px 10px" }} autoFocus onKeyDown={(e) => { if (e.key === "Enter") { const v = Number(editVal); if (!isNaN(v) && v >= 0) saveThresholdsLocal({ ...thresholds, [pid]: v }); setEditThresh(null); } if (e.key === "Escape") setEditThresh(null); }} />
                             {suggestedThresh && <button className="wms-btn" onClick={() => setEditVal(String(suggestedThresh))} title={`= 1 mois conso (${suggestedThresh})`} style={{ padding: "6px 8px", fontSize: 11, background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid var(--accent-border)" }}>⚡</button>}
                             <button className="wms-btn" onClick={() => { const v = Number(editVal); if (!isNaN(v) && v >= 0) saveThresholdsLocal({ ...thresholds, [pid]: v }); setEditThresh(null); }} style={{ background: "var(--success)", color: "#fff", padding: "6px 10px", fontSize: 13 }}>✓</button>
-                            <button className="wms-btn wms-btn-danger" onClick={() => { const t = { ...thresholds }; delete t[pid]; saveThresholdsLocal(t); setEditThresh(null); }} style={{ padding: "6px 10px", fontSize: 12 }}>✕</button>
+                            <button className="wms-btn wms-btn-danger" onClick={async () => { const t = { ...thresholds }; const ref = stockMap[pid]?.ref; delete t[pid]; setThresholds(t); if (ref) { try { await supa.deleteThreshold(ref); } catch {} } setEditThresh(null); }} style={{ padding: "6px 10px", fontSize: 12 }}>✕</button>
                           </>
                         ) : (
                           <button className="wms-btn" onClick={() => { setEditThresh(pid); setEditVal(thresh !== undefined ? String(thresh) : suggestedThresh ? String(suggestedThresh) : ""); }} style={{ flexShrink: 0, padding: "6px 14px", fontSize: 12, fontWeight: thresh !== undefined ? 700 : 400, fontFamily: thresh !== undefined ? MONO : "inherit", background: thresh !== undefined ? (isAlert ? "var(--danger-soft)" : "var(--warning-soft)") : "var(--bg-surface)", color: thresh !== undefined ? (isAlert ? "var(--danger)" : "var(--warning)") : "var(--text-muted)", border: `1px solid ${thresh !== undefined ? (isAlert ? "var(--danger-border)" : "var(--warning-border)") : "var(--border)"}` }}>
