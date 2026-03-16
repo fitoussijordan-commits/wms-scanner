@@ -1093,6 +1093,10 @@ export default function Page() {
             <a href="/dashboard" style={{ textDecoration: "none", display: "block" }}>
               <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>} label="Dashboard" sub="Alertes stock, consommation, livraisons" color="#1d4ed8" onClick={() => {}} />
             </a>
+            <div style={{ height: 10 }} />
+            <a href="/dashboard" style={{ textDecoration: "none", display: "block" }}>
+              <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>} label="Dashboard" sub="Alertes stock, consommation, livraisons" color="#1d4ed8" onClick={() => {}} />
+            </a>
             {/* HIDDEN: E-shop button — pas au point
             <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>} label="E-shop" sub="Préparer les commandes SendCloud" color="#f59e0b" onClick={() => setScreen("eshop")} />
             */}
@@ -1545,14 +1549,16 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
       {/* Qty with +/- */}
       <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>Quantité</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button onClick={() => { if (qty > 1) { setQty(qty - 1); vibrate(); } }} style={qtyBtn}>−</button>
+        <div style={{ display: "flex", alignItems: "stretch", gap: 0, border: `1.5px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.white }}>
+          <button onClick={() => { if (qty > 1) { setQty(qty - 1); vibrate(); } }}
+            style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 26, fontWeight: 700, color: C.blue, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}` }}>−</button>
           <input type="number" min="1" value={qty === 0 ? "" : qty}
             onChange={e => { const raw = e.target.value; if (raw === "") { setQty(0); return; } const v = parseInt(raw); if (!isNaN(v) && v >= 0) setQty(v); }}
             onBlur={() => { if (qty === 0) setQty(1); }}
             onKeyDown={e => e.stopPropagation()}
-            style={{ flex: 1, textAlign: "center", fontSize: 28, fontWeight: 800, border: `1.5px solid ${C.border}`, borderRadius: 10, outline: "none", background: C.white, color: C.text, padding: "12px 0", fontFamily: "'DM Mono', monospace" }} />
-          <button onClick={() => { setQty(qty + 1); vibrate(); }} style={qtyBtn}>+</button>
+            style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 28, fontWeight: 800, border: "none", outline: "none", background: C.white, color: C.text, padding: "14px 4px", fontFamily: "'DM Mono', monospace" }} />
+          <button onClick={() => { setQty(qty + 1); vibrate(); }}
+            style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 26, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderLeft: `1px solid ${C.blue}` }}>+</button>
         </div>
         {/* Quick qty buttons */}
         <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
@@ -2802,13 +2808,15 @@ function PrintModal({ req, onClose, onToast }: { req: PrintRequest; onClose: () 
         {/* Quantity */}
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Nombre d'étiquettes</div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
-            <button onClick={() => setCopies(c => Math.max(1, c - 1))} style={qtyBtnStyle}>−</button>
+          <div style={{ display: "flex", alignItems: "stretch", gap: 0, border: `1.5px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.white, maxWidth: 220, margin: "0 auto" }}>
+            <button onClick={() => setCopies(c => Math.max(1, c - 1))}
+              style={{ width: 56, flexShrink: 0, background: C.bg, border: "none", fontSize: 22, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", borderRight: `1px solid ${C.border}` }}>−</button>
             <input type="number" value={copies} min={1} max={99}
               onChange={e => { const v = parseInt(e.target.value); if (v > 0 && v <= 99) setCopies(v); }}
               onKeyDown={e => e.stopPropagation()}
-              style={{ width: 60, textAlign: "center", fontSize: 22, fontWeight: 800, fontFamily: "'DM Mono', monospace", border: `2px solid ${C.border}`, borderRadius: 10, padding: "8px 0", background: C.white, color: C.text }} />
-            <button onClick={() => setCopies(c => Math.min(99, c + 1))} style={qtyBtnStyle}>+</button>
+              style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 22, fontWeight: 800, fontFamily: "'DM Mono', monospace", border: "none", padding: "10px 0", background: C.white, color: C.text, outline: "none" }} />
+            <button onClick={() => setCopies(c => Math.min(99, c + 1))}
+              style={{ width: 56, flexShrink: 0, background: C.blue, border: "none", fontSize: 22, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", borderLeft: `1px solid ${C.blue}` }}>+</button>
           </div>
           {/* Presets */}
           <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 10 }}>
@@ -4715,23 +4723,23 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           {/* Quantité + contrôles */}
           <div style={{ marginTop: 12 }}>
             {/* Compteur +/- */}
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "stretch", gap: 0, border: `1.5px solid ${C.border}`, borderRadius: 14, overflow: "hidden", background: C.white, marginBottom: 10 }}>
               <button
                 onClick={() => onAdjustQty(currentLine.id, getQty(currentLine) - 1)}
                 disabled={loading || (currentLine.qty_done || 0) <= 0}
-                style={{ width: 44, height: 44, borderRadius: 12, border: `1.5px solid ${C.border}`, background: C.bg, fontSize: 22, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", opacity: getQty(currentLine) <= 0 ? 0.3 : 1 }}>
+                style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 24, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}`, opacity: getQty(currentLine) <= 0 ? 0.3 : 1 }}>
                 −
               </button>
-              <div style={{ flex: 1, textAlign: "center" }}>
-                <span style={{ fontSize: 38, fontWeight: 900, color: C.text }}>{getQty(currentLine)}</span>
-                <span style={{ fontSize: 20, color: C.textMuted, margin: "0 6px" }}>/</span>
-                <span style={{ fontSize: 22, fontWeight: 700, color: C.textSec }}>{currentLine.reserved_uom_qty || 0}</span>
-                <span style={{ fontSize: 13, color: C.textMuted, marginLeft: 4 }}>{currentLine.product_uom_id?.[1] || ""}</span>
+              <div style={{ flex: 1, textAlign: "center", padding: "12px 4px", minWidth: 0 }}>
+                <span style={{ fontSize: 36, fontWeight: 900, color: C.text }}>{getQty(currentLine)}</span>
+                <span style={{ fontSize: 18, color: C.textMuted, margin: "0 4px" }}>/</span>
+                <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{currentLine.reserved_uom_qty || 0}</span>
+                <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 4 }}>{currentLine.product_uom_id?.[1] || ""}</span>
               </div>
               <button
                 onClick={() => onAdjustQty(currentLine.id, getQty(currentLine) + 1)}
                 disabled={loading || (currentLine.qty_done || 0) >= (currentLine.reserved_uom_qty || 0)}
-                style={{ width: 44, height: 44, borderRadius: 12, border: `1.5px solid ${C.border}`, background: C.bg, fontSize: 22, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", opacity: getQty(currentLine) >= (currentLine.reserved_uom_qty || 0) ? 0.3 : 1 }}>
+                style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 24, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderLeft: `1px solid ${C.blue}`, opacity: getQty(currentLine) >= (currentLine.reserved_uom_qty || 0) ? 0.3 : 1 }}>
                 +
               </button>
             </div>
