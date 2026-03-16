@@ -965,6 +965,8 @@ export default function Dashboard() {
                       const prods = pids.length ? await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code", "name"], 2000) : [];
                       const prodMap: Record<number, { ref: string; name: string }> = Object.fromEntries(prods.map((p: any) => [p.id, { ref: p.default_code || "", name: p.name || "" }]));
 
+                      console.log("DEBUG date range:", sd, "→", ed);
+                      console.log("DEBUG total moves:", allLines.length);
                       // seuil = total 12 mois / 12 (= avg mensuel, identique à loadConso)
                       const supaItems: supa.WmsThreshold[] = [];
                       const nt: Record<number, number> = {};
