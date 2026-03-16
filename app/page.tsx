@@ -409,6 +409,11 @@ export default function Page() {
     vibrate();
     showToast(`⚡ ${code}`);
     if (screen === "home") doLookup(code);
+    else if (screen === "prep") {
+      // Scan WH/PICK/xxx directly from prep list → open picking
+      if (/^WH\/PICK\//i.test(code) || /^WH\/OUT\//i.test(code)) { openPickingByName(code); return; }
+      doLookup(code);
+    }
     else if (screen === "transfer") {
       if (transferMode === "classic") doClassicScan(code);
       else doQuickScan(code);
@@ -588,6 +593,30 @@ export default function Page() {
       setPickings(p);
     } catch (e: any) { setError(e.message); }
     setLoading(false);
+  };
+
+  const openPickingByName = async (name: string) => {
+    if (!session) return;
+    const trimmed = name.trim().toUpperCase();
+    // Search in already loaded pickings first
+    const found = pickings.find((p: any) => (p.name || "").toUpperCase() === trimmed);
+    if (found) { openPicking(found); return; }
+    // Not in list — search Odoo directly (handles case where prep list isn't loaded yet)
+    setLoading(true); setError("");
+    try {
+      const results = await odoo.searchRead(
+        session, "stock.picking",
+        [["name", "=", trimmed], ["state", "in", ["assigned", "waiting", "confirmed"]]],
+        ["id", "name", "partner_id", "scheduled_date", "state", "priority", "date_deadline", "shipping_date"],
+        1
+      );
+      if (results.length) {
+        openPicking(results[0]);
+      } else {
+        showToast(`❌ "${trimmed}" introuvable`);
+        setLoading(false);
+      }
+    } catch (e: any) { setError(e.message); setLoading(false); }
   };
 
   const openPicking = async (picking: any) => {
@@ -1016,6 +1045,7 @@ export default function Page() {
             loading={loading}
             error={error}
             onOpen={openPicking}
+            onScanPicking={openPickingByName}
             onCheckAvail={checkPickingAvailability}
             onRefresh={loadPickings}
             onReport={openPickingReport}
@@ -3885,7 +3915,8 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
 // ============================================
 // PREPARATION LIST SCREEN
 // ============================================
-function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefresh, onReport }: any) {
+function PrepListScreen({ pickings, loading, error, onOpen, onScanPicking, onCheckAvail, onRefresh, onReport }: any) {
+  const [scanCode, setScanCode] = useState("");
   // Group by shipping_date (date d'expédition prévue), fallback date_deadline, then scheduled_date
   const grouped: Record<string, any[]> = {};
   for (const p of pickings) {
@@ -3904,13 +3935,34 @@ function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefr
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Préparation</h2>
           <p style={{ fontSize: 12, color: C.textMuted }}>{pickings.length} commande(s) prête(s)</p>
         </div>
         <button onClick={onRefresh} disabled={loading} style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        </button>
+      </div>
+
+      {/* Scan picking by name — WH/PICK/xxxxx */}
+      <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
+        <input
+          style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed" }}
+          value={scanCode}
+          onChange={e => setScanCode(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Enter" && scanCode.trim()) {
+              onScanPicking(scanCode.trim());
+              setScanCode("");
+            }
+          }}
+          placeholder="📷 Scanner WH/PICK/... pour ouvrir directement"
+        />
+        <button
+          onClick={() => { if (scanCode.trim()) { onScanPicking(scanCode.trim()); setScanCode(""); } }}
+          style={{ padding: "10px 16px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap" }}>
+          Ouvrir
         </button>
       </div>
 
