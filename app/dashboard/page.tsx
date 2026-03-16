@@ -946,31 +946,42 @@ export default function Dashboard() {
                       const custLocIds = custLocs.map((l: any) => l.id);
                       const intLocIds = intLocs.map((l: any) => l.id);
 
-                      // Requête mois par mois pour éviter la limite 20000 lignes
+                      // Récupère les product IDs depuis stockMap (filtrés watchlist si active)
+                      const relevantRefs = watchlistMode && watchlist.size > 0
+                        ? Array.from(watchlist)
+                        : Object.values(stockMap).map(s => s.ref).filter(Boolean);
+
+                      // Trouve les product IDs Odoo pour ces refs
+                      const refChunks: string[][] = [];
+                      for (let i = 0; i < relevantRefs.length; i += 100) refChunks.push(relevantRefs.slice(i, i + 100));
+
                       const byPid: Record<number, number> = {};
-                      for (const month of ms) {
-                        const mStart = month + "-01 00:00:00";
-                        const mDate = new Date(Number(month.split("-")[0]), Number(month.split("-")[1]), 0);
-                        const mEnd = month + "-" + String(mDate.getDate()).padStart(2,"0") + " 23:59:59";
-                        const batch = await odoo.searchRead(session, "stock.move.line", [
+
+                      for (const chunk of refChunks) {
+                        const prodsChunk = await odoo.searchRead(session, "product.product", [["default_code", "in", chunk]], ["id", "default_code"], chunk.length + 10);
+                        const chunkPids = prodsChunk.map((p: any) => p.id);
+                        if (!chunkPids.length) continue;
+
+                        // Pour chaque chunk de produits, requête sur 12 mois d'un coup
+                        const lines = await odoo.searchRead(session, "stock.move.line", [
                           ["state", "=", "done"],
+                          ["product_id", "in", chunkPids],
                           ["location_id", "in", intLocIds],
                           ["location_dest_id", "in", custLocIds],
-                          ["date", ">=", mStart],
-                          ["date", "<=", mEnd],
+                          ["date", ">=", sd],
+                          ["date", "<=", ed],
                         ], ["product_id", "qty_done"], 10000);
-                        for (const mv of batch) {
+
+                        for (const mv of lines) {
                           byPid[mv.product_id[0]] = (byPid[mv.product_id[0]] || 0) + (mv.qty_done || 0);
                         }
                       }
-                      console.log("DEBUG 1010101 total apres batches=", byPid[Object.keys(byPid).find(k => true) as any]);
 
                       // Refs + noms
                       const pids = Object.keys(byPid).map(Number);
                       const prods = pids.length ? await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code", "name"], 2000) : [];
                       const prodMap: Record<number, { ref: string; name: string }> = Object.fromEntries(prods.map((p: any) => [p.id, { ref: p.default_code || "", name: p.name || "" }]));
 
-                      console.log("DEBUG date range:", sd, "→", ed);
                       // seuil = total 12 mois / 12 (= avg mensuel, identique à loadConso)
                       const supaItems: supa.WmsThreshold[] = [];
                       const nt: Record<number, number> = {};
@@ -979,7 +990,6 @@ export default function Dashboard() {
                         const info = prodMap[pid];
                         if (!info?.ref) continue;
                         const seuil = Math.max(1, Math.round(total / 12));
-                        if (info.ref === "1010101") console.log("DEBUG 1010101 total=", total, "seuil=", seuil);
                         nt[pid] = seuil;
                         supaItems.push({ odoo_ref: info.ref, threshold: seuil, product_name: info.name });
                       }
