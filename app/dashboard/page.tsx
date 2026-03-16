@@ -486,8 +486,7 @@ export default function Dashboard() {
       }));
       rows.sort((a, b) => b.total - a.total);
       rows.forEach(r => {
-        const active = Object.values(r.months).filter(v => v > 0).length;
-        r.avg = active > 0 ? Math.round(r.total / active) : 0;
+        r.avg = consoMonths > 0 ? Math.round(r.total / consoMonths) : 0;
       });
       setConso(rows);
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
@@ -848,7 +847,7 @@ export default function Dashboard() {
                       const nt = { ...thresholds }; let count = 0;
                       for (const [pidStr, data] of Object.entries(byProd)) {
                         if (!data.ref || data.activeMonths.size === 0) continue;
-                        const avg = Math.round(data.total / data.activeMonths.size);
+                        const avg = Math.round(data.total / 6); // toujours sur 6 mois de période
                         if (avg <= 0) continue;
                         const match = Object.entries(stockMap).find(([, d]) => d.ref === data.ref);
                         if (match) { nt[Number(match[0])] = Math.round(avg * mult); count++; }
