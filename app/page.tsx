@@ -1545,13 +1545,13 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
       {/* Qty with +/- */}
       <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>Quantité</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 0, borderRadius: 10, border: `1.5px solid ${C.border}`, minHeight: 58 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button onClick={() => { if (qty > 1) { setQty(qty - 1); vibrate(); } }} style={qtyBtn}>−</button>
           <input type="number" min="1" value={qty === 0 ? "" : qty}
             onChange={e => { const raw = e.target.value; if (raw === "") { setQty(0); return; } const v = parseInt(raw); if (!isNaN(v) && v >= 0) setQty(v); }}
             onBlur={() => { if (qty === 0) setQty(1); }}
             onKeyDown={e => e.stopPropagation()}
-            style={{ flex: 1, textAlign: "center", fontSize: 22, fontWeight: 800, border: "none", outline: "none", background: C.white, color: C.text, padding: "12px 0", fontFamily: "'DM Mono', monospace" }} />
+            style={{ flex: 1, textAlign: "center", fontSize: 28, fontWeight: 800, border: `1.5px solid ${C.border}`, borderRadius: 10, outline: "none", background: C.white, color: C.text, padding: "12px 0", fontFamily: "'DM Mono', monospace" }} />
           <button onClick={() => { setQty(qty + 1); vibrate(); }} style={qtyBtn}>+</button>
         </div>
         {/* Quick qty buttons */}
@@ -4881,11 +4881,12 @@ const secondaryBtn: React.CSSProperties = {
 };
 
 const qtyBtn: React.CSSProperties = {
-  minWidth: 64, width: 64, height: 58, flexShrink: 0, background: C.bg,
-  border: "none", borderRadius: 0, fontSize: 30, fontWeight: 700,
-  cursor: "pointer", color: C.blue, fontFamily: "inherit",
+  width: 58, height: 58, flexShrink: 0,
+  background: C.blue, color: "#fff",
+  border: "none", borderRadius: 10, fontSize: 28, fontWeight: 700,
+  cursor: "pointer", fontFamily: "inherit",
   display: "flex", alignItems: "center", justifyContent: "center",
-  touchAction: "manipulation", WebkitTapHighlightColor: "transparent",
+  touchAction: "manipulation",
 };
 
 // ============================================
