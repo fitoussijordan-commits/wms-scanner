@@ -398,6 +398,9 @@ export default function Dashboard() {
   const [prepStats, setPrepStats] = useState<{ name: string; picking: number; emballage: number; total: number }[]>([]);
   const [prepStatsLoading, setPrepStatsLoading] = useState(false);
   const [consoColSort, setConsoColSort] = useState<{ col: string; dir: SortDir }>({ col: "total", dir: "desc" });
+  const [alertsUnderstockOpen, setAlertsUnderstockOpen] = useState(true);
+  const [alertsOverstockOpen, setAlertsOverstockOpen] = useState(true);
+  const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
 
   useEffect(() => { const s = loadSession(); if (s) setSession(s); const cfg = loadCfg(); if (cfg) { setUrl(cfg.u); setDb(cfg.d); } }, []);
   useEffect(() => { try { const t = localStorage.getItem("wms_thresholds"); if (t) setThresholds(JSON.parse(t)); } catch {} }, []);
@@ -714,52 +717,71 @@ export default function Dashboard() {
           <div style={{ animation: "fadeIn .3s ease both" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}>
               <div><h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Alertes stock</h2><p style={{ fontSize: 13, color: "var(--text-muted)" }}>Seuils min. configurables — jours restants estimés via la consommation moyenne</p></div>
-              <button className="wms-btn wms-btn-primary" onClick={loadAlerts} disabled={loading}>{loading ? <Spinner /> : I.refresh} Actualiser</button>
+              <button className="wms-btn wms-btn-primary" onClick={async () => { await loadAlerts(); if (conso.length === 0) await loadConso(); }} disabled={loading}>{loading ? <Spinner /> : I.refresh} Actualiser</button>
             </div>
 
-            {/* Under-stock alerts */}
-            {alerts.length > 0 && (
-              <div style={{ marginBottom: 28 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--danger)", marginBottom: 14, textTransform: "uppercase", letterSpacing: "1px", display: "flex", alignItems: "center", gap: 8 }}><div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--danger)", animation: "pulse-dot 1.5s ease-in-out infinite" }} />{alerts.length} article{alerts.length > 1 ? "s" : ""} en sous-stock</div>
-                <div style={{ display: "grid", gap: 10 }}>
-                  {alerts.map((a, idx) => {
-                    const ratio = a.qty / a.threshold; const color = ratio <= .25 ? "var(--danger)" : ratio <= .75 ? "var(--warning)" : "var(--orange)"; const bg = ratio <= .25 ? "var(--danger-soft)" : ratio <= .75 ? "var(--warning-soft)" : "rgba(249,115,22,.08)";
-                    const consoRow = conso.find((c) => c.ref === a.ref); const dailyAvg = consoRow ? consoRow.avg / 30 : 0; const daysLeft = dailyAvg > 0 ? Math.round(a.qty / dailyAvg) : null;
-                    const daysLabel = daysLeft === null ? "Conso inconnue" : daysLeft <= 0 ? "Rupture imminente" : `${daysLeft}j restant${daysLeft > 1 ? "s" : ""}`;
-                    return (
-                      <div key={a.productId} className="alert-card" style={{ background: bg, borderLeftColor: color, animationDelay: `${idx * 50}ms` }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>{a.ref && <span style={{ fontFamily: MONO, color: "var(--accent)", marginRight: 8, fontSize: 12 }}>[{a.ref}]</span>}{a.name}</div>
-                            <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13, color: "var(--text-secondary)" }}>
-                              <span>Stock : <strong style={{ color, fontSize: 15 }}>{a.qty}</strong></span><span>Seuil : <strong>{a.threshold}</strong></span>{consoRow && <span>Moy : <strong>{consoRow.avg}/mois</strong></span>}
-                            </div>
-                          </div>
-                          <div style={{ fontSize: 12, fontWeight: 700, color, whiteSpace: "nowrap", fontFamily: MONO }}>{daysLabel}</div>
-                        </div>
-                        <div style={{ height: 4, background: "rgba(128,128,128,.15)", borderRadius: 2, marginTop: 14, overflow: "hidden" }}><div className="bar-fill" style={{ width: `${Math.min(ratio * 100, 100)}%`, background: color, animationDelay: `${idx * 50 + 200}ms` }} /></div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            {(() => {
+              // Split alerts: critical (< 25% seuil or < 7j), warning (7-30j), ok
+              const criticalAlerts = alerts.filter(a => { const c = conso.find(c => c.ref === a.ref); const d = c ? c.avg / 30 : 0; const days = d > 0 ? Math.round(a.qty / d) : null; return days === null || days <= 7 || a.qty / a.threshold <= 0.25; });
+              const warningAlerts = alerts.filter(a => !criticalAlerts.includes(a));
 
-            {/* Overstock alerts — calmer styling */}
-            {overstockItems.length > 0 && (
-              <div style={{ marginBottom: 28 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--purple)", marginBottom: 14, textTransform: "uppercase", letterSpacing: "1px", display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--purple)" }} />
-                  {overstockItems.length} article{overstockItems.length > 1 ? "s" : ""} en surstock ({`>${OVERSTOCK_DAYS}j`})
+              const AccordionSection = ({ open, onToggle, color, dot, pulseAnim, title, count, children }: any) => (
+                <div style={{ marginBottom: 12 }}>
+                  <button onClick={onToggle} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: open ? "10px 10px 0 0" : 10, cursor: "pointer", fontFamily: "inherit", transition: "border-radius .2s" }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0, animation: pulseAnim ? "pulse-dot 1.5s ease-in-out infinite" : "none" }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: ".8px", flex: 1, textAlign: "left" }}>{title}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", fontFamily: MONO }}>{count} article{count > 1 ? "s" : ""}</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2.5" style={{ transform: open ? "rotate(180deg)" : "rotate(0)", transition: "transform .2s", flexShrink: 0 }}><path d="M6 9l6 6 6-6"/></svg>
+                  </button>
+                  {open && <div style={{ border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 10px 10px", padding: "12px", display: "grid", gap: 8 }}>{children}</div>}
                 </div>
-                <div style={{ display: "grid", gap: 8 }}>
-                  {overstockItems.map((item, idx) => (
-                    <div key={item.pid} style={{ background: "var(--purple-soft)", borderLeft: "3px solid var(--purple-border)", borderRadius: 10, padding: "14px 18px", animation: "fadeIn .3s ease both", animationDelay: `${idx * 40}ms` }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600 }}>
-                            {item.ref && <span style={{ fontFamily: MONO, color: "var(--accent)", marginRight: 8, fontSize: 12 }}>[{item.ref}]</span>}{item.name}
-                          </div>
+              );
+
+              const AlertCard = ({ a }: { a: typeof alerts[0] }) => {
+                const ratio = a.qty / a.threshold;
+                const color = ratio <= .25 ? "var(--danger)" : ratio <= .75 ? "var(--warning)" : "var(--orange)";
+                const bg = ratio <= .25 ? "var(--danger-soft)" : ratio <= .75 ? "var(--warning-soft)" : "rgba(249,115,22,.06)";
+                const consoRow = conso.find(c => c.ref === a.ref);
+                const dailyAvg = consoRow ? consoRow.avg / 30 : 0;
+                const daysLeft = dailyAvg > 0 ? Math.round(a.qty / dailyAvg) : null;
+                const daysLabel = daysLeft === null ? "—" : daysLeft <= 0 ? "Rupture !" : `${daysLeft}j`;
+                return (
+                  <div style={{ background: bg, borderLeft: `3px solid ${color}`, borderRadius: 8, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 200 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{a.ref && <span style={{ fontFamily: MONO, color: "var(--accent)", marginRight: 8, fontSize: 11 }}>[{a.ref}]</span>}{a.name}</div>
+                      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
+                        <span>Stock : <strong style={{ color }}>{a.qty}</strong></span>
+                        <span>Seuil : <strong>{a.threshold}</strong></span>
+                        {consoRow && <span>Moy : <strong>{consoRow.avg}/mois</strong></span>}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+                      <div style={{ height: 6, width: 80, background: "rgba(128,128,128,.15)", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${Math.min(ratio * 100, 100)}%`, background: color, borderRadius: 3 }} />
+                      </div>
+                      <span style={{ fontSize: 13, fontWeight: 800, color, fontFamily: MONO, minWidth: 52, textAlign: "right" }}>{daysLabel}</span>
+                    </div>
+                  </div>
+                );
+              };
+
+              return <>
+                {criticalAlerts.length > 0 && (
+                  <AccordionSection open={alertsUnderstockOpen} onToggle={() => setAlertsUnderstockOpen(o => !o)} color="var(--danger)" dot pulseAnim title="Critique — rupture imminente" count={criticalAlerts.length}>
+                    {criticalAlerts.map(a => <AlertCard key={a.productId} a={a} />)}
+                  </AccordionSection>
+                )}
+                {warningAlerts.length > 0 && (
+                  <AccordionSection open={alertsWarningOpen} onToggle={() => setAlertsWarningOpen(o => !o)} color="var(--warning)" dot={false} pulseAnim={false} title="Attention — stock bas" count={warningAlerts.length}>
+                    {warningAlerts.map(a => <AlertCard key={a.productId} a={a} />)}
+                  </AccordionSection>
+                )}
+                {overstockItems.length > 0 && (
+                  <AccordionSection open={alertsOverstockOpen} onToggle={() => setAlertsOverstockOpen(o => !o)} color="var(--purple)" dot={false} pulseAnim={false} title={`Stock conséquent (>${OVERSTOCK_DAYS}j)`} count={overstockItems.length}>
+                    {overstockItems.map(item => (
+                      <div key={item.pid} style={{ background: "var(--purple-soft)", borderLeft: "3px solid var(--purple-border)", borderRadius: 8, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                        <div style={{ flex: 1, minWidth: 200 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600 }}>{item.ref && <span style={{ fontFamily: MONO, color: "var(--accent)", marginRight: 8, fontSize: 11 }}>[{item.ref}]</span>}{item.name}</div>
                           <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4, display: "flex", gap: 16, flexWrap: "wrap" }}>
                             <span>Stock : <strong style={{ color: "var(--text-secondary)" }}>{item.qty}</strong></span>
                             <span>Seuil : <strong>{item.thresh}</strong></span>
@@ -771,13 +793,16 @@ export default function Dashboard() {
                           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>+{item.daysOfStock - OVERSTOCK_DAYS}j au-dessus</div>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {alerts.length === 0 && overstockItems.length === 0 && Object.keys(stockMap).length > 0 && <div style={{ background: "var(--success-soft)", border: "1px solid var(--success-border)", borderRadius: 12, padding: "22px 28px", marginBottom: 28, display: "flex", alignItems: "center", gap: 16, animation: "fadeIn .4s ease both" }}>{I.check}<div><div style={{ fontSize: 15, fontWeight: 700, color: "var(--success)" }}>Tous les stocks sont OK</div><div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>Aucun article en sous-stock ou surstock.</div></div></div>}
+                    ))}
+                  </AccordionSection>
+                )}
+                {alerts.length === 0 && overstockItems.length === 0 && Object.keys(stockMap).length > 0 && (
+                  <div style={{ background: "var(--success-soft)", border: "1px solid var(--success-border)", borderRadius: 12, padding: "22px 28px", marginBottom: 28, display: "flex", alignItems: "center", gap: 16, animation: "fadeIn .4s ease both" }}>
+                    {I.check}<div><div style={{ fontSize: 15, fontWeight: 700, color: "var(--success)" }}>Tous les stocks sont OK</div><div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>Aucun article en sous-stock ou surstock.</div></div>
+                  </div>
+                )}
+              </>;
+            })()}
             {/* Threshold manager */}
             <div className="wms-card" style={{ padding: 24 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
