@@ -475,8 +475,11 @@ export default function Dashboard() {
   /*
    * loadConso — Consommation mensuelle
    * stock.move: state=done, location_id.usage=internal → location_dest_id.usage=customer.
-   * This catches the final leg of any delivery chain (PICK→PACK→OUT or direct OUT).
-   * product_qty = real quantity in product UoM.
+   * Queries stock.move.line (same model as Odoo pivot view).
+   * Measure: qty_done (= "Fait" column in Odoo 16 pivot).
+   * Filters: state=done, location_id.usage=internal, location_dest_id.usage=customer.
+   * This exactly matches the Odoo pivot at:
+   * stock.move.line > pivot > measure "Fait" > filtered outgoing
    */
   const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
@@ -504,16 +507,16 @@ export default function Dashboard() {
         domain.push(["product_id", "in", searchedProdIds]);
       }
 
-      const allMoves = await odoo.searchRead(session, "stock.move", domain,
-        ["product_id", "product_qty", "date"], 10000);
+      const allLines = await odoo.searchRead(session, "stock.move.line", domain,
+        ["product_id", "qty_done", "date"], 10000);
 
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
-      for (const m of allMoves) {
-        const pid = m.product_id[0];
-        const month = (m.date || "").substring(0, 7);
+      for (const ml of allLines) {
+        const pid = ml.product_id[0];
+        const month = (ml.date || "").substring(0, 7);
         if (!month) continue;
-        if (!byProd[pid]) byProd[pid] = { name: m.product_id[1], ref: "", months: {} };
-        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (m.product_qty || 0);
+        if (!byProd[pid]) byProd[pid] = { name: ml.product_id[1], ref: "", months: {} };
+        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (ml.qty_done || 0);
       }
 
       const prodIds = Object.keys(byProd).map(Number);
@@ -812,12 +815,12 @@ export default function Dashboard() {
                       const ms = monthsBack(6);
                       const sd = ms[0] + "-01 00:00:00";
                       const ed = new Date().toISOString().split("T")[0] + " 23:59:59";
-                      const allMoves = await odoo.searchRead(session, "stock.move", [
+                      const allMoves = await odoo.searchRead(session, "stock.move.line", [
                         ["state", "=", "done"],
                         ["location_id.usage", "=", "internal"],
                         ["location_dest_id.usage", "=", "customer"],
                         ["date", ">=", sd], ["date", "<=", ed],
-                      ], ["product_id", "product_qty", "date"], 20000);
+                      ], ["product_id", "qty_done", "date"], 20000);
 
                       // Aggregate avg per product
                       const byProd: Record<number, { ref: string; total: number; activeMonths: Set<string> }> = {};
@@ -826,7 +829,7 @@ export default function Dashboard() {
                         const month = (m.date || "").substring(0, 7);
                         if (!month) continue;
                         if (!byProd[pid]) byProd[pid] = { ref: "", total: 0, activeMonths: new Set() };
-                        byProd[pid].total += m.product_qty || 0;
+                        byProd[pid].total += m.qty_done || 0;
                         byProd[pid].activeMonths.add(month);
                       }
 
