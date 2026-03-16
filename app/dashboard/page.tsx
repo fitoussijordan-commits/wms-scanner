@@ -506,7 +506,7 @@ export default function Dashboard() {
       }
 
       const allMoves = await odoo.searchRead(session, "stock.move", domain,
-        ["product_id", "product_uom_qty", "date"], 10000);
+        ["product_id", "product_qty", "date"], 10000);
 
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
       for (const m of allMoves) {
@@ -514,7 +514,7 @@ export default function Dashboard() {
         const month = (m.date || "").substring(0, 7);
         if (!month) continue;
         if (!byProd[pid]) byProd[pid] = { name: m.product_id[1], ref: "", months: {} };
-        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (m.product_uom_qty || 0);
+        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (m.product_qty || 0);
       }
 
       const prodIds = Object.keys(byProd).map(Number);
@@ -816,7 +816,7 @@ export default function Dashboard() {
                       const allMoves = await odoo.searchRead(session, "stock.move", [
                         ["state", "=", "done"], ["picking_type_id.code", "=", "outgoing"],
                         ["date", ">=", sd], ["date", "<=", ed],
-                      ], ["product_id", "product_uom_qty", "date"], 20000);
+                      ], ["product_id", "product_qty", "date"], 20000);
 
                       // Aggregate avg per product
                       const byProd: Record<number, { ref: string; total: number; activeMonths: Set<string> }> = {};
@@ -825,7 +825,7 @@ export default function Dashboard() {
                         const month = (m.date || "").substring(0, 7);
                         if (!month) continue;
                         if (!byProd[pid]) byProd[pid] = { ref: "", total: 0, activeMonths: new Set() };
-                        byProd[pid].total += m.product_uom_qty || 0;
+                        byProd[pid].total += m.product_qty || 0;
                         byProd[pid].activeMonths.add(month);
                       }
 
