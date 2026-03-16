@@ -805,20 +805,26 @@ export default function Page() {
   const openPickingByName = async (name: string) => {
     if (!session) return;
     const trimmed = name.trim();
-    // Search in already loaded pickings first (case-insensitive)
+    // 1. Search in already loaded pickings
     const found = pickings.find((p: any) => (p.name || "").toUpperCase() === trimmed.toUpperCase());
     if (found) { openPicking(found); return; }
-    // Fallback: search Odoo directly
+    // 2. Search Odoo — only basic fields to avoid invalid field errors
     setLoading(true); setError("");
     try {
       const results = await odoo.searchRead(
         session, "stock.picking",
         [["name", "=", trimmed], ["state", "in", ["assigned", "waiting", "confirmed"]]],
-        ["id", "name", "partner_id", "scheduled_date", "state", "priority", "date_deadline", "shipping_date"],
+        ["id", "name", "partner_id", "scheduled_date", "state", "priority"],
         1
       );
-      if (results.length) { openPicking(results[0]); }
-      else { showToast(`❌ "${trimmed}" introuvable`); setLoading(false); }
+      if (results.length) {
+        // Enrich with shipping_date via getOutgoingPickings if possible, else use basic data
+        const p = { ...results[0], shipping_date: results[0].scheduled_date };
+        openPicking(p);
+      } else {
+        showToast(`❌ "${trimmed}" introuvable`);
+        setLoading(false);
+      }
     } catch (e: any) { setError(e.message); setLoading(false); }
   };
 
@@ -879,28 +885,53 @@ export default function Page() {
       }
 
       // STEP 2: Location already scanned → expect product or lot
-      if (r.type === "product" || r.type === "lot") {
-        const productId = r.type === "product" ? r.data.id : r.data.product?.id;
-        const lotId = r.type === "lot" ? r.data.lot.id : null;
-        const lotName = r.type === "lot" ? r.data.lot.name : null;
-        if (!productId) { showToast("Produit inconnu"); vibrateError(); return; }
+      // Also handle raw code as lot name if smartScan returns nothing useful
+      let productId: number | null = null;
+      let lotId: number | null = null;
+      let lotName: string | null = null;
+      let scannedCode = code;
 
-        // Find matching move line at the locked location
-        const ml = pickingMoveLines.find((m: any) =>
-          m.location_id && m.location_id[0] === prepStep.locId &&
-          m.product_id[0] === productId &&
-          (m.qty_done || 0) < (m.reserved_uom_qty || 0) &&
-          (!lotId || !m.lot_id || m.lot_id[0] === lotId)
-        );
-        if (!ml) {
-          showToast("Pas dans cette commande ou déjà complet");
+      if (r.type === "product") {
+        productId = r.data.id;
+      } else if (r.type === "lot") {
+        productId = r.data.product?.id || null;
+        lotId = r.data.lot.id;
+        lotName = r.data.lot.name;
+      } else {
+        // Unknown barcode — treat as raw lot name (common on carton labels)
+        // Search lot directly by name
+        const rawLots = await odoo.searchRead(session, "stock.lot", [["name", "=", code.trim()]], ["id", "name", "product_id"], 1);
+        if (rawLots.length) {
+          lotId = rawLots[0].id;
+          lotName = rawLots[0].name;
+          productId = rawLots[0].product_id?.[0] || null;
+        } else {
+          showToast(`⚠ "${code}" non reconnu`);
           vibrateError();
           return;
         }
+      }
 
-        // Increment qty_done by 1
-        const newQty = (ml.qty_done || 0) + 1;
-        await odoo.setMoveLineQtyDone(session, ml.id, newQty, lotId);
+      // Find the current move line for this step
+      const ml = pickingMoveLines.find((m: any) => m.id === prepStep.lineId);
+      if (!ml) { showToast("Ligne introuvable"); vibrateError(); return; }
+
+      // Check if product matches
+      if (productId && ml.product_id[0] !== productId) {
+        showToast(`⚠ Mauvais produit — attendu: ${ml.product_id[1]}`);
+        vibrateError();
+        return;
+      }
+
+      // Lot différent du lot attendu → warning orange mais on accepte
+      if (lotName && ml.lot_id && ml.lot_id[1] !== lotName) {
+        showToast(`🟠 Lot différent: ${lotName} (attendu ${ml.lot_id[1]}) — accepté`);
+        // Use the scanned lot id for the write
+      }
+
+      // Increment qty_done by 1
+      const newQty = (ml.qty_done || 0) + 1;
+      await odoo.setMoveLineQtyDone(session, ml.id, newQty, lotId || ml.lot_id?.[0] || null);
 
         // Refresh
         const updatedLines = await odoo.getPickingMoveLines(session, selectedPicking.id);
@@ -1422,7 +1453,11 @@ function LocationDropdown({ locations, onSelect, excludeId }: { locations: any[]
     !search || (l.name || "").toLowerCase().includes(search.toLowerCase()) || (l.complete_name || "").toLowerCase().includes(search.toLowerCase()) || (l.barcode || "").toLowerCase().includes(search.toLowerCase())
   ));
 
-  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 80); }, []);
+  useEffect(() => {
+    // Ne pas auto-ouvrir le clavier sur mobile/PDA
+    const isMobile = /Mobi|Android|iPad|iPhone/i.test(navigator.userAgent);
+    if (!isMobile) setTimeout(() => inputRef.current?.focus(), 80);
+  }, []);
 
   const trySelect = (val: string) => {
     // Exact barcode match → auto-select
