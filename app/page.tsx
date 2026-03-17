@@ -4960,7 +4960,8 @@ interface WmsPalette {
 }
 interface WmsPaletteLigne {
   id: number; palette_id: number; odoo_ref: string; product_name: string;
-  lot: string | null; expiry_date: string | null; qty: number; unite: string; created_at: string;
+  lot: string | null; expiry_date: string | null; qty: number; unite: string;
+  created_at: string; updated_at?: string;
 }
 
 function PalettesScreen({ onBack, session, printerId }: {
@@ -5180,7 +5181,6 @@ function PaletteDetail({ palette, lignes, session, printerId, onBack, onRefresh 
         expiry_date: newExpiry || null,
         qty: parseFloat(newQty),
         unite: newUnite,
-        updated_at: new Date().toISOString(),
       });
       await onRefresh();
       setNewRef(""); setNewName(""); setNewLot(""); setNewExpiry(""); setNewQty("1");
