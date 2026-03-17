@@ -2895,7 +2895,11 @@ function PaletteResult({ data }: { data: { palette: WmsPalette; lignes: WmsPalet
               </div>
               <div style={{ textAlign: "right" as const, flexShrink: 0, marginLeft: 8 }}>
                 <div style={{ fontWeight: 800, fontSize: 15, color: C.text }}>{l.qty}</div>
-                <div style={{ fontSize: 10, color: C.textMuted }}>{l.unite}</div>
+                {l.packaging_qty && l.packaging_qty > 1 ? (
+                  <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 600 }}>{Math.round(l.qty / l.packaging_qty)} colis de {l.packaging_qty}</div>
+                ) : (
+                  <div style={{ fontSize: 10, color: C.textMuted }}>{l.unite}</div>
+                )}
               </div>
             </div>
           ))}
@@ -5032,6 +5036,7 @@ interface WmsPalette {
 interface WmsPaletteLigne {
   id: number; palette_id: number; odoo_ref: string; product_name: string;
   lot: string | null; expiry_date: string | null; qty: number; unite: string;
+  packaging_qty: number | null;
   created_at: string; updated_at?: string;
 }
 
@@ -5201,6 +5206,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
       await palUpsert(currentPalette.id, {
         odoo_ref: newRef.trim(), product_name: newName.trim() || newRef.trim(),
         lot: newLot.trim() || null, expiry_date: null, qty: parseFloat(newQty) || 1, unite: "unité",
+        packaging_qty: packaging || null,
       });
       if (newEmplacement.trim()) await palUpdate(currentPalette.id, { emplacement: newEmplacement.trim() });
       const { palette: p, lignes: ls } = await palDetail(currentPalette.id);
@@ -5342,7 +5348,10 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
                         <span style={{ color: C.text, marginLeft: 6 }}>{l.product_name}</span>
                         {l.lot && <span style={{ color: C.textMuted, marginLeft: 6 }}>🏷️ {l.lot}</span>}
                       </div>
-                      <span style={{ fontWeight: 800, fontSize: 14, color: C.text, marginLeft: 8, flexShrink: 0 }}>{l.qty}</span>
+                      <div style={{ textAlign: "right" as const, flexShrink: 0, marginLeft: 8 }}>
+                        <div style={{ fontWeight: 800, fontSize: 14, color: C.text }}>{l.qty}</div>
+                        {l.packaging_qty && l.packaging_qty > 1 && <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 600 }}>{Math.round(l.qty / l.packaging_qty)} × {l.packaging_qty}</div>}
+                      </div>
                     </div>
                   ))
                 }

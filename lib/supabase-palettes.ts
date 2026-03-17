@@ -21,6 +21,7 @@ export interface WmsPaletteLigne {
   expiry_date: string | null;
   qty: number;
   unite: string;
+  packaging_qty: number | null;
   created_at: string;
 }
 
@@ -73,7 +74,7 @@ export async function upsertLigne(paletteId: number, ligne: Omit<WmsPaletteLigne
 
   if (existing) {
     const { error } = await sb.from("wms_palette_lignes")
-      .update({ qty: existing.qty + ligne.qty, updated_at: new Date().toISOString() })
+      .update({ qty: existing.qty + ligne.qty, packaging_qty: ligne.packaging_qty ?? null, updated_at: new Date().toISOString() })
       .eq("id", existing.id);
     if (error) throw new Error(error.message);
   } else {
