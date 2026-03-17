@@ -637,10 +637,6 @@ export default function Page() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, session, src, dst, transferMode]);
 
-  // Ref to always call latest doPrepScan (avoids stale closure in useCallback)
-  const doPrepScanRef = useRef(doPrepScan);
-  useEffect(() => { doPrepScanRef.current = doPrepScan; });
-
   useScannerListener(handleGlobalScan, screen !== "login");
 
   // Init
@@ -990,6 +986,10 @@ export default function Page() {
       }
     } catch (e: any) { setError(e.message); vibrateError(); }
   };
+
+  // Ref to always call latest doPrepScan (avoids stale closure)
+  const doPrepScanRef = useRef<(code: string) => Promise<void>>(async () => {});
+  useEffect(() => { doPrepScanRef.current = doPrepScan; });
 
   // "Tout prendre" — fill all remaining qty for the current location
   const prepTakeAll = async () => {
