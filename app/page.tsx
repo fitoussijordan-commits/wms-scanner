@@ -864,7 +864,31 @@ export default function Page() {
     if (!code || !session || !currentPicking) return;
     setError("");
     try {
-      const r = await odoo.smartScan(session, code);
+      // Optimisation : requête ciblée selon le step (au lieu de 8 requêtes smartScan)
+      let r: any;
+      if (!currentStep) {
+        // Step 1 : on attend un emplacement
+        const locs = await odoo.searchRead(session, "stock.location",
+          [["barcode", "=", code.trim()]], ["id", "name", "complete_name", "barcode"], 1);
+        r = locs.length ? { type: "location", data: locs[0] }
+          : (await odoo.searchRead(session, "stock.location",
+              [["barcode", "ilike", code.trim()]], ["id", "name", "complete_name", "barcode"], 1))
+            .map((l: any) => ({ type: "location", data: l }))[0]
+            || { type: "not_found", code };
+      } else {
+        // Step 2 : on attend un lot
+        const lots = await odoo.searchRead(session, "stock.lot",
+          [["name", "=", code.trim()]], ["id", "name", "product_id"], 1);
+        if (lots.length) {
+          r = { type: "lot", data: { lot: lots[0], product: { id: lots[0].product_id?.[0] } } };
+        } else {
+          const lotsI = await odoo.searchRead(session, "stock.lot",
+            [["name", "ilike", code.trim()]], ["id", "name", "product_id"], 1);
+          r = lotsI.length
+            ? { type: "lot", data: { lot: lotsI[0], product: { id: lotsI[0].product_id?.[0] } } }
+            : { type: "not_found", code };
+        }
+      }
       // STEP 1: No active step → expect a location scan
       if (!currentStep) {
         if (r.type === "location") {
