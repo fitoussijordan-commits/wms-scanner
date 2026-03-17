@@ -5096,9 +5096,9 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
     try {
       const res = await fetch("/api/printnode", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ printerId: printId, content: btoa(unescape(encodeURIComponent(zpl))), contentType: "raw_base64", title: p.numero }),
+        body: JSON.stringify({ action: "print", printerId: printId, title: p.numero, content: btoa(unescape(encodeURIComponent(zpl))), source: "WMS Scanner" }),
       });
-      if (!res.ok) throw new Error(`PrintNode ${res.status}`);
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || `PrintNode ${res.status}`); }
       showSuccess(`🖨️ ${p.numero} envoyée`);
     } catch (e: any) { setError(`Impression échouée: ${e.message}`); }
   };
