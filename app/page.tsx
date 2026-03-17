@@ -606,10 +606,19 @@ export default function Page() {
   const [prepScanned, setPrepScanned] = useState<Set<number>>(new Set());
   // 2-step preparation: step 1 = scan location, step 2 = scan lot/barcode → +1 qty each scan
   const [prepStep, setPrepStep] = useState<{ locId: number; locName: string; lineId: number; productName: string; lotName?: string; remaining: number } | null>(null);
+  // Refs so doPrepScan always reads current values (avoids stale closure)
+  const prepStepRef = useRef<typeof prepStep>(null);
+  const pickingMoveLinesRef = useRef<any[]>([]);
+  const selectedPickingRef = useRef<any>(null);
 
   // Print modal
   const [printReq, setPrintReq] = useState<PrintRequest | null>(null);
   useEffect(() => { _setPrintReq = setPrintReq; return () => { _setPrintReq = null; }; }, []);
+
+  // Sync refs with state
+  useEffect(() => { prepStepRef.current = prepStep; }, [prepStep]);
+  useEffect(() => { pickingMoveLinesRef.current = pickingMoveLines; }, [pickingMoveLines]);
+  useEffect(() => { selectedPickingRef.current = selectedPicking; }, [selectedPicking]);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 2200); };
 
@@ -849,16 +858,19 @@ export default function Page() {
   };
 
   const doPrepScan = async (code: string) => {
-    if (!code || !session || !selectedPicking) return;
+    const currentStep = prepStepRef.current;
+    const currentLines = pickingMoveLinesRef.current;
+    const currentPicking = selectedPickingRef.current;
+    if (!code || !session || !currentPicking) return;
     setError("");
     try {
       const r = await odoo.smartScan(session, code);
       // STEP 1: No active step → expect a location scan
-      if (!prepStep) {
+      if (!currentStep) {
         if (r.type === "location") {
           // Find move lines at this location that still need qty
           const locId = r.data.id;
-          const pending = pickingMoveLines.filter((ml: any) =>
+          const pending = currentLines.filter((ml: any) =>
             ml.location_id && ml.location_id[0] === locId && (ml.qty_done || 0) < (ml.reserved_uom_qty || 0)
           );
           if (pending.length === 0) {
@@ -924,19 +936,19 @@ export default function Page() {
       }
 
       // Find the move line — by lineId first, then by product+location if not found
-      let ml = pickingMoveLines.find((m: any) => m.id === prepStep.lineId);
+      let ml = currentLines.find((m: any) => m.id === currentStep!.lineId);
       if (!ml && productId) {
         // Fallback: find by product at this location with qty remaining
-        ml = pickingMoveLines.find((m: any) =>
-          m.location_id?.[0] === prepStep.locId &&
+        ml = currentLines.find((m: any) =>
+          m.location_id?.[0] === currentStep!.locId &&
           m.product_id[0] === productId &&
           (m.qty_done || 0) < (m.reserved_uom_qty || 0)
         );
       }
       if (!ml) {
         // Last fallback: any line at this location with qty remaining
-        ml = pickingMoveLines.find((m: any) =>
-          m.location_id?.[0] === prepStep.locId &&
+        ml = currentLines.find((m: any) =>
+          m.location_id?.[0] === currentStep!.locId &&
           (m.qty_done || 0) < (m.reserved_uom_qty || 0)
         );
       }
@@ -960,7 +972,7 @@ export default function Page() {
       await odoo.setMoveLineQtyDone(session, ml.id, newQty, lotId || ml.lot_id?.[0] || null);
 
       // Refresh
-      const updatedLines = await odoo.getPickingMoveLines(session, selectedPicking.id);
+      const updatedLines = await odoo.getPickingMoveLines(session, currentPicking.id);
       setPickingMoveLines(updatedLines);
 
       if (newQty >= (ml.reserved_uom_qty || 0)) {
@@ -972,15 +984,15 @@ export default function Page() {
       showToast(`✓ ${lotName || ml.product_id[1]} · ${newQty}/${ml.reserved_uom_qty || 0}`);
 
       const morePending = updatedLines.filter((m: any) =>
-        m.location_id && m.location_id[0] === prepStep.locId && (m.qty_done || 0) < (m.reserved_uom_qty || 0)
+        m.location_id && m.location_id[0] === currentStep!.locId && (m.qty_done || 0) < (m.reserved_uom_qty || 0)
       );
       if (morePending.length === 0) {
         setPrepStep(null);
-        showToast(`✓ Emplacement ${prepStep.locName} terminé`);
+        showToast(`✓ Emplacement ${currentStep!.locName} terminé`);
       } else if (remaining <= 0) {
         const next = morePending[0];
         const nextRemaining = (next.reserved_uom_qty || 0) - (next.qty_done || 0);
-        setPrepStep({ locId: prepStep.locId, locName: prepStep.locName, lineId: next.id, productName: next.product_id[1], lotName: next.lot_id?.[1] || undefined, remaining: nextRemaining });
+        setPrepStep({ locId: currentStep!.locId, locName: currentStep!.locName, lineId: next.id, productName: next.product_id[1], lotName: next.lot_id?.[1] || undefined, remaining: nextRemaining });
       } else {
         setPrepStep(prev => prev ? { ...prev, lineId: ml.id, remaining } : null);
       }
