@@ -570,7 +570,7 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1196,6 +1196,8 @@ export default function Page() {
             <div style={{ height: 10 }} />
             <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>} label="Impression étiquettes" sub="Palette, vierge, produit" color="#0891b2" onClick={() => setScreen("labels")} />
             <div style={{ height: 10 }} />
+            <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="17"/><line x1="9" y1="15" x2="15" y2="15"/></svg>} label="Palettes WMS" sub="Stock physique par palette" color="#7c3aed" onClick={() => setScreen("palettes")} />
+            <div style={{ height: 10 }} />
             <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>} label="Ajustement inventaire" sub="Corriger les quantités en stock" color="#8b5cf6" onClick={() => setScreen("inventory")} />
           </div>
 
@@ -1441,6 +1443,10 @@ export default function Page() {
         )}
 
         {/* ===== INVENTORY ===== */}
+        {screen === "palettes" && session && (
+          <PalettesScreen onBack={goHome} session={session} />
+        )}
+
         {screen === "inventory" && session && (
           <InventoryScreen session={session} onBack={goHome} onToast={showToast} />
         )}
