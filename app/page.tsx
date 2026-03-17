@@ -1445,7 +1445,8 @@ export default function Page() {
 
         {/* ===== INVENTORY ===== */}
         {screen === "palettes" && session && (
-          <PalettesScreen onBack={goHome} session={session} />
+          <PalettesScreen onBack={goHome} session={session}
+            getPalettePrinter={() => pn.getLabelTypeConfig("palette").printerId || null} />
         )}
 
         {screen === "inventory" && session && (
@@ -4324,7 +4325,7 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
     { key: "product", label: "Étiquette produit", icon: "📦", hasSize: true },
     { key: "lot", label: "Étiquette lot", icon: "🏷️", hasSize: true },
     { key: "location", label: "Étiquette emplacement", icon: "📍", hasSize: true },
-    { key: "palette", label: "Étiquette palette", icon: "🏭", hasSize: true },
+    { key: "palette", label: "Étiquette palette (WMS)", icon: "🏭", hasSize: true },
     { key: "blank", label: "Étiquette vierge", icon: "✏️", hasSize: true },
     { key: "picking", label: "Étiquette colis (picking)", icon: "📦", hasSize: true },
     // HIDDEN: E-shop — pas au point
@@ -4964,10 +4965,10 @@ interface WmsPaletteLigne {
   created_at: string; updated_at?: string;
 }
 
-function PalettesScreen({ onBack, session, printerId }: {
+function PalettesScreen({ onBack, session, getPalettePrinter }: {
   onBack: () => void;
   session?: any;
-  printerId?: number;
+  getPalettePrinter?: () => number | null;
 }) {
   const [view, setView] = useState<"list" | "detail" | "search">("list");
   const [palettes, setPalettes] = useState<WmsPalette[]>([]);
@@ -5005,6 +5006,16 @@ function PalettesScreen({ onBack, session, printerId }: {
     setLoading(true);
     try {
       const p = await palCreate();
+      // Auto-print étiquette palette 70x45
+      const printId = getPalettePrinter?.();
+      if (printId) {
+        const zpl = palZPL(p, []);
+        await fetch("/api/printnode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ printerId: printId, content: btoa(unescape(encodeURIComponent(zpl))), contentType: "raw_base64", title: p.numero }),
+        }).catch(() => {}); // silently ignore print errors
+      }
       await openPalette(p);
       load();
     } catch (e: any) { setError(e.message); }
@@ -5038,7 +5049,7 @@ function PalettesScreen({ onBack, session, printerId }: {
       palette={selected}
       lignes={lignes}
       session={session}
-      printerId={printerId}
+      printerId={getPalettePrinter?.() || null}
       onBack={() => { setView("list"); load(); }}
       onRefresh={async () => {
         const { palette, lignes } = await palDetail(selected.id);
