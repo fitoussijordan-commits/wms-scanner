@@ -609,6 +609,7 @@ export default function Page() {
   const [prepStep, setPrepStep] = useState<{ locId: number; locName: string; lineId: number; productName: string; lotName?: string; remaining: number } | null>(null);
   // Refs so doPrepScan always reads current values (avoids stale closure)
   const prepStepRef = useRef<typeof prepStep>(null);
+  const paletteScanRef = useRef<((code: string) => void) | null>(null);
   const pickingMoveLinesRef = useRef<any[]>([]);
   const selectedPickingRef = useRef<any>(null);
 
@@ -646,6 +647,9 @@ export default function Page() {
     else if (screen === "prepDetail") {
       scanQueueRef.current.push(code);
       processScanQueue();
+    }
+    else if (screen === "palettes") {
+      if (paletteScanRef.current) paletteScanRef.current(code);
     }
     setTimeout(() => {
       document.querySelectorAll("input").forEach((el) => {
@@ -1458,7 +1462,7 @@ export default function Page() {
 
         {/* ===== INVENTORY ===== */}
         {screen === "palettes" && session && (
-          <PalettesScreen onBack={goHome} session={session} getPalettePrinter={() => pn.getLabelTypeConfig("palette_wms").printerId || null} />
+          <PalettesScreen onBack={goHome} session={session} getPalettePrinter={() => pn.getLabelTypeConfig("palette_wms").printerId || null} onScanRef={paletteScanRef} />
         )}
 
         {screen === "inventory" && session && (
@@ -5030,10 +5034,11 @@ interface WmsPaletteLigne {
 
 type PaletteView = "scan" | "lookup";
 
-function PalettesScreen({ onBack, session, getPalettePrinter }: {
+function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   onBack: () => void;
   session?: any;
   getPalettePrinter?: () => number | null;
+  onScanRef?: React.MutableRefObject<((code: string) => void) | null>;
 }) {
   const [view, setView] = useState<PaletteView>("scan");
   const [scanInput, setScanInput] = useState("");
@@ -5042,6 +5047,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [autoPrint, setAutoPrint] = useState(true); // mode chaîne: print seulement quand on veut
 
   // Scan step: 0=scan palette, 1=scan ref, 2=lot, 3=qty, 4=emplacement
   const [step, setStep] = useState(0);
@@ -5050,6 +5056,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
   const [newLot, setNewLot] = useState("");
   const [newQty, setNewQty] = useState("1");
   const [newEmplacement, setNewEmplacement] = useState("");
+  const [packaging, setPackaging] = useState<number | null>(null); // qty par conditionnement
 
   // Lookup
   const [lookupInput, setLookupInput] = useState("");
@@ -5057,9 +5064,15 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
 
   const showSuccess = (msg: string) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(""), 2500); };
 
+  // Register scan callback for global scanner
+  useEffect(() => {
+    if (onScanRef) onScanRef.current = (code: string) => handleScan(code);
+    return () => { if (onScanRef) onScanRef.current = null; };
+  });
+
   const printPalette = async (p: WmsPalette, ls: WmsPaletteLigne[]) => {
     const printId = getPalettePrinter?.();
-    if (!printId) { setError("Aucune imprimante palette configurée (Paramètres → Imprimantes)"); return; }
+    if (!printId) { setError("Aucune imprimante Palettes WMS configurée (Paramètres → Imprimantes)"); return; }
     const zpl = palZPL(p, ls);
     try {
       const res = await fetch("/api/printnode", {
@@ -5069,6 +5082,17 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || `PrintNode ${res.status}`); }
       showSuccess(`🖨️ ${p.numero} envoyée`);
     } catch (e: any) { setError(`Impression échouée: ${e.message}`); }
+  };
+
+  // Fetch packaging qty from Odoo
+  const fetchPackaging = async (productId: number): Promise<number | null> => {
+    if (!session) return null;
+    try {
+      const pkgs = await odoo.searchRead(session, "product.packaging",
+        [["product_id", "=", productId]], ["qty", "name"], 5);
+      if (pkgs.length > 0) return pkgs[0].qty || null;
+    } catch {}
+    return null;
   };
 
   const handleScan = async (code: string) => {
@@ -5115,16 +5139,25 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
 
     // Step 1 — référence produit
     if (step === 1) {
+      setPackaging(null);
       if (session) {
         setLoading(true);
         try {
           const r = await odoo.smartScan(session, code.trim());
           if (r.type === "product") {
             setNewRef(r.data.default_code || code.trim()); setNewName(r.data.name);
-            showSuccess(`✓ ${r.data.name}`); setStep(2); setLoading(false); return;
+            const pkg = await fetchPackaging(r.data.id);
+            setPackaging(pkg);
+            showSuccess(`✓ ${r.data.name}${pkg ? ` (cond. ${pkg})` : ""}`);
+            setStep(2); setLoading(false); return;
           } else if (r.type === "lot") {
             setNewRef(r.data.product?.default_code || code.trim()); setNewName(r.data.product?.name || "");
-            setNewLot(r.data.lot.name); showSuccess(`✓ Lot ${r.data.lot.name}`); setStep(3); setLoading(false); return;
+            setNewLot(r.data.lot.name);
+            if (r.data.product?.id) {
+              const pkg = await fetchPackaging(r.data.product.id);
+              setPackaging(pkg);
+            }
+            showSuccess(`✓ Lot ${r.data.lot.name}`); setStep(3); setLoading(false); return;
           }
         } catch {}
         setLoading(false);
@@ -5136,11 +5169,17 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
     // Step 2 — lot
     if (step === 2) { setNewLot(code.trim()); showSuccess(`Lot: ${code.trim()}`); setStep(3); return; }
 
-    // Step 3 — qty
+    // Step 3 — qty (en colis/conditionnement → multiplié)
     if (step === 3) {
       const n = parseFloat(code.trim());
-      if (!isNaN(n) && n > 0) { setNewQty(String(n)); showSuccess(`Qté: ${n}`); setStep(4); }
-      else setError("Quantité invalide");
+      if (!isNaN(n) && n > 0) {
+        const totalQty = packaging ? n * packaging : n;
+        setNewQty(String(totalQty));
+        showSuccess(packaging ? `${n} × ${packaging} = ${totalQty} unités` : `Qté: ${totalQty}`);
+        setStep(4);
+      } else {
+        setError("Quantité invalide");
+      }
       return;
     }
 
@@ -5159,9 +5198,8 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
       if (newEmplacement.trim()) await palUpdate(currentPalette.id, { emplacement: newEmplacement.trim() });
       const { palette: p, lignes: ls } = await palDetail(currentPalette.id);
       setCurrentPalette(p); setLignes(ls);
-      await printPalette(p, ls);
       showSuccess("✓ Ligne ajoutée");
-      setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setStep(1);
+      setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setStep(1);
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
@@ -5170,23 +5208,17 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
     if (!lookupInput.trim()) return;
     setLoading(true); setError(""); setLookupResults([]);
     try {
-      // Cherche par numéro de palette
       const p = await palFind(lookupInput.trim());
       if (p) {
         const { palette, lignes } = await palDetail(p.id);
         setLookupResults([{ palette, lignes }]);
       } else {
-        // Cherche par ref produit dans toutes les palettes
         const results = await palSearch(lookupInput.trim());
         if (results.length) {
-          // Grouper par palette
           const palMap = new Map<number, { palette: WmsPalette; lignes: WmsPaletteLigne[] }>();
           for (const r of results) {
             if (!palMap.has(r.palette_id)) {
-              try {
-                const d = await palDetail(r.palette_id);
-                palMap.set(r.palette_id, d);
-              } catch {}
+              try { const d = await palDetail(r.palette_id); palMap.set(r.palette_id, d); } catch {}
             }
           }
           setLookupResults(Array.from(palMap.values()));
@@ -5200,7 +5232,6 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
 
   const stepLabels = ["Palette", "Référence", "Lot", "Quantité", "Emplacement"];
 
-  // ── Rendu du stepper compact ──
   const StepBar = () => (
     <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
       {stepLabels.map((label, i) => (
@@ -5306,7 +5337,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
                   style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>
                   🖨️
                 </button>
-                <button onClick={() => { setCurrentPalette(null); setLignes([]); setStep(0); setNewRef(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); }}
+                <button onClick={() => { setCurrentPalette(null); setLignes([]); setStep(0); setNewRef(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); }}
                   style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.textSec }}>
                   ✕
                 </button>
@@ -5319,6 +5350,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
             <div style={{ fontSize: 13, fontWeight: 700, color: "#7c3aed", marginBottom: 8 }}>
               {["📦", "🔍", "🏷️", "🔢", "📍"][step]} {stepLabels[step]}
               {step === 0 && <span style={{ color: C.textMuted, fontWeight: 400 }}> — scanner ou Entrée pour créer</span>}
+              {step === 3 && packaging && <span style={{ color: C.green, fontWeight: 600 }}> (× {packaging} par colis)</span>}
               {loading && <Spinner />}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
@@ -5331,7 +5363,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
                   step === 0 ? "Pal-XXXX ou Entrée pour créer..." :
                   step === 1 ? "Code-barres produit..." :
                   step === 2 ? "Numéro de lot..." :
-                  step === 3 ? "Quantité..." :
+                  step === 3 ? (packaging ? `Nb colis (× ${packaging})...` : "Quantité...") :
                   "Emplacement (optionnel)..."
                 }
                 type={step === 3 ? "number" : "text"}
@@ -5352,7 +5384,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
             {step === 3 && scanInput && (
               <button onClick={() => handleScan(scanInput)} disabled={loading}
                 style={{ marginTop: 8, width: "100%", padding: 12, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>
-                Confirmer {scanInput} unités →
+                {packaging ? `Confirmer ${scanInput} × ${packaging} = ${parseFloat(scanInput || "0") * packaging} →` : `Confirmer ${scanInput} unités →`}
               </button>
             )}
             {step === 4 && (
@@ -5368,7 +5400,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
             <div style={{ ...cardStyle, padding: "10px 14px", marginBottom: 12, fontSize: 13 }}>
               {newRef && <div><strong>Réf:</strong> {newRef} {newName && <span style={{ color: C.textMuted }}>— {newName}</span>}</div>}
               {newLot && <div><strong>Lot:</strong> {newLot}</div>}
-              {step >= 4 && <div><strong>Qté:</strong> {newQty}</div>}
+              {step >= 4 && <div><strong>Qté:</strong> {newQty} unités{packaging ? ` (${Math.round(parseFloat(newQty) / packaging)} colis × ${packaging})` : ""}</div>}
               {newEmplacement && <div><strong>Emplacement:</strong> {newEmplacement}</div>}
             </div>
           )}
@@ -5376,8 +5408,14 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
           {/* Lignes déjà ajoutées */}
           {lignes.length > 0 && (
             <Section>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase" as const }}>
-                Contenu ({lignes.length} réf · {lignes.reduce((s, l) => s + l.qty, 0)} unités)
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const }}>
+                  Contenu ({lignes.length} réf · {lignes.reduce((s, l) => s + l.qty, 0)} unités)
+                </div>
+                <button onClick={() => currentPalette && printPalette(currentPalette, lignes)}
+                  style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#7c3aed" }}>
+                  🖨️ Imprimer
+                </button>
               </div>
               {lignes.map(l => (
                 <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
