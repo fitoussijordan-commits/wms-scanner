@@ -5047,7 +5047,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
-  const [autoPrint, setAutoPrint] = useState(true); // mode chaîne: print seulement quand on veut
+  const [batchQty, setBatchQty] = useState("5");
 
   // Scan step: 0=scan palette, 1=scan ref, 2=lot, 3=qty, 4=emplacement
   const [step, setStep] = useState(0);
@@ -5232,6 +5232,29 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
 
   const stepLabels = ["Palette", "Référence", "Lot", "Quantité", "Emplacement"];
 
+  // Batch: créer et imprimer N palettes vierges d'un coup
+  const batchPrint = async () => {
+    const n = parseInt(batchQty) || 0;
+    if (n < 1 || n > 50) { setError("Entre 1 et 50 max"); return; }
+    const printId = getPalettePrinter?.();
+    if (!printId) { setError("Aucune imprimante Palettes WMS configurée"); return; }
+    setLoading(true); setError("");
+    let ok = 0;
+    for (let i = 0; i < n; i++) {
+      try {
+        const p = await palCreate();
+        const zpl = palZPL(p, []);
+        await fetch("/api/printnode", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "print", printerId: printId, title: p.numero, content: btoa(unescape(encodeURIComponent(zpl))), source: "WMS Scanner" }),
+        });
+        ok++;
+      } catch {}
+    }
+    showSuccess(`✓ ${ok} étiquette${ok > 1 ? "s" : ""} palette${ok > 1 ? "s" : ""} imprimée${ok > 1 ? "s" : ""}`);
+    setLoading(false);
+  };
+
   const StepBar = () => (
     <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
       {stepLabels.map((label, i) => (
@@ -5278,7 +5301,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
             <input style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed" }}
               value={lookupInput} onChange={e => setLookupInput(e.target.value)}
               onKeyDown={e => e.key === "Enter" && handleLookup()}
-              placeholder="Pal-0001 ou référence produit..." autoFocus />
+              placeholder="Pal-0001 ou référence produit..." />
             <button onClick={handleLookup} disabled={loading}
               style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer", fontSize: 14 }}>
               {loading ? "..." : "→"}
@@ -5325,6 +5348,31 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
         <div>
           <StepBar />
 
+          {/* Batch print — imprimer des palettes vierges pour aller en stock */}
+          {step === 0 && !currentPalette && (
+            <Section style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>🖨️ Étiquettes palettes vierges</div>
+              <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 10 }}>Imprimer un lot d'étiquettes avant d'aller en stock</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                {[3, 5, 10, 20].map(n => (
+                  <button key={n} onClick={() => setBatchQty(String(n))}
+                    style={{ padding: "8px 0", flex: 1, borderRadius: 8, border: `1.5px solid ${batchQty === String(n) ? "#7c3aed" : C.border}`, background: batchQty === String(n) ? "#f5f3ff" : C.white, color: batchQty === String(n) ? "#7c3aed" : C.textSec, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+                    {n}
+                  </button>
+                ))}
+                <input
+                  style={{ ...inputStyle, width: 60, textAlign: "center" as const, padding: "8px 4px", fontSize: 14, fontWeight: 700 }}
+                  value={batchQty} onChange={e => setBatchQty(e.target.value.replace(/\D/g, ""))}
+                  type="text" inputMode="numeric" placeholder="N"
+                />
+              </div>
+              <button onClick={batchPrint} disabled={loading || !batchQty}
+                style={{ marginTop: 10, width: "100%", padding: 12, background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>
+                {loading ? `Impression en cours...` : `🖨️ Imprimer ${batchQty || 0} étiquette${parseInt(batchQty) > 1 ? "s" : ""}`}
+              </button>
+            </Section>
+          )}
+
           {/* Current palette badge */}
           {currentPalette && (
             <div style={{ ...cardStyle, padding: "10px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", borderColor: "#ddd6fe" }}>
@@ -5367,7 +5415,6 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
                   "Emplacement (optionnel)..."
                 }
                 type={step === 3 ? "number" : "text"}
-                autoFocus
               />
               <button onClick={() => handleScan(scanInput)} disabled={loading}
                 style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, fontSize: 16, cursor: "pointer", minWidth: 56 }}>
