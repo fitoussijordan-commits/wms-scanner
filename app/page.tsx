@@ -5067,7 +5067,7 @@ interface WmsPaletteLigne {
   created_at: string; updated_at?: string;
 }
 
-type PaletteView = "scan" | "lookup";
+type PaletteView = "scan" | "lookup" | "stock";
 
 function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   onBack: () => void;
@@ -5087,6 +5087,10 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [editQty, setEditQty] = useState("");
   const [editEmpl, setEditEmpl] = useState(false);
   const [editEmplValue, setEditEmplValue] = useState("");
+  const [sortingLigne, setSortingLigne] = useState<number | null>(null);
+  const [sortQty, setSortQty] = useState("");
+  const [stockData, setStockData] = useState<{ ref: string; name: string; odoo: number; supabase: number; picking: number }[]>([]);
+  const [stockLoading, setStockLoading] = useState(false);
 
   // Scan step: 0=scan palette, 1=scan ref, 2=lot, 3=qty, 4=emplacement
   const [step, setStep] = useState(0);
@@ -5297,6 +5301,60 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     setLoading(false);
   };
 
+  // Sortir X unités d'une ligne palette → décrémente Supabase
+  const sortirVersPicking = async (ligneId: number, qtySortie: number) => {
+    if (qtySortie <= 0 || !currentPalette) return;
+    setLoading(true);
+    try {
+      const ligne = lignes.find(l => l.id === ligneId);
+      if (!ligne) throw new Error("Ligne introuvable");
+      const newQty = ligne.qty - qtySortie;
+      await palUpdateQty(ligneId, Math.max(0, newQty));
+      const { palette: p, lignes: ls } = await palDetail(currentPalette.id);
+      setCurrentPalette(p); setLignes(ls);
+      setSortingLigne(null); setSortQty("");
+      showSuccess(`✓ ${qtySortie} sorti${qtySortie > 1 ? "s" : ""} vers picking`);
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  // Charger stock théorique picking = Odoo total - Supabase total par ref
+  const loadStockPicking = async () => {
+    if (!session) return;
+    setStockLoading(true); setError("");
+    try {
+      // 1. Charger toutes les palettes actives depuis Supabase
+      const palettes = await palLoad("actif");
+      const supaMap: Record<string, { qty: number; name: string }> = {};
+      for (const pal of palettes) {
+        const { lignes: ls } = await palDetail(pal.id);
+        for (const l of ls) {
+          if (!supaMap[l.odoo_ref]) supaMap[l.odoo_ref] = { qty: 0, name: l.product_name };
+          supaMap[l.odoo_ref].qty += l.qty;
+        }
+      }
+      // 2. Pour chaque ref, chercher le stock Odoo total
+      const refs = Object.keys(supaMap);
+      const result: typeof stockData = [];
+      for (const ref of refs) {
+        try {
+          const prods = await odoo.searchRead(session, "product.product", [["default_code", "=", ref]], ["id", "name"], 1);
+          if (prods.length > 0) {
+            const quants = await odoo.searchRead(session, "stock.quant",
+              [["product_id", "=", prods[0].id], ["location_id.usage", "=", "internal"]],
+              ["quantity"], 100);
+            const odooTotal = quants.reduce((s: number, q: any) => s + (q.quantity || 0), 0);
+            const supaTotal = supaMap[ref].qty;
+            result.push({ ref, name: supaMap[ref].name, odoo: odooTotal, supabase: supaTotal, picking: Math.max(0, odooTotal - supaTotal) });
+          }
+        } catch {}
+      }
+      result.sort((a, b) => b.picking - a.picking);
+      setStockData(result);
+    } catch (e: any) { setError(e.message); }
+    setStockLoading(false);
+  };
+
   const StepBar = () => (
     <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
       {stepLabels.map((label, i) => (
@@ -5317,7 +5375,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   return (
     <div>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
@@ -5325,10 +5383,19 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
           <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Palettes WMS</div>
           {currentPalette && <div style={{ fontSize: 12, color: "#7c3aed", fontWeight: 700 }}>{currentPalette.numero} · {lignes.length} réf</div>}
         </div>
-        <button onClick={() => { setView(view === "lookup" ? "scan" : "lookup"); setLookupResults([]); setError(""); }}
-          style={{ background: view === "lookup" ? "#7c3aed" : C.bg, color: view === "lookup" ? "#fff" : C.textSec, border: `1px solid ${view === "lookup" ? "#7c3aed" : C.border}`, borderRadius: 10, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-          {view === "lookup" ? "← Scanner" : "🔍 Recherche"}
-        </button>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", background: C.white, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 14 }}>
+        {([["scan", "📦 Scanner"], ["lookup", "🔍 Recherche"], ["stock", "📊 Picking"]] as const).map(([id, label]) => (
+          <button key={id} onClick={() => { setView(id); setError(""); }}
+            style={{ flex: 1, padding: "10px 0", fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "inherit", transition: "all .15s",
+              background: view === id ? "#7c3aed" : "transparent",
+              color: view === id ? "#fff" : C.textSec,
+            }}>
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* Messages */}
@@ -5551,9 +5618,22 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
                           <button onClick={async () => { const nq = parseFloat(editQty); if (nq > 0) { await palUpdateQty(l.id, nq); const { lignes: ls } = await palDetail(currentPalette!.id); setLignes(ls); } setEditingLigne(null); }}
                             style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: C.greenSoft, color: C.green, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>✓</button>
                         </>
+                      ) : sortingLigne === l.id ? (
+                        <>
+                          <input style={{ width: 60, padding: "4px 6px", border: `1.5px solid ${C.orange}`, borderRadius: 6, fontSize: 14, fontWeight: 700, textAlign: "center" as const, fontFamily: "inherit" }}
+                            value={sortQty} onChange={e => setSortQty(e.target.value)} type="number" inputMode="numeric"
+                            placeholder={l.packaging_qty ? `× ${l.packaging_qty}` : "qty"}
+                            onKeyDown={e => { if (e.key === "Enter") { const n = parseFloat(sortQty); const total = l.packaging_qty && l.packaging_qty > 1 ? n * l.packaging_qty : n; if (total > 0) sortirVersPicking(l.id, total); } }} />
+                          <button onClick={() => { const n = parseFloat(sortQty); const total = l.packaging_qty && l.packaging_qty > 1 ? n * l.packaging_qty : n; if (total > 0) sortirVersPicking(l.id, total); }}
+                            style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: C.orangeSoft, color: C.orange, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>→</button>
+                          <button onClick={() => { setSortingLigne(null); setSortQty(""); }}
+                            style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: C.bg, color: C.textMuted, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+                        </>
                       ) : (
                         <>
-                          <button onClick={() => { setEditingLigne(l.id); setEditQty(String(l.qty)); }}
+                          <button onClick={() => { setSortingLigne(l.id); setSortQty(""); setEditingLigne(null); }}
+                            style={{ padding: "3px 8px", borderRadius: 6, border: "none", background: C.orangeSoft, color: C.orange, cursor: "pointer", fontSize: 10, fontWeight: 700 }}>📤</button>
+                          <button onClick={() => { setEditingLigne(l.id); setEditQty(String(l.qty)); setSortingLigne(null); }}
                             style={{ fontSize: 16, fontWeight: 800, color: C.text, background: "none", border: "none", cursor: "pointer", padding: "2px 4px" }}>{l.qty}</button>
                           <button onClick={async () => { await palUpdateQty(l.id, 0); const { lignes: ls } = await palDetail(currentPalette!.id); setLignes(ls); }}
                             style={{ width: 24, height: 24, borderRadius: 6, border: "none", background: C.redSoft, color: C.red, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
@@ -5561,8 +5641,55 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
                       )}
                     </div>
                   </div>
+                  {sortingLigne === l.id && l.packaging_qty && l.packaging_qty > 1 && sortQty && (
+                    <div style={{ fontSize: 11, color: C.orange, fontWeight: 600, marginTop: 4, textAlign: "right" as const }}>
+                      {sortQty} colis × {l.packaging_qty} = {parseFloat(sortQty || "0") * l.packaging_qty} unités à sortir
+                    </div>
+                  )}
                 </div>
               ))}
+            </Section>
+          )}
+        </div>
+      )}
+
+      {/* ── STOCK PICKING VIEW ── */}
+      {view === "stock" && (
+        <div>
+          <Section>
+            <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="2.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>} title="Stock picking théorique" sub="Odoo total − Palettes WMS = Picking" />
+            <button onClick={loadStockPicking} disabled={stockLoading}
+              style={{ width: "100%", padding: 12, background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: stockLoading ? "wait" : "pointer", marginBottom: 14 }}>
+              {stockLoading ? "Calcul en cours..." : "🔄 Calculer le stock picking"}
+            </button>
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12 }}>
+              Stock Odoo (emplacements internes) − Stock palettes WMS (actives) = Ce qui reste en picking
+            </div>
+          </Section>
+
+          {stockData.length > 0 && (
+            <Section>
+              {/* Header */}
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `2px solid ${C.border}`, fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const }}>
+                <div style={{ flex: 1 }}>Réf</div>
+                <div style={{ width: 55, textAlign: "right" as const }}>Odoo</div>
+                <div style={{ width: 55, textAlign: "right" as const }}>Palettes</div>
+                <div style={{ width: 55, textAlign: "right" as const, color: C.orange }}>Picking</div>
+              </div>
+              {stockData.map((s, i) => (
+                <div key={s.ref} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < stockData.length - 1 ? `1px solid ${C.border}` : "" }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{s.ref}</div>
+                    <div style={{ fontSize: 11, color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{s.name}</div>
+                  </div>
+                  <div style={{ width: 55, textAlign: "right" as const, fontSize: 13, fontWeight: 600, color: C.textSec }}>{s.odoo}</div>
+                  <div style={{ width: 55, textAlign: "right" as const, fontSize: 13, fontWeight: 600, color: "#7c3aed" }}>{s.supabase}</div>
+                  <div style={{ width: 55, textAlign: "right" as const, fontSize: 14, fontWeight: 800, color: s.picking > 0 ? C.orange : C.green }}>{s.picking}</div>
+                </div>
+              ))}
+              <div style={{ marginTop: 12, padding: "10px 14px", background: C.orangeSoft, border: `1px solid ${C.orangeBorder}`, borderRadius: 10, fontSize: 12, color: C.orange, fontWeight: 600 }}>
+                Total picking estimé : {stockData.reduce((s, d) => s + d.picking, 0)} unités sur {stockData.filter(d => d.picking > 0).length} réf
+              </div>
             </Section>
           )}
         </div>
