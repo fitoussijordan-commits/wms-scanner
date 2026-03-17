@@ -5061,7 +5061,7 @@ function PalettesScreen({ onBack, session, printerId }: {
           : searchResults.map((r, i) => (
             <div key={i} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 8 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div style={{ fontWeight: 700, color: C.purple, fontSize: 15 }}>{r.palette_numero}</div>
+                <div style={{ fontWeight: 700, color: "#7c3aed", fontSize: 15 }}>{r.palette_numero}</div>
                 <div style={{ fontSize: 12, color: C.textMuted }}>{r.palette_emplacement || "—"}</div>
               </div>
               <div style={{ fontSize: 13, color: C.text, marginTop: 4 }}>{r.product_name}</div>
@@ -5087,7 +5087,7 @@ function PalettesScreen({ onBack, session, printerId }: {
           <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Palettes WMS</div>
           <div style={{ fontSize: 12, color: C.textMuted }}>{palettes.length} palette{palettes.length > 1 ? "s" : ""}</div>
         </div>
-        <button onClick={createPalette} disabled={loading} style={{ background: C.purple, color: "#fff", border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+        <button onClick={createPalette} disabled={loading} style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, padding: "10px 16px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
           + Nouvelle
         </button>
       </div>
@@ -5095,7 +5095,7 @@ function PalettesScreen({ onBack, session, printerId }: {
       {error && <div style={{ background: C.redSoft, border: `1px solid ${C.redBorder}`, borderRadius: 10, padding: "10px 14px", color: C.red, fontSize: 13, marginBottom: 12 }} onClick={() => setError("")}>{error} ✕</div>}
 
       {/* Scan palette */}
-      <input style={{ ...inputStyle, borderColor: C.purple, marginBottom: 10 }}
+      <input style={{ ...inputStyle, borderColor: "#7c3aed", marginBottom: 10 }}
         value={scanInput}
         onChange={e => setScanInput(e.target.value)}
         onKeyDown={e => { if (e.key === "Enter" && scanInput.trim()) handleScan(scanInput.trim()); }}
@@ -5113,7 +5113,7 @@ function PalettesScreen({ onBack, session, printerId }: {
       {/* Filtre statut */}
       <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
         {["actif", "archive", "expedie"].map(s => (
-          <button key={s} onClick={() => setStatut(s)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", border: "none", background: statut === s ? C.purple : C.bg, color: statut === s ? "#fff" : C.textSec }}>
+          <button key={s} onClick={() => setStatut(s)} style={{ flex: 1, padding: "8px 0", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", border: "none", background: statut === s ? "#7c3aed" : C.bg, color: statut === s ? "#fff" : C.textSec }}>
             {s.charAt(0).toUpperCase() + s.slice(1)}
           </button>
         ))}
@@ -5128,7 +5128,7 @@ function PalettesScreen({ onBack, session, printerId }: {
           <div key={p.id} onClick={() => openPalette(p)}
             style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 8, cursor: "pointer", boxShadow: C.shadow }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontWeight: 800, fontSize: 16, color: C.purple }}>{p.numero}</div>
+              <div style={{ fontWeight: 800, fontSize: 16, color: "#7c3aed" }}>{p.numero}</div>
               <div style={{ fontSize: 11, color: C.textMuted }}>{age === 0 ? "Aujourd'hui" : `Il y a ${age}j`}</div>
             </div>
             <div style={{ fontSize: 12, color: C.textSec, marginTop: 4, display: "flex", gap: 12 }}>
