@@ -611,12 +611,18 @@ export default function Page() {
   const pickingMoveLinesRef = useRef<any[]>([]);
   const selectedPickingRef = useRef<any>(null);
 
+  // Wrapper: updates both state and ref immediately (no async useEffect delay)
+  const updatePrepStep = (val: typeof prepStep | ((prev: typeof prepStep) => typeof prepStep)) => {
+    const newVal = typeof val === "function" ? val(prepStepRef.current) : val;
+    prepStepRef.current = newVal;
+    setPrepStep(newVal);
+  };
+
   // Print modal
   const [printReq, setPrintReq] = useState<PrintRequest | null>(null);
   useEffect(() => { _setPrintReq = setPrintReq; return () => { _setPrintReq = null; }; }, []);
 
   // Sync refs with state
-  useEffect(() => { prepStepRef.current = prepStep; }, [prepStep]);
   useEffect(() => { pickingMoveLinesRef.current = pickingMoveLines; }, [pickingMoveLines]);
   useEffect(() => { selectedPickingRef.current = selectedPicking; }, [selectedPicking]);
 
@@ -905,7 +911,7 @@ export default function Page() {
           // Lock on first pending line at this location
           const ml = pending[0];
           const remaining = (ml.reserved_uom_qty || 0) - (ml.qty_done || 0);
-          setPrepStep({
+          updatePrepStep({
             locId, locName: r.data.name, lineId: ml.id,
             productName: ml.product_id[1], lotName: ml.lot_id?.[1] || undefined,
             remaining,
@@ -934,7 +940,7 @@ export default function Page() {
         lotName = r.data.lot.name;
       } else if (r.type === "location") {
         // Re-scanning a location while step is active → reset step and re-process
-        setPrepStep(null);
+        updatePrepStep(null);
         doPrepScan(code);
         return;
       } else {
@@ -1011,14 +1017,14 @@ export default function Page() {
         m.location_id && m.location_id[0] === currentStep!.locId && (m.qty_done || 0) < (m.reserved_uom_qty || 0)
       );
       if (morePending.length === 0) {
-        setPrepStep(null);
+        updatePrepStep(null);
         showToast(`✓ Emplacement ${currentStep!.locName} terminé`);
       } else if (remaining <= 0) {
         const next = morePending[0];
         const nextRemaining = (next.reserved_uom_qty || 0) - (next.qty_done || 0);
-        setPrepStep({ locId: currentStep!.locId, locName: currentStep!.locName, lineId: next.id, productName: next.product_id[1], lotName: next.lot_id?.[1] || undefined, remaining: nextRemaining });
+        updatePrepStep({ locId: currentStep!.locId, locName: currentStep!.locName, lineId: next.id, productName: next.product_id[1], lotName: next.lot_id?.[1] || undefined, remaining: nextRemaining });
       } else {
-        setPrepStep(prev => prev ? { ...prev, lineId: ml.id, remaining } : null);
+        updatePrepStep(prev => prev ? { ...prev, lineId: ml.id, remaining } : null);
       }
     } catch (e: any) { setError(e.message); vibrateError(); }
   };
@@ -1043,7 +1049,7 @@ export default function Page() {
       const done = new Set(Array.from(prepScanned));
       pending.forEach((ml: any) => done.add(ml.id));
       setPrepScanned(done);
-      setPrepStep(null);
+      updatePrepStep(null);
       vibrateSuccess();
       showToast(`✓ Tout pris à ${prepStep.locName}`);
     } catch (e: any) { setError(e.message); }
