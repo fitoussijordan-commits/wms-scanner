@@ -688,6 +688,18 @@ export default function Page() {
     if (!code || !session) return;
     setLoading(true); setError(""); clearLookup();
     try {
+      // ── Palette WMS — détection directe via Supabase ──
+      if (/^Pal-\d+$/i.test(code.trim())) {
+        const pal = await palFind(code.trim());
+        if (pal) {
+          const { palette, lignes } = await palDetail(pal.id);
+          setLookupResult({ palette, lignes });
+          setLookupType("palette");
+          vibrateSuccess();
+          setLoading(false);
+          return;
+        }
+      }
       const r = await odoo.smartScan(session, code);
       if (r.type === "product") { setLookupResult(r.data); setLookupType("product"); setLookupStock(await odoo.getAllStockForProduct(session, r.data.id)); vibrateSuccess(); }
       else if (r.type === "lot") { setLookupResult(r.data); setLookupType("lot"); if (r.data.product) setLookupStock(await odoo.getStockForLot(session, r.data.lot.id, r.data.product.id)); vibrateSuccess(); }
@@ -1168,13 +1180,14 @@ export default function Page() {
         {screen === "home" && <>
           <Section>
             <SectionHeader icon={scanIcon} title="Recherche rapide" sub="Scanne ou tape un code" />
-            <InputBar onSubmit={doLookup} placeholder="Code-barres, référence, lot, emplacement..." />
+            <InputBar onSubmit={doLookup} placeholder="Code-barres, réf, lot, emplacement, Pal-XXXX..." />
           </Section>
 
           {error && <Alert type="error">{error}</Alert>}
           {lookupType === "product" && lookupResult && <ProductResult product={lookupResult} stock={lookupStock} onRename={rename} />}
           {lookupType === "lot" && lookupResult && <LotResult lot={lookupResult.lot} product={lookupResult.product} stock={lookupStock} />}
           {lookupType === "location" && lookupResult && <LocationResult location={lookupResult} stock={lookupStock} onRename={rename} />}
+          {lookupType === "palette" && lookupResult && <PaletteResult data={lookupResult} />}
 
           <div style={{ marginTop: 16 }}>
             <BigButton icon={transferIcon("#fff")} label="Transfert interne" sub="Déplacer du stock entre emplacements" onClick={() => { resetTransfer(); setScreen("transfer"); }} />
@@ -2837,6 +2850,58 @@ function LocationResult({ location, stock, onRename }: { location: any; stock: a
 // ============================================
 // LOGIN
 // ============================================
+
+// ── Palette lookup result (home screen free search) ──
+function PaletteResult({ data }: { data: { palette: WmsPalette; lignes: WmsPaletteLigne[] } }) {
+  const { palette, lignes } = data;
+  const totalQty = lignes.reduce((s, l) => s + l.qty, 0);
+  const statutColors: Record<string, { bg: string; text: string; border: string }> = {
+    actif: { bg: C.greenSoft, text: C.green, border: C.greenBorder },
+    archive: { bg: C.orangeSoft, text: C.orange, border: C.orangeBorder },
+    expedie: { bg: C.blueSoft, text: C.blue, border: C.blueBorder },
+  };
+  const sc = statutColors[palette.statut] || statutColors.actif;
+  return (
+    <Section>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 2 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: "#7c3aed" }}>{palette.numero}</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2, display: "flex", gap: 10, flexWrap: "wrap" as const }}>
+            <span>📍 {palette.emplacement || "Non défini"}</span>
+            <span style={{ background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, borderRadius: 6, padding: "1px 8px", fontSize: 11, fontWeight: 700 }}>
+              {palette.statut}
+            </span>
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 1, borderRadius: 10, overflow: "hidden", marginBottom: 14, marginTop: 12 }}>
+        <StatBox value={lignes.length} label="RÉFS" color="#7c3aed" />
+        <StatBox value={totalQty} label="UNITÉS" color={C.textSec} />
+      </div>
+      {lignes.length === 0
+        ? <div style={{ textAlign: "center", color: C.textMuted, padding: 16, fontSize: 13 }}>Palette vide</div>
+        : <>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Contenu</div>
+          {lignes.map((l, i) => (
+            <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < lignes.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</div>
+                <div style={{ fontSize: 12, color: C.text, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{l.product_name}</div>
+                {l.lot && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>🏷️ {l.lot}{l.expiry_date ? ` · 📅 ${l.expiry_date}` : ""}</div>}
+              </div>
+              <span style={{ fontWeight: 800, fontSize: 15, color: C.text, marginLeft: 8 }}>{l.qty} <span style={{ fontSize: 11, fontWeight: 400, color: C.textMuted }}>{l.unite}</span></span>
+            </div>
+          ))}
+        </>
+      }
+      <div style={{ fontSize: 11, color: C.textMuted, marginTop: 10, textAlign: "right" as const }}>
+        Créée le {new Date(palette.created_at).toLocaleDateString("fr-FR")}
+        {palette.updated_at && ` · Màj ${new Date(palette.updated_at).toLocaleDateString("fr-FR")}`}
+      </div>
+    </Section>
+  );
+}
+
 // ============================================
 // PRINT MODAL — choose quantity before printing
 // ============================================
@@ -4995,7 +5060,7 @@ interface WmsPaletteLigne {
   created_at: string; updated_at?: string;
 }
 
-type PaletteView = "scan" | "detail" | "lookup";
+type PaletteView = "scan" | "lookup";
 
 function PalettesScreen({ onBack, session, getPalettePrinter }: {
   onBack: () => void;
@@ -5020,26 +5085,43 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
 
   // Lookup
   const [lookupInput, setLookupInput] = useState("");
-  const [lookupResult, setLookupResult] = useState<{ palette: WmsPalette; lignes: WmsPaletteLigne[] } | null>(null);
+  const [lookupResults, setLookupResults] = useState<{ palette: WmsPalette; lignes: WmsPaletteLigne[] }[]>([]);
 
   const showSuccess = (msg: string) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(""), 2500); };
 
   const printPalette = async (p: WmsPalette, ls: WmsPaletteLigne[]) => {
     const printId = getPalettePrinter?.();
-    if (!printId) return;
+    if (!printId) { setError("Aucune imprimante palette configurée (Paramètres → Imprimantes)"); return; }
     const zpl = palZPL(p, ls);
-    await fetch("/api/printnode", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ printerId: printId, content: btoa(unescape(encodeURIComponent(zpl))), contentType: "raw_base64", title: p.numero }),
-    }).catch(() => {});
+    try {
+      const res = await fetch("/api/printnode", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ printerId: printId, content: btoa(unescape(encodeURIComponent(zpl))), contentType: "raw_base64", title: p.numero }),
+      });
+      if (!res.ok) throw new Error(`PrintNode ${res.status}`);
+      showSuccess(`🖨️ ${p.numero} envoyée`);
+    } catch (e: any) { setError(`Impression échouée: ${e.message}`); }
   };
 
   const handleScan = async (code: string) => {
-    if (!code.trim()) return;
-    setScanInput("");
-    setError("");
+    if (!code.trim()) {
+      // Step 0 + vide = créer nouvelle palette
+      if (step === 0) {
+        setLoading(true);
+        try {
+          const p = await palCreate();
+          const { lignes: ls } = await palDetail(p.id);
+          setCurrentPalette(p); setLignes(ls); setStep(1);
+          await printPalette(p, ls);
+          showSuccess(`✓ ${p.numero} créée`);
+        } catch (e: any) { setError(e.message); }
+        setLoading(false);
+      }
+      return;
+    }
+    setScanInput(""); setError("");
 
-    // Step 0 — scan palette ou créer nouvelle
+    // Step 0 — scan palette
     if (step === 0) {
       setLoading(true);
       try {
@@ -5048,82 +5130,54 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
           p = await palFind(code.trim());
         }
         if (!p) {
-          // Créer nouvelle palette
           p = await palCreate();
-          await printPalette(p, []);
-          showSuccess(`✓ ${p.numero} créée et imprimée`);
+          const { lignes: ls } = await palDetail(p.id);
+          setCurrentPalette(p); setLignes(ls); setStep(1);
+          await printPalette(p, ls);
+          showSuccess(`✓ ${p.numero} créée`);
         } else {
+          const { lignes: ls } = await palDetail(p.id);
+          setCurrentPalette(p); setLignes(ls); setStep(1);
           showSuccess(`✓ ${p.numero} chargée`);
         }
-        const { lignes: ls } = await palDetail(p.id);
-        setCurrentPalette(p);
-        setLignes(ls);
-        setStep(1);
       } catch (e: any) { setError(e.message); }
       setLoading(false);
       return;
     }
 
-    // Step 1 — scan/saisie référence produit
+    // Step 1 — référence produit
     if (step === 1) {
-      // Try to resolve via Odoo
       if (session) {
         setLoading(true);
         try {
           const r = await odoo.smartScan(session, code.trim());
           if (r.type === "product") {
-            setNewRef(r.data.default_code || code.trim());
-            setNewName(r.data.name);
-            showSuccess(`✓ ${r.data.name}`);
-            setStep(2);
-            setLoading(false);
-            return;
+            setNewRef(r.data.default_code || code.trim()); setNewName(r.data.name);
+            showSuccess(`✓ ${r.data.name}`); setStep(2); setLoading(false); return;
           } else if (r.type === "lot") {
-            setNewRef(r.data.product?.default_code || code.trim());
-            setNewName(r.data.product?.name || "");
-            setNewLot(r.data.lot.name);
-            showSuccess(`✓ Lot ${r.data.lot.name}`);
-            setStep(3); // skip to qty
-            setLoading(false);
-            return;
+            setNewRef(r.data.product?.default_code || code.trim()); setNewName(r.data.product?.name || "");
+            setNewLot(r.data.lot.name); showSuccess(`✓ Lot ${r.data.lot.name}`); setStep(3); setLoading(false); return;
           }
         } catch {}
         setLoading(false);
       }
-      setNewRef(code.trim());
-      setNewName("");
-      showSuccess(`Réf: ${code.trim()}`);
-      setStep(2);
+      setNewRef(code.trim()); setNewName(""); showSuccess(`Réf: ${code.trim()}`); setStep(2);
       return;
     }
 
     // Step 2 — lot
-    if (step === 2) {
-      setNewLot(code.trim());
-      showSuccess(`Lot: ${code.trim()}`);
-      setStep(3);
-      return;
-    }
+    if (step === 2) { setNewLot(code.trim()); showSuccess(`Lot: ${code.trim()}`); setStep(3); return; }
 
-    // Step 3 — qty (scan ou saisie)
+    // Step 3 — qty
     if (step === 3) {
       const n = parseFloat(code.trim());
-      if (!isNaN(n) && n > 0) {
-        setNewQty(String(n));
-        showSuccess(`Qté: ${n}`);
-        setStep(4);
-      } else {
-        setError("Quantité invalide");
-      }
+      if (!isNaN(n) && n > 0) { setNewQty(String(n)); showSuccess(`Qté: ${n}`); setStep(4); }
+      else setError("Quantité invalide");
       return;
     }
 
     // Step 4 — emplacement
-    if (step === 4) {
-      setNewEmplacement(code.trim());
-      showSuccess(`Emplacement: ${code.trim()}`);
-      return;
-    }
+    if (step === 4) { setNewEmplacement(code.trim()); showSuccess(`Emplacement: ${code.trim()}`); return; }
   };
 
   const validateLine = async () => {
@@ -5131,52 +5185,70 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
     setLoading(true);
     try {
       await palUpsert(currentPalette.id, {
-        odoo_ref: newRef.trim(),
-        product_name: newName.trim() || newRef.trim(),
-        lot: newLot.trim() || null,
-        expiry_date: null,
-        qty: parseFloat(newQty) || 1,
-        unite: "unité",
+        odoo_ref: newRef.trim(), product_name: newName.trim() || newRef.trim(),
+        lot: newLot.trim() || null, expiry_date: null, qty: parseFloat(newQty) || 1, unite: "unité",
       });
-      if (newEmplacement.trim()) {
-        await palUpdate(currentPalette.id, { emplacement: newEmplacement.trim() });
-      }
+      if (newEmplacement.trim()) await palUpdate(currentPalette.id, { emplacement: newEmplacement.trim() });
       const { palette: p, lignes: ls } = await palDetail(currentPalette.id);
-      setCurrentPalette(p);
-      setLignes(ls);
+      setCurrentPalette(p); setLignes(ls);
       await printPalette(p, ls);
-      showSuccess("✓ Ligne ajoutée — étiquette imprimée");
-      // Reset for next line
-      setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement("");
-      setStep(1);
+      showSuccess("✓ Ligne ajoutée");
+      setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setStep(1);
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
 
   const handleLookup = async () => {
     if (!lookupInput.trim()) return;
-    setLoading(true);
-    setError("");
+    setLoading(true); setError(""); setLookupResults([]);
     try {
+      // Cherche par numéro de palette
       const p = await palFind(lookupInput.trim());
       if (p) {
         const { palette, lignes } = await palDetail(p.id);
-        setLookupResult({ palette, lignes });
+        setLookupResults([{ palette, lignes }]);
       } else {
-        // Search by ref in all palettes
+        // Cherche par ref produit dans toutes les palettes
         const results = await palSearch(lookupInput.trim());
         if (results.length) {
-          setError(`Trouvé dans ${results.length} palette(s) — affinage nécessaire`);
+          // Grouper par palette
+          const palMap = new Map<number, { palette: WmsPalette; lignes: WmsPaletteLigne[] }>();
+          for (const r of results) {
+            if (!palMap.has(r.palette_id)) {
+              try {
+                const d = await palDetail(r.palette_id);
+                palMap.set(r.palette_id, d);
+              } catch {}
+            }
+          }
+          setLookupResults(Array.from(palMap.values()));
         } else {
-          setError(`"${lookupInput}" introuvable`);
+          setError(`"${lookupInput}" — introuvable`);
         }
       }
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
 
-  const stepLabels = ["Scanner palette", "Scanner référence", "Numéro de lot", "Quantité", "Emplacement"];
-  const stepIcons = ["📦", "🔍", "🏷️", "🔢", "📍"];
+  const stepLabels = ["Palette", "Référence", "Lot", "Quantité", "Emplacement"];
+
+  // ── Rendu du stepper compact ──
+  const StepBar = () => (
+    <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
+      {stepLabels.map((label, i) => (
+        <div key={i} style={{ flex: 1, textAlign: "center" as const }}>
+          <div style={{
+            height: 4, borderRadius: 2, marginBottom: 4,
+            background: i < step ? C.green : i === step ? "#7c3aed" : C.border,
+            transition: "background .2s",
+          }} />
+          <div style={{ fontSize: 10, fontWeight: i === step ? 700 : 500, color: i === step ? "#7c3aed" : i < step ? C.green : C.textMuted }}>
+            {i < step ? "✓" : ""} {label}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 
   return (
     <div>
@@ -5189,109 +5261,108 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
           <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Palettes WMS</div>
           {currentPalette && <div style={{ fontSize: 12, color: "#7c3aed", fontWeight: 700 }}>{currentPalette.numero} · {lignes.length} réf</div>}
         </div>
-        <button onClick={() => setView(view === "lookup" ? "scan" : "lookup")}
-          style={{ background: view === "lookup" ? "#7c3aed" : C.bg, color: view === "lookup" ? "#fff" : C.textSec, border: "none", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-          🔍 Recherche
+        <button onClick={() => { setView(view === "lookup" ? "scan" : "lookup"); setLookupResults([]); setError(""); }}
+          style={{ background: view === "lookup" ? "#7c3aed" : C.bg, color: view === "lookup" ? "#fff" : C.textSec, border: `1px solid ${view === "lookup" ? "#7c3aed" : C.border}`, borderRadius: 10, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {view === "lookup" ? "← Scanner" : "🔍 Recherche"}
         </button>
       </div>
 
       {/* Messages */}
-      {successMsg && <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "10px 14px", color: "#16a34a", fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{successMsg}</div>}
-      {error && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: "10px 14px", color: "#dc2626", fontSize: 13, marginBottom: 10 }} onClick={() => setError("")}>{error} ✕</div>}
+      {successMsg && <Alert type="success">{successMsg}</Alert>}
+      {error && <div style={{ background: C.redSoft, border: `1px solid ${C.redBorder}`, borderRadius: 10, padding: "10px 14px", color: C.red, fontSize: 13, marginBottom: 10, cursor: "pointer" }} onClick={() => setError("")}>{error} ✕</div>}
 
       {/* ── LOOKUP VIEW ── */}
       {view === "lookup" && (
-        <div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <Section>
+          <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>} title="Rechercher" sub="Numéro palette ou référence produit" />
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <input style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed" }}
               value={lookupInput} onChange={e => setLookupInput(e.target.value)}
               onKeyDown={e => e.key === "Enter" && handleLookup()}
-              placeholder="Pal-0001 ou référence produit..." />
+              placeholder="Pal-0001 ou référence produit..." autoFocus />
             <button onClick={handleLookup} disabled={loading}
-              style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 700, cursor: "pointer" }}>
-              {loading ? "..." : "OK"}
+              style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer", fontSize: 14 }}>
+              {loading ? "..." : "→"}
             </button>
           </div>
-          {lookupResult && (
-            <div>
-              <div style={{ background: "#f5f3ff", border: "1.5px solid #ddd6fe", borderRadius: 14, padding: "14px 16px", marginBottom: 12 }}>
-                <div style={{ fontSize: 20, fontWeight: 900, color: "#7c3aed" }}>{lookupResult.palette.numero}</div>
-                <div style={{ fontSize: 12, color: C.textSec, marginTop: 4, display: "flex", gap: 12 }}>
-                  <span>📍 {lookupResult.palette.emplacement || "—"}</span>
-                  <span>📊 {lookupResult.lignes.reduce((s, l) => s + l.qty, 0)} unités</span>
-                  <span style={{ color: lookupResult.palette.statut === "actif" ? "#16a34a" : "#ea580c" }}>
-                    {lookupResult.palette.statut}
-                  </span>
-                </div>
-              </div>
-              {lookupResult.lignes.length === 0
-                ? <div style={{ textAlign: "center", color: C.textMuted, padding: 20 }}>Palette vide</div>
-                : lookupResult.lignes.map(l => (
-                  <div key={l.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", marginBottom: 6 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", fontFamily: "monospace" }}>{l.odoo_ref}</div>
-                        <div style={{ fontSize: 13, color: C.text }}>{l.product_name}</div>
-                        {l.lot && <div style={{ fontSize: 11, color: C.textMuted }}>🏷️ {l.lot}</div>}
-                      </div>
-                      <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>{l.qty}</div>
+          {lookupResults.map(({ palette, lignes: ls }) => {
+            const totalQ = ls.reduce((s, l) => s + l.qty, 0);
+            return (
+              <div key={palette.id} style={{ background: C.white, border: `1.5px solid #ddd6fe`, borderRadius: 14, padding: "14px 16px", marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: "#7c3aed" }}>{palette.numero}</div>
+                    <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>
+                      📍 {palette.emplacement || "—"} · {ls.length} réf · {totalQ} unités ·{" "}
+                      <span style={{ color: palette.statut === "actif" ? C.green : C.orange, fontWeight: 600 }}>{palette.statut}</span>
                     </div>
                   </div>
-                ))
-              }
-              <button onClick={() => { setLookupResult(null); setLookupInput(""); }}
-                style={{ width: "100%", marginTop: 8, padding: 10, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 13, color: C.textSec }}>
-                Effacer
-              </button>
-            </div>
-          )}
-        </div>
+                  <button onClick={() => printPalette(palette, ls)}
+                    style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", cursor: "pointer", flexShrink: 0 }}>
+                    🖨️
+                  </button>
+                </div>
+                {ls.length === 0
+                  ? <div style={{ textAlign: "center", color: C.textMuted, padding: 12, fontSize: 13 }}>Palette vide</div>
+                  : ls.map((l, i) => (
+                    <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</span>
+                        <span style={{ color: C.text, marginLeft: 6 }}>{l.product_name}</span>
+                        {l.lot && <span style={{ color: C.textMuted, marginLeft: 6 }}>🏷️ {l.lot}</span>}
+                      </div>
+                      <span style={{ fontWeight: 800, fontSize: 14, color: C.text, marginLeft: 8, flexShrink: 0 }}>{l.qty}</span>
+                    </div>
+                  ))
+                }
+              </div>
+            );
+          })}
+        </Section>
       )}
 
       {/* ── SCAN VIEW ── */}
       {view === "scan" && (
         <div>
-          {/* Step indicators */}
-          <div style={{ display: "flex", gap: 6, marginBottom: 16, overflowX: "auto" as const }}>
-            {stepLabels.map((label, i) => (
-              <div key={i} style={{ flex: "0 0 auto", display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 4, opacity: i > step ? 0.3 : 1 }}>
-                <div style={{ width: 32, height: 32, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16,
-                  background: i < step ? "#16a34a" : i === step ? "#7c3aed" : C.border,
-                  color: i <= step ? "#fff" : C.textMuted }}>
-                  {i < step ? "✓" : stepIcons[i]}
-                </div>
-                <div style={{ fontSize: 10, fontWeight: 600, color: i === step ? "#7c3aed" : C.textMuted, textAlign: "center" as const, maxWidth: 56 }}>{label}</div>
-              </div>
-            ))}
-          </div>
+          <StepBar />
 
-          {/* Current palette info */}
+          {/* Current palette badge */}
           {currentPalette && (
-            <div style={{ background: "#f5f3ff", border: "1.5px solid #ddd6fe", borderRadius: 12, padding: "10px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ fontWeight: 800, fontSize: 16, color: "#7c3aed" }}>{currentPalette.numero}</div>
-              <button onClick={() => { setCurrentPalette(null); setLignes([]); setStep(0); setNewRef(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); }}
-                style={{ fontSize: 11, color: "#7c3aed", background: "none", border: "1px solid #ddd6fe", borderRadius: 6, padding: "4px 8px", cursor: "pointer" }}>
-                Changer
-              </button>
+            <div style={{ ...cardStyle, padding: "10px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", borderColor: "#ddd6fe" }}>
+              <div>
+                <span style={{ fontWeight: 800, fontSize: 16, color: "#7c3aed" }}>{currentPalette.numero}</span>
+                {currentPalette.emplacement && <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 8 }}>📍 {currentPalette.emplacement}</span>}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => currentPalette && printPalette(currentPalette, lignes)}
+                  style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>
+                  🖨️
+                </button>
+                <button onClick={() => { setCurrentPalette(null); setLignes([]); setStep(0); setNewRef(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); }}
+                  style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.textSec }}>
+                  ✕
+                </button>
+              </div>
             </div>
           )}
 
           {/* Scan input */}
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed", marginBottom: 6 }}>
-              {stepIcons[step]} {stepLabels[step]}
-              {step === 0 && <span style={{ color: C.textMuted, fontWeight: 400 }}> — scanner ou laisser vide pour créer nouvelle</span>}
+          <Section>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#7c3aed", marginBottom: 8 }}>
+              {["📦", "🔍", "🏷️", "🔢", "📍"][step]} {stepLabels[step]}
+              {step === 0 && <span style={{ color: C.textMuted, fontWeight: 400 }}> — scanner ou Entrée pour créer</span>}
+              {loading && <Spinner />}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <input
-                style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed", fontSize: 16 }}
+                style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed", fontSize: 15 }}
                 value={scanInput}
                 onChange={e => setScanInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") { handleScan(scanInput); } }}
+                onKeyDown={e => { if (e.key === "Enter") handleScan(scanInput); }}
                 placeholder={
-                  step === 0 ? "Scanner Pal-XXXX ou appuyer Entrée..." :
-                  step === 1 ? "Scanner code-barres produit..." :
-                  step === 2 ? "Scanner numéro de lot..." :
+                  step === 0 ? "Pal-XXXX ou Entrée pour créer..." :
+                  step === 1 ? "Code-barres produit..." :
+                  step === 2 ? "Numéro de lot..." :
                   step === 3 ? "Quantité..." :
                   "Emplacement (optionnel)..."
                 }
@@ -5299,35 +5370,35 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
                 autoFocus
               />
               <button onClick={() => handleScan(scanInput)} disabled={loading}
-                style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 700, fontSize: 16, cursor: "pointer", minWidth: 56 }}>
-                {loading ? "..." : "→"}
+                style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, fontSize: 16, cursor: "pointer", minWidth: 56 }}>
+                →
               </button>
             </div>
-            {/* Skip buttons for optional steps */}
-            {(step === 2 || step === 4) && (
-              <button onClick={() => { if (step === 2) { setNewLot(""); setStep(3); } else validateLine(); }}
-                style={{ marginTop: 8, width: "100%", padding: 10, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 13, color: C.textSec }}>
-                {step === 2 ? "⏭ Passer (sans lot)" : "✓ Valider sans emplacement"}
-              </button>
-            )}
-            {step === 4 && newEmplacement && (
-              <button onClick={validateLine} disabled={loading}
-                style={{ marginTop: 8, width: "100%", padding: 12, background: "#16a34a", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>
-                {loading ? "..." : "✓ Valider la ligne"}
+            {/* Skip / confirm buttons */}
+            {step === 2 && (
+              <button onClick={() => { setNewLot(""); setStep(3); }}
+                style={{ marginTop: 8, width: "100%", padding: 10, ...secondaryBtn, fontSize: 13 }}>
+                ⏭ Passer (sans lot)
               </button>
             )}
             {step === 3 && scanInput && (
               <button onClick={() => handleScan(scanInput)} disabled={loading}
-                style={{ marginTop: 8, width: "100%", padding: 12, background: "#16a34a", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>
+                style={{ marginTop: 8, width: "100%", padding: 12, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>
                 Confirmer {scanInput} unités →
               </button>
             )}
-          </div>
+            {step === 4 && (
+              <button onClick={validateLine} disabled={loading}
+                style={{ marginTop: 8, width: "100%", padding: 12, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>
+                {loading ? "..." : `✓ Valider la ligne${newEmplacement ? "" : " (sans emplacement)"}`}
+              </button>
+            )}
+          </Section>
 
           {/* Summary of current entry */}
           {step > 1 && (
-            <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 13 }}>
-              {newRef && <div><strong>Réf:</strong> {newRef} {newName && `— ${newName}`}</div>}
+            <div style={{ ...cardStyle, padding: "10px 14px", marginBottom: 12, fontSize: 13 }}>
+              {newRef && <div><strong>Réf:</strong> {newRef} {newName && <span style={{ color: C.textMuted }}>— {newName}</span>}</div>}
               {newLot && <div><strong>Lot:</strong> {newLot}</div>}
               {step >= 4 && <div><strong>Qté:</strong> {newQty}</div>}
               {newEmplacement && <div><strong>Emplacement:</strong> {newEmplacement}</div>}
@@ -5336,28 +5407,25 @@ function PalettesScreen({ onBack, session, getPalettePrinter }: {
 
           {/* Lignes déjà ajoutées */}
           {lignes.length > 0 && (
-            <div>
+            <Section>
               <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase" as const }}>
-                Contenu ({lignes.length})
+                Contenu ({lignes.length} réf · {lignes.reduce((s, l) => s + l.qty, 0)} unités)
               </div>
               {lignes.map(l => (
-                <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 6 }}>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", fontFamily: "monospace" }}>{l.odoo_ref}</div>
+                <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</div>
+                    <div style={{ fontSize: 12, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{l.product_name}</div>
                     {l.lot && <div style={{ fontSize: 11, color: C.textMuted }}>🏷️ {l.lot}</div>}
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                     <span style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{l.qty}</span>
                     <button onClick={async () => { await palUpdateQty(l.id, 0); const { lignes: ls } = await palDetail(currentPalette!.id); setLignes(ls); }}
-                      style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: "#fef2f2", color: "#dc2626", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+                      style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: C.redSoft, color: C.red, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
                   </div>
                 </div>
               ))}
-              <button onClick={() => currentPalette && printPalette(currentPalette, lignes)}
-                style={{ width: "100%", marginTop: 8, padding: 12, background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#7c3aed" }}>
-                🖨️ Réimprimer étiquette
-              </button>
-            </div>
+            </Section>
           )}
         </div>
       )}
