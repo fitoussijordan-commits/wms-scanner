@@ -4952,6 +4952,9 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 // ══════════════════════════════════════════════════════
 // MAIN SCREEN
 // ══════════════════════════════════════════════════════
+type WmsPalette = supaPalettes.WmsPalette;
+type WmsPaletteLigne = supaPalettes.WmsPaletteLigne;
+
 function PalettesScreen({ onBack, session, printerId }: {
   onBack: () => void;
   session?: any;
