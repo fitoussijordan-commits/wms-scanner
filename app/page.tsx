@@ -2913,19 +2913,30 @@ function PaletteResult({ data, session }: { data: { palette: WmsPalette; lignes:
           {lignes.map((l, i) => {
             const pkg = getPkg(l);
             return (
-              <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < lignes.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</div>
-                  <div style={{ fontSize: 12, color: C.text, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{l.product_name}</div>
-                  {l.lot && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>🏷️ {l.lot}{l.expiry_date ? ` · 📅 ${l.expiry_date}` : ""}</div>}
-                </div>
-                <div style={{ textAlign: "right" as const, flexShrink: 0, marginLeft: 8 }}>
-                  <div style={{ fontWeight: 800, fontSize: 15, color: C.text }}>{l.qty}</div>
-                  {pkg && pkg > 1 ? (
-                    <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 600 }}>{Math.round(l.qty / pkg)} colis de {pkg}</div>
-                  ) : (
-                    <div style={{ fontSize: 10, color: C.textMuted }}>{l.unite || "unité"}</div>
-                  )}
+              <div key={l.id} style={{ padding: "7px 0", borderBottom: i < lignes.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <button onClick={() => requestPrint({ type: "product", title: l.product_name, barcode: l.odoo_ref, ref: l.odoo_ref, productName: l.product_name })}
+                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                      {printerSmallIcon} <span style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace", fontSize: 12 }}>{l.odoo_ref}</span>
+                    </button>
+                    <div style={{ fontSize: 12, color: C.text, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{l.product_name}</div>
+                    {l.lot && (
+                      <button onClick={() => requestPrint({ type: "lot", title: `${l.lot} — ${l.product_name}`, barcode: l.lot!, lotName: l.lot!, productName: l.product_name, expiryDate: l.expiry_date || "" })}
+                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 3, marginTop: 2 }}>
+                        {printerSmallIcon} <span style={{ fontSize: 11, color: C.blue, fontWeight: 600 }}>🏷️ {l.lot}</span>
+                        {l.expiry_date && <span style={{ fontSize: 10, color: C.textMuted }}> · 📅 {l.expiry_date}</span>}
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ textAlign: "right" as const, flexShrink: 0, marginLeft: 8 }}>
+                    <div style={{ fontWeight: 800, fontSize: 15, color: C.text }}>{l.qty}</div>
+                    {pkg && pkg > 1 ? (
+                      <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 600 }}>{Math.round(l.qty / pkg)} colis de {pkg}</div>
+                    ) : (
+                      <div style={{ fontSize: 10, color: C.textMuted }}>{l.unite || "unité"}</div>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -5079,6 +5090,8 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [scanInput, setScanInput] = useState("");
   const [currentPalette, setCurrentPalette] = useState<WmsPalette | null>(null);
   const [lignes, setLignes] = useState<WmsPaletteLigne[]>([]);
+  const currentPaletteRef = useRef<WmsPalette | null>(null);
+  const setCurPalette = (p: WmsPalette | null) => { currentPaletteRef.current = p; setCurPalette(p); };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
@@ -5094,6 +5107,8 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
 
   // Scan step: 0=scan palette, 1=scan ref, 2=lot, 3=qty, 4=emplacement
   const [step, setStep] = useState(0);
+  const stepRef = useRef(0);
+  const updateStep = (v: number) => { stepRef.current = v; updateStep(v); };
   const [newRef, setNewRef] = useState("");
   const [newName, setNewName] = useState("");
   const [newLot, setNewLot] = useState("");
@@ -5142,12 +5157,12 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const handleScan = async (code: string) => {
     if (!code.trim()) {
       // Step 0 + vide = créer nouvelle palette
-      if (step === 0) {
+      if (stepRef.current === 0) {
         setLoading(true);
         try {
           const p = await palCreate();
           const { lignes: ls } = await palDetail(p.id);
-          setCurrentPalette(p); setLignes(ls); setStep(1);
+          setCurPalette(p); setLignes(ls); updateStep(1);
           await printPalette(p, ls);
           showSuccess(`✓ ${p.numero} créée`);
         } catch (e: any) { setError(e.message); }
@@ -5157,8 +5172,25 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     }
     setScanInput(""); setError("");
 
+    // ── Si on scanne un numéro de palette à n'importe quel step → reset et ouvrir ──
+    if (/^Pal-\d+$/i.test(code.trim()) && stepRef.current !== 0) {
+      setLoading(true);
+      try {
+        const p = await palFind(code.trim());
+        if (p) {
+          const { lignes: ls } = await palDetail(p.id);
+          setCurPalette(p); setLignes(ls); updateStep(1);
+          setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis");
+          showSuccess(`✓ ${p.numero} chargée`);
+          setLoading(false);
+          return;
+        }
+      } catch {}
+      setLoading(false);
+    }
+
     // Step 0 — scan palette
-    if (step === 0) {
+    if (stepRef.current === 0) {
       setLoading(true);
       try {
         let p: WmsPalette | null = null;
@@ -5168,12 +5200,12 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
         if (!p) {
           p = await palCreate();
           const { lignes: ls } = await palDetail(p.id);
-          setCurrentPalette(p); setLignes(ls); setStep(1);
+          setCurPalette(p); setLignes(ls); updateStep(1);
           await printPalette(p, ls);
           showSuccess(`✓ ${p.numero} créée`);
         } else {
           const { lignes: ls } = await palDetail(p.id);
-          setCurrentPalette(p); setLignes(ls); setStep(1);
+          setCurPalette(p); setLignes(ls); updateStep(1);
           showSuccess(`✓ ${p.numero} chargée`);
         }
       } catch (e: any) { setError(e.message); }
@@ -5182,7 +5214,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     }
 
     // Step 1 — référence produit
-    if (step === 1) {
+    if (stepRef.current === 1) {
       setPackaging(null); setQtyMode("colis");
       if (session) {
         setLoading(true);
@@ -5193,7 +5225,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
             const pkg = await fetchPackaging(r.data.id);
             setPackaging(pkg);
             showSuccess(`✓ ${r.data.name}${pkg ? ` (cond. ${pkg})` : ""}`);
-            setStep(2); setLoading(false); return;
+            updateStep(2); setLoading(false); return;
           } else if (r.type === "lot") {
             setNewRef(r.data.product?.default_code || code.trim()); setNewName(r.data.product?.name || "");
             setNewLot(r.data.lot.name);
@@ -5201,26 +5233,26 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
               const pkg = await fetchPackaging(r.data.product.id);
               setPackaging(pkg);
             }
-            showSuccess(`✓ Lot ${r.data.lot.name}`); setStep(3); setLoading(false); return;
+            showSuccess(`✓ Lot ${r.data.lot.name}`); updateStep(3); setLoading(false); return;
           }
         } catch {}
         setLoading(false);
       }
-      setNewRef(code.trim()); setNewName(""); showSuccess(`Réf: ${code.trim()}`); setStep(2);
+      setNewRef(code.trim()); setNewName(""); showSuccess(`Réf: ${code.trim()}`); updateStep(2);
       return;
     }
 
     // Step 2 — lot
-    if (step === 2) { setNewLot(code.trim()); showSuccess(`Lot: ${code.trim()}`); setStep(3); return; }
+    if (stepRef.current === 2) { setNewLot(code.trim()); showSuccess(`Lot: ${code.trim()}`); updateStep(3); return; }
 
     // Step 3 — qty (colis × packaging ou libre)
-    if (step === 3) {
+    if (stepRef.current === 3) {
       const n = parseFloat(code.trim());
       if (!isNaN(n) && n > 0) {
         const totalQty = (packaging && qtyMode === "colis") ? n * packaging : n;
         setNewQty(String(totalQty));
         showSuccess(packaging && qtyMode === "colis" ? `${n} × ${packaging} = ${totalQty} unités` : `Qté: ${totalQty}`);
-        setStep(4);
+        updateStep(4);
       } else {
         setError("Quantité invalide");
       }
@@ -5228,7 +5260,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     }
 
     // Step 4 — emplacement
-    if (step === 4) { setNewEmplacement(code.trim()); showSuccess(`Emplacement: ${code.trim()}`); return; }
+    if (stepRef.current === 4) { setNewEmplacement(code.trim()); showSuccess(`Emplacement: ${code.trim()}`); return; }
   };
 
   const validateLine = async () => {
@@ -5243,11 +5275,11 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
       await palUpsert(currentPalette.id, ligneData);
       if (newEmplacement.trim()) await palUpdate(currentPalette.id, { emplacement: newEmplacement.trim() });
       const { palette: p, lignes: ls } = await palDetail(currentPalette.id);
-      setCurrentPalette(p); setLignes(ls);
+      setCurPalette(p); setLignes(ls);
       showSuccess("✓ Ligne ajoutée");
       // Reset complet — prêt pour une nouvelle palette
       setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis");
-      setCurrentPalette(null); setLignes([]); setStep(0);
+      setCurPalette(null); setLignes([]); updateStep(0);
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
@@ -5313,7 +5345,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
       const newQty = ligne.qty - qtySortie;
       await palUpdateQty(ligneId, Math.max(0, newQty));
       const { palette: p, lignes: ls } = await palDetail(currentPalette.id);
-      setCurrentPalette(p); setLignes(ls);
+      setCurPalette(p); setLignes(ls);
       setSortingLigne(null); setSortQty("");
       showSuccess(`✓ ${qtySortie} sorti${qtySortie > 1 ? "s" : ""} vers picking`);
     } catch (e: any) { setError(e.message); }
@@ -5499,7 +5531,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
                   style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>
                   🖨️
                 </button>
-                <button onClick={() => { setCurrentPalette(null); setLignes([]); setStep(0); setNewRef(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis"); }}
+                <button onClick={() => { setCurPalette(null); setLignes([]); updateStep(0); setNewRef(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis"); }}
                   style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.textSec }}>
                   ✕
                 </button>
@@ -5550,7 +5582,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
             </div>
             {/* Skip / confirm buttons */}
             {step === 2 && (
-              <button onClick={() => { setNewLot(""); setStep(3); }}
+              <button onClick={() => { setNewLot(""); updateStep(3); }}
                 style={{ marginTop: 8, width: "100%", padding: 10, ...secondaryBtn, fontSize: 13 }}>
                 ⏭ Passer (sans lot)
               </button>
@@ -5586,9 +5618,9 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
               {editEmpl ? (
                 <div style={{ display: "flex", gap: 8 }}>
                   <input style={{ ...inputStyle, flex: 1, fontSize: 14 }} value={editEmplValue} onChange={e => setEditEmplValue(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter" && editEmplValue.trim()) { palUpdate(currentPalette.id, { emplacement: editEmplValue.trim() }).then(() => palDetail(currentPalette.id)).then(({ palette: p }) => { setCurrentPalette(p); setEditEmpl(false); showSuccess("✓ Emplacement mis à jour"); }); } }}
+                    onKeyDown={e => { if (e.key === "Enter" && editEmplValue.trim()) { palUpdate(currentPalette.id, { emplacement: editEmplValue.trim() }).then(() => palDetail(currentPalette.id)).then(({ palette: p }) => { setCurPalette(p); setEditEmpl(false); showSuccess("✓ Emplacement mis à jour"); }); } }}
                     placeholder="Scanner ou taper..." />
-                  <button onClick={async () => { if (editEmplValue.trim()) { await palUpdate(currentPalette.id, { emplacement: editEmplValue.trim() }); const { palette: p } = await palDetail(currentPalette.id); setCurrentPalette(p); showSuccess("✓"); } setEditEmpl(false); }}
+                  <button onClick={async () => { if (editEmplValue.trim()) { await palUpdate(currentPalette.id, { emplacement: editEmplValue.trim() }); const { palette: p } = await palDetail(currentPalette.id); setCurPalette(p); showSuccess("✓"); } setEditEmpl(false); }}
                     style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 700, cursor: "pointer" }}>✓</button>
                   <button onClick={() => setEditEmpl(false)} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>✕</button>
                 </div>
