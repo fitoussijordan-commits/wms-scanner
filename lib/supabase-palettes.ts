@@ -123,17 +123,26 @@ export async function searchProductInPalettes(odooRef: string): Promise<(WmsPale
 // ── ZPL 70×45mm pour PrintNode ──
 export function generatePaletteZPL(palette: WmsPalette, lignes: WmsPaletteLigne[]): string {
   // 70mm x 45mm @ 203dpi = 559 x 360 dots
-  const topLines = lignes.slice(0, 4).map((l, i) =>
-    `^FO20,${130 + i * 30}^A0N,20,20^FD${l.odoo_ref} ${l.lot ? `Lot:${l.lot}` : ""} x${l.qty}^FS`
-  ).join("\n");
+  const W = 559;
+  const H = 360;
+  const cW = W - 20;
 
-  return `^XA
-^CI28
-^FO20,15^A0N,40,40^FD${palette.numero}^FS
-^FO20,60^A0N,22,22^FD${palette.emplacement || ""}^FS
-^FO20,88^GB519,2,2^FS
-^FO200,10^BQN,2,6^FDQA,${palette.numero}^FS
-${topLines}
-^FO20,342^A0N,18,18^FD${new Date(palette.created_at).toLocaleDateString("fr-FR")}^FS
-^XZ`;
+  const lines: string[] = [
+    "^XA",
+    "^CI28",
+    `^PW${W}`,
+    `^LL${H}`,
+  ];
+
+  // ── NUMÉRO — gros, gras, centré ──
+  lines.push(`^FO10,25^A0N,100,96^FB${cW},1,0,C^FD${palette.numero}^FS`);
+
+  // ── QR Code — centré ──
+  lines.push(`^FO${Math.round((W - 150) / 2)},145^BQN,2,5^FDQA,${palette.numero}^FS`);
+
+  // ── Date petit en bas ──
+  lines.push(`^FO10,${H - 22}^A0N,16,16^FB${cW},1,0,C^FD${new Date(palette.created_at).toLocaleDateString("fr-FR")}^FS`);
+
+  lines.push("^XZ");
+  return lines.join("\n");
 }
