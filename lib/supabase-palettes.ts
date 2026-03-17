@@ -63,7 +63,7 @@ export async function findPaletteByNumero(numero: string): Promise<WmsPalette | 
 }
 
 // ── Ajouter/mettre à jour une ligne ──
-export async function upsertLigne(paletteId: number, ligne: Omit<WmsPaletteLigne, "id" | "palette_id" | "created_at">): Promise<void> {
+export async function upsertLigne(paletteId: number, ligne: Partial<Omit<WmsPaletteLigne, "id" | "palette_id" | "created_at">> & { odoo_ref: string; product_name: string; qty: number; unite: string }): Promise<void> {
   // Si même ref+lot existe → additionne la qty
   const { data: existing } = await sb.from("wms_palette_lignes")
     .select("id, qty")
@@ -73,12 +73,16 @@ export async function upsertLigne(paletteId: number, ligne: Omit<WmsPaletteLigne
     .single();
 
   if (existing) {
+    const updateData: any = { qty: existing.qty + ligne.qty, updated_at: new Date().toISOString() };
+    if (ligne.packaging_qty !== undefined) updateData.packaging_qty = ligne.packaging_qty;
     const { error } = await sb.from("wms_palette_lignes")
-      .update({ qty: existing.qty + ligne.qty, packaging_qty: ligne.packaging_qty ?? null, updated_at: new Date().toISOString() })
+      .update(updateData)
       .eq("id", existing.id);
     if (error) throw new Error(error.message);
   } else {
-    const { error } = await sb.from("wms_palette_lignes").insert({ ...ligne, palette_id: paletteId });
+    const insertData: any = { palette_id: paletteId, odoo_ref: ligne.odoo_ref, product_name: ligne.product_name, lot: ligne.lot || null, expiry_date: ligne.expiry_date || null, qty: ligne.qty, unite: ligne.unite };
+    if (ligne.packaging_qty !== undefined) insertData.packaging_qty = ligne.packaging_qty;
+    const { error } = await sb.from("wms_palette_lignes").insert(insertData);
     if (error) throw new Error(error.message);
   }
   // Update palette updated_at

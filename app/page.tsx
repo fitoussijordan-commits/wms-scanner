@@ -5100,6 +5100,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [newQty, setNewQty] = useState("1");
   const [newEmplacement, setNewEmplacement] = useState("");
   const [packaging, setPackaging] = useState<number | null>(null); // qty par conditionnement
+  const [qtyMode, setQtyMode] = useState<"colis" | "libre">("colis");
 
   // Lookup
   const [lookupInput, setLookupInput] = useState("");
@@ -5182,7 +5183,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
 
     // Step 1 — référence produit
     if (step === 1) {
-      setPackaging(null);
+      setPackaging(null); setQtyMode("colis");
       if (session) {
         setLoading(true);
         try {
@@ -5212,13 +5213,13 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     // Step 2 — lot
     if (step === 2) { setNewLot(code.trim()); showSuccess(`Lot: ${code.trim()}`); setStep(3); return; }
 
-    // Step 3 — qty (en colis/conditionnement → multiplié)
+    // Step 3 — qty (colis × packaging ou libre)
     if (step === 3) {
       const n = parseFloat(code.trim());
       if (!isNaN(n) && n > 0) {
-        const totalQty = packaging ? n * packaging : n;
+        const totalQty = (packaging && qtyMode === "colis") ? n * packaging : n;
         setNewQty(String(totalQty));
-        showSuccess(packaging ? `${n} × ${packaging} = ${totalQty} unités` : `Qté: ${totalQty}`);
+        showSuccess(packaging && qtyMode === "colis" ? `${n} × ${packaging} = ${totalQty} unités` : `Qté: ${totalQty}`);
         setStep(4);
       } else {
         setError("Quantité invalide");
@@ -5234,17 +5235,18 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     if (!currentPalette || !newRef.trim()) return;
     setLoading(true);
     try {
-      await palUpsert(currentPalette.id, {
+      const ligneData: any = {
         odoo_ref: newRef.trim(), product_name: newName.trim() || newRef.trim(),
         lot: newLot.trim() || null, expiry_date: null, qty: parseFloat(newQty) || 1, unite: "unité",
-        packaging_qty: packaging || null,
-      });
+      };
+      if (packaging) ligneData.packaging_qty = packaging;
+      await palUpsert(currentPalette.id, ligneData);
       if (newEmplacement.trim()) await palUpdate(currentPalette.id, { emplacement: newEmplacement.trim() });
       const { palette: p, lignes: ls } = await palDetail(currentPalette.id);
       setCurrentPalette(p); setLignes(ls);
       showSuccess("✓ Ligne ajoutée");
       // Reset complet — prêt pour une nouvelle palette
-      setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null);
+      setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis");
       setCurrentPalette(null); setLignes([]); setStep(0);
     } catch (e: any) { setError(e.message); }
     setLoading(false);
@@ -5497,7 +5499,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
                   style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>
                   🖨️
                 </button>
-                <button onClick={() => { setCurrentPalette(null); setLignes([]); setStep(0); setNewRef(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); }}
+                <button onClick={() => { setCurrentPalette(null); setLignes([]); setStep(0); setNewRef(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis"); }}
                   style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.textSec }}>
                   ✕
                 </button>
@@ -5513,6 +5515,19 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
               {step === 3 && packaging && <span style={{ color: C.green, fontWeight: 600 }}> (× {packaging} par colis)</span>}
               {loading && <Spinner />}
             </div>
+            {/* Toggle colis / unités libres */}
+            {step === 3 && packaging && (
+              <div style={{ display: "flex", background: C.white, borderRadius: 8, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 8 }}>
+                {(["colis", "libre"] as const).map(m => (
+                  <button key={m} onClick={() => setQtyMode(m)}
+                    style={{ flex: 1, padding: "8px 0", fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "inherit",
+                      background: qtyMode === m ? "#7c3aed" : "transparent",
+                      color: qtyMode === m ? "#fff" : C.textSec }}>
+                    {m === "colis" ? `📦 Colis (× ${packaging})` : "🔢 Unités libres"}
+                  </button>
+                ))}
+              </div>
+            )}
             <div style={{ display: "flex", gap: 8 }}>
               <input
                 style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed", fontSize: 15 }}
@@ -5523,7 +5538,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
                   step === 0 ? "Pal-XXXX ou Entrée pour créer..." :
                   step === 1 ? "Code-barres produit..." :
                   step === 2 ? "Numéro de lot..." :
-                  step === 3 ? (packaging ? `Nb colis (× ${packaging})...` : "Quantité...") :
+                  step === 3 ? (packaging && qtyMode === "colis" ? `Nb colis (× ${packaging})...` : "Quantité...") :
                   "Emplacement (optionnel)..."
                 }
                 type={step === 3 ? "number" : "text"}
@@ -5543,7 +5558,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
             {step === 3 && scanInput && (
               <button onClick={() => handleScan(scanInput)} disabled={loading}
                 style={{ marginTop: 8, width: "100%", padding: 12, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>
-                {packaging ? `Confirmer ${scanInput} × ${packaging} = ${parseFloat(scanInput || "0") * packaging} →` : `Confirmer ${scanInput} unités →`}
+                {packaging && qtyMode === "colis" ? `Confirmer ${scanInput} × ${packaging} = ${parseFloat(scanInput || "0") * packaging} →` : `Confirmer ${scanInput} unités →`}
               </button>
             )}
             {step === 4 && (
