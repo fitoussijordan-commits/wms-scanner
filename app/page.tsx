@@ -4952,8 +4952,15 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 // ══════════════════════════════════════════════════════
 // MAIN SCREEN
 // ══════════════════════════════════════════════════════
-type WmsPalette = supaPalettes.WmsPalette;
-type WmsPaletteLigne = supaPalettes.WmsPaletteLigne;
+interface WmsPalette {
+  id: number; numero: string; numero_seq: number;
+  emplacement: string | null; statut: "actif" | "archive" | "expedie";
+  notes: string | null; created_at: string; updated_at: string;
+}
+interface WmsPaletteLigne {
+  id: number; palette_id: number; odoo_ref: string; product_name: string;
+  lot: string | null; expiry_date: string | null; qty: number; unite: string; created_at: string;
+}
 
 function PalettesScreen({ onBack, session, printerId }: {
   onBack: () => void;
