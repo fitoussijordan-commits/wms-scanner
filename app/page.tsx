@@ -4515,6 +4515,39 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
       {/* HIDDEN: E-shop chariot — pas au point
       <EshopChariotSkus session={session} />
       */}
+
+      {/* ── Palettes WMS printer config ── */}
+      <Section>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#7c3aed", marginBottom: 12 }}>📦 Impression Palettes WMS</div>
+        <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 10 }}>
+          Imprimante pour l'impression automatique des étiquettes 70×45 à la création d'une palette.
+        </div>
+        {printers.length === 0 ? (
+          <div style={{ fontSize: 12, color: C.orange, background: C.orangeSoft, padding: "8px 12px", borderRadius: 8 }}>
+            ⚠️ Charge d'abord les imprimantes ci-dessus
+          </div>
+        ) : (
+          <div>
+            <select
+              value={configs["palette"]?.printerId ?? ""}
+              onChange={e => updateTypeConfig("palette", { printerId: Number(e.target.value) || null })}
+              style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #ddd6fe", borderRadius: 8, fontSize: 13, background: "#f5f3ff", color: "#7c3aed", fontWeight: 700, outline: "none", cursor: "pointer" }}
+            >
+              <option value="">— Non configurée —</option>
+              {printers.map((p: any) => <option key={p.id} value={p.id}>{p.name} #{p.id}</option>)}
+            </select>
+            {configs["palette"]?.printerId && (
+              <div style={{ marginTop: 8, fontSize: 12, color: C.green, fontWeight: 600 }}>
+                ✓ {printerName(configs["palette"].printerId)}
+              </div>
+            )}
+            <button onClick={() => testPrint("palette")} disabled={!configs["palette"]?.printerId}
+              style={{ marginTop: 10, width: "100%", padding: 10, background: configs["palette"]?.printerId ? "#7c3aed" : C.bg, color: configs["palette"]?.printerId ? "#fff" : C.textMuted, border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              🖨️ Imprimer test palette
+            </button>
+          </div>
+        )}
+      </Section>
     </>
   );
 }
