@@ -625,7 +625,7 @@ export default function Page() {
     else if (screen === "prep") {
       if (/^WH\//i.test(code)) { openPickingByName(code); return; }
     }
-    else if (screen === "prepDetail") doPrepScan(code);
+    else if (screen === "prepDetail") doPrepScanRef.current(code);
     setTimeout(() => {
       document.querySelectorAll("input").forEach((el) => {
         if (el.value === code || el.value.includes(code)) {
@@ -636,6 +636,10 @@ export default function Page() {
     }, 10);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, session, src, dst, transferMode]);
+
+  // Ref to always call latest doPrepScan (avoids stale closure in useCallback)
+  const doPrepScanRef = useRef(doPrepScan);
+  useEffect(() => { doPrepScanRef.current = doPrepScan; });
 
   useScannerListener(handleGlobalScan, screen !== "login");
 
