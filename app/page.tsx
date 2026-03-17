@@ -640,7 +640,10 @@ export default function Page() {
     else if (screen === "prep") {
       if (/^WH\//i.test(code)) { openPickingByName(code); return; }
     }
-    else if (screen === "prepDetail") doPrepScanRef.current(code);
+    else if (screen === "prepDetail") {
+      scanQueueRef.current.push(code);
+      processScanQueue();
+    }
     setTimeout(() => {
       document.querySelectorAll("input").forEach((el) => {
         if (el.value === code || el.value.includes(code)) {
@@ -1032,6 +1035,19 @@ export default function Page() {
   // Ref to always call latest doPrepScan (avoids stale closure)
   const doPrepScanRef = useRef<(code: string) => Promise<void>>(async () => {});
   useEffect(() => { doPrepScanRef.current = doPrepScan; });
+
+  // Scan queue — accumule les scans pendant qu'un traitement est en cours
+  const scanQueueRef = useRef<string[]>([]);
+  const scanProcessingRef = useRef(false);
+  const processScanQueue = useCallback(async () => {
+    if (scanProcessingRef.current) return;
+    scanProcessingRef.current = true;
+    while (scanQueueRef.current.length > 0) {
+      const code = scanQueueRef.current.shift()!;
+      await doPrepScanRef.current(code);
+    }
+    scanProcessingRef.current = false;
+  }, []);
 
   // "Tout prendre" — fill all remaining qty for the current location
   const prepTakeAll = async () => {
