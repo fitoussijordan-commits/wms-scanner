@@ -4861,6 +4861,33 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         </button>
       </div>
 
+      {/* ── Articles déjà préparés — cliquables pour corriger ── */}
+      {doneLines > 0 && (
+        <details style={{ marginBottom: 16 }}>
+          <summary style={{ fontSize: 12, fontWeight: 700, color: C.green, cursor: "pointer", letterSpacing: 0.5, textTransform: "uppercase", padding: "8px 0", userSelect: "none" }}>
+            ✓ Préparés ({doneLines}) — appuyer pour modifier
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            {allLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).map((ml: any) => (
+              <div key={ml.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 6, background: C.greenSoft, border: `1px solid ${C.greenBorder}`, borderRadius: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ml.product_id[1]}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                    {shortLoc(ml.location_id?.[1] || "")}
+                    {ml.lot_id && ` · ${ml.lot_id[1]}`}
+                    <span style={{ color: C.green, fontWeight: 700, marginLeft: 6 }}>{getQty(ml)}/{ml.reserved_uom_qty || 0}</span>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <button onClick={() => onAdjustQty(ml.id, getQty(ml) - 1)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.red }}>−</button>
+                  <button onClick={() => onAdjustQty(ml.id, getQty(ml) + 1)} disabled={getQty(ml) >= (ml.reserved_uom_qty || 0)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.blue, opacity: getQty(ml) >= (ml.reserved_uom_qty || 0) ? 0.3 : 1 }}>+</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
       {/* ── Liste rapide des articles restants ── */}
       {!allDone && (
         <div style={{ marginBottom: 16 }}>
