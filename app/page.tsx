@@ -2864,7 +2864,7 @@ function PaletteResult({ data, session }: { data: { palette: WmsPalette; lignes:
   // Fetch packaging from Odoo for lines without packaging_qty
   useEffect(() => {
     if (!session) return;
-    const refs = [...new Set(lignes.filter(l => !l.packaging_qty).map(l => l.odoo_ref))];
+    const refs = Array.from(new Set(lignes.filter(l => !l.packaging_qty).map(l => l.odoo_ref)));
     if (refs.length === 0) return;
     (async () => {
       const map: Record<string, number | null> = {};
