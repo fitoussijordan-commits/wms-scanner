@@ -2893,7 +2893,10 @@ function PaletteResult({ data }: { data: { palette: WmsPalette; lignes: WmsPalet
                 <div style={{ fontSize: 12, color: C.text, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{l.product_name}</div>
                 {l.lot && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>🏷️ {l.lot}{l.expiry_date ? ` · 📅 ${l.expiry_date}` : ""}</div>}
               </div>
-              <span style={{ fontWeight: 800, fontSize: 15, color: C.text, marginLeft: 8 }}>{l.qty} <span style={{ fontSize: 11, fontWeight: 400, color: C.textMuted }}>{l.unite}</span></span>
+              <div style={{ textAlign: "right" as const, flexShrink: 0, marginLeft: 8 }}>
+                <div style={{ fontWeight: 800, fontSize: 15, color: C.text }}>{l.qty}</div>
+                <div style={{ fontSize: 10, color: C.textMuted }}>{l.unite}</div>
+              </div>
             </div>
           ))}
         </>
