@@ -1191,7 +1191,7 @@ export default function Page() {
           {lookupType === "product" && lookupResult && <ProductResult product={lookupResult} stock={lookupStock} onRename={rename} />}
           {lookupType === "lot" && lookupResult && <LotResult lot={lookupResult.lot} product={lookupResult.product} stock={lookupStock} />}
           {lookupType === "location" && lookupResult && <LocationResult location={lookupResult} stock={lookupStock} onRename={rename} />}
-          {lookupType === "palette" && lookupResult && <PaletteResult data={lookupResult} />}
+          {lookupType === "palette" && lookupResult && <PaletteResult data={lookupResult} session={session} />}
 
           <div style={{ marginTop: 16 }}>
             <BigButton icon={transferIcon("#fff")} label="Transfert interne" sub="Déplacer du stock entre emplacements" onClick={() => { resetTransfer(); setScreen("transfer"); }} />
@@ -2856,9 +2856,33 @@ function LocationResult({ location, stock, onRename }: { location: any; stock: a
 // ============================================
 
 // ── Palette lookup result (home screen free search) ──
-function PaletteResult({ data }: { data: { palette: WmsPalette; lignes: WmsPaletteLigne[] } }) {
+function PaletteResult({ data, session }: { data: { palette: WmsPalette; lignes: WmsPaletteLigne[] }; session?: any }) {
   const { palette, lignes } = data;
   const totalQty = lignes.reduce((s, l) => s + l.qty, 0);
+  const [pkgMap, setPkgMap] = useState<Record<string, number | null>>({});
+
+  // Fetch packaging from Odoo for lines without packaging_qty
+  useEffect(() => {
+    if (!session) return;
+    const refs = [...new Set(lignes.filter(l => !l.packaging_qty).map(l => l.odoo_ref))];
+    if (refs.length === 0) return;
+    (async () => {
+      const map: Record<string, number | null> = {};
+      for (const ref of refs) {
+        try {
+          const prods = await odoo.searchRead(session, "product.product", [["default_code", "=", ref]], ["id"], 1);
+          if (prods.length > 0) {
+            const pkgs = await odoo.searchRead(session, "product.packaging", [["product_id", "=", prods[0].id]], ["qty"], 1);
+            map[ref] = pkgs.length > 0 && pkgs[0].qty > 1 ? pkgs[0].qty : null;
+          }
+        } catch {}
+      }
+      setPkgMap(map);
+    })();
+  }, [session, lignes]);
+
+  const getPkg = (l: WmsPaletteLigne) => l.packaging_qty || pkgMap[l.odoo_ref] || null;
+
   const statutColors: Record<string, { bg: string; text: string; border: string }> = {
     actif: { bg: C.greenSoft, text: C.green, border: C.greenBorder },
     archive: { bg: C.orangeSoft, text: C.orange, border: C.orangeBorder },
@@ -2886,23 +2910,26 @@ function PaletteResult({ data }: { data: { palette: WmsPalette; lignes: WmsPalet
         ? <div style={{ textAlign: "center", color: C.textMuted, padding: 16, fontSize: 13 }}>Palette vide</div>
         : <>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Contenu</div>
-          {lignes.map((l, i) => (
-            <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < lignes.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</div>
-                <div style={{ fontSize: 12, color: C.text, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{l.product_name}</div>
-                {l.lot && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>🏷️ {l.lot}{l.expiry_date ? ` · 📅 ${l.expiry_date}` : ""}</div>}
+          {lignes.map((l, i) => {
+            const pkg = getPkg(l);
+            return (
+              <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < lignes.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</div>
+                  <div style={{ fontSize: 12, color: C.text, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{l.product_name}</div>
+                  {l.lot && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>🏷️ {l.lot}{l.expiry_date ? ` · 📅 ${l.expiry_date}` : ""}</div>}
+                </div>
+                <div style={{ textAlign: "right" as const, flexShrink: 0, marginLeft: 8 }}>
+                  <div style={{ fontWeight: 800, fontSize: 15, color: C.text }}>{l.qty}</div>
+                  {pkg && pkg > 1 ? (
+                    <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 600 }}>{Math.round(l.qty / pkg)} colis de {pkg}</div>
+                  ) : (
+                    <div style={{ fontSize: 10, color: C.textMuted }}>{l.unite || "unité"}</div>
+                  )}
+                </div>
               </div>
-              <div style={{ textAlign: "right" as const, flexShrink: 0, marginLeft: 8 }}>
-                <div style={{ fontWeight: 800, fontSize: 15, color: C.text }}>{l.qty}</div>
-                {l.packaging_qty && l.packaging_qty > 1 ? (
-                  <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 600 }}>{Math.round(l.qty / l.packaging_qty)} colis de {l.packaging_qty}</div>
-                ) : (
-                  <div style={{ fontSize: 10, color: C.textMuted }}>{l.unite}</div>
-                )}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </>
       }
       <div style={{ fontSize: 11, color: C.textMuted, marginTop: 10, textAlign: "right" as const }}>
