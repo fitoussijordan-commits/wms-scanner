@@ -5048,6 +5048,10 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
   const [batchQty, setBatchQty] = useState("5");
+  const [editingLigne, setEditingLigne] = useState<number | null>(null);
+  const [editQty, setEditQty] = useState("");
+  const [editEmpl, setEditEmpl] = useState(false);
+  const [editEmplValue, setEditEmplValue] = useState("");
 
   // Scan step: 0=scan palette, 1=scan ref, 2=lot, 3=qty, 4=emplacement
   const [step, setStep] = useState(0);
@@ -5199,7 +5203,9 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
       const { palette: p, lignes: ls } = await palDetail(currentPalette.id);
       setCurrentPalette(p); setLignes(ls);
       showSuccess("✓ Ligne ajoutée");
-      setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setStep(1);
+      // Reset complet — prêt pour une nouvelle palette
+      setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null);
+      setCurrentPalette(null); setLignes([]); setStep(0);
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
@@ -5452,6 +5458,31 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
             </div>
           )}
 
+          {/* Emplacement palette */}
+          {currentPalette && (
+            <div style={{ ...cardStyle, padding: "10px 14px", marginBottom: 12, borderColor: "#ddd6fe" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, marginBottom: 4, textTransform: "uppercase" as const }}>Emplacement</div>
+              {editEmpl ? (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input style={{ ...inputStyle, flex: 1, fontSize: 14 }} value={editEmplValue} onChange={e => setEditEmplValue(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" && editEmplValue.trim()) { palUpdate(currentPalette.id, { emplacement: editEmplValue.trim() }).then(() => palDetail(currentPalette.id)).then(({ palette: p }) => { setCurrentPalette(p); setEditEmpl(false); showSuccess("✓ Emplacement mis à jour"); }); } }}
+                    placeholder="Scanner ou taper..." />
+                  <button onClick={async () => { if (editEmplValue.trim()) { await palUpdate(currentPalette.id, { emplacement: editEmplValue.trim() }); const { palette: p } = await palDetail(currentPalette.id); setCurrentPalette(p); showSuccess("✓"); } setEditEmpl(false); }}
+                    style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 700, cursor: "pointer" }}>✓</button>
+                  <button onClick={() => setEditEmpl(false)} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>✕</button>
+                </div>
+              ) : (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: currentPalette.emplacement ? C.blue : C.textMuted }}>
+                    📍 {currentPalette.emplacement || "Non défini"}
+                  </span>
+                  <button onClick={() => { setEditEmplValue(currentPalette.emplacement || ""); setEditEmpl(true); }}
+                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: C.textMuted }}>✏️</button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Lignes déjà ajoutées */}
           {lignes.length > 0 && (
             <Section>
@@ -5465,16 +5496,31 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
                 </button>
               </div>
               {lignes.map(l => (
-                <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</div>
-                    <div style={{ fontSize: 12, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{l.product_name}</div>
-                    {l.lot && <div style={{ fontSize: 11, color: C.textMuted }}>🏷️ {l.lot}</div>}
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                    <span style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{l.qty}</span>
-                    <button onClick={async () => { await palUpdateQty(l.id, 0); const { lignes: ls } = await palDetail(currentPalette!.id); setLignes(ls); }}
-                      style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: C.redSoft, color: C.red, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+                <div key={l.id} style={{ padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</div>
+                      <div style={{ fontSize: 12, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{l.product_name}</div>
+                      {l.lot && <div style={{ fontSize: 11, color: C.textMuted }}>🏷️ {l.lot}</div>}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                      {editingLigne === l.id ? (
+                        <>
+                          <input style={{ width: 60, padding: "4px 6px", border: `1.5px solid ${C.blue}`, borderRadius: 6, fontSize: 14, fontWeight: 700, textAlign: "center" as const, fontFamily: "inherit" }}
+                            value={editQty} onChange={e => setEditQty(e.target.value)} type="number" inputMode="numeric"
+                            onKeyDown={e => { if (e.key === "Enter") { const nq = parseFloat(editQty); if (nq > 0) { palUpdateQty(l.id, nq).then(() => palDetail(currentPalette!.id)).then(({ lignes: ls }) => { setLignes(ls); setEditingLigne(null); }); } } }} />
+                          <button onClick={async () => { const nq = parseFloat(editQty); if (nq > 0) { await palUpdateQty(l.id, nq); const { lignes: ls } = await palDetail(currentPalette!.id); setLignes(ls); } setEditingLigne(null); }}
+                            style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: C.greenSoft, color: C.green, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>✓</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => { setEditingLigne(l.id); setEditQty(String(l.qty)); }}
+                            style={{ fontSize: 16, fontWeight: 800, color: C.text, background: "none", border: "none", cursor: "pointer", padding: "2px 4px" }}>{l.qty}</button>
+                          <button onClick={async () => { await palUpdateQty(l.id, 0); const { lignes: ls } = await palDetail(currentPalette!.id); setLignes(ls); }}
+                            style={{ width: 24, height: 24, borderRadius: 6, border: "none", background: C.redSoft, color: C.red, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
