@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as odoo from "@/lib/odoo";
+import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByNumero as palFind, createPalette as palCreate, upsertLigne as palUpsert, updateLigneQty as palUpdateQty, updatePalette as palUpdate, searchProductInPalettes as palSearch, generatePaletteZPL as palZPL } from "@/lib/supabase-palettes";
 import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
@@ -4981,17 +4982,17 @@ function PalettesScreen({ onBack, session, printerId }: {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setPalettes(await supaPalettes.loadPalettes(statut));
+      setPalettes(await palLoad(statut));
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   }, [statut]);
 
   useEffect(() => { load(); }, [load]);
 
-  const openPalette = async (p: supaPalettes.WmsPalette) => {
+  const openPalette = async (p: WmsPalette) => {
     setLoading(true);
     try {
-      const { palette, lignes } = await supaPalettes.loadPaletteDetail(p.id);
+      const { palette, lignes } = await palDetail(p.id);
       setSelected(palette);
       setLignes(lignes);
       setView("detail");
@@ -5002,7 +5003,7 @@ function PalettesScreen({ onBack, session, printerId }: {
   const createPalette = async () => {
     setLoading(true);
     try {
-      const p = await supaPalettes.createPalette();
+      const p = await palCreate();
       await openPalette(p);
       load();
     } catch (e: any) { setError(e.message); }
@@ -5012,7 +5013,7 @@ function PalettesScreen({ onBack, session, printerId }: {
   // Scan palette numéro depuis la liste
   const handleScan = async (code: string) => {
     if (/^Pal-\d+$/i.test(code)) {
-      const p = await supaPalettes.findPaletteByNumero(code);
+      const p = await palFind(code);
       if (p) { openPalette(p); setScanInput(""); return; }
     }
     setError(`"${code}" non reconnu`);
@@ -5023,7 +5024,7 @@ function PalettesScreen({ onBack, session, printerId }: {
     if (!searchRef.trim()) return;
     setLoading(true);
     try {
-      const r = await supaPalettes.searchProductInPalettes(searchRef.trim());
+      const r = await palSearch(searchRef.trim());
       setSearchResults(r);
       setView("search");
     } catch (e: any) { setError(e.message); }
@@ -5039,7 +5040,7 @@ function PalettesScreen({ onBack, session, printerId }: {
       printerId={printerId}
       onBack={() => { setView("list"); load(); }}
       onRefresh={async () => {
-        const { palette, lignes } = await supaPalettes.loadPaletteDetail(selected.id);
+        const { palette, lignes } = await palDetail(selected.id);
         setSelected(palette); setLignes(lignes);
       }}
     />;
@@ -5146,8 +5147,8 @@ function PalettesScreen({ onBack, session, printerId }: {
 // PALETTE DETAIL
 // ══════════════════════════════════════════════════════
 function PaletteDetail({ palette, lignes, session, printerId, onBack, onRefresh }: {
-  palette: supaPalettes.WmsPalette;
-  lignes: supaPalettes.WmsPaletteLigne[];
+  palette: WmsPalette;
+  lignes: WmsPaletteLigne[];
   session?: any;
   printerId?: number;
   onBack: () => void;
@@ -5172,7 +5173,7 @@ function PaletteDetail({ palette, lignes, session, printerId, onBack, onRefresh 
     if (!newRef.trim() || !newQty) return;
     setLoading(true);
     try {
-      await supaPalettes.upsertLigne(palette.id, {
+      await palUpsert(palette.id, {
         odoo_ref: newRef.trim(),
         product_name: newName.trim() || newRef.trim(),
         lot: newLot.trim() || null,
@@ -5191,7 +5192,7 @@ function PaletteDetail({ palette, lignes, session, printerId, onBack, onRefresh 
   const changeQty = async (ligneId: number, qty: number) => {
     setLoading(true);
     try {
-      await supaPalettes.updateLigneQty(ligneId, qty);
+      await palUpdateQty(ligneId, qty);
       await onRefresh();
     } catch (e: any) { setError(e.message); }
     setLoading(false);
@@ -5200,17 +5201,17 @@ function PaletteDetail({ palette, lignes, session, printerId, onBack, onRefresh 
   const saveEmplacement = async () => {
     setLoading(true);
     try {
-      await supaPalettes.updatePalette(palette.id, { emplacement });
+      await palUpdate(palette.id, { emplacement });
       setEditEmplacement(false);
       await onRefresh();
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
 
-  const changeStatut = async (statut: supaPalettes.supaPalettes.WmsPalette["statut"]) => {
+  const changeStatut = async (statut: "actif" | "archive" | "expedie") => {
     setLoading(true);
     try {
-      await supaPalettes.updatePalette(palette.id, { statut });
+      await palUpdate(palette.id, { statut });
       await onRefresh();
     } catch (e: any) { setError(e.message); }
     setLoading(false);
@@ -5218,7 +5219,7 @@ function PaletteDetail({ palette, lignes, session, printerId, onBack, onRefresh 
 
   const printLabel = async () => {
     if (!printerId) { setError("Aucune imprimante configurée"); return; }
-    const zpl = supaPalettes.generatePaletteZPL(palette, lignes);
+    const zpl = palZPL(palette, lignes);
     try {
       const res = await fetch("/api/printnode", {
         method: "POST",
