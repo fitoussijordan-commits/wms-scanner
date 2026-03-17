@@ -853,7 +853,6 @@ export default function Page() {
     setError("");
     try {
       const r = await odoo.smartScan(session, code);
-
       // STEP 1: No active step → expect a location scan
       if (!prepStep) {
         if (r.type === "location") {
@@ -897,26 +896,53 @@ export default function Page() {
         productId = r.data.product?.id || null;
         lotId = r.data.lot.id;
         lotName = r.data.lot.name;
+      } else if (r.type === "location") {
+        // Re-scanning a location while step is active → reset step and re-process
+        setPrepStep(null);
+        doPrepScan(code);
+        return;
       } else {
         // Unknown barcode — treat as raw lot name (common on carton labels)
-        // Search lot directly by name
         const rawLots = await odoo.searchRead(session, "stock.lot", [["name", "=", code.trim()]], ["id", "name", "product_id"], 1);
         if (rawLots.length) {
           lotId = rawLots[0].id;
           lotName = rawLots[0].name;
           productId = rawLots[0].product_id?.[0] || null;
         } else {
-          showToast(`⚠ "${code}" non reconnu`);
-          vibrateError();
-          return;
+          // Last resort: try ilike (partial match)
+          const rawLotsLike = await odoo.searchRead(session, "stock.lot", [["name", "ilike", code.trim()]], ["id", "name", "product_id"], 5);
+          if (rawLotsLike.length === 1) {
+            lotId = rawLotsLike[0].id;
+            lotName = rawLotsLike[0].name;
+            productId = rawLotsLike[0].product_id?.[0] || null;
+          } else {
+            showToast(`⚠ Lot "${code}" introuvable`);
+            vibrateError();
+            return;
+          }
         }
       }
 
-      // Find the current move line for this step
-      const ml = pickingMoveLines.find((m: any) => m.id === prepStep.lineId);
-      if (!ml) { showToast("Ligne introuvable"); vibrateError(); return; }
+      // Find the move line — by lineId first, then by product+location if not found
+      let ml = pickingMoveLines.find((m: any) => m.id === prepStep.lineId);
+      if (!ml && productId) {
+        // Fallback: find by product at this location with qty remaining
+        ml = pickingMoveLines.find((m: any) =>
+          m.location_id?.[0] === prepStep.locId &&
+          m.product_id[0] === productId &&
+          (m.qty_done || 0) < (m.reserved_uom_qty || 0)
+        );
+      }
+      if (!ml) {
+        // Last fallback: any line at this location with qty remaining
+        ml = pickingMoveLines.find((m: any) =>
+          m.location_id?.[0] === prepStep.locId &&
+          (m.qty_done || 0) < (m.reserved_uom_qty || 0)
+        );
+      }
+      if (!ml) { showToast("Ligne introuvable à cet emplacement"); vibrateError(); return; }
 
-      // Check if product matches
+      // Check if product matches (only if we got product info from scan)
       if (productId && ml.product_id[0] !== productId) {
         showToast(`⚠ Mauvais produit — attendu: ${ml.product_id[1]}`);
         vibrateError();
