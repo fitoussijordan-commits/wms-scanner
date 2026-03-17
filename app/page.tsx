@@ -615,6 +615,8 @@ export default function Page() {
   const updatePrepStep = (val: typeof prepStep | ((prev: typeof prepStep) => typeof prepStep)) => {
     const newVal = typeof val === "function" ? val(prepStepRef.current) : val;
     prepStepRef.current = newVal;
+    // Si on remet à null (fin d'emplacement), vider la queue pour éviter scans parasites
+    if (newVal === null) scanQueueRef.current = [];
     setPrepStep(newVal);
   };
 
@@ -1045,6 +1047,8 @@ export default function Page() {
     while (scanQueueRef.current.length > 0) {
       const code = scanQueueRef.current.shift()!;
       await doPrepScanRef.current(code);
+      // Petit délai pour laisser le ref se mettre à jour avant le prochain scan
+      await new Promise(r => setTimeout(r, 50));
     }
     scanProcessingRef.current = false;
   }, []);
