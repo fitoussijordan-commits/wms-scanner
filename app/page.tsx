@@ -5431,8 +5431,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     setStockLoading(false);
   };
 
-  const StepBar = () => {
-    return (
+  const StepBar = () => (
       <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
         {stepLabels.map((label, i) => (
           <div key={i} style={{ flex: 1, textAlign: "center" as const }}>
@@ -5447,8 +5446,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
           </div>
         ))}
       </div>
-    );
-  };
+  );
 
   return (
     <div>
