@@ -5109,7 +5109,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [stockData, setStockData] = useState<{ ref: string; name: string; odoo: number; supabase: number; picking: number }[]>([]);
   const [stockLoading, setStockLoading] = useState(false);
   const [slots, setSlots] = useState<WmsPickingSlot[]>([]);
-  const [reapproData, setReapproData] = useState<{ slot: WmsPickingSlot; stockPicking: number; manque: number; sourcePal: string | null; sourceEmpl: string | null }[]>([]);
+  const [reapproData, setReapproData] = useState<{ slot: WmsPickingSlot; stockPicking: number; manque: number; sources: { numero: string; empl: string | null; colis: number }[] }[]>([]);
   const [reapproLoading, setReapproLoading] = useState(false);
   const [sortieStep, setSortieStep] = useState(0); // 0=palette, 1=ref, 2=lot, 3=qty
   const [sortiePal, setSortiePal] = useState<WmsPalette | null>(null);
@@ -5510,8 +5510,20 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
           const pickingUnits = Math.max(0, odooTotal - supTotal);
           const pickingColis = Math.floor(pickingUnits / pkgQty);
           const manque = Math.max(0, slot.capacite_colis - pickingColis);
-          const source = supaMap[slot.odoo_ref]?.pals.sort((a, b) => (a.empl || "ZZZ").localeCompare(b.empl || "ZZZ"))[0] || null;
-          if (manque > 0) orders.push({ slot, stockPicking: pickingColis, manque, sourcePal: source?.numero || null, sourceEmpl: source?.empl || null });
+          if (manque > 0) {
+            const sources: { numero: string; empl: string | null; colis: number }[] = [];
+            let remaining = manque;
+            const pals = (supaMap[slot.odoo_ref]?.pals || []).sort((a, b) => (a.empl || "ZZZ").localeCompare(b.empl || "ZZZ"));
+            for (const pal of pals) {
+              if (remaining <= 0) break;
+              const palColis = Math.floor(pal.qty / pkgQty);
+              if (palColis <= 0) continue;
+              const take = Math.min(remaining, palColis);
+              sources.push({ numero: pal.numero, empl: pal.empl, colis: take });
+              remaining -= take;
+            }
+            orders.push({ slot, stockPicking: pickingColis, manque, sources });
+          }
         } catch { /* skip */ }
       }
       orders.sort((a, b) => b.manque - a.manque);
@@ -5798,10 +5810,14 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
             <div style={{ fontSize: 10, color: C.textMuted }}>colis manquants</div>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, fontSize: 11, color: C.textSec }}>
-          <span>En picking: {r.stockPicking}/{r.slot.capacite_colis} colis</span>
-          {r.sourcePal && (<span style={{ color: "#7c3aed", fontWeight: 700 }}>→ Prendre sur {r.sourcePal} ({r.sourceEmpl || "?"})</span>)}
-        </div>
+        <div style={{ fontSize: 11, color: C.textSec, marginBottom: 6 }}>En picking: {r.stockPicking}/{r.slot.capacite_colis} colis</div>
+        {r.sources.map((src, j) => (<button key={j} onClick={async () => {
+          const p = await palFind(src.numero);
+          if (p) { const d = await palDetail(p.id); setSortiePal(p); setSortieLignes(d.lignes); setSortieRef(r.slot.odoo_ref); setSortieName(r.slot.product_name); setSortiePkg(r.slot.packaging_qty); setSortieStep(2); setSortieQty(String(src.colis)); setView("sortie"); }
+        }} style={{ display: "flex", justifyContent: "space-between", width: "100%", padding: "8px 12px", marginBottom: 4, background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>
+          <span style={{ color: "#7c3aed", fontWeight: 700 }}>→ {src.numero} ({src.empl || "?"})</span>
+          <span style={{ fontWeight: 800, color: C.text }}>{src.colis} colis</span>
+        </button>))}
       </div>))}
       {slots.length === 0 && !reapproLoading && (<div style={{ textAlign: "center", padding: 30, color: C.textMuted }}>Aucun rack configuré.{isAdmin ? " Va dans Config racks." : " Demande à l'admin."}</div>)}
     </div>)}
