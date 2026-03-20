@@ -5389,16 +5389,23 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
         }
       }
       const refs = Object.keys(supaMap);
+      if (refs.length === 0) { setStockData([]); setStockLoading(false); return; }
+      // Batch: tous les produits en 1 requête
+      const prods = await odoo.searchRead(session, "product.product", [["default_code", "in", refs]], ["id", "default_code", "name"], 200);
+      const prodIds = prods.map((p: any) => p.id);
+      const refById: Record<number, string> = {};
+      for (const p of prods) refById[p.id] = p.default_code;
+      // Batch: tous les quants en 1 requête
+      const quants = prodIds.length > 0 ? await odoo.searchRead(session, "stock.quant", [["product_id", "in", prodIds], ["location_id.usage", "=", "internal"]], ["product_id", "quantity"], 1000) : [];
+      const odooMap: Record<string, number> = {};
+      for (const q of quants) {
+        const ref = refById[q.product_id[0]];
+        if (ref) odooMap[ref] = (odooMap[ref] || 0) + (q.quantity || 0);
+      }
       const result: typeof stockData = [];
       for (const ref of refs) {
-        try {
-          const prods = await odoo.searchRead(session, "product.product", [["default_code", "=", ref]], ["id", "name"], 1);
-          if (prods.length > 0) {
-            const quants = await odoo.searchRead(session, "stock.quant", [["product_id", "=", prods[0].id], ["location_id.usage", "=", "internal"]], ["quantity"], 100);
-            const odooTotal = quants.reduce((acc: number, q: any) => acc + (q.quantity || 0), 0);
-            result.push({ ref, name: supaMap[ref].name, odoo: odooTotal, supabase: supaMap[ref].qty, picking: Math.max(0, odooTotal - supaMap[ref].qty) });
-          }
-        } catch { /* skip */ }
+        const odooTotal = odooMap[ref] || 0;
+        result.push({ ref, name: supaMap[ref].name, odoo: odooTotal, supabase: supaMap[ref].qty, picking: Math.max(0, odooTotal - supaMap[ref].qty) });
       }
       result.sort((a, b) => b.picking - a.picking);
       setStockData(result);
