@@ -5264,7 +5264,40 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     // Step 4 — emplacement
     if (stepRef.current === 4) { setNewEmplacement(code.trim()); showSuccess(`Emplacement: ${code.trim()}`); return; }
   };
-  handleScanRef.current = handleScan;
+  // Lookup avec un code directement (pour le scanner physique)
+  const handleLookupScan = async (code: string) => {
+    if (!code.trim()) return;
+    setLoading(true); setError(""); setLookupResults([]);
+    setLookupInput(code.trim());
+    try {
+      const p = await palFind(code.trim());
+      if (p) {
+        const { palette, lignes } = await palDetail(p.id);
+        setLookupResults([{ palette, lignes }]);
+      } else {
+        const results = await palSearch(code.trim());
+        if (results.length) {
+          const palMap = new Map<number, { palette: WmsPalette; lignes: WmsPaletteLigne[] }>();
+          for (const r of results) {
+            if (!palMap.has(r.palette_id)) {
+              try { const d = await palDetail(r.palette_id); palMap.set(r.palette_id, d); } catch {}
+            }
+          }
+          setLookupResults(Array.from(palMap.values()));
+        } else {
+          setError(`"${code}" — introuvable`);
+        }
+      }
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  // Route le scan physique selon la vue active
+  const routeScan = (code: string) => {
+    if (view === "lookup") handleLookupScan(code);
+    else if (view === "scan" || view === "menu") handleScan(code);
+  };
+  handleScanRef.current = routeScan;
 
   const validateLine = async () => {
     if (!currentPalette || !newRef.trim()) return;
