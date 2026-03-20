@@ -5708,7 +5708,8 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</div>
               <div style={{ fontSize: 12, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{l.product_name}</div>
-              {l.lot && <div style={{ fontSize: 11, color: C.textMuted }}>🏷️ {l.lot}</div>}
+              {l.lot && <div style={{ fontSize: 11, color: C.textMuted }}>🏷️ {l.lot}{l.expiry_date ? " · 📅 " + l.expiry_date : ""}</div>}
+              {l.packaging_qty && l.packaging_qty > 1 && <div style={{ fontSize: 10, color: "#7c3aed" }}>{Math.round(l.qty / l.packaging_qty)} colis de {l.packaging_qty}</div>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
               {editingLigne === l.id ? (<>
@@ -5720,7 +5721,9 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
                 <button onClick={() => { setSortingLigne(null); setSortQty(""); }} style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: C.bg, color: C.textMuted, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
               </>) : (<>
                 <button onClick={() => { setSortingLigne(l.id); setSortQty(""); setEditingLigne(null); }} style={{ padding: "3px 8px", borderRadius: 6, border: "none", background: C.orangeSoft, color: C.orange, cursor: "pointer", fontSize: 10, fontWeight: 700 }}>📤</button>
+                <button onClick={async () => { if (currentPalette) { const dec = l.packaging_qty && l.packaging_qty > 1 ? l.packaging_qty : 1; await palUpdateQty(l.id, Math.max(0, l.qty - dec)); const d = await palDetail(currentPalette.id); setLignes(d.lignes); } }} style={{ width: 28, height: 28, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", color: l.qty <= 1 ? C.red : C.text }}>−</button>
                 <button onClick={() => { setEditingLigne(l.id); setEditQty(String(l.qty)); setSortingLigne(null); }} style={{ fontSize: 16, fontWeight: 800, color: C.text, background: "none", border: "none", cursor: "pointer", padding: "2px 4px" }}>{l.qty}</button>
+                <button onClick={async () => { if (currentPalette) { const inc = l.packaging_qty && l.packaging_qty > 1 ? l.packaging_qty : 1; await palUpdateQty(l.id, l.qty + inc); const d = await palDetail(currentPalette.id); setLignes(d.lignes); } }} style={{ width: 28, height: 28, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", color: C.blue }}>+</button>
                 <button onClick={async () => { if (currentPalette) { await palUpdateQty(l.id, 0); const d = await palDetail(currentPalette.id); setLignes(d.lignes); } }} style={{ width: 24, height: 24, borderRadius: 6, border: "none", background: C.redSoft, color: C.red, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
               </>)}
             </div>
