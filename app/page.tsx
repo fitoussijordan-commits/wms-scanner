@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as odoo from "@/lib/odoo";
-import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByNumero as palFind, createPalette as palCreate, upsertLigne as palUpsert, updateLigneQty as palUpdateQty, updatePalette as palUpdate, searchProductInPalettes as palSearch, generatePaletteZPL as palZPL, loadPickingSlots, upsertPickingSlot, deletePickingSlot } from "@/lib/supabase-palettes";
+import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByNumero as palFind, createPalette as palCreate, upsertLigne as palUpsert, updateLigneQty as palUpdateQty, updatePalette as palUpdate, searchProductInPalettes as palSearch, searchLotInPalettes as palSearchLot, searchByEmplacement as palSearchEmpl, generatePaletteZPL as palZPL, loadPickingSlots, upsertPickingSlot, deletePickingSlot } from "@/lib/supabase-palettes";
 import type { WmsPickingSlot } from "@/lib/supabase-palettes";
 import * as pn from "@/lib/printnode";
 
@@ -5266,27 +5266,52 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     if (s === 4) { setNewEmplacement(code.trim()); showSuccess("Emplacement: " + code.trim()); }
   };
 
-  const handleLookupScan = async (code: string) => {
-    if (!code.trim()) return;
-    setLoading(true); setError(""); setLookupResults([]); setLookupInput(code.trim());
+  const universalSearch = async (code: string) => {
+    const q = code.trim();
+    if (!q) return;
+    setLoading(true); setError(""); setLookupResults([]); setLookupInput(q);
+    const palMap = new Map<number, { palette: WmsPalette; lignes: WmsPaletteLigne[] }>();
     try {
-      const p = await palFind(code.trim());
-      if (p) {
-        const d = await palDetail(p.id);
-        setLookupResults([d]);
-      } else {
-        const results = await palSearch(code.trim());
-        if (results.length) {
-          const palMap = new Map<number, { palette: WmsPalette; lignes: WmsPaletteLigne[] }>();
-          for (const r of results) {
-            if (!palMap.has(r.palette_id)) { try { palMap.set(r.palette_id, await palDetail(r.palette_id)); } catch { /* skip */ } }
-          }
-          setLookupResults(Array.from(palMap.values()));
-        } else { setError('"' + code + '" introuvable'); }
+      // 1. Par numéro palette
+      if (/^Pal-\d+$/i.test(q)) {
+        const p = await palFind(q);
+        if (p) { palMap.set(p.id, await palDetail(p.id)); }
       }
+      // 2. Par ref produit
+      if (palMap.size === 0) {
+        const byRef = await palSearch(q);
+        for (const r of byRef) { if (!palMap.has(r.palette_id)) { try { palMap.set(r.palette_id, await palDetail(r.palette_id)); } catch { /* skip */ } } }
+      }
+      // 3. Par lot
+      if (palMap.size === 0) {
+        const byLot = await palSearchLot(q);
+        for (const r of byLot) { if (!palMap.has(r.palette_id)) { try { palMap.set(r.palette_id, await palDetail(r.palette_id)); } catch { /* skip */ } } }
+      }
+      // 4. Par emplacement
+      if (palMap.size === 0) {
+        const byEmpl = await palSearchEmpl(q);
+        for (const p of byEmpl) { if (!palMap.has(p.id)) { try { palMap.set(p.id, await palDetail(p.id)); } catch { /* skip */ } } }
+      }
+      // 5. Par code-barres Odoo → résoudre la ref puis chercher
+      if (palMap.size === 0 && session) {
+        try {
+          const r = await odoo.smartScan(session, q);
+          if (r.type === "product" && r.data.default_code) {
+            const byRef = await palSearch(r.data.default_code);
+            for (const rr of byRef) { if (!palMap.has(rr.palette_id)) { try { palMap.set(rr.palette_id, await palDetail(rr.palette_id)); } catch { /* skip */ } } }
+          } else if (r.type === "lot" && r.data.lot?.name) {
+            const byLot = await palSearchLot(r.data.lot.name);
+            for (const rr of byLot) { if (!palMap.has(rr.palette_id)) { try { palMap.set(rr.palette_id, await palDetail(rr.palette_id)); } catch { /* skip */ } } }
+          }
+        } catch { /* skip */ }
+      }
+      if (palMap.size > 0) { setLookupResults(Array.from(palMap.values())); }
+      else { setError('"' + q + '" — introuvable dans les palettes'); }
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
+
+  const handleLookupScan = async (code: string) => { await universalSearch(code); };
 
   const routeScan = useCallback((code: string) => {
     if (view === "lookup") handleLookupScan(code);
@@ -5313,23 +5338,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     setLoading(false);
   };
 
-  const handleLookup = async () => {
-    if (!lookupInput.trim()) return;
-    setLoading(true); setError(""); setLookupResults([]);
-    try {
-      const p = await palFind(lookupInput.trim());
-      if (p) { setLookupResults([await palDetail(p.id)]); }
-      else {
-        const results = await palSearch(lookupInput.trim());
-        if (results.length) {
-          const palMap = new Map<number, { palette: WmsPalette; lignes: WmsPaletteLigne[] }>();
-          for (const r of results) { if (!palMap.has(r.palette_id)) { try { palMap.set(r.palette_id, await palDetail(r.palette_id)); } catch { /* skip */ } } }
-          setLookupResults(Array.from(palMap.values()));
-        } else { setError('"' + lookupInput + '" introuvable'); }
-      }
-    } catch (e: any) { setError(e.message); }
-    setLoading(false);
-  };
+  const handleLookup = async () => { await universalSearch(lookupInput); };
 
   const batchPrint = async () => {
     const n = parseInt(batchQty) || 0;
@@ -5578,7 +5587,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     {view === "lookup" && (<Section>
       <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>} title="Rechercher" sub="Numéro palette ou référence produit" />
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed" }} value={lookupInput} onChange={e => setLookupInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLookup()} placeholder="Pal-0001 ou référence produit..." />
+        <input style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed" }} value={lookupInput} onChange={e => setLookupInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLookup()} placeholder="Palette, réf, lot, emplacement, code-barres..." />
         <button onClick={handleLookup} disabled={loading} style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer", fontSize: 14 }}>{loading ? "..." : "→"}</button>
       </div>
       {lookupResults.map(({ palette: pal, lignes: ls }) => (<div key={pal.id} style={{ background: C.white, border: "1.5px solid #ddd6fe", borderRadius: 14, padding: "14px 16px", marginBottom: 10 }}>

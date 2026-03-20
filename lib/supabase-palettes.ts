@@ -277,3 +277,28 @@ export async function calcReappro(
 }
 
 // ── Picking Slots ──
+
+// ── Recherche par lot dans toutes les palettes ──
+export async function searchLotInPalettes(lot: string): Promise<(WmsPaletteLigne & { palette_numero: string; palette_emplacement: string | null })[]> {
+  const { data, error } = await sb.from("wms_palette_lignes")
+    .select("*, wms_palettes(numero, emplacement)")
+    .eq("lot", lot)
+    .gt("qty", 0);
+  if (error) throw new Error(error.message);
+  return (data || []).map((l: any) => ({
+    ...l,
+    palette_numero: l.wms_palettes?.numero,
+    palette_emplacement: l.wms_palettes?.emplacement,
+  }));
+}
+
+// ── Recherche par emplacement ──
+export async function searchByEmplacement(empl: string): Promise<WmsPalette[]> {
+  const { data, error } = await sb.from("wms_palettes")
+    .select("*")
+    .ilike("emplacement", "%" + empl + "%")
+    .eq("statut", "actif")
+    .order("emplacement");
+  if (error) throw new Error(error.message);
+  return data || [];
+}
