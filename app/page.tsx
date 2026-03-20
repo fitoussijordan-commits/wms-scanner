@@ -5084,7 +5084,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 // ══════════════════════════════════════════
 
 
-type PaletteView = "menu" | "scan" | "lookup" | "stock" | "reappro" | "pickingConfig";
+type PaletteView = "menu" | "scan" | "lookup" | "stock" | "reappro" | "pickingConfig" | "sortie";
 
 function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   onBack: () => void; session?: any; getPalettePrinter?: () => number | null;
@@ -5111,6 +5111,15 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [slots, setSlots] = useState<WmsPickingSlot[]>([]);
   const [reapproData, setReapproData] = useState<{ slot: WmsPickingSlot; stockPicking: number; manque: number; sourcePal: string | null; sourceEmpl: string | null }[]>([]);
   const [reapproLoading, setReapproLoading] = useState(false);
+  const [sortieStep, setSortieStep] = useState(0); // 0=palette, 1=ref, 2=lot, 3=qty
+  const [sortiePal, setSortiePal] = useState<WmsPalette | null>(null);
+  const [sortieLignes, setSortieLignes] = useState<WmsPaletteLigne[]>([]);
+  const [sortieRef, setSortieRef] = useState("");
+  const [sortieName, setSortieName] = useState("");
+  const [sortieLot, setSortieLot] = useState("");
+  const [sortieQty, setSortieQty] = useState("");
+  const [sortiePkg, setSortiePkg] = useState<number | null>(null);
+  const [sortieScanInput, setSortieScanInput] = useState("");
   const [showSlotForm, setShowSlotForm] = useState(false);
   const [slotForm, setSlotForm] = useState({ emplacement: "", odoo_ref: "", product_name: "", capacite_colis: "5", packaging_qty: "", notes: "" });
   const [editingSlotId, setEditingSlotId] = useState<number | null>(null);
@@ -5274,6 +5283,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
 
   const routeScan = useCallback((code: string) => {
     if (view === "lookup") handleLookupScan(code);
+    else if (view === "sortie") handleSortieScan(code);
     else handleScan(code);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
@@ -5380,6 +5390,79 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     setStockLoading(false);
   };
 
+  const handleSortieScan = async (code: string) => {
+    if (!code.trim()) return;
+    setSortieScanInput(""); setError("");
+    if (sortieStep === 0) {
+      setLoading(true);
+      try {
+        if (/^Pal-\d+$/i.test(code.trim())) {
+          const p = await palFind(code.trim());
+          if (p) {
+            const d = await palDetail(p.id);
+            setSortiePal(p); setSortieLignes(d.lignes); setSortieStep(1);
+            showSuccess("✓ " + p.numero);
+          } else { setError("Palette introuvable"); }
+        } else { setError("Scanne un numéro Pal-XXXX"); }
+      } catch (e: any) { setError(e.message); }
+      setLoading(false);
+      return;
+    }
+    if (sortieStep === 1) {
+      const ligne = sortieLignes.find(l => l.odoo_ref === code.trim());
+      if (ligne) {
+        setSortieRef(ligne.odoo_ref); setSortieName(ligne.product_name); setSortiePkg(ligne.packaging_qty);
+        if (ligne.lot) { setSortieLot(ligne.lot); setSortieStep(3); showSuccess("✓ " + ligne.odoo_ref + " lot " + ligne.lot); }
+        else { setSortieStep(2); showSuccess("✓ " + ligne.odoo_ref); }
+        return;
+      }
+      if (session) {
+        setLoading(true);
+        try {
+          const r = await odoo.smartScan(session, code.trim());
+          if (r.type === "product") {
+            const ref = r.data.default_code || code.trim();
+            const l = sortieLignes.find(ll => ll.odoo_ref === ref);
+            if (l) { setSortieRef(ref); setSortieName(r.data.name); setSortiePkg(l.packaging_qty); setSortieStep(2); showSuccess("✓ " + r.data.name); }
+            else { setError("Réf " + ref + " pas sur cette palette"); }
+            setLoading(false); return;
+          }
+        } catch { /* skip */ }
+        setLoading(false);
+      }
+      setError("Réf introuvable sur cette palette");
+      return;
+    }
+    if (sortieStep === 2) {
+      const l = sortieLignes.find(ll => ll.odoo_ref === sortieRef && ll.lot === code.trim());
+      if (l) { setSortieLot(code.trim()); setSortieStep(3); showSuccess("✓ Lot " + code.trim()); }
+      else { setSortieLot(code.trim()); setSortieStep(3); showSuccess("Lot: " + code.trim()); }
+      return;
+    }
+    if (sortieStep === 3) {
+      const n = parseFloat(code.trim());
+      if (!isNaN(n) && n > 0) { setSortieQty(String(n)); showSuccess("Qté: " + n); }
+      else { setError("Quantité invalide"); }
+    }
+  };
+
+  const validateSortie = async () => {
+    if (!sortiePal || !sortieRef) return;
+    const ligne = sortieLignes.find(l => l.odoo_ref === sortieRef && (!sortieLot || l.lot === sortieLot));
+    if (!ligne) { setError("Ligne introuvable"); return; }
+    const nbColis = parseFloat(sortieQty) || 0;
+    if (nbColis <= 0) { setError("Quantité invalide"); return; }
+    const totalUnits = sortiePkg && sortiePkg > 1 ? nbColis * sortiePkg : nbColis;
+    setLoading(true);
+    try {
+      const newQty = Math.max(0, ligne.qty - totalUnits);
+      await palUpdateQty(ligne.id, newQty);
+      showSuccess("✓ " + totalUnits + " unités sorties de " + sortiePal.numero);
+      setSortieStep(0); setSortiePal(null); setSortieLignes([]); setSortieRef(""); setSortieName(""); setSortieLot(""); setSortieQty(""); setSortiePkg(null);
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
   const loadReappro = async () => {
     if (!session) return;
     setReapproLoading(true); setError("");
@@ -5459,7 +5542,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
       </button>
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Palettes WMS</div>
-        {view !== "menu" && <div style={{ fontSize: 12, color: C.textMuted }}>{view === "scan" ? "Scanner / Remplir" : view === "lookup" ? "Recherche" : view === "stock" ? "Stock picking" : view === "reappro" ? "Réappro picking" : view === "pickingConfig" ? "Config racks" : ""}</div>}
+        {view !== "menu" && <div style={{ fontSize: 12, color: C.textMuted }}>{view === "scan" ? "Scanner / Remplir" : view === "lookup" ? "Recherche" : view === "stock" ? "Stock picking" : view === "reappro" ? "Réappro picking" : view === "pickingConfig" ? "Config racks" : view === "sortie" ? "Sortie colis" : ""}</div>}
       </div>
       {currentPalette && view === "scan" && <div style={{ fontSize: 12, color: "#7c3aed", fontWeight: 700 }}>{currentPalette.numero}</div>}
     </div>
@@ -5472,6 +5555,8 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
       <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>} label="Recherche palette" sub="Chercher par numéro ou référence produit" color="#2563eb" onClick={() => setView("lookup")} />
       <div style={{ height: 10 }} />
       <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>} label="Stock picking théorique" sub="Odoo − Palettes = ce qui reste en picking" color="#ea580c" onClick={() => setView("stock")} />
+      <div style={{ height: 10 }} />
+      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M12 5v14M5 12h14"/></svg>} label="Sortie colis" sub="Scanner palette → ref → lot → nb colis à sortir" color="#dc2626" onClick={() => setView("sortie")} />
       <div style={{ height: 10 }} />
       <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>} label="Réappro picking" sub="Ordres de réapprovisionnement des racks" color="#059669" onClick={() => { setView("reappro"); loadReappro(); }} />
       {isAdmin && (<><div style={{ height: 10 }} />
@@ -5632,6 +5717,50 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
           <div style={{ width: 55, textAlign: "right" as const, fontSize: 14, fontWeight: 800, color: s.picking > 0 ? C.orange : C.green }}>{s.picking}</div>
         </div>))}
         <div style={{ marginTop: 12, padding: "10px 14px", background: C.orangeSoft, border: `1px solid ${C.orangeBorder}`, borderRadius: 10, fontSize: 12, color: C.orange, fontWeight: 600 }}>Total picking : {stockData.reduce((acc, d) => acc + d.picking, 0)} unités sur {stockData.filter(d => d.picking > 0).length} réf</div>
+      </Section>)}
+    </div>)}
+
+    {view === "sortie" && (<div>
+      <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
+        {["Palette", "Référence", "Lot", "Nb colis"].map((label, i) => (<div key={i} style={{ flex: 1, textAlign: "center" as const }}>
+          <div style={{ height: 4, borderRadius: 2, marginBottom: 4, background: i < sortieStep ? C.green : i === sortieStep ? "#dc2626" : C.border }} />
+          <div style={{ fontSize: 10, fontWeight: i === sortieStep ? 700 : 500, color: i === sortieStep ? "#dc2626" : i < sortieStep ? C.green : C.textMuted }}>{i < sortieStep ? "✓" : ""} {label}</div>
+        </div>))}
+      </div>
+
+      {sortiePal && (<div style={{ ...cardStyle, padding: "10px 14px", marginBottom: 12, borderColor: "#fecaca" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <span style={{ fontWeight: 800, fontSize: 16, color: "#dc2626" }}>{sortiePal.numero}</span>
+            {sortiePal.emplacement && <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 8 }}>📍 {sortiePal.emplacement}</span>}
+          </div>
+          <button onClick={() => { setSortieStep(0); setSortiePal(null); setSortieLignes([]); setSortieRef(""); setSortieName(""); setSortieLot(""); setSortieQty(""); setSortiePkg(null); }} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, color: C.textSec }}>✕</button>
+        </div>
+        {sortieRef && <div style={{ fontSize: 12, marginTop: 4 }}><span style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{sortieRef}</span> <span style={{ color: C.textMuted }}>{sortieName}</span></div>}
+        {sortieLot && <div style={{ fontSize: 11, color: C.textMuted }}>🏷️ {sortieLot}</div>}
+      </div>)}
+
+      <Section>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#dc2626", marginBottom: 8 }}>
+          {["📦", "🔍", "🏷️", "🔢"][sortieStep]} {["Scanner la palette", "Scanner la référence", "Scanner le lot", "Nombre de colis"][sortieStep]}
+          {sortieStep === 1 && <span style={{ color: C.textMuted, fontWeight: 400 }}> — présent sur la palette</span>}
+          {sortieStep === 3 && sortiePkg && <span style={{ color: C.orange, fontWeight: 600 }}> (× {sortiePkg} par colis)</span>}
+          {loading && <Spinner />}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input style={{ ...inputStyle, flex: 1, borderColor: "#dc2626", fontSize: 15 }} value={sortieScanInput} onChange={e => setSortieScanInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") handleSortieScan(sortieScanInput); }} placeholder={sortieStep === 0 ? "Pal-XXXX..." : sortieStep === 1 ? "Code-barres produit..." : sortieStep === 2 ? "Numéro de lot..." : "Nombre de colis..."} type={sortieStep === 3 ? "number" : "text"} />
+          <button onClick={() => handleSortieScan(sortieScanInput)} disabled={loading} style={{ background: "#dc2626", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, fontSize: 16, cursor: "pointer", minWidth: 56 }}>→</button>
+        </div>
+        {sortieStep === 2 && (<button onClick={() => { setSortieLot(""); setSortieStep(3); }} style={{ marginTop: 8, width: "100%", padding: 10, ...secondaryBtn, fontSize: 13 }}>⏭ Passer (sans lot)</button>)}
+        {sortieStep === 3 && sortieQty && (<button onClick={validateSortie} disabled={loading} style={{ marginTop: 8, width: "100%", padding: 12, background: "#dc2626", border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>{loading ? "..." : "📤 Sortir " + sortieQty + " colis" + (sortiePkg && sortiePkg > 1 ? " (" + (parseFloat(sortieQty) * sortiePkg) + " u)" : "")}</button>)}
+      </Section>
+
+      {sortiePal && sortieLignes.length > 0 && sortieStep >= 1 && (<Section style={{ marginTop: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6, textTransform: "uppercase" as const }}>Contenu palette</div>
+        {sortieLignes.map(l => (<div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12, opacity: sortieRef && l.odoo_ref !== sortieRef ? 0.4 : 1 }}>
+          <div><span style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</span> {l.lot && <span style={{ color: C.textMuted }}>🏷️ {l.lot}</span>}</div>
+          <span style={{ fontWeight: 800 }}>{l.qty}{l.packaging_qty && l.packaging_qty > 1 ? <span style={{ fontSize: 10, color: "#7c3aed", marginLeft: 4 }}>{Math.round(l.qty / l.packaging_qty)}c</span> : ""}</span>
+        </div>))}
       </Section>)}
     </div>)}
 
