@@ -5094,7 +5094,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [currentPalette, setCurrentPalette] = useState<WmsPalette | null>(null);
   const [lignes, setLignes] = useState<WmsPaletteLigne[]>([]);
   const currentPaletteRef = useRef<WmsPalette | null>(null);
-  const setCurPalette = (p: WmsPalette | null) => { currentPaletteRef.current = p; setCurPalette(p); };
+  const setCurPalette = (p: WmsPalette | null) => { currentPaletteRef.current = p; setCurrentPalette(p); };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
@@ -5111,7 +5111,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   // Scan step: 0=scan palette, 1=scan ref, 2=lot, 3=qty, 4=emplacement
   const [step, setStep] = useState(0);
   const stepRef = useRef(0);
-  const updateStep = (v: number) => { stepRef.current = v; updateStep(v); };
+  const updateStep = (v: number) => { stepRef.current = v; setStep(v); };
   const [newRef, setNewRef] = useState("");
   const [newName, setNewName] = useState("");
   const [newLot, setNewLot] = useState("");
@@ -5126,16 +5126,10 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
 
   const showSuccess = (msg: string) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(""), 2500); };
 
-  // Register scan callback for global scanner via stable ref
+  // Scan callback — simple ref, mis à jour via onScanRef directement
+  // Le parent appelle paletteScanRef.current(code) qui délègue à handleScanRef
   const handleScanRef = useRef<(code: string) => void>(() => {});
-  useEffect(() => {
-    handleScanRef.current = handleScan;
-  });
-  useEffect(() => {
-    if (onScanRef) onScanRef.current = (code: string) => handleScanRef.current(code);
-    return () => { if (onScanRef) onScanRef.current = null; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  if (onScanRef) onScanRef.current = (code: string) => handleScanRef.current(code);
 
   const printPalette = async (p: WmsPalette, ls: WmsPaletteLigne[]) => {
     const printId = getPalettePrinter?.();
@@ -5270,6 +5264,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     // Step 4 — emplacement
     if (stepRef.current === 4) { setNewEmplacement(code.trim()); showSuccess(`Emplacement: ${code.trim()}`); return; }
   };
+  handleScanRef.current = handleScan;
 
   const validateLine = async () => {
     if (!currentPalette || !newRef.trim()) return;
