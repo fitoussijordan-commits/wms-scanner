@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as odoo from "@/lib/odoo";
 import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByNumero as palFind, createPalette as palCreate, upsertLigne as palUpsert, updateLigneQty as palUpdateQty, updatePalette as palUpdate, searchProductInPalettes as palSearch, generatePaletteZPL as palZPL } from "@/lib/supabase-palettes";
-import PalettesScreen from "@/components/PalettesWMS";
 import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
@@ -5070,6 +5069,476 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 // ══════════════════════════════════════════
 // PALETTES WMS
 // ══════════════════════════════════════════
+
+
+type PaletteView = "menu" | "scan" | "lookup" | "stock";
+
+function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
+  onBack: () => void; session?: any; getPalettePrinter?: () => number | null;
+  onScanRef?: React.MutableRefObject<((code: string) => void) | null>;
+}): JSX.Element {
+  const [view, setView] = useState<PaletteView>("menu");
+  const [scanInput, setScanInput] = useState("");
+  const [currentPalette, setCurPalette_raw] = useState<WmsPalette | null>(null);
+  const [lignes, setLignes] = useState<WmsPaletteLigne[]>([]);
+  const curPalRef = useRef<WmsPalette | null>(null);
+  const setCurPalette = (p: WmsPalette | null) => { curPalRef.current = p; setCurPalette_raw(p); };
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
+  const [batchQty, setBatchQty] = useState("5");
+  const [editingLigne, setEditingLigne] = useState<number | null>(null);
+  const [editQty, setEditQty] = useState("");
+  const [editEmpl, setEditEmpl] = useState(false);
+  const [editEmplValue, setEditEmplValue] = useState("");
+  const [sortingLigne, setSortingLigne] = useState<number | null>(null);
+  const [sortQty, setSortQty] = useState("");
+  const [stockData, setStockData] = useState<{ ref: string; name: string; odoo: number; supabase: number; picking: number }[]>([]);
+  const [stockLoading, setStockLoading] = useState(false);
+  const [step, setStep_raw] = useState(0);
+  const stepRef = useRef(0);
+  const setStep = (v: number) => { stepRef.current = v; setStep_raw(v); };
+  const [newRef, setNewRef] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newLot, setNewLot] = useState("");
+  const [newQty, setNewQty] = useState("1");
+  const [newEmplacement, setNewEmplacement] = useState("");
+  const [packaging, setPackaging] = useState<number | null>(null);
+  const [qtyMode, setQtyMode] = useState<"colis" | "libre">("colis");
+  const [lookupInput, setLookupInput] = useState("");
+  const [lookupResults, setLookupResults] = useState<{ palette: WmsPalette; lignes: WmsPaletteLigne[] }[]>([]);
+  const showSuccess = (msg: string) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(""), 2500); };
+  const handleScanRef = useRef<(code: string) => void>(() => {});
+  useEffect(() => {
+    if (onScanRef) { onScanRef.current = (code: string) => handleScanRef.current(code); }
+    return () => { if (onScanRef) onScanRef.current = null; };
+  }, [onScanRef]);
+
+  const printPalette = async (p: WmsPalette, ls: WmsPaletteLigne[]) => {
+    const printId = getPalettePrinter?.();
+    if (!printId) { setError("Aucune imprimante Palettes WMS configurée (Paramètres)"); return; }
+    const zpl = palZPL(p, ls);
+    try {
+      const res = await fetch("/api/printnode", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "print", printerId: printId, title: p.numero, content: btoa(unescape(encodeURIComponent(zpl))), source: "WMS Scanner" }),
+      });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || "Erreur PrintNode"); }
+      showSuccess("🖨️ " + p.numero + " envoyée");
+    } catch (e: any) { setError("Impression: " + e.message); }
+  };
+
+  const fetchPackaging = async (productId: number): Promise<number | null> => {
+    if (!session) return null;
+    try {
+      const pkgs = await odoo.searchRead(session, "product.packaging", [["product_id", "=", productId]], ["qty", "name"], 5);
+      if (pkgs.length > 0) return pkgs[0].qty || null;
+    } catch { /* ignore */ }
+    return null;
+  };
+
+  const handleScan = async (code: string) => {
+    const s = stepRef.current;
+    if (!code.trim()) {
+      if (s === 0) {
+        setLoading(true);
+        try {
+          const p = await palCreate();
+          const d = await palDetail(p.id);
+          setCurPalette(p); setLignes(d.lignes); setStep(1);
+          await printPalette(p, d.lignes);
+          showSuccess("✓ " + p.numero + " créée");
+        } catch (e: any) { setError(e.message); }
+        setLoading(false);
+      }
+      return;
+    }
+    setScanInput(""); setError("");
+    if (/^Pal-\d+$/i.test(code.trim()) && s !== 0) {
+      setLoading(true);
+      try {
+        const p = await palFind(code.trim());
+        if (p) {
+          const d = await palDetail(p.id);
+          setCurPalette(p); setLignes(d.lignes); setStep(1);
+          setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis");
+          showSuccess("✓ " + p.numero + " chargée");
+        }
+      } catch (e: any) { setError(e.message); }
+      setLoading(false);
+      return;
+    }
+    if (s === 0) {
+      setLoading(true);
+      try {
+        let p: WmsPalette | null = null;
+        if (/^Pal-\d+$/i.test(code.trim())) p = await palFind(code.trim());
+        if (!p) {
+          p = await palCreate();
+          const d = await palDetail(p.id);
+          setCurPalette(p); setLignes(d.lignes); setStep(1);
+          await printPalette(p, d.lignes);
+          showSuccess("✓ " + p.numero + " créée");
+        } else {
+          const d = await palDetail(p.id);
+          setCurPalette(p); setLignes(d.lignes); setStep(1);
+          showSuccess("✓ " + p.numero + " chargée");
+        }
+      } catch (e: any) { setError(e.message); }
+      setLoading(false);
+      return;
+    }
+    if (s === 1) {
+      setPackaging(null); setQtyMode("colis");
+      if (session) {
+        setLoading(true);
+        try {
+          const r = await odoo.smartScan(session, code.trim());
+          if (r.type === "product") {
+            setNewRef(r.data.default_code || code.trim()); setNewName(r.data.name);
+            const pkg = await fetchPackaging(r.data.id);
+            setPackaging(pkg);
+            showSuccess("✓ " + r.data.name + (pkg ? " (cond. " + pkg + ")" : ""));
+            setStep(2); setLoading(false); return;
+          }
+          if (r.type === "lot") {
+            setNewRef(r.data.product?.default_code || code.trim()); setNewName(r.data.product?.name || "");
+            setNewLot(r.data.lot.name);
+            if (r.data.product?.id) { const pkg = await fetchPackaging(r.data.product.id); setPackaging(pkg); }
+            showSuccess("✓ Lot " + r.data.lot.name); setStep(3); setLoading(false); return;
+          }
+        } catch { /* ignore */ }
+        setLoading(false);
+      }
+      setNewRef(code.trim()); setNewName(""); showSuccess("Réf: " + code.trim()); setStep(2);
+      return;
+    }
+    if (s === 2) { setNewLot(code.trim()); showSuccess("Lot: " + code.trim()); setStep(3); return; }
+    if (s === 3) {
+      const n = parseFloat(code.trim());
+      if (!isNaN(n) && n > 0) {
+        const total = (packaging && qtyMode === "colis") ? n * packaging : n;
+        setNewQty(String(total));
+        showSuccess(packaging && qtyMode === "colis" ? n + " × " + packaging + " = " + total : "Qté: " + total);
+        setStep(4);
+      } else { setError("Quantité invalide"); }
+      return;
+    }
+    if (s === 4) { setNewEmplacement(code.trim()); showSuccess("Emplacement: " + code.trim()); }
+  };
+
+  const handleLookupScan = async (code: string) => {
+    if (!code.trim()) return;
+    setLoading(true); setError(""); setLookupResults([]); setLookupInput(code.trim());
+    try {
+      const p = await palFind(code.trim());
+      if (p) {
+        const d = await palDetail(p.id);
+        setLookupResults([d]);
+      } else {
+        const results = await palSearch(code.trim());
+        if (results.length) {
+          const palMap = new Map<number, { palette: WmsPalette; lignes: WmsPaletteLigne[] }>();
+          for (const r of results) {
+            if (!palMap.has(r.palette_id)) { try { palMap.set(r.palette_id, await palDetail(r.palette_id)); } catch { /* skip */ } }
+          }
+          setLookupResults(Array.from(palMap.values()));
+        } else { setError('"' + code + '" introuvable'); }
+      }
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const routeScan = useCallback((code: string) => {
+    if (view === "lookup") handleLookupScan(code);
+    else handleScan(code);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+  useEffect(() => { handleScanRef.current = routeScan; }, [routeScan]);
+
+  const validateLine = async () => {
+    if (!curPalRef.current || !newRef.trim()) return;
+    setLoading(true);
+    try {
+      const ligneData: any = { odoo_ref: newRef.trim(), product_name: newName.trim() || newRef.trim(), lot: newLot.trim() || null, expiry_date: null, qty: parseFloat(newQty) || 1, unite: "unité" };
+      if (packaging) ligneData.packaging_qty = packaging;
+      await palUpsert(curPalRef.current.id, ligneData);
+      if (newEmplacement.trim()) await palUpdate(curPalRef.current.id, { emplacement: newEmplacement.trim() });
+      const d = await palDetail(curPalRef.current.id);
+      setCurPalette(d.palette); setLignes(d.lignes);
+      showSuccess("✓ Ligne ajoutée");
+      setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis");
+      setCurPalette(null); setLignes([]); setStep(0);
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const handleLookup = async () => {
+    if (!lookupInput.trim()) return;
+    setLoading(true); setError(""); setLookupResults([]);
+    try {
+      const p = await palFind(lookupInput.trim());
+      if (p) { setLookupResults([await palDetail(p.id)]); }
+      else {
+        const results = await palSearch(lookupInput.trim());
+        if (results.length) {
+          const palMap = new Map<number, { palette: WmsPalette; lignes: WmsPaletteLigne[] }>();
+          for (const r of results) { if (!palMap.has(r.palette_id)) { try { palMap.set(r.palette_id, await palDetail(r.palette_id)); } catch { /* skip */ } } }
+          setLookupResults(Array.from(palMap.values()));
+        } else { setError('"' + lookupInput + '" introuvable'); }
+      }
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const batchPrint = async () => {
+    const n = parseInt(batchQty) || 0;
+    if (n < 1 || n > 50) { setError("Entre 1 et 50"); return; }
+    const printId = getPalettePrinter?.();
+    if (!printId) { setError("Aucune imprimante configurée"); return; }
+    setLoading(true); setError("");
+    let ok = 0;
+    for (let i = 0; i < n; i++) {
+      try {
+        const p = await palCreate();
+        const zpl = palZPL(p, []);
+        await fetch("/api/printnode", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "print", printerId: printId, title: p.numero, content: btoa(unescape(encodeURIComponent(zpl))), source: "WMS Scanner" }) });
+        ok++;
+      } catch { /* skip */ }
+    }
+    showSuccess("✓ " + ok + " étiquette" + (ok > 1 ? "s" : "") + " imprimée" + (ok > 1 ? "s" : ""));
+    setLoading(false);
+  };
+
+  const sortirVersPicking = async (ligneId: number, qtySortie: number) => {
+    if (qtySortie <= 0 || !curPalRef.current) return;
+    setLoading(true);
+    try {
+      const ligne = lignes.find(l => l.id === ligneId);
+      if (!ligne) throw new Error("Ligne introuvable");
+      await palUpdateQty(ligneId, Math.max(0, ligne.qty - qtySortie));
+      const d = await palDetail(curPalRef.current.id);
+      setCurPalette(d.palette); setLignes(d.lignes);
+      setSortingLigne(null); setSortQty("");
+      showSuccess("✓ " + qtySortie + " sorti" + (qtySortie > 1 ? "s" : "") + " vers picking");
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const loadStockPicking = async () => {
+    if (!session) return;
+    setStockLoading(true); setError("");
+    try {
+      const palettes = await palLoad("actif");
+      const supaMap: Record<string, { qty: number; name: string }> = {};
+      for (const pal of palettes) {
+        const d = await palDetail(pal.id);
+        for (const l of d.lignes) {
+          if (!supaMap[l.odoo_ref]) supaMap[l.odoo_ref] = { qty: 0, name: l.product_name };
+          supaMap[l.odoo_ref].qty += l.qty;
+        }
+      }
+      const refs = Object.keys(supaMap);
+      const result: typeof stockData = [];
+      for (const ref of refs) {
+        try {
+          const prods = await odoo.searchRead(session, "product.product", [["default_code", "=", ref]], ["id", "name"], 1);
+          if (prods.length > 0) {
+            const quants = await odoo.searchRead(session, "stock.quant", [["product_id", "=", prods[0].id], ["location_id.usage", "=", "internal"]], ["quantity"], 100);
+            const odooTotal = quants.reduce((acc: number, q: any) => acc + (q.quantity || 0), 0);
+            result.push({ ref, name: supaMap[ref].name, odoo: odooTotal, supabase: supaMap[ref].qty, picking: Math.max(0, odooTotal - supaMap[ref].qty) });
+          }
+        } catch { /* skip */ }
+      }
+      result.sort((a, b) => b.picking - a.picking);
+      setStockData(result);
+    } catch (e: any) { setError(e.message); }
+    setStockLoading(false);
+  };
+
+  const stepLabels = ["Palette", "Référence", "Lot", "Quantité", "Emplacement"];
+
+  return (<div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+      <button onClick={view === "menu" ? onBack : () => { setView("menu"); setError(""); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Palettes WMS</div>
+        {view !== "menu" && <div style={{ fontSize: 12, color: C.textMuted }}>{view === "scan" ? "Scanner / Remplir" : view === "lookup" ? "Recherche" : "Stock picking"}</div>}
+      </div>
+      {currentPalette && view === "scan" && <div style={{ fontSize: 12, color: "#7c3aed", fontWeight: 700 }}>{currentPalette.numero}</div>}
+    </div>
+    {successMsg && <Alert type="success">{successMsg}</Alert>}
+    {error && <div style={{ background: C.redSoft, border: `1px solid ${C.redBorder}`, borderRadius: 10, padding: "10px 14px", color: C.red, fontSize: 13, marginBottom: 10, cursor: "pointer" }} onClick={() => setError("")}>{error} ✕</div>}
+
+    {view === "menu" && (<div>
+      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>} label="Scanner / Remplir" sub="Créer, scanner et remplir des palettes" color="#7c3aed" onClick={() => setView("scan")} />
+      <div style={{ height: 10 }} />
+      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>} label="Recherche palette" sub="Chercher par numéro ou référence produit" color="#2563eb" onClick={() => setView("lookup")} />
+      <div style={{ height: 10 }} />
+      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>} label="Stock picking théorique" sub="Odoo − Palettes = ce qui reste en picking" color="#ea580c" onClick={() => setView("stock")} />
+    </div>)}
+
+    {view === "lookup" && (<Section>
+      <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>} title="Rechercher" sub="Numéro palette ou référence produit" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed" }} value={lookupInput} onChange={e => setLookupInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLookup()} placeholder="Pal-0001 ou référence produit..." />
+        <button onClick={handleLookup} disabled={loading} style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer", fontSize: 14 }}>{loading ? "..." : "→"}</button>
+      </div>
+      {lookupResults.map(({ palette: pal, lignes: ls }) => (<div key={pal.id} style={{ background: C.white, border: "1.5px solid #ddd6fe", borderRadius: 14, padding: "14px 16px", marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: "#7c3aed" }}>{pal.numero}</div>
+            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>📍 {pal.emplacement || "—"} · {ls.length} réf · {ls.reduce((acc, l) => acc + l.qty, 0)} u · <span style={{ color: pal.statut === "actif" ? C.green : C.orange, fontWeight: 600 }}>{pal.statut}</span></div>
+          </div>
+          <button onClick={() => printPalette(pal, ls)} style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>🖨️</button>
+        </div>
+        {ls.map((l, idx) => (<div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: idx > 0 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</span>
+            <span style={{ color: C.text, marginLeft: 6 }}>{l.product_name}</span>
+            {l.lot && <span style={{ color: C.textMuted, marginLeft: 6 }}>🏷️ {l.lot}</span>}
+          </div>
+          <div style={{ textAlign: "right" as const, flexShrink: 0, marginLeft: 8 }}>
+            <div style={{ fontWeight: 800, fontSize: 14, color: C.text }}>{l.qty}</div>
+            {l.packaging_qty && l.packaging_qty > 1 && <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 600 }}>{Math.round(l.qty / l.packaging_qty)} × {l.packaging_qty}</div>}
+          </div>
+        </div>))}
+      </div>))}
+    </Section>)}
+
+    {view === "scan" && (<div>
+      <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
+        {stepLabels.map((label, i) => (<div key={i} style={{ flex: 1, textAlign: "center" as const }}>
+          <div style={{ height: 4, borderRadius: 2, marginBottom: 4, background: i < step ? C.green : i === step ? "#7c3aed" : C.border }} />
+          <div style={{ fontSize: 10, fontWeight: i === step ? 700 : 500, color: i === step ? "#7c3aed" : i < step ? C.green : C.textMuted }}>{i < step ? "✓" : ""} {label}</div>
+        </div>))}
+      </div>
+
+      {step === 0 && !currentPalette && (<Section style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>🖨️ Étiquettes palettes vierges</div>
+        <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 10 }}>Imprimer un lot avant d'aller en stock</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {[3, 5, 10, 20].map(n => (<button key={n} onClick={() => setBatchQty(String(n))} style={{ padding: "8px 0", flex: 1, borderRadius: 8, border: `1.5px solid ${batchQty === String(n) ? "#7c3aed" : C.border}`, background: batchQty === String(n) ? "#f5f3ff" : C.white, color: batchQty === String(n) ? "#7c3aed" : C.textSec, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{n}</button>))}
+          <input style={{ ...inputStyle, width: 60, textAlign: "center" as const, padding: "8px 4px", fontSize: 14, fontWeight: 700 }} value={batchQty} onChange={e => setBatchQty(e.target.value.replace(/\D/g, ""))} type="text" inputMode="numeric" placeholder="N" />
+        </div>
+        <button onClick={batchPrint} disabled={loading || !batchQty} style={{ marginTop: 10, width: "100%", padding: 12, background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "Impression..." : "🖨️ Imprimer " + (batchQty || 0) + " étiquette" + (parseInt(batchQty) > 1 ? "s" : "")}</button>
+      </Section>)}
+
+      {currentPalette && (<div style={{ ...cardStyle, padding: "10px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", borderColor: "#ddd6fe" }}>
+        <div>
+          <span style={{ fontWeight: 800, fontSize: 16, color: "#7c3aed" }}>{currentPalette.numero}</span>
+          {currentPalette.emplacement && <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 8 }}>📍 {currentPalette.emplacement}</span>}
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => printPalette(currentPalette, lignes)} style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>🖨️</button>
+          <button onClick={() => { setCurPalette(null); setLignes([]); setStep(0); setNewRef(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis"); }} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.textSec }}>✕</button>
+        </div>
+      </div>)}
+
+      <Section>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#7c3aed", marginBottom: 8 }}>
+          {["📦","🔍","🏷️","🔢","📍"][step]} {stepLabels[step]}
+          {step === 0 && <span style={{ color: C.textMuted, fontWeight: 400 }}> — scanner ou Entrée pour créer</span>}
+          {step === 3 && packaging && <span style={{ color: C.green, fontWeight: 600 }}> (× {packaging} par colis)</span>}
+          {loading && <Spinner />}
+        </div>
+        {step === 3 && packaging && (<div style={{ display: "flex", background: C.white, borderRadius: 8, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 8 }}>
+          {(["colis", "libre"] as const).map(m => (<button key={m} onClick={() => setQtyMode(m)} style={{ flex: 1, padding: "8px 0", fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "inherit", background: qtyMode === m ? "#7c3aed" : "transparent", color: qtyMode === m ? "#fff" : C.textSec }}>{m === "colis" ? "📦 Colis (×" + packaging + ")" : "🔢 Unités libres"}</button>))}
+        </div>)}
+        <div style={{ display: "flex", gap: 8 }}>
+          <input style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed", fontSize: 15 }} value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") handleScan(scanInput); }} placeholder={step === 0 ? "Pal-XXXX ou Entrée pour créer..." : step === 1 ? "Code-barres produit..." : step === 2 ? "Numéro de lot..." : step === 3 ? (packaging && qtyMode === "colis" ? "Nb colis (×" + packaging + ")..." : "Quantité...") : "Emplacement (optionnel)..."} type={step === 3 ? "number" : "text"} />
+          <button onClick={() => handleScan(scanInput)} disabled={loading} style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, fontSize: 16, cursor: "pointer", minWidth: 56 }}>→</button>
+        </div>
+        {step === 2 && (<button onClick={() => { setNewLot(""); setStep(3); }} style={{ marginTop: 8, width: "100%", padding: 10, ...secondaryBtn, fontSize: 13 }}>⏭ Passer (sans lot)</button>)}
+        {step === 3 && scanInput && (<button onClick={() => handleScan(scanInput)} disabled={loading} style={{ marginTop: 8, width: "100%", padding: 12, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>{packaging && qtyMode === "colis" ? "Confirmer " + scanInput + " × " + packaging + " = " + (parseFloat(scanInput || "0") * packaging) + " →" : "Confirmer " + scanInput + " unités →"}</button>)}
+        {step === 4 && (<button onClick={validateLine} disabled={loading} style={{ marginTop: 8, width: "100%", padding: 12, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>{loading ? "..." : "✓ Valider la ligne" + (newEmplacement ? "" : " (sans emplacement)")}</button>)}
+      </Section>
+
+      {step > 1 && (<div style={{ ...cardStyle, padding: "10px 14px", marginBottom: 12, fontSize: 13 }}>
+        {newRef && <div><strong>Réf:</strong> {newRef} {newName && <span style={{ color: C.textMuted }}>— {newName}</span>}</div>}
+        {newLot && <div><strong>Lot:</strong> {newLot}</div>}
+        {step >= 4 && <div><strong>Qté:</strong> {newQty} unités{packaging ? " (" + Math.round(parseFloat(newQty) / packaging) + " colis × " + packaging + ")" : ""}</div>}
+        {newEmplacement && <div><strong>Emplacement:</strong> {newEmplacement}</div>}
+      </div>)}
+
+      {currentPalette && (<div style={{ ...cardStyle, padding: "10px 14px", marginBottom: 12, borderColor: "#ddd6fe" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, marginBottom: 4, textTransform: "uppercase" as const }}>Emplacement</div>
+        {editEmpl ? (<div style={{ display: "flex", gap: 8 }}>
+          <input style={{ ...inputStyle, flex: 1, fontSize: 14 }} value={editEmplValue} onChange={e => setEditEmplValue(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && editEmplValue.trim()) { palUpdate(currentPalette.id, { emplacement: editEmplValue.trim() }).then(() => palDetail(currentPalette.id)).then(d => { setCurPalette(d.palette); setEditEmpl(false); showSuccess("✓"); }); } }} placeholder="Scanner ou taper..." />
+          <button onClick={async () => { if (editEmplValue.trim()) { await palUpdate(currentPalette.id, { emplacement: editEmplValue.trim() }); const d = await palDetail(currentPalette.id); setCurPalette(d.palette); showSuccess("✓"); } setEditEmpl(false); }} style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 700, cursor: "pointer" }}>✓</button>
+          <button onClick={() => setEditEmpl(false)} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>✕</button>
+        </div>) : (<div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: currentPalette.emplacement ? C.blue : C.textMuted }}>📍 {currentPalette.emplacement || "Non défini"}</span>
+          <button onClick={() => { setEditEmplValue(currentPalette.emplacement || ""); setEditEmpl(true); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: C.textMuted }}>✏️</button>
+        </div>)}
+      </div>)}
+
+      {lignes.length > 0 && (<Section>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const }}>Contenu ({lignes.length} réf · {lignes.reduce((acc, l) => acc + l.qty, 0)} u)</div>
+          <button onClick={() => currentPalette && printPalette(currentPalette, lignes)} style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#7c3aed" }}>🖨️</button>
+        </div>
+        {lignes.map(l => (<div key={l.id} style={{ padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</div>
+              <div style={{ fontSize: 12, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{l.product_name}</div>
+              {l.lot && <div style={{ fontSize: 11, color: C.textMuted }}>🏷️ {l.lot}</div>}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+              {editingLigne === l.id ? (<>
+                <input style={{ width: 60, padding: "4px 6px", border: `1.5px solid ${C.blue}`, borderRadius: 6, fontSize: 14, fontWeight: 700, textAlign: "center" as const }} value={editQty} onChange={e => setEditQty(e.target.value)} type="number" onKeyDown={e => { if (e.key === "Enter") { const nq = parseFloat(editQty); if (nq > 0 && currentPalette) { palUpdateQty(l.id, nq).then(() => palDetail(currentPalette.id)).then(d => { setLignes(d.lignes); setEditingLigne(null); }); } } }} />
+                <button onClick={async () => { const nq = parseFloat(editQty); if (nq > 0 && currentPalette) { await palUpdateQty(l.id, nq); const d = await palDetail(currentPalette.id); setLignes(d.lignes); } setEditingLigne(null); }} style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: C.greenSoft, color: C.green, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>✓</button>
+              </>) : sortingLigne === l.id ? (<>
+                <input style={{ width: 60, padding: "4px 6px", border: `1.5px solid ${C.orange}`, borderRadius: 6, fontSize: 14, fontWeight: 700, textAlign: "center" as const }} value={sortQty} onChange={e => setSortQty(e.target.value)} type="number" placeholder={l.packaging_qty ? "×" + l.packaging_qty : "qty"} onKeyDown={e => { if (e.key === "Enter") { const nn = parseFloat(sortQty); const tot = l.packaging_qty && l.packaging_qty > 1 ? nn * l.packaging_qty : nn; if (tot > 0) sortirVersPicking(l.id, tot); } }} />
+                <button onClick={() => { const nn = parseFloat(sortQty); const tot = l.packaging_qty && l.packaging_qty > 1 ? nn * l.packaging_qty : nn; if (tot > 0) sortirVersPicking(l.id, tot); }} style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: C.orangeSoft, color: C.orange, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>→</button>
+                <button onClick={() => { setSortingLigne(null); setSortQty(""); }} style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: C.bg, color: C.textMuted, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+              </>) : (<>
+                <button onClick={() => { setSortingLigne(l.id); setSortQty(""); setEditingLigne(null); }} style={{ padding: "3px 8px", borderRadius: 6, border: "none", background: C.orangeSoft, color: C.orange, cursor: "pointer", fontSize: 10, fontWeight: 700 }}>📤</button>
+                <button onClick={() => { setEditingLigne(l.id); setEditQty(String(l.qty)); setSortingLigne(null); }} style={{ fontSize: 16, fontWeight: 800, color: C.text, background: "none", border: "none", cursor: "pointer", padding: "2px 4px" }}>{l.qty}</button>
+                <button onClick={async () => { if (currentPalette) { await palUpdateQty(l.id, 0); const d = await palDetail(currentPalette.id); setLignes(d.lignes); } }} style={{ width: 24, height: 24, borderRadius: 6, border: "none", background: C.redSoft, color: C.red, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+              </>)}
+            </div>
+          </div>
+          {sortingLigne === l.id && l.packaging_qty && l.packaging_qty > 1 && sortQty && (<div style={{ fontSize: 11, color: C.orange, fontWeight: 600, marginTop: 4, textAlign: "right" as const }}>{sortQty} colis × {l.packaging_qty} = {parseFloat(sortQty || "0") * l.packaging_qty} unités</div>)}
+        </div>))}
+      </Section>)}
+    </div>)}
+
+    {view === "stock" && (<div>
+      <Section>
+        <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="2.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>} title="Stock picking théorique" sub="Odoo total − Palettes WMS = Picking" />
+        <button onClick={loadStockPicking} disabled={stockLoading} style={{ width: "100%", padding: 12, background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: stockLoading ? "wait" : "pointer", marginBottom: 14 }}>{stockLoading ? "Calcul en cours..." : "🔄 Calculer le stock picking"}</button>
+      </Section>
+      {stockData.length > 0 && (<Section>
+        <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `2px solid ${C.border}`, fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const }}>
+          <div style={{ flex: 1 }}>Réf</div>
+          <div style={{ width: 55, textAlign: "right" as const }}>Odoo</div>
+          <div style={{ width: 55, textAlign: "right" as const }}>Palettes</div>
+          <div style={{ width: 55, textAlign: "right" as const, color: C.orange }}>Picking</div>
+        </div>
+        {stockData.map((s, i) => (<div key={s.ref} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < stockData.length - 1 ? `1px solid ${C.border}` : "" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{s.ref}</div>
+            <div style={{ fontSize: 11, color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{s.name}</div>
+          </div>
+          <div style={{ width: 55, textAlign: "right" as const, fontSize: 13, fontWeight: 600, color: C.textSec }}>{s.odoo}</div>
+          <div style={{ width: 55, textAlign: "right" as const, fontSize: 13, fontWeight: 600, color: "#7c3aed" }}>{s.supabase}</div>
+          <div style={{ width: 55, textAlign: "right" as const, fontSize: 14, fontWeight: 800, color: s.picking > 0 ? C.orange : C.green }}>{s.picking}</div>
+        </div>))}
+        <div style={{ marginTop: 12, padding: "10px 14px", background: C.orangeSoft, border: `1px solid ${C.orangeBorder}`, borderRadius: 10, fontSize: 12, color: C.orange, fontWeight: 600 }}>Total picking : {stockData.reduce((acc, d) => acc + d.picking, 0)} unités sur {stockData.filter(d => d.picking > 0).length} réf</div>
+      </Section>)}
+    </div>)}
+  </div>);
+}
+
+
+function Login({ onLogin, loading, error }: { onLogin: (u: string, d: string, l: string, p: string) => void; loading: boolean; error: string }) {
+  const cfg = typeof window !== "undefined" ? loadCfg() : null;
+  const [url, setUrl] = useState(cfg?.u || ""); const [db, setDb] = useState(cfg?.d || "");
   const [user, setUser] = useState(""); const [pw, setPw] = useState("");
   const [showCfg, setShowCfg] = useState(!cfg);
   const go = () => { if (url && db && user && pw) onLogin(url, db, user, pw); };
