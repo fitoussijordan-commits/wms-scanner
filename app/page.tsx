@@ -5737,7 +5737,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
         </div>
         {stockData.map((s, i) => (<div key={s.ref} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < stockData.length - 1 ? `1px solid ${C.border}` : "" }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{s.ref}</div>
+            <button onClick={() => { setLookupInput(s.ref); setView("lookup"); universalSearch(s.ref); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: C.blue, textDecoration: "underline" }}>{s.ref}</button>
             <div style={{ fontSize: 11, color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{s.name}</div>
           </div>
           <div style={{ width: 55, textAlign: "right" as const, fontSize: 13, fontWeight: 600, color: C.textSec }}>{s.odoo}</div>
