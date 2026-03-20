@@ -5431,22 +5431,24 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     setStockLoading(false);
   };
 
-  const StepBar = () => (
-    <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
-      {stepLabels.map((label, i) => (
-        <div key={i} style={{ flex: 1, textAlign: "center" as const }}>
-          <div style={{
-            height: 4, borderRadius: 2, marginBottom: 4,
-            background: i < step ? C.green : i === step ? "#7c3aed" : C.border,
-            transition: "background .2s",
-          }} />
-          <div style={{ fontSize: 10, fontWeight: i === step ? 700 : 500, color: i === step ? "#7c3aed" : i < step ? C.green : C.textMuted }}>
-            {i < step ? "✓" : ""} {label}
+  const StepBar = () => {
+    return (
+      <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
+        {stepLabels.map((label, i) => (
+          <div key={i} style={{ flex: 1, textAlign: "center" as const }}>
+            <div style={{
+              height: 4, borderRadius: 2, marginBottom: 4,
+              background: i < step ? C.green : i === step ? "#7c3aed" : C.border,
+              transition: "background .2s",
+            }} />
+            <div style={{ fontSize: 10, fontWeight: i === step ? 700 : 500, color: i === step ? "#7c3aed" : i < step ? C.green : C.textMuted }}>
+              {i < step ? "✓" : ""} {label}
+            </div>
           </div>
-        </div>
-      ))}
-    </div>
-  );
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div>
