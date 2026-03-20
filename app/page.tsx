@@ -5131,6 +5131,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [newLot, setNewLot] = useState("");
   const [newQty, setNewQty] = useState("1");
   const [newEmplacement, setNewEmplacement] = useState("");
+  const [newExpiry, setNewExpiry] = useState("");
   const [packaging, setPackaging] = useState<number | null>(null);
   const [qtyMode, setQtyMode] = useState<"colis" | "libre">("colis");
   const [lookupInput, setLookupInput] = useState("");
@@ -5193,7 +5194,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
         if (p) {
           const d = await palDetail(p.id);
           setCurPalette(p); setLignes(d.lignes); setStep(1);
-          setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis");
+          setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setNewExpiry(""); setPackaging(null); setQtyMode("colis");
           showSuccess("✓ " + p.numero + " chargée");
         }
       } catch (e: any) { setError(e.message); }
@@ -5236,6 +5237,8 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
           if (r.type === "lot") {
             setNewRef(r.data.product?.default_code || code.trim()); setNewName(r.data.product?.name || "");
             setNewLot(r.data.lot.name);
+            if (r.data.lot.expiration_date) setNewExpiry(r.data.lot.expiration_date);
+            else { try { const lots = await odoo.searchRead(session, "stock.lot", [["id", "=", r.data.lot.id]], ["expiration_date"], 1); if (lots[0]?.expiration_date) setNewExpiry(lots[0].expiration_date); } catch { /* skip */ } }
             if (r.data.product?.id) { const pkg = await fetchPackaging(r.data.product.id); setPackaging(pkg); }
             showSuccess("✓ Lot " + r.data.lot.name); setStep(3); setLoading(false); return;
           }
@@ -5245,7 +5248,11 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
       setNewRef(code.trim()); setNewName(""); showSuccess("Réf: " + code.trim()); setStep(2);
       return;
     }
-    if (s === 2) { setNewLot(code.trim()); showSuccess("Lot: " + code.trim()); setStep(3); return; }
+    if (s === 2) {
+      setNewLot(code.trim());
+      if (session) { try { const lots = await odoo.searchRead(session, "stock.lot", [["name", "=", code.trim()]], ["expiration_date"], 1); if (lots[0]?.expiration_date) setNewExpiry(lots[0].expiration_date); } catch { /* skip */ } }
+      showSuccess("Lot: " + code.trim()); setStep(3); return;
+    }
     if (s === 3) {
       const n = parseFloat(code.trim());
       if (!isNaN(n) && n > 0) {
@@ -5293,14 +5300,14 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     if (!curPalRef.current || !newRef.trim()) return;
     setLoading(true);
     try {
-      const ligneData: any = { odoo_ref: newRef.trim(), product_name: newName.trim() || newRef.trim(), lot: newLot.trim() || null, expiry_date: null, qty: parseFloat(newQty) || 1, unite: "unité" };
+      const ligneData: any = { odoo_ref: newRef.trim(), product_name: newName.trim() || newRef.trim(), lot: newLot.trim() || null, expiry_date: newExpiry || null, qty: parseFloat(newQty) || 1, unite: "unité" };
       if (packaging) ligneData.packaging_qty = packaging;
       await palUpsert(curPalRef.current.id, ligneData);
       if (newEmplacement.trim()) await palUpdate(curPalRef.current.id, { emplacement: newEmplacement.trim() });
       const d = await palDetail(curPalRef.current.id);
       setCurPalette(d.palette); setLignes(d.lignes);
       showSuccess("✓ Ligne ajoutée");
-      setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis");
+      setNewRef(""); setNewName(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setNewExpiry(""); setPackaging(null); setQtyMode("colis");
       setCurPalette(null); setLignes([]); setStep(0);
     } catch (e: any) { setError(e.message); }
     setLoading(false);
@@ -5494,7 +5501,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
           const pickingUnits = Math.max(0, odooTotal - supTotal);
           const pickingColis = Math.floor(pickingUnits / pkgQty);
           const manque = Math.max(0, slot.capacite_colis - pickingColis);
-          const source = supaMap[slot.odoo_ref]?.pals.sort((a, b) => b.qty - a.qty)[0] || null;
+          const source = supaMap[slot.odoo_ref]?.pals.sort((a, b) => (a.empl || "ZZZ").localeCompare(b.empl || "ZZZ"))[0] || null;
           if (manque > 0) orders.push({ slot, stockPicking: pickingColis, manque, sourcePal: source?.numero || null, sourceEmpl: source?.empl || null });
         } catch { /* skip */ }
       }
@@ -5621,7 +5628,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button onClick={() => printPalette(currentPalette, lignes)} style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12 }}>🖨️</button>
-          <button onClick={() => { setCurPalette(null); setLignes([]); setStep(0); setNewRef(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setPackaging(null); setQtyMode("colis"); }} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.textSec }}>✕</button>
+          <button onClick={() => { setCurPalette(null); setLignes([]); setStep(0); setNewRef(""); setNewLot(""); setNewQty("1"); setNewEmplacement(""); setNewExpiry(""); setPackaging(null); setQtyMode("colis"); }} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.textSec }}>✕</button>
         </div>
       </div>)}
 
@@ -5646,7 +5653,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
 
       {step > 1 && (<div style={{ ...cardStyle, padding: "10px 14px", marginBottom: 12, fontSize: 13 }}>
         {newRef && <div><strong>Réf:</strong> {newRef} {newName && <span style={{ color: C.textMuted }}>— {newName}</span>}</div>}
-        {newLot && <div><strong>Lot:</strong> {newLot}</div>}
+        {newLot && <div><strong>Lot:</strong> {newLot}{newExpiry && <span style={{ color: C.textMuted }}> · DLV {(() => { try { return new Date(newExpiry).toLocaleDateString("fr-FR"); } catch { return newExpiry; } })()}</span>}</div>}
         {step >= 4 && <div><strong>Qté:</strong> {newQty} unités{packaging ? " (" + Math.round(parseFloat(newQty) / packaging) + " colis × " + packaging + ")" : ""}</div>}
         {newEmplacement && <div><strong>Emplacement:</strong> {newEmplacement}</div>}
       </div>)}
