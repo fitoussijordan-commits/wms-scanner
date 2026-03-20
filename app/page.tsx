@@ -2856,6 +2856,18 @@ function LocationResult({ location, stock, onRename }: { location: any; stock: a
 // ============================================
 
 // ── Palette lookup result (home screen free search) ──
+interface WmsPalette {
+  id: number; numero: string; numero_seq: number;
+  emplacement: string | null; statut: "actif" | "archive" | "expedie";
+  notes: string | null; created_at: string; updated_at: string;
+}
+interface WmsPaletteLigne {
+  id: number; palette_id: number; odoo_ref: string; product_name: string;
+  lot: string | null; expiry_date: string | null; qty: number; unite: string;
+  packaging_qty: number | null;
+  created_at: string; updated_at?: string;
+}
+
 function PaletteResult({ data, session }: { data: { palette: WmsPalette; lignes: WmsPaletteLigne[] }; session?: any }) {
   const { palette, lignes } = data;
   const totalQty = lignes.reduce((s, l) => s + l.qty, 0);
