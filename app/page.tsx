@@ -2863,9 +2863,10 @@ function PaletteResult({ data, session }: { data: { palette: WmsPalette; lignes:
 
   // Fetch packaging from Odoo for lines without packaging_qty
   useEffect(() => {
-    if (!session) return;
+    if (!session || lignes.length === 0) return;
     const refs = Array.from(new Set(lignes.filter(l => !l.packaging_qty).map(l => l.odoo_ref)));
     if (refs.length === 0) return;
+    let cancelled = false;
     (async () => {
       const map: Record<string, number | null> = {};
       for (const ref of refs) {
@@ -2877,9 +2878,11 @@ function PaletteResult({ data, session }: { data: { palette: WmsPalette; lignes:
           }
         } catch {}
       }
-      setPkgMap(map);
+      if (!cancelled) setPkgMap(map);
     })();
-  }, [session, lignes]);
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [palette.id]);
 
   const getPkg = (l: WmsPaletteLigne) => l.packaging_qty || pkgMap[l.odoo_ref] || null;
 
