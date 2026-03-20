@@ -146,3 +146,134 @@ export function generatePaletteZPL(palette: WmsPalette, lignes: WmsPaletteLigne[
   lines.push("^XZ");
   return lines.join("\n");
 }
+
+// ══════════════════════════════════════════
+// PICKING SLOTS — emplacements picking + capacité
+// ══════════════════════════════════════════
+export interface WmsPickingSlot {
+  id: number;
+  emplacement: string;
+  odoo_ref: string;
+  product_name: string;
+  capacite_max: number;
+  packaging_qty: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function loadPickingSlots(): Promise<WmsPickingSlot[]> {
+  const { data, error } = await sb.from("wms_picking_slots").select("*").order("emplacement");
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function upsertPickingSlot(slot: Omit<WmsPickingSlot, "id" | "created_at" | "updated_at">): Promise<void> {
+  const { data: existing } = await sb.from("wms_picking_slots")
+    .select("id").eq("emplacement", slot.emplacement).eq("odoo_ref", slot.odoo_ref).single();
+  if (existing) {
+    const { error } = await sb.from("wms_picking_slots")
+      .update({ ...slot, updated_at: new Date().toISOString() })
+      .eq("id", existing.id);
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await sb.from("wms_picking_slots").insert(slot);
+    if (error) throw new Error(error.message);
+  }
+}
+
+export async function deletePickingSlot(id: number): Promise<void> {
+  const { error } = await sb.from("wms_picking_slots").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Calcul réappro FEFO ──
+// Pour chaque slot picking, calcule combien il manque et d'où prendre (palette + lot avec DLV la plus proche)
+export interface ReapproLine {
+  slot: WmsPickingSlot;
+  stockPicking: number;       // stock actuel estimé en picking (unités)
+  stockPickingColis: number;  // idem en colis
+  manqueColis: number;        // colis à réapprovisionner
+  manqueUnites: number;       // unités à réapprovisionner
+  source: {
+    palette_id: number;
+    palette_numero: string;
+    palette_emplacement: string | null;
+    lot: string | null;
+    expiry_date: string | null;
+    qty_dispo: number;        // qty disponible sur cette palette pour ce produit
+  } | null;
+}
+
+export async function calcReappro(
+  slots: WmsPickingSlot[],
+  odooStockByRef: Record<string, number>  // stock Odoo total par ref
+): Promise<ReapproLine[]> {
+  // 1. Charger toutes les palettes actives + lignes
+  const palettes = await loadPalettes("actif");
+  const palData: { palette: WmsPalette; lignes: WmsPaletteLigne[] }[] = [];
+  for (const pal of palettes) {
+    const d = await loadPaletteDetail(pal.id);
+    palData.push(d);
+  }
+
+  // 2. Calculer stock palette par ref
+  const supaByRef: Record<string, number> = {};
+  // 3. Construire la liste des sources par ref, triée FEFO
+  const sourcesByRef: Record<string, { palette_id: number; palette_numero: string; palette_emplacement: string | null; lot: string | null; expiry_date: string | null; qty_dispo: number }[]> = {};
+
+  for (const { palette, lignes } of palData) {
+    for (const l of lignes) {
+      supaByRef[l.odoo_ref] = (supaByRef[l.odoo_ref] || 0) + l.qty;
+      if (!sourcesByRef[l.odoo_ref]) sourcesByRef[l.odoo_ref] = [];
+      sourcesByRef[l.odoo_ref].push({
+        palette_id: palette.id,
+        palette_numero: palette.numero,
+        palette_emplacement: palette.emplacement,
+        lot: l.lot,
+        expiry_date: l.expiry_date,
+        qty_dispo: l.qty,
+      });
+    }
+  }
+
+  // Trier FEFO : expiry_date la plus proche en premier, null en dernier
+  for (const ref of Object.keys(sourcesByRef)) {
+    sourcesByRef[ref].sort((a, b) => {
+      if (!a.expiry_date && !b.expiry_date) return 0;
+      if (!a.expiry_date) return 1;
+      if (!b.expiry_date) return -1;
+      return a.expiry_date.localeCompare(b.expiry_date);
+    });
+  }
+
+  // 4. Pour chaque slot, calculer le manque et la source FEFO
+  const result: ReapproLine[] = [];
+  for (const slot of slots) {
+    const odooTotal = odooStockByRef[slot.odoo_ref] || 0;
+    const supaTotal = supaByRef[slot.odoo_ref] || 0;
+    const pickingUnites = Math.max(0, odooTotal - supaTotal);
+    const pkg = slot.packaging_qty || 1;
+    const pickingColis = Math.round(pickingUnites / pkg);
+    const manqueColis = Math.max(0, slot.capacite_max - pickingColis);
+    const manqueUnites = manqueColis * pkg;
+
+    const sources = sourcesByRef[slot.odoo_ref] || [];
+    const source = manqueColis > 0 && sources.length > 0 ? sources[0] : null;
+
+    result.push({
+      slot,
+      stockPicking: pickingUnites,
+      stockPickingColis: pickingColis,
+      manqueColis,
+      manqueUnites,
+      source,
+    });
+  }
+
+  // Trier : les plus urgents (manque le plus) en premier
+  result.sort((a, b) => b.manqueColis - a.manqueColis);
+  return result;
+}
+
+// ── Picking Slots ──

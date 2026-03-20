@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as odoo from "@/lib/odoo";
-import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByNumero as palFind, createPalette as palCreate, upsertLigne as palUpsert, updateLigneQty as palUpdateQty, updatePalette as palUpdate, searchProductInPalettes as palSearch, generatePaletteZPL as palZPL } from "@/lib/supabase-palettes";
+import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByNumero as palFind, createPalette as palCreate, upsertLigne as palUpsert, updateLigneQty as palUpdateQty, updatePalette as palUpdate, searchProductInPalettes as palSearch, generatePaletteZPL as palZPL, loadPickingSlots, upsertPickingSlot, deletePickingSlot } from "@/lib/supabase-palettes";
+import type { WmsPickingSlot } from "@/lib/supabase-palettes";
 import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
@@ -5083,7 +5084,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 // ══════════════════════════════════════════
 
 
-type PaletteView = "menu" | "scan" | "lookup" | "stock";
+type PaletteView = "menu" | "scan" | "lookup" | "stock" | "reappro" | "pickingConfig";
 
 function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   onBack: () => void; session?: any; getPalettePrinter?: () => number | null;
@@ -5107,6 +5108,12 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [sortQty, setSortQty] = useState("");
   const [stockData, setStockData] = useState<{ ref: string; name: string; odoo: number; supabase: number; picking: number }[]>([]);
   const [stockLoading, setStockLoading] = useState(false);
+  const [slots, setSlots] = useState<WmsPickingSlot[]>([]);
+  const [reapproData, setReapproData] = useState<{ slot: WmsPickingSlot; stockPicking: number; manque: number; sourcePal: string | null; sourceEmpl: string | null }[]>([]);
+  const [reapproLoading, setReapproLoading] = useState(false);
+  const [showSlotForm, setShowSlotForm] = useState(false);
+  const [slotForm, setSlotForm] = useState({ emplacement: "", odoo_ref: "", product_name: "", capacite_colis: "5", packaging_qty: "", notes: "" });
+  const [editingSlotId, setEditingSlotId] = useState<number | null>(null);
   const [step, setStep_raw] = useState(0);
   const stepRef = useRef(0);
   const setStep = (v: number) => { stepRef.current = v; setStep_raw(v); };
@@ -5120,6 +5127,10 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [lookupInput, setLookupInput] = useState("");
   const [lookupResults, setLookupResults] = useState<{ palette: WmsPalette; lignes: WmsPaletteLigne[] }[]>([]);
   const showSuccess = (msg: string) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(""), 2500); };
+  const ADMIN_PIN = "1234";
+  const [isAdmin, setIsAdmin] = useState(() => { try { return localStorage.getItem("wms_admin") === "1"; } catch { return false; } });
+  const [pinInput, setPinInput] = useState("");
+  const checkPin = () => { if (pinInput === ADMIN_PIN) { setIsAdmin(true); try { localStorage.setItem("wms_admin", "1"); } catch {} setPinInput(""); return true; } setError("PIN incorrect"); setPinInput(""); return false; };
   const handleScanRef = useRef<(code: string) => void>(() => {});
   useEffect(() => {
     if (onScanRef) { onScanRef.current = (code: string) => handleScanRef.current(code); }
@@ -5369,6 +5380,76 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     setStockLoading(false);
   };
 
+  const loadReappro = async () => {
+    if (!session) return;
+    setReapproLoading(true); setError("");
+    try {
+      const slotsData = await loadPickingSlots();
+      setSlots(slotsData);
+      const palettes = await palLoad("actif");
+      const supaMap: Record<string, { qty: number; pals: { numero: string; empl: string | null; qty: number }[] }> = {};
+      for (const pal of palettes) {
+        const d = await palDetail(pal.id);
+        for (const l of d.lignes) {
+          if (!supaMap[l.odoo_ref]) supaMap[l.odoo_ref] = { qty: 0, pals: [] };
+          supaMap[l.odoo_ref].qty += l.qty;
+          const ex = supaMap[l.odoo_ref].pals.find(p => p.numero === pal.numero);
+          if (ex) ex.qty += l.qty; else supaMap[l.odoo_ref].pals.push({ numero: pal.numero, empl: pal.emplacement, qty: l.qty });
+        }
+      }
+      const orders: typeof reapproData = [];
+      for (const slot of slotsData) {
+        try {
+          const prods = await odoo.searchRead(session, "product.product", [["default_code", "=", slot.odoo_ref]], ["id"], 1);
+          let odooTotal = 0;
+          if (prods.length > 0) {
+            const quants = await odoo.searchRead(session, "stock.quant", [["product_id", "=", prods[0].id], ["location_id.usage", "=", "internal"]], ["quantity"], 100);
+            odooTotal = quants.reduce((acc: number, q: any) => acc + (q.quantity || 0), 0);
+          }
+          const supTotal = supaMap[slot.odoo_ref]?.qty || 0;
+          const pkgQty = slot.packaging_qty || 1;
+          const pickingUnits = Math.max(0, odooTotal - supTotal);
+          const pickingColis = Math.floor(pickingUnits / pkgQty);
+          const manque = Math.max(0, slot.capacite_colis - pickingColis);
+          const source = supaMap[slot.odoo_ref]?.pals.sort((a, b) => b.qty - a.qty)[0] || null;
+          if (manque > 0) orders.push({ slot, stockPicking: pickingColis, manque, sourcePal: source?.numero || null, sourceEmpl: source?.empl || null });
+        } catch { /* skip */ }
+      }
+      orders.sort((a, b) => b.manque - a.manque);
+      setReapproData(orders);
+    } catch (e: any) { setError(e.message); }
+    setReapproLoading(false);
+  };
+
+  const saveSlot = async () => {
+    if (!slotForm.emplacement.trim() || !slotForm.odoo_ref.trim()) { setError("Emplacement et référence obligatoires"); return; }
+    setLoading(true);
+    try {
+      await upsertPickingSlot({ emplacement: slotForm.emplacement.trim(), odoo_ref: slotForm.odoo_ref.trim(), product_name: slotForm.product_name.trim(), capacite_colis: parseInt(slotForm.capacite_colis) || 5, packaging_qty: slotForm.packaging_qty ? parseFloat(slotForm.packaging_qty) : null, notes: slotForm.notes.trim() || null });
+      setSlots(await loadPickingSlots());
+      setShowSlotForm(false); setEditingSlotId(null);
+      setSlotForm({ emplacement: "", odoo_ref: "", product_name: "", capacite_colis: "5", packaging_qty: "", notes: "" });
+      showSuccess("✓ Emplacement sauvegardé");
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const removeSlot = async (id: number) => {
+    try { await deletePickingSlot(id); setSlots(await loadPickingSlots()); showSuccess("✓ Supprimé"); } catch (e: any) { setError(e.message); }
+  };
+
+  const resolveSlotRef = async (ref: string) => {
+    if (!session || !ref.trim()) return;
+    try {
+      const r = await odoo.smartScan(session, ref.trim());
+      if (r.type === "product") {
+        setSlotForm(f => ({ ...f, odoo_ref: r.data.default_code || ref.trim(), product_name: r.data.name }));
+        const pkgs = await odoo.searchRead(session, "product.packaging", [["product_id", "=", r.data.id]], ["qty"], 1);
+        if (pkgs.length > 0 && pkgs[0].qty > 1) setSlotForm(f => ({ ...f, packaging_qty: String(pkgs[0].qty) }));
+      }
+    } catch { /* skip */ }
+  };
+
   const stepLabels = ["Palette", "Référence", "Lot", "Quantité", "Emplacement"];
 
   return (<div>
@@ -5378,7 +5459,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
       </button>
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Palettes WMS</div>
-        {view !== "menu" && <div style={{ fontSize: 12, color: C.textMuted }}>{view === "scan" ? "Scanner / Remplir" : view === "lookup" ? "Recherche" : "Stock picking"}</div>}
+        {view !== "menu" && <div style={{ fontSize: 12, color: C.textMuted }}>{view === "scan" ? "Scanner / Remplir" : view === "lookup" ? "Recherche" : view === "stock" ? "Stock picking" : view === "reappro" ? "Réappro picking" : view === "pickingConfig" ? "Config racks" : ""}</div>}
       </div>
       {currentPalette && view === "scan" && <div style={{ fontSize: 12, color: "#7c3aed", fontWeight: 700 }}>{currentPalette.numero}</div>}
     </div>
@@ -5391,6 +5472,15 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
       <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>} label="Recherche palette" sub="Chercher par numéro ou référence produit" color="#2563eb" onClick={() => setView("lookup")} />
       <div style={{ height: 10 }} />
       <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>} label="Stock picking théorique" sub="Odoo − Palettes = ce qui reste en picking" color="#ea580c" onClick={() => setView("stock")} />
+      <div style={{ height: 10 }} />
+      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>} label="Réappro picking" sub="Ordres de réapprovisionnement des racks" color="#059669" onClick={() => { setView("reappro"); loadReappro(); }} />
+      {isAdmin && (<><div style={{ height: 10 }} />
+      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09"/></svg>} label="Config racks picking" sub="Définir les emplacements et capacités" color="#64748b" onClick={() => { setView("pickingConfig"); loadPickingSlots().then(setSlots).catch(() => {}); }} /></>)}
+      {!isAdmin && (<><div style={{ height: 16 }} />
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input style={{ ...inputStyle, flex: 1, fontSize: 13 }} value={pinInput} onChange={e => setPinInput(e.target.value)} onKeyDown={e => e.key === "Enter" && checkPin()} placeholder="PIN admin pour config..." type="password" />
+        <button onClick={checkPin} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: C.textSec }}>🔓</button>
+      </div></>)}
     </div>)}
 
     {view === "lookup" && (<Section>
@@ -5543,6 +5633,69 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
         </div>))}
         <div style={{ marginTop: 12, padding: "10px 14px", background: C.orangeSoft, border: `1px solid ${C.orangeBorder}`, borderRadius: 10, fontSize: 12, color: C.orange, fontWeight: 600 }}>Total picking : {stockData.reduce((acc, d) => acc + d.picking, 0)} unités sur {stockData.filter(d => d.picking > 0).length} réf</div>
       </Section>)}
+    </div>)}
+
+    {view === "reappro" && (<div>
+      <Section>
+        <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/></svg>} title="Réappro picking" sub="Racks à réapprovisionner" />
+        <button onClick={loadReappro} disabled={reapproLoading} style={{ width: "100%", padding: 12, background: "#059669", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: reapproLoading ? "wait" : "pointer", marginBottom: 14 }}>{reapproLoading ? "Calcul..." : "🔄 Calculer les réappros"}</button>
+      </Section>
+      {reapproData.length === 0 && !reapproLoading && slots.length > 0 && (<div style={{ textAlign: "center", padding: 20, color: C.green, fontSize: 14, fontWeight: 700 }}>✅ Tous les racks sont remplis</div>)}
+      {reapproData.map((r, i) => (<div key={i} style={{ ...cardStyle, marginBottom: 10, padding: "12px 16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: C.orange }}>📍 {r.slot.emplacement}</div>
+            <div style={{ fontSize: 12, color: C.blue, fontFamily: "monospace", fontWeight: 700 }}>{r.slot.odoo_ref}</div>
+            <div style={{ fontSize: 11, color: C.textMuted }}>{r.slot.product_name}</div>
+          </div>
+          <div style={{ textAlign: "right" as const }}>
+            <div style={{ fontSize: 22, fontWeight: 900, color: C.orange }}>-{r.manque}</div>
+            <div style={{ fontSize: 10, color: C.textMuted }}>colis manquants</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, fontSize: 11, color: C.textSec }}>
+          <span>En picking: {r.stockPicking}/{r.slot.capacite_colis} colis</span>
+          {r.sourcePal && (<span style={{ color: "#7c3aed", fontWeight: 700 }}>→ Prendre sur {r.sourcePal} ({r.sourceEmpl || "?"})</span>)}
+        </div>
+      </div>))}
+      {slots.length === 0 && !reapproLoading && (<div style={{ textAlign: "center", padding: 30, color: C.textMuted }}>Aucun rack configuré.{isAdmin ? " Va dans Config racks." : " Demande à l'admin."}</div>)}
+    </div>)}
+
+    {view === "pickingConfig" && (<div>
+      <Section>
+        <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><circle cx="12" cy="12" r="3"/></svg>} title="Config racks picking" sub="Emplacements, refs et capacités" />
+        <button onClick={() => { setShowSlotForm(true); setEditingSlotId(null); setSlotForm({ emplacement: "", odoo_ref: "", product_name: "", capacite_colis: "5", packaging_qty: "", notes: "" }); }} style={{ width: "100%", padding: 10, background: C.green, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>+ Ajouter un rack</button>
+      </Section>
+      {showSlotForm && (<Section style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>{editingSlotId ? "Modifier" : "Nouveau"} rack</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          <input style={{ ...inputStyle, flex: 1 }} value={slotForm.emplacement} onChange={e => setSlotForm({ ...slotForm, emplacement: e.target.value })} placeholder="Emplacement (ex: A1-01)" />
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          <input style={{ ...inputStyle, flex: 2 }} value={slotForm.odoo_ref} onChange={e => setSlotForm({ ...slotForm, odoo_ref: e.target.value })} onBlur={e => resolveSlotRef(e.target.value)} placeholder="Réf produit" />
+          <input style={{ ...inputStyle, flex: 3 }} value={slotForm.product_name} onChange={e => setSlotForm({ ...slotForm, product_name: e.target.value })} placeholder="Nom produit" />
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          <input style={{ ...inputStyle, flex: 1 }} value={slotForm.capacite_colis} onChange={e => setSlotForm({ ...slotForm, capacite_colis: e.target.value })} placeholder="Capacité (colis)" type="number" />
+          <input style={{ ...inputStyle, flex: 1 }} value={slotForm.packaging_qty} onChange={e => setSlotForm({ ...slotForm, packaging_qty: e.target.value })} placeholder="Unités/colis" type="number" />
+        </div>
+        <input style={{ ...inputStyle, marginBottom: 8 }} value={slotForm.notes} onChange={e => setSlotForm({ ...slotForm, notes: e.target.value })} placeholder="Notes (optionnel)" />
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={saveSlot} disabled={loading} style={{ flex: 1, padding: 10, background: C.green, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>{loading ? "..." : "✓ Sauvegarder"}</button>
+          <button onClick={() => setShowSlotForm(false)} style={{ padding: "10px 16px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", color: C.textSec }}>Annuler</button>
+        </div>
+      </Section>)}
+      {slots.map(s => (<div key={s.id} style={{ ...cardStyle, padding: "10px 14px", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>📍 {s.emplacement}</div>
+          <div style={{ fontSize: 12, color: C.blue, fontFamily: "monospace" }}>{s.odoo_ref} <span style={{ color: C.textMuted, fontFamily: "inherit" }}>{s.product_name}</span></div>
+          <div style={{ fontSize: 11, color: C.textMuted }}>{s.capacite_colis} colis max{s.packaging_qty ? " · " + s.packaging_qty + " u/colis" : ""}{s.notes ? " · " + s.notes : ""}</div>
+        </div>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={() => { setEditingSlotId(s.id); setSlotForm({ emplacement: s.emplacement, odoo_ref: s.odoo_ref, product_name: s.product_name, capacite_colis: String(s.capacite_colis), packaging_qty: s.packaging_qty ? String(s.packaging_qty) : "", notes: s.notes || "" }); setShowSlotForm(true); }} style={{ background: C.blueSoft, border: "none", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 11, color: C.blue, fontWeight: 700 }}>✏️</button>
+          <button onClick={() => removeSlot(s.id)} style={{ background: C.redSoft, border: "none", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 11, color: C.red, fontWeight: 700 }}>×</button>
+        </div>
+      </div>))}
     </div>)}
   </div>);
 }
