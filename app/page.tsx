@@ -5107,6 +5107,12 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [sortQty, setSortQty] = useState("");
   const [stockData, setStockData] = useState<{ ref: string; name: string; odoo: number; supabase: number; picking: number }[]>([]);
   const [stockLoading, setStockLoading] = useState(false);
+  // Config form
+  const [cfgEmpl, setCfgEmpl] = useState("");
+  const [cfgRef, setCfgRef] = useState("");
+  const [cfgName, setCfgName] = useState("");
+  const [cfgCapa, setCfgCapa] = useState("5");
+
 
   // Scan step: 0=scan palette, 1=scan ref, 2=lot, 3=qty, 4=emplacement
   const [step, setStep] = useState(0);
@@ -5489,8 +5495,6 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
             color="#ea580c"
             onClick={() => setView("stock")}
           />
-        </div>
-      )}
 
       {/* ── LOOKUP VIEW ── */}
       {view === "lookup" && (
