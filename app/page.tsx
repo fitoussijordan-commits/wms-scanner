@@ -5123,11 +5123,16 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
 
   const showSuccess = (msg: string) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(""), 2500); };
 
-  // Register scan callback for global scanner
+  // Register scan callback for global scanner via stable ref
+  const handleScanRef = useRef<(code: string) => void>(() => {});
   useEffect(() => {
-    if (onScanRef) onScanRef.current = (code: string) => handleScan(code);
-    return () => { if (onScanRef) onScanRef.current = null; };
+    handleScanRef.current = handleScan;
   });
+  useEffect(() => {
+    if (onScanRef) onScanRef.current = (code: string) => handleScanRef.current(code);
+    return () => { if (onScanRef) onScanRef.current = null; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const printPalette = async (p: WmsPalette, ls: WmsPaletteLigne[]) => {
     const printId = getPalettePrinter?.();
