@@ -5078,7 +5078,7 @@ interface WmsPaletteLigne {
   created_at: string; updated_at?: string;
 }
 
-type PaletteView = "scan" | "lookup" | "stock";
+type PaletteView = "menu" | "scan" | "lookup" | "stock";
 
 function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   onBack: () => void;
@@ -5086,7 +5086,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   getPalettePrinter?: () => number | null;
   onScanRef?: React.MutableRefObject<((code: string) => void) | null>;
 }) {
-  const [view, setView] = useState<PaletteView>("scan");
+  const [view, setView] = useState<PaletteView>("menu");
   const [scanInput, setScanInput] = useState("");
   const [currentPalette, setCurrentPalette] = useState<WmsPalette | null>(null);
   const [lignes, setLignes] = useState<WmsPaletteLigne[]>([]);
@@ -5414,32 +5414,52 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   return (
     <div>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={view === "menu" ? onBack : () => { setView("menu"); setError(""); }}
+          style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Palettes WMS</div>
-          {currentPalette && <div style={{ fontSize: 12, color: "#7c3aed", fontWeight: 700 }}>{currentPalette.numero} · {lignes.length} réf</div>}
+          {view !== "menu" && <div style={{ fontSize: 12, color: C.textMuted }}>
+            {view === "scan" ? "Scanner / Remplir" : view === "lookup" ? "Recherche" : "Stock picking"}
+          </div>}
         </div>
-      </div>
-
-      {/* Tabs */}
-      <div style={{ display: "flex", background: C.white, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 14 }}>
-        {([["scan", "📦 Scanner"], ["lookup", "🔍 Recherche"], ["stock", "📊 Picking"]] as const).map(([id, label]) => (
-          <button key={id} onClick={() => { setView(id); setError(""); }}
-            style={{ flex: 1, padding: "10px 0", fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "inherit", transition: "all .15s",
-              background: view === id ? "#7c3aed" : "transparent",
-              color: view === id ? "#fff" : C.textSec,
-            }}>
-            {label}
-          </button>
-        ))}
+        {currentPalette && view === "scan" && <div style={{ fontSize: 12, color: "#7c3aed", fontWeight: 700 }}>{currentPalette.numero} · {lignes.length} réf</div>}
       </div>
 
       {/* Messages */}
       {successMsg && <Alert type="success">{successMsg}</Alert>}
       {error && <div style={{ background: C.redSoft, border: `1px solid ${C.redBorder}`, borderRadius: 10, padding: "10px 14px", color: C.red, fontSize: 13, marginBottom: 10, cursor: "pointer" }} onClick={() => setError("")}>{error} ✕</div>}
+
+      {/* ── MENU ── */}
+      {view === "menu" && (
+        <div>
+          <BigButton
+            icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="17"/><line x1="9" y1="15" x2="15" y2="15"/></svg>}
+            label="Scanner / Remplir"
+            sub="Créer, scanner et remplir des palettes"
+            color="#7c3aed"
+            onClick={() => setView("scan")}
+          />
+          <div style={{ height: 10 }} />
+          <BigButton
+            icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>}
+            label="Recherche palette"
+            sub="Chercher par numéro ou référence produit"
+            color="#2563eb"
+            onClick={() => setView("lookup")}
+          />
+          <div style={{ height: 10 }} />
+          <BigButton
+            icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>}
+            label="Stock picking théorique"
+            sub="Odoo − Palettes = ce qui reste en picking"
+            color="#ea580c"
+            onClick={() => setView("stock")}
+          />
+        </div>
+      )}
 
       {/* ── LOOKUP VIEW ── */}
       {view === "lookup" && (
