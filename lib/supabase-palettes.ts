@@ -155,7 +155,7 @@ export interface WmsPickingSlot {
   emplacement: string;
   odoo_ref: string;
   product_name: string;
-  capacite_max: number;
+  capacite_colis: number;
   packaging_qty: number | null;
   notes: string | null;
   created_at: string;
@@ -255,7 +255,7 @@ export async function calcReappro(
     const pickingUnites = Math.max(0, odooTotal - supaTotal);
     const pkg = slot.packaging_qty || 1;
     const pickingColis = Math.round(pickingUnites / pkg);
-    const manqueColis = Math.max(0, slot.capacite_max - pickingColis);
+    const manqueColis = Math.max(0, slot.capacite_colis - pickingColis);
     const manqueUnites = manqueColis * pkg;
 
     const sources = sourcesByRef[slot.odoo_ref] || [];
