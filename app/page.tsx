@@ -5626,7 +5626,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
           </div>
           {ls.map((l, idx) => (<div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderTop: idx > 0 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
             <div><span style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</span> {l.lot && <span style={{ color: C.textMuted }}>🏷️ {l.lot}</span>}</div>
-            <span style={{ fontWeight: 800 }}>{l.qty}{l.packaging_qty && l.packaging_qty > 1 ? <span style={{ fontSize: 10, color: "#7c3aed", marginLeft: 4 }}>{Math.round(l.qty / l.packaging_qty)}c</span> : ""}</span>
+            <div style={{ textAlign: "right" as const, flexShrink: 0 }}><span style={{ fontWeight: 800 }}>{l.qty} u</span>{l.packaging_qty && l.packaging_qty > 1 ? <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 600 }}>{Math.round(l.qty / l.packaging_qty)} colis</div> : ""}</div>
           </div>))}
         </div>))}
       </div>)}
