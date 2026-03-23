@@ -5287,8 +5287,8 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const universalSearch = async (code: string) => {
     let q = code.trim();
     if (!q) return;
-    // Raccourci: si on tape juste des chiffres, chercher Pal-XXXX
-    if (/^\d+$/.test(q)) q = "Pal-" + q.padStart(4, "0");
+    // Raccourci: si on tape 1-4 chiffres (numéro palette), chercher Pal-XXXX
+    if (/^\d{1,4}$/.test(q) && parseInt(q) < 10000) q = "Pal-" + q.padStart(4, "0");
     setLoading(true); setError(""); setLookupResults([]); setLookupInput(q);
     const palMap = new Map<number, { palette: WmsPalette; lignes: WmsPaletteLigne[] }>();
     try {
