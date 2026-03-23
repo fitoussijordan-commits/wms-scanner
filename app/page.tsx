@@ -5577,7 +5577,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
       </button>
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Palettes WMS</div>
-        {view !== "menu" && <div style={{ fontSize: 12, color: C.textMuted }}>{view === "scan" ? "Scanner / Remplir" : view === "lookup" ? "Recherche" : view === "stock" ? "Stock picking" : view === "reappro" ? "Réappro picking" : view === "pickingConfig" ? "Config racks" : view === "sortie" ? "Sortie colis" : ""}</div>}
+        {view !== "menu" && <div style={{ fontSize: 12, color: C.textMuted }}>{view === "scan" ? "Palettes" : view === "lookup" ? "Recherche" : view === "reappro" ? "Réappro picking" : view === "pickingConfig" ? "Config racks" : view === "stock" ? "Stock picking" : view === "sortie" ? "Sortie colis" : ""}</div>}
       </div>
       {currentPalette && view === "scan" && <div style={{ fontSize: 12, color: "#7c3aed", fontWeight: 700 }}>{currentPalette.numero}</div>}
     </div>
@@ -5585,51 +5585,17 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     {error && <div style={{ background: C.redSoft, border: `1px solid ${C.redBorder}`, borderRadius: 10, padding: "10px 14px", color: C.red, fontSize: 13, marginBottom: 10, cursor: "pointer" }} onClick={() => setError("")}>{error} ✕</div>}
 
     {view === "menu" && (<div>
-      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>} label="Scanner / Remplir" sub="Créer, scanner et remplir des palettes" color="#7c3aed" onClick={() => setView("scan")} />
+      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>} label="Palettes" sub="Scanner, remplir, rechercher, ajuster" color="#7c3aed" onClick={() => setView("scan")} />
       <div style={{ height: 10 }} />
-      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>} label="Recherche palette" sub="Chercher par numéro ou référence produit" color="#2563eb" onClick={() => setView("lookup")} />
-      <div style={{ height: 10 }} />
-      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>} label="Stock picking théorique" sub="Odoo − Palettes = ce qui reste en picking" color="#ea580c" onClick={() => setView("stock")} />
-      <div style={{ height: 10 }} />
-      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M12 5v14M5 12h14"/></svg>} label="Sortie colis" sub="Scanner palette → ref → lot → nb colis à sortir" color="#dc2626" onClick={() => setView("sortie")} />
-      <div style={{ height: 10 }} />
-      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>} label="Réappro picking" sub="Ordres de réapprovisionnement des racks" color="#059669" onClick={() => { setView("reappro"); loadReappro(); }} />
+      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>} label="Réappro picking" sub="Manques, stock théorique, sortie colis" color="#059669" onClick={() => { setView("reappro"); loadReappro(); }} />
       {isAdmin && (<><div style={{ height: 10 }} />
-      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09"/></svg>} label="Config racks picking" sub="Définir les emplacements et capacités" color="#64748b" onClick={() => { setView("pickingConfig"); loadPickingSlots().then(setSlots).catch(() => {}); }} /></>)}
+      <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09"/></svg>} label="Config racks picking" sub="Emplacements et capacités" color="#64748b" onClick={() => { setView("pickingConfig"); loadPickingSlots().then(setSlots).catch(() => {}); }} /></>)}
       {!isAdmin && (<><div style={{ height: 16 }} />
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input style={{ ...inputStyle, flex: 1, fontSize: 13 }} value={pinInput} onChange={e => setPinInput(e.target.value)} onKeyDown={e => e.key === "Enter" && checkPin()} placeholder="PIN admin pour config..." type="password" />
         <button onClick={checkPin} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: C.textSec }}>🔓</button>
       </div></>)}
     </div>)}
-
-    {view === "lookup" && (<Section>
-      <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>} title="Rechercher" sub="Numéro palette ou référence produit" />
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed" }} value={lookupInput} onChange={e => setLookupInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLookup()} placeholder="Palette, réf, lot, emplacement, code-barres..." />
-        <button onClick={handleLookup} disabled={loading} style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer", fontSize: 14 }}>{loading ? "..." : "→"}</button>
-      </div>
-      {lookupResults.map(({ palette: pal, lignes: ls }) => (<div key={pal.id} style={{ background: C.white, border: "1.5px solid #ddd6fe", borderRadius: 14, padding: "14px 16px", marginBottom: 10 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 900, color: "#7c3aed" }}>{pal.numero}</div>
-            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>📍 {pal.emplacement || "—"} · {ls.length} réf · {ls.reduce((acc, l) => acc + l.qty, 0)} u · <span style={{ color: pal.statut === "actif" ? C.green : C.orange, fontWeight: 600 }}>{pal.statut}</span></div>
-          </div>
-          <button onClick={() => printPalette(pal, ls)} style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>🖨️</button>
-        </div>
-        {ls.map((l, idx) => (<div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: idx > 0 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</span>
-            <span style={{ color: C.text, marginLeft: 6 }}>{l.product_name}</span>
-            {l.lot && <span style={{ color: C.textMuted, marginLeft: 6 }}>🏷️ {l.lot}</span>}
-          </div>
-          <div style={{ textAlign: "right" as const, flexShrink: 0, marginLeft: 8 }}>
-            <div style={{ fontWeight: 800, fontSize: 14, color: C.text }}>{l.qty}</div>
-            {l.packaging_qty && l.packaging_qty > 1 && <div style={{ fontSize: 10, color: "#7c3aed", fontWeight: 600 }}>{Math.round(l.qty / l.packaging_qty)} × {l.packaging_qty}</div>}
-          </div>
-        </div>))}
-      </div>))}
-    </Section>)}
 
     {view === "scan" && (<div>
       <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
@@ -5638,6 +5604,29 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
           <div style={{ fontSize: 10, fontWeight: i === step ? 700 : 500, color: i === step ? "#7c3aed" : i < step ? C.green : C.textMuted }}>{i < step ? "✓" : ""} {label}</div>
         </div>))}
       </div>
+
+      {step === 0 && !currentPalette && (<Section style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>🔍 Rechercher</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input style={{ ...inputStyle, flex: 1, borderColor: C.blue }} value={lookupInput} onChange={e => setLookupInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLookup()} placeholder="Palette, réf, lot, emplacement..." />
+          <button onClick={handleLookup} disabled={loading} style={{ background: C.blue, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, cursor: "pointer", fontSize: 14 }}>{loading ? "..." : "→"}</button>
+        </div>
+      </Section>)}
+      {step === 0 && !currentPalette && lookupResults.length > 0 && (<div style={{ marginBottom: 10 }}>
+        {lookupResults.map(({ palette: pal, lignes: ls }) => (<div key={pal.id} style={{ background: C.white, border: "1.5px solid #ddd6fe", borderRadius: 14, padding: "14px 16px", marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <div>
+              <button onClick={async () => { const d = await palDetail(pal.id); setCurPalette(d.palette); setLignes(d.lignes); setStep(1); setLookupResults([]); showSuccess("✓ " + pal.numero); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 18, fontWeight: 900, color: "#7c3aed", textDecoration: "underline" }}>{pal.numero}</button>
+              <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>📍 {pal.emplacement || "—"} · {ls.length} réf · {ls.reduce((acc, l) => acc + l.qty, 0)} u · <span style={{ color: pal.statut === "actif" ? C.green : C.orange, fontWeight: 600 }}>{pal.statut}</span></div>
+            </div>
+            <button onClick={() => printPalette(pal, ls)} style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>🖨️</button>
+          </div>
+          {ls.map((l, idx) => (<div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderTop: idx > 0 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+            <div><span style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{l.odoo_ref}</span> {l.lot && <span style={{ color: C.textMuted }}>🏷️ {l.lot}</span>}</div>
+            <span style={{ fontWeight: 800 }}>{l.qty}{l.packaging_qty && l.packaging_qty > 1 ? <span style={{ fontSize: 10, color: "#7c3aed", marginLeft: 4 }}>{Math.round(l.qty / l.packaging_qty)}c</span> : ""}</span>
+          </div>))}
+        </div>))}
+      </div>)}
 
       {step === 0 && !currentPalette && (<Section style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>🖨️ Étiquettes palettes vierges</div>
@@ -5805,8 +5794,19 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     {view === "reappro" && (<div>
       <Section>
         <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/></svg>} title="Réappro picking" sub="Racks à réapprovisionner" />
-        <button onClick={loadReappro} disabled={reapproLoading} style={{ width: "100%", padding: 12, background: "#059669", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: reapproLoading ? "wait" : "pointer", marginBottom: 14 }}>{reapproLoading ? "Calcul..." : "🔄 Calculer les réappros"}</button>
+        <button onClick={loadReappro} disabled={reapproLoading} style={{ width: "100%", padding: 12, background: "#059669", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: reapproLoading ? "wait" : "pointer", marginBottom: 10 }}>{reapproLoading ? "Calcul..." : "🔄 Calculer les réappros"}</button>
+        <button onClick={loadStockPicking} disabled={stockLoading} style={{ width: "100%", padding: 10, background: "none", color: C.blue, border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: stockLoading ? "wait" : "pointer" }}>{stockLoading ? "Calcul..." : "📊 Stock picking théorique"}</button>
       </Section>
+      {stockData.length > 0 && (<Section style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase" as const }}>Stock théorique ({stockData.length} réf)</div>
+        {stockData.slice(0, 15).map((s, i) => (<div key={s.ref} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: i < Math.min(stockData.length, 15) - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+          <div style={{ flex: 1 }}><button onClick={() => { setLookupInput(s.ref); setView("scan"); setStep(0); universalSearch(s.ref); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "monospace", fontWeight: 700, color: C.blue, textDecoration: "underline", fontSize: 12 }}>{s.ref}</button></div>
+          <div style={{ width: 50, textAlign: "right" as const, color: C.textSec }}>{s.odoo}</div>
+          <div style={{ width: 50, textAlign: "right" as const, color: "#7c3aed" }}>{s.supabase}</div>
+          <div style={{ width: 50, textAlign: "right" as const, fontWeight: 800, color: s.picking > 0 ? C.orange : C.green }}>{s.picking}</div>
+        </div>))}
+        <div style={{ marginTop: 8, padding: "8px 12px", background: C.orangeSoft, border: `1px solid ${C.orangeBorder}`, borderRadius: 8, fontSize: 11, color: C.orange, fontWeight: 600 }}>Total: {stockData.reduce((acc, d) => acc + d.picking, 0)} u en picking sur {stockData.filter(d => d.picking > 0).length} réf</div>
+      </Section>)}
       {reapproData.length === 0 && !reapproLoading && slots.length > 0 && (<div style={{ textAlign: "center", padding: 20, color: C.green, fontSize: 14, fontWeight: 700 }}>✅ Tous les racks sont remplis</div>)}
       {reapproData.map((r, i) => (<div key={i} style={{ ...cardStyle, marginBottom: 10, padding: "12px 16px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
