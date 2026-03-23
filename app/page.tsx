@@ -1236,14 +1236,15 @@ export default function Page() {
         {/* ===== TRANSFER ===== */}
         {screen === "transfer" && <>
           {/* Mode toggle */}
-          <div style={{ display: "flex", background: C.white, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 16 }}>
+          <div style={{ display: "flex", background: C.bg, borderRadius: 10, padding: 3, marginBottom: 16 }}>
             {(["classic", "quick"] as const).map(m => (
               <button key={m} onClick={() => { setTransferMode(m); resetTransfer(); }}
-                style={{ flex: 1, padding: "10px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "inherit", transition: "all .15s",
-                  background: transferMode === m ? C.blue : "transparent",
-                  color: transferMode === m ? "#fff" : C.textSec,
+                style={{ flex: 1, padding: "10px 0", fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", fontFamily: "inherit", borderRadius: 8, transition: "all .15s",
+                  background: transferMode === m ? C.white : "transparent",
+                  color: transferMode === m ? C.text : C.textMuted,
+                  boxShadow: transferMode === m ? C.shadow : "none",
                 }}>
-                {m === "classic" ? "📋 Classique" : "⚡ Rapide"}
+                {m === "classic" ? "Classique" : "Rapide"}
               </button>
             ))}
           </div>
@@ -2558,14 +2559,11 @@ function Spinner() { return <span style={{ fontSize: 11, color: C.blue, animatio
 
 function StepIndicator({ step, steps }: { step: number; steps: string[] }) {
   return (
-    <div style={{ display: "flex", gap: 8, marginBottom: 20, alignItems: "center" }}>
+    <div style={{ display: "flex", gap: 2, marginBottom: 16 }}>
       {steps.map((s, i) => (
         <div key={s} style={{ flex: 1, textAlign: "center" }}>
-          <div style={{ width: 28, height: 28, borderRadius: "50%", margin: "0 auto 4px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700,
-            background: step > i ? C.green : step === i ? C.blue : C.border,
-            color: step >= i ? "#fff" : C.textMuted, transition: "all .2s",
-          }}>{step > i ? "✓" : i + 1}</div>
-          <div style={{ fontSize: 11, fontWeight: 600, color: step === i ? C.blue : step > i ? C.green : C.textMuted }}>{s}</div>
+          <div style={{ height: 3, borderRadius: 2, marginBottom: 6, background: i < step ? C.green : i === step ? C.text : C.border, transition: "all .2s" }} />
+          <div style={{ fontSize: 11, fontWeight: i === step ? 700 : 500, color: i === step ? C.text : i < step ? C.green : C.textMuted }}>{i < step ? "✓ " : ""}{s}</div>
         </div>
       ))}
     </div>
