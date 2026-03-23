@@ -5336,6 +5336,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const routeScan = useCallback((code: string) => {
     if (view === "lookup") handleLookupScan(code);
     else if (view === "sortie") handleSortieScan(code);
+    else if (view === "pickingConfig") handleCfgScan(code);
     else handleScan(code);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
@@ -5535,7 +5536,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
           const supTotal = supaMap[slot.odoo_ref]?.qty || 0;
           const pkgQty = slot.packaging_qty || 1;
           const pickingUnits = Math.max(0, odooTotal - supTotal);
-          const pickingColis = Math.floor(pickingUnits / pkgQty);
+          const pickingColis = Math.ceil(pickingUnits / pkgQty);
           const manque = Math.max(0, slot.capacite_colis - pickingColis);
           if (manque > 0) {
             const sources: { numero: string; empl: string | null; colis: number }[] = [];
@@ -5580,8 +5581,9 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     if (!code.trim()) return;
     setCfgScanInput(""); setError("");
     if (cfgStep === 0) {
-      setSlotForm(f => ({ ...f, emplacement: code.trim() }));
-      setCfgStep(1); showSuccess("📍 " + code.trim());
+      const empl = code.trim().replace(/^[A-Z]-/i, "");
+      setSlotForm(f => ({ ...f, emplacement: empl }));
+      setCfgStep(1); showSuccess("📍 " + empl);
       return;
     }
     if (cfgStep === 1) {
