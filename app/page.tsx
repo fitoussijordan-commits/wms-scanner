@@ -5125,6 +5125,8 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [sortieScanInput, setSortieScanInput] = useState("");
   const [showSlotForm, setShowSlotForm] = useState(false);
   const [slotForm, setSlotForm] = useState({ emplacement: "", odoo_ref: "", product_name: "", capacite_colis: "5", packaging_qty: "", notes: "" });
+  const [cfgStep, setCfgStep] = useState(0); // 0=emplacement, 1=ref, 2=capacité
+  const [cfgScanInput, setCfgScanInput] = useState("");
   const [editingSlotId, setEditingSlotId] = useState<number | null>(null);
   const [step, setStep_raw] = useState(0);
   const stepRef = useRef(0);
@@ -5559,6 +5561,46 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     try { await deletePickingSlot(id); setSlots(await loadPickingSlots()); showSuccess("✓ Supprimé"); } catch (e: any) { setError(e.message); }
   };
 
+  const handleCfgScan = async (code: string) => {
+    if (!code.trim()) return;
+    setCfgScanInput(""); setError("");
+    if (cfgStep === 0) {
+      setSlotForm(f => ({ ...f, emplacement: code.trim() }));
+      setCfgStep(1); showSuccess("📍 " + code.trim());
+      return;
+    }
+    if (cfgStep === 1) {
+      if (session) {
+        setLoading(true);
+        try {
+          const r = await odoo.smartScan(session, code.trim());
+          if (r.type === "product") {
+            setSlotForm(f => ({ ...f, odoo_ref: r.data.default_code || code.trim(), product_name: r.data.name }));
+            const pkgs = await odoo.searchRead(session, "product.packaging", [["product_id", "=", r.data.id]], ["qty"], 1);
+            if (pkgs.length > 0 && pkgs[0].qty > 1) setSlotForm(f => ({ ...f, packaging_qty: String(pkgs[0].qty) }));
+            showSuccess("✓ " + r.data.name); setCfgStep(2); setLoading(false); return;
+          }
+        } catch (e) { /* skip */ }
+        setLoading(false);
+      }
+      setSlotForm(f => ({ ...f, odoo_ref: code.trim() }));
+      showSuccess("Réf: " + code.trim()); setCfgStep(2);
+      return;
+    }
+    if (cfgStep === 2) {
+      const n = parseInt(code.trim());
+      if (!isNaN(n) && n > 0) {
+        setSlotForm(f => ({ ...f, capacite_colis: String(n) }));
+        showSuccess("Capacité: " + n + " colis");
+      } else { setError("Nombre invalide"); }
+    }
+  };
+
+  const saveCfgAndReset = async () => {
+    await saveSlot();
+    setCfgStep(0); setSlotForm({ emplacement: "", odoo_ref: "", product_name: "", capacite_colis: "5", packaging_qty: "", notes: "" });
+  };
+
   const resolveSlotRef = async (ref: string) => {
     if (!session || !ref.trim()) return;
     try {
@@ -5843,39 +5885,41 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
 
     {view === "pickingConfig" && (<div>
       <Section>
-        <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><circle cx="12" cy="12" r="3"/></svg>} title="Config racks picking" sub="Emplacements, refs et capacités" />
-        <button onClick={() => { setShowSlotForm(true); setEditingSlotId(null); setSlotForm({ emplacement: "", odoo_ref: "", product_name: "", capacite_colis: "5", packaging_qty: "", notes: "" }); }} style={{ width: "100%", padding: 10, background: C.green, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", marginBottom: 12 }}>+ Ajouter un rack</button>
-      </Section>
-      {showSlotForm && (<Section style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>{editingSlotId ? "Modifier" : "Nouveau"} rack</div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <input style={{ ...inputStyle, flex: 1 }} value={slotForm.emplacement} onChange={e => setSlotForm({ ...slotForm, emplacement: e.target.value })} placeholder="Emplacement (ex: A1-01)" />
+        <div style={{ display: "flex", gap: 2, marginBottom: 12 }}>
+          {["Emplacement", "Référence", "Capacité"].map((label, i) => (<div key={i} style={{ flex: 1, textAlign: "center" as const }}>
+            <div style={{ height: 4, borderRadius: 2, marginBottom: 4, background: i < cfgStep ? C.green : i === cfgStep ? "#64748b" : C.border }} />
+            <div style={{ fontSize: 10, fontWeight: i === cfgStep ? 700 : 500, color: i === cfgStep ? "#64748b" : i < cfgStep ? C.green : C.textMuted }}>{i < cfgStep ? "✓" : ""} {label}</div>
+          </div>))}
         </div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <input style={{ ...inputStyle, flex: 2 }} value={slotForm.odoo_ref} onChange={e => setSlotForm({ ...slotForm, odoo_ref: e.target.value })} onBlur={e => resolveSlotRef(e.target.value)} placeholder="Réf produit" />
-          <input style={{ ...inputStyle, flex: 3 }} value={slotForm.product_name} onChange={e => setSlotForm({ ...slotForm, product_name: e.target.value })} placeholder="Nom produit" />
+        {cfgStep > 0 && (<div style={{ padding: "8px 12px", background: C.bg, borderRadius: 8, marginBottom: 10, fontSize: 12 }}>
+          <div style={{ fontWeight: 700 }}>📍 {slotForm.emplacement}</div>
+          {cfgStep > 1 && <div><span style={{ fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{slotForm.odoo_ref}</span> {slotForm.product_name && <span style={{ color: C.textMuted }}>{slotForm.product_name}</span>}{slotForm.packaging_qty && <span style={{ color: "#7c3aed" }}> · {slotForm.packaging_qty} u/colis</span>}</div>}
+        </div>)}
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#64748b", marginBottom: 8 }}>
+          {["📍", "🔍", "🔢"][cfgStep]} {["Scanner l'emplacement", "Scanner la référence produit", "Capacité en colis"][cfgStep]}
+          {loading && <Spinner />}
         </div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <input style={{ ...inputStyle, flex: 1 }} value={slotForm.capacite_colis} onChange={e => setSlotForm({ ...slotForm, capacite_colis: e.target.value })} placeholder="Capacité (colis)" type="number" />
-          <input style={{ ...inputStyle, flex: 1 }} value={slotForm.packaging_qty} onChange={e => setSlotForm({ ...slotForm, packaging_qty: e.target.value })} placeholder="Unités/colis" type="number" />
-        </div>
-        <input style={{ ...inputStyle, marginBottom: 8 }} value={slotForm.notes} onChange={e => setSlotForm({ ...slotForm, notes: e.target.value })} placeholder="Notes (optionnel)" />
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={saveSlot} disabled={loading} style={{ flex: 1, padding: 10, background: C.green, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>{loading ? "..." : "✓ Sauvegarder"}</button>
-          <button onClick={() => setShowSlotForm(false)} style={{ padding: "10px 16px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", color: C.textSec }}>Annuler</button>
+          <input style={{ ...inputStyle, flex: 1, borderColor: "#64748b", fontSize: 15 }} value={cfgScanInput} onChange={e => setCfgScanInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") handleCfgScan(cfgScanInput); }} placeholder={cfgStep === 0 ? "Emplacement rack..." : cfgStep === 1 ? "Code-barres produit..." : "Nombre de colis max..."} type={cfgStep === 2 ? "number" : "text"} />
+          <button onClick={() => handleCfgScan(cfgScanInput)} disabled={loading} style={{ background: "#64748b", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, fontSize: 16, cursor: "pointer" }}>→</button>
         </div>
+        {cfgStep === 2 && slotForm.capacite_colis && (<button onClick={saveCfgAndReset} disabled={loading} style={{ marginTop: 10, width: "100%", padding: 12, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>{loading ? "..." : "✓ Sauvegarder " + slotForm.emplacement + " → " + slotForm.odoo_ref + " (" + slotForm.capacite_colis + " colis)"}</button>)}
+      </Section>
+
+      {slots.length > 0 && (<Section style={{ marginTop: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase" as const }}>Racks configurés ({slots.length})</div>
+        {slots.map(s => (<div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>📍 {s.emplacement}</div>
+            <div style={{ fontSize: 12, color: C.blue, fontFamily: "monospace" }}>{s.odoo_ref} <span style={{ color: C.textMuted, fontFamily: "inherit" }}>{s.product_name}</span></div>
+            <div style={{ fontSize: 11, color: C.textMuted }}>{s.capacite_colis} colis{s.packaging_qty ? " · " + s.packaging_qty + " u/colis" : ""}</div>
+          </div>
+          <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+            <button onClick={() => { setSlotForm({ emplacement: s.emplacement, odoo_ref: s.odoo_ref, product_name: s.product_name, capacite_colis: String(s.capacite_colis), packaging_qty: s.packaging_qty ? String(s.packaging_qty) : "", notes: s.notes || "" }); setCfgStep(2); }} style={{ background: C.blueSoft, border: "none", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 11, color: C.blue }}>✏️</button>
+            <button onClick={() => removeSlot(s.id)} style={{ background: C.redSoft, border: "none", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 11, color: C.red }}>×</button>
+          </div>
+        </div>))}
       </Section>)}
-      {slots.map(s => (<div key={s.id} style={{ ...cardStyle, padding: "10px 14px", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>📍 {s.emplacement}</div>
-          <div style={{ fontSize: 12, color: C.blue, fontFamily: "monospace" }}>{s.odoo_ref} <span style={{ color: C.textMuted, fontFamily: "inherit" }}>{s.product_name}</span></div>
-          <div style={{ fontSize: 11, color: C.textMuted }}>{s.capacite_colis} colis max{s.packaging_qty ? " · " + s.packaging_qty + " u/colis" : ""}{s.notes ? " · " + s.notes : ""}</div>
-        </div>
-        <div style={{ display: "flex", gap: 4 }}>
-          <button onClick={() => { setEditingSlotId(s.id); setSlotForm({ emplacement: s.emplacement, odoo_ref: s.odoo_ref, product_name: s.product_name, capacite_colis: String(s.capacite_colis), packaging_qty: s.packaging_qty ? String(s.packaging_qty) : "", notes: s.notes || "" }); setShowSlotForm(true); }} style={{ background: C.blueSoft, border: "none", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 11, color: C.blue, fontWeight: 700 }}>✏️</button>
-          <button onClick={() => removeSlot(s.id)} style={{ background: C.redSoft, border: "none", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 11, color: C.red, fontWeight: 700 }}>×</button>
-        </div>
-      </div>))}
     </div>)}
   </div>);
 }
