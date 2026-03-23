@@ -5111,6 +5111,9 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
   const [slots, setSlots] = useState<WmsPickingSlot[]>([]);
   const [reapproData, setReapproData] = useState<{ slot: WmsPickingSlot; stockPicking: number; manque: number; sources: { numero: string; empl: string | null; colis: number }[] }[]>([]);
   const [reapproLoading, setReapproLoading] = useState(false);
+  const [showReappro, setShowReappro] = useState(true);
+  const [showStock, setShowStock] = useState(false);
+  const [showAnomalies, setShowAnomalies] = useState(false);
   const [sortieStep, setSortieStep] = useState(0); // 0=palette, 1=ref, 2=lot, 3=qty
   const [sortiePal, setSortiePal] = useState<WmsPalette | null>(null);
   const [sortieLignes, setSortieLignes] = useState<WmsPaletteLigne[]>([]);
@@ -5722,31 +5725,6 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
       </Section>)}
     </div>)}
 
-    {view === "stock" && (<div>
-      <Section>
-        <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" strokeWidth="2.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>} title="Stock picking théorique" sub="Odoo total − Palettes WMS = Picking" />
-        <button onClick={loadStockPicking} disabled={stockLoading} style={{ width: "100%", padding: 12, background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: stockLoading ? "wait" : "pointer", marginBottom: 14 }}>{stockLoading ? "Calcul en cours..." : "🔄 Calculer le stock picking"}</button>
-      </Section>
-      {stockData.length > 0 && (<Section>
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `2px solid ${C.border}`, fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const }}>
-          <div style={{ flex: 1 }}>Réf</div>
-          <div style={{ width: 55, textAlign: "right" as const }}>Odoo</div>
-          <div style={{ width: 55, textAlign: "right" as const }}>Palettes</div>
-          <div style={{ width: 55, textAlign: "right" as const, color: C.orange }}>Picking</div>
-        </div>
-        {stockData.map((s, i) => (<div key={s.ref} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < stockData.length - 1 ? `1px solid ${C.border}` : "" }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <button onClick={() => { setLookupInput(s.ref); setView("lookup"); universalSearch(s.ref); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: C.blue, textDecoration: "underline" }}>{s.ref}</button>
-            <div style={{ fontSize: 11, color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{s.name}</div>
-          </div>
-          <div style={{ width: 55, textAlign: "right" as const, fontSize: 13, fontWeight: 600, color: C.textSec }}>{s.odoo}</div>
-          <div style={{ width: 55, textAlign: "right" as const, fontSize: 13, fontWeight: 600, color: "#7c3aed" }}>{s.supabase}</div>
-          <div style={{ width: 55, textAlign: "right" as const, fontSize: 14, fontWeight: 800, color: s.picking > 0 ? C.orange : C.green }}>{s.picking}</div>
-        </div>))}
-        <div style={{ marginTop: 12, padding: "10px 14px", background: C.orangeSoft, border: `1px solid ${C.orangeBorder}`, borderRadius: 10, fontSize: 12, color: C.orange, fontWeight: 600 }}>Total picking : {stockData.reduce((acc, d) => acc + d.picking, 0)} unités sur {stockData.filter(d => d.picking > 0).length} réf</div>
-      </Section>)}
-    </div>)}
-
     {view === "sortie" && (<div>
       <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
         {["Palette", "Référence", "Lot", "Nb colis"].map((label, i) => (<div key={i} style={{ flex: 1, textAlign: "center" as const }}>
@@ -5793,43 +5771,74 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
 
     {view === "reappro" && (<div>
       <Section>
-        <SectionHeader icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/></svg>} title="Réappro picking" sub="Racks à réapprovisionner" />
-        <button onClick={loadReappro} disabled={reapproLoading} style={{ width: "100%", padding: 12, background: "#059669", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: reapproLoading ? "wait" : "pointer", marginBottom: 10 }}>{reapproLoading ? "Calcul..." : "🔄 Calculer les réappros"}</button>
-        <button onClick={loadStockPicking} disabled={stockLoading} style={{ width: "100%", padding: 10, background: "none", color: C.blue, border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: stockLoading ? "wait" : "pointer" }}>{stockLoading ? "Calcul..." : "📊 Stock picking théorique"}</button>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <button onClick={loadReappro} disabled={reapproLoading} style={{ flex: 1, padding: 12, background: "#059669", color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: reapproLoading ? "wait" : "pointer" }}>{reapproLoading ? "..." : "🔄 Réappros"}</button>
+          <button onClick={loadStockPicking} disabled={stockLoading} style={{ flex: 1, padding: 12, background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: stockLoading ? "wait" : "pointer" }}>{stockLoading ? "..." : "📊 Stock"}</button>
+        </div>
       </Section>
-      {stockData.length > 0 && (<Section style={{ marginTop: 10 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase" as const }}>Stock théorique ({stockData.length} réf)</div>
-        {stockData.slice(0, 15).map((s, i) => (<div key={s.ref} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: i < Math.min(stockData.length, 15) - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+
+      <button onClick={() => setShowReappro(!showReappro)} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", marginTop: 10, background: C.white, border: `1.5px solid ${C.orangeBorder}`, borderRadius: showReappro ? "14px 14px 0 0" : 14, cursor: "pointer", fontFamily: "inherit" }}>
+        <span style={{ fontSize: 14, fontWeight: 800, color: C.orange }}>📤 Réappro picking {reapproData.length > 0 && <span style={{ fontSize: 12, background: C.orangeSoft, padding: "2px 8px", borderRadius: 10, marginLeft: 6 }}>{reapproData.length}</span>}</span>
+        <span style={{ fontSize: 16, color: C.textMuted }}>{showReappro ? "▲" : "▼"}</span>
+      </button>
+      {showReappro && (<div style={{ border: `1.5px solid ${C.orangeBorder}`, borderTop: "none", borderRadius: "0 0 14px 14px", padding: "10px 14px", background: C.white }}>
+        {reapproData.length === 0 && !reapproLoading && slots.length > 0 && (<div style={{ textAlign: "center", padding: 14, color: C.green, fontSize: 13, fontWeight: 700 }}>✅ Tous les racks sont remplis</div>)}
+        {reapproData.map((r, i) => (<div key={i} style={{ padding: "10px 0", borderBottom: i < reapproData.length - 1 ? `1px solid ${C.border}` : "" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: C.orange }}>📍 {r.slot.emplacement}</div>
+              <div style={{ fontSize: 12, color: C.blue, fontFamily: "monospace", fontWeight: 700 }}>{r.slot.odoo_ref} <span style={{ color: C.textMuted, fontFamily: "inherit", fontWeight: 400 }}>{r.slot.product_name}</span></div>
+            </div>
+            <div style={{ textAlign: "right" as const }}>
+              <div style={{ fontSize: 20, fontWeight: 900, color: C.orange }}>-{r.manque}</div>
+              <div style={{ fontSize: 10, color: C.textMuted }}>{r.stockPicking}/{r.slot.capacite_colis} colis</div>
+            </div>
+          </div>
+          {r.sources.map((src, j) => (<button key={j} onClick={async () => { const p = await palFind(src.numero); if (p) { const d = await palDetail(p.id); setSortiePal(p); setSortieLignes(d.lignes); setSortieRef(r.slot.odoo_ref); setSortieName(r.slot.product_name); setSortiePkg(r.slot.packaging_qty); setSortieStep(2); setSortieQty(String(src.colis)); setView("sortie"); } }} style={{ display: "flex", justifyContent: "space-between", width: "100%", padding: "6px 10px", marginTop: 4, background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>
+            <span style={{ color: "#7c3aed", fontWeight: 700 }}>→ {src.numero} ({src.empl || "?"})</span>
+            <span style={{ fontWeight: 800, color: C.text }}>{src.colis} colis</span>
+          </button>))}
+        </div>))}
+        {slots.length === 0 && !reapproLoading && (<div style={{ textAlign: "center", padding: 14, color: C.textMuted, fontSize: 12 }}>Aucun rack configuré.{isAdmin ? " Va dans Config racks." : ""}</div>)}
+      </div>)}
+
+      <button onClick={() => setShowStock(!showStock)} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", marginTop: 10, background: C.white, border: `1.5px solid ${C.blueBorder}`, borderRadius: showStock ? "14px 14px 0 0" : 14, cursor: "pointer", fontFamily: "inherit" }}>
+        <span style={{ fontSize: 14, fontWeight: 800, color: C.blue }}>📊 Stock théorique {stockData.length > 0 && <span style={{ fontSize: 12, background: C.blueSoft, padding: "2px 8px", borderRadius: 10, marginLeft: 6 }}>{stockData.length} réf</span>}</span>
+        <span style={{ fontSize: 16, color: C.textMuted }}>{showStock ? "▲" : "▼"}</span>
+      </button>
+      {showStock && stockData.length > 0 && (<div style={{ border: `1.5px solid ${C.blueBorder}`, borderTop: "none", borderRadius: "0 0 14px 14px", padding: "10px 14px", background: C.white }}>
+        <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: `2px solid ${C.border}`, fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const }}>
+          <div style={{ flex: 1 }}>Réf</div><div style={{ width: 50, textAlign: "right" as const }}>Odoo</div><div style={{ width: 50, textAlign: "right" as const }}>Pal.</div><div style={{ width: 50, textAlign: "right" as const }}>Picking</div>
+        </div>
+        {stockData.map((s, i) => (<div key={s.ref} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: i < stockData.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
           <div style={{ flex: 1 }}><button onClick={() => { setLookupInput(s.ref); setView("scan"); setStep(0); universalSearch(s.ref); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "monospace", fontWeight: 700, color: C.blue, textDecoration: "underline", fontSize: 12 }}>{s.ref}</button></div>
           <div style={{ width: 50, textAlign: "right" as const, color: C.textSec }}>{s.odoo}</div>
           <div style={{ width: 50, textAlign: "right" as const, color: "#7c3aed" }}>{s.supabase}</div>
           <div style={{ width: 50, textAlign: "right" as const, fontWeight: 800, color: s.picking > 0 ? C.orange : C.green }}>{s.picking}</div>
         </div>))}
         <div style={{ marginTop: 8, padding: "8px 12px", background: C.orangeSoft, border: `1px solid ${C.orangeBorder}`, borderRadius: 8, fontSize: 11, color: C.orange, fontWeight: 600 }}>Total: {stockData.reduce((acc, d) => acc + d.picking, 0)} u en picking sur {stockData.filter(d => d.picking > 0).length} réf</div>
-      </Section>)}
-      {reapproData.length === 0 && !reapproLoading && slots.length > 0 && (<div style={{ textAlign: "center", padding: 20, color: C.green, fontSize: 14, fontWeight: 700 }}>✅ Tous les racks sont remplis</div>)}
-      {reapproData.map((r, i) => (<div key={i} style={{ ...cardStyle, marginBottom: 10, padding: "12px 16px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: C.orange }}>📍 {r.slot.emplacement}</div>
-            <div style={{ fontSize: 12, color: C.blue, fontFamily: "monospace", fontWeight: 700 }}>{r.slot.odoo_ref}</div>
-            <div style={{ fontSize: 11, color: C.textMuted }}>{r.slot.product_name}</div>
+      </div>)}
+
+      <button onClick={() => setShowAnomalies(!showAnomalies)} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", marginTop: 10, background: C.white, border: `1.5px solid ${C.redBorder}`, borderRadius: showAnomalies ? "14px 14px 0 0" : 14, cursor: "pointer", fontFamily: "inherit" }}>
+        <span style={{ fontSize: 14, fontWeight: 800, color: C.red }}>⚠️ Anomalies stock {stockData.filter(s => s.supabase > s.odoo).length > 0 && <span style={{ fontSize: 12, background: C.redSoft, padding: "2px 8px", borderRadius: 10, marginLeft: 6 }}>{stockData.filter(s => s.supabase > s.odoo).length}</span>}</span>
+        <span style={{ fontSize: 16, color: C.textMuted }}>{showAnomalies ? "▲" : "▼"}</span>
+      </button>
+      {showAnomalies && (<div style={{ border: `1.5px solid ${C.redBorder}`, borderTop: "none", borderRadius: "0 0 14px 14px", padding: "10px 14px", background: C.white }}>
+        {stockData.filter(s => s.supabase > s.odoo).length === 0 && (<div style={{ textAlign: "center", padding: 14, color: C.green, fontSize: 13, fontWeight: 700 }}>✅ Aucune anomalie détectée</div>)}
+        {stockData.filter(s => s.supabase > s.odoo).map((s, i) => (<div key={s.ref} style={{ padding: "8px 0", borderBottom: i < stockData.filter(ss => ss.supabase > ss.odoo).length - 1 ? `1px solid ${C.border}` : "" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <button onClick={() => { setLookupInput(s.ref); setView("scan"); setStep(0); universalSearch(s.ref); }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "monospace", fontWeight: 700, color: C.red, textDecoration: "underline", fontSize: 13 }}>{s.ref}</button>
+              <div style={{ fontSize: 11, color: C.textMuted }}>{s.name}</div>
+            </div>
+            <div style={{ textAlign: "right" as const }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: C.red }}>Pal: {s.supabase} &gt; Odoo: {s.odoo}</div>
+              <div style={{ fontSize: 11, color: C.red }}>+{s.supabase - s.odoo} unités en trop</div>
+            </div>
           </div>
-          <div style={{ textAlign: "right" as const }}>
-            <div style={{ fontSize: 22, fontWeight: 900, color: C.orange }}>-{r.manque}</div>
-            <div style={{ fontSize: 10, color: C.textMuted }}>colis manquants</div>
-          </div>
-        </div>
-        <div style={{ fontSize: 11, color: C.textSec, marginBottom: 6 }}>En picking: {r.stockPicking}/{r.slot.capacite_colis} colis</div>
-        {r.sources.map((src, j) => (<button key={j} onClick={async () => {
-          const p = await palFind(src.numero);
-          if (p) { const d = await palDetail(p.id); setSortiePal(p); setSortieLignes(d.lignes); setSortieRef(r.slot.odoo_ref); setSortieName(r.slot.product_name); setSortiePkg(r.slot.packaging_qty); setSortieStep(2); setSortieQty(String(src.colis)); setView("sortie"); }
-        }} style={{ display: "flex", justifyContent: "space-between", width: "100%", padding: "8px 12px", marginBottom: 4, background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>
-          <span style={{ color: "#7c3aed", fontWeight: 700 }}>→ {src.numero} ({src.empl || "?"})</span>
-          <span style={{ fontWeight: 800, color: C.text }}>{src.colis} colis</span>
-        </button>))}
-      </div>))}
-      {slots.length === 0 && !reapproLoading && (<div style={{ textAlign: "center", padding: 30, color: C.textMuted }}>Aucun rack configuré.{isAdmin ? " Va dans Config racks." : " Demande à l'admin."}</div>)}
+        </div>))}
+        {stockData.filter(s => s.supabase > s.odoo).length > 0 && (<div style={{ marginTop: 8, padding: "8px 12px", background: C.redSoft, border: `1px solid ${C.redBorder}`, borderRadius: 8, fontSize: 11, color: C.red, fontWeight: 600 }}>Cliquez sur une réf pour voir les palettes et recompter</div>)}
+      </div>)}
     </div>)}
 
     {view === "pickingConfig" && (<div>
