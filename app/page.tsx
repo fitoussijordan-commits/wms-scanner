@@ -2074,11 +2074,12 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
       </div>
 
       {/* Tabs */}
-      <div style={{ display: "flex", background: C.white, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 14 }}>
-        {([["blank", "✏️ Vierge"], ["palette", "🏭 Palette"], ["chain", "🔗 Chaîne"]] as const).map(([id, label]) => (
+      <div style={{ display: "flex", background: C.bg, borderRadius: 10, padding: 3, marginBottom: 14 }}>
+        {([["blank", "Vierge"], ["palette", "Palette"], ["chain", "Chaîne"]] as const).map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
-            style={{ flex: 1, padding: "11px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "inherit",
-              background: tab === id ? C.blue : "transparent", color: tab === id ? "#fff" : C.textSec }}>
+            style={{ flex: 1, padding: "10px 0", fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", fontFamily: "inherit", borderRadius: 8, transition: "all .15s",
+              background: tab === id ? C.white : "transparent", color: tab === id ? C.text : C.textMuted,
+              boxShadow: tab === id ? C.shadow : "none" }}>
             {label}
           </button>
         ))}
@@ -2090,6 +2091,10 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
         {/* ── BLANK — éditeur visuel ── */}
         {tab === "blank" && (
           <div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
+              <button onClick={() => { const w = labelSize.widthMM; const h = labelSize.heightMM; if (w < h) saveSize({ widthMM: h, heightMM: w }); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${labelSize.widthMM > labelSize.heightMM ? C.text : C.border}`, background: labelSize.widthMM > labelSize.heightMM ? C.bg : C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: labelSize.widthMM > labelSize.heightMM ? C.text : C.textMuted }}>↔ Paysage</button>
+              <button onClick={() => { const w = labelSize.widthMM; const h = labelSize.heightMM; if (w > h) saveSize({ widthMM: h, heightMM: w }); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${labelSize.widthMM <= labelSize.heightMM ? C.text : C.border}`, background: labelSize.widthMM <= labelSize.heightMM ? C.bg : C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: labelSize.widthMM <= labelSize.heightMM ? C.text : C.textMuted }}>↕ Portrait</button>
+            </div>
             <LabelEditor
               template={labelTemplate}
               onChange={setLabelTemplate}
@@ -4693,18 +4698,18 @@ function PrepListScreen({ pickings, loading, error, onOpen, onScanPicking, onChe
       {/* Scan direct par nom WH/PICK/xxxxx */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input
-          style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed" }}
+          style={{ ...inputStyle, flex: 1 }}
           value={scanCode}
           onChange={e => setScanCode(e.target.value)}
           onKeyDown={e => {
             if (e.key === "Enter" && scanCode.trim()) { onScanPicking(scanCode.trim()); setScanCode(""); }
           }}
-          placeholder="📷 Scanner WH/PICK/... pour ouvrir directement"
+          placeholder="Scanner WH/PICK/... pour ouvrir directement"
         />
         <button
           onClick={() => { if (scanCode.trim()) { onScanPicking(scanCode.trim()); setScanCode(""); } }}
-          style={{ padding: "10px 16px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap" as const }}>
-          Ouvrir
+          style={{ padding: "10px 16px", background: C.text, color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap" as const }}>
+          →
         </button>
       </div>
 
@@ -5690,7 +5695,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
           {[3, 5, 10, 20].map(n => (<button key={n} onClick={() => setBatchQty(String(n))} style={{ padding: "8px 0", flex: 1, borderRadius: 8, border: `1.5px solid ${batchQty === String(n) ? "#7c3aed" : C.border}`, background: batchQty === String(n) ? "#f5f3ff" : C.white, color: batchQty === String(n) ? "#7c3aed" : C.textSec, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{n}</button>))}
           <input style={{ ...inputStyle, width: 60, textAlign: "center" as const, padding: "8px 4px", fontSize: 14, fontWeight: 700 }} value={batchQty} onChange={e => setBatchQty(e.target.value.replace(/\D/g, ""))} type="text" inputMode="numeric" placeholder="N" />
         </div>
-        <button onClick={batchPrint} disabled={loading || !batchQty} style={{ marginTop: 10, width: "100%", padding: 12, background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "Impression..." : "🖨️ Imprimer " + (batchQty || 0) + " étiquette" + (parseInt(batchQty) > 1 ? "s" : "")}</button>
+        <button onClick={batchPrint} disabled={loading || !batchQty} style={{ marginTop: 10, width: "100%", padding: 12, background: C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: loading ? "wait" : "pointer" }}>{loading ? "Impression..." : "🖨️ Imprimer " + (batchQty || 0) + " étiquette" + (parseInt(batchQty) > 1 ? "s" : "")}</button>
       </Section>)}
 
       {currentPalette && (<div style={{ ...cardStyle, padding: "10px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", borderColor: "#ddd6fe" }}>
@@ -5715,8 +5720,8 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
           {(["colis", "libre"] as const).map(m => (<button key={m} onClick={() => setQtyMode(m)} style={{ flex: 1, padding: "8px 0", fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "inherit", background: qtyMode === m ? "#7c3aed" : "transparent", color: qtyMode === m ? "#fff" : C.textSec }}>{m === "colis" ? "📦 Colis (×" + packaging + ")" : "🔢 Unités libres"}</button>))}
         </div>)}
         <div style={{ display: "flex", gap: 8 }}>
-          <input style={{ ...inputStyle, flex: 1, borderColor: "#7c3aed", fontSize: 15 }} value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") handleScan(scanInput); }} placeholder={step === 0 ? "Pal-XXXX ou Entrée pour créer..." : step === 1 ? "Code-barres produit..." : step === 2 ? "Numéro de lot..." : step === 3 ? (packaging && qtyMode === "colis" ? "Nb colis (×" + packaging + ")..." : "Quantité...") : "Emplacement (optionnel)..."} type={step === 3 ? "number" : "text"} />
-          <button onClick={() => handleScan(scanInput)} disabled={loading} style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, fontSize: 16, cursor: "pointer", minWidth: 56 }}>→</button>
+          <input style={{ ...inputStyle, flex: 1, fontSize: 15 }} value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") handleScan(scanInput); }} placeholder={step === 0 ? "Pal-XXXX ou Entrée pour créer..." : step === 1 ? "Code-barres produit..." : step === 2 ? "Numéro de lot..." : step === 3 ? (packaging && qtyMode === "colis" ? "Nb colis (×" + packaging + ")..." : "Quantité...") : "Emplacement (optionnel)..."} type={step === 3 ? "number" : "text"} />
+          <button onClick={() => handleScan(scanInput)} disabled={loading} style={{ background: C.text, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 600, fontSize: 16, cursor: "pointer", minWidth: 56 }}>→</button>
         </div>
         {step === 2 && (<button onClick={() => { setNewLot(""); setStep(3); }} style={{ marginTop: 8, width: "100%", padding: 10, ...secondaryBtn, fontSize: 13 }}>⏭ Passer (sans lot)</button>)}
         {step === 3 && scanInput && (<button onClick={() => handleScan(scanInput)} disabled={loading} style={{ marginTop: 8, width: "100%", padding: 12, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>{packaging && qtyMode === "colis" ? "Confirmer " + scanInput + " × " + packaging + " = " + (parseFloat(scanInput || "0") * packaging) + " →" : "Confirmer " + scanInput + " unités →"}</button>)}
@@ -5806,7 +5811,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <input style={{ ...inputStyle, flex: 1, borderColor: "#dc2626", fontSize: 15 }} value={sortieScanInput} onChange={e => setSortieScanInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") handleSortieScan(sortieScanInput); }} placeholder={sortieStep === 0 ? "Pal-XXXX..." : sortieStep === 1 ? "Code-barres produit..." : sortieStep === 2 ? "Numéro de lot..." : "Nombre de colis..."} type={sortieStep === 3 ? "number" : "text"} />
-          <button onClick={() => handleSortieScan(sortieScanInput)} disabled={loading} style={{ background: "#dc2626", color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 700, fontSize: 16, cursor: "pointer", minWidth: 56 }}>→</button>
+          <button onClick={() => handleSortieScan(sortieScanInput)} disabled={loading} style={{ background: C.text, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontWeight: 600, fontSize: 16, cursor: "pointer", minWidth: 56 }}>→</button>
         </div>
         {sortieStep === 2 && (<button onClick={() => { setSortieLot(""); setSortieStep(3); }} style={{ marginTop: 8, width: "100%", padding: 10, ...secondaryBtn, fontSize: 13 }}>⏭ Passer (sans lot)</button>)}
         {sortieStep === 3 && sortieQty && (<button onClick={validateSortie} disabled={loading} style={{ marginTop: 8, width: "100%", padding: 12, background: "#dc2626", border: "none", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff" }}>{loading ? "..." : "📤 Sortir " + sortieQty + " colis" + (sortiePkg && sortiePkg > 1 ? " (" + (parseFloat(sortieQty) * sortiePkg) + " u)" : "")}</button>)}
