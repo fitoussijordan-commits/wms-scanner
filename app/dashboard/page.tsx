@@ -13,6 +13,8 @@ interface StockAlert {
   name: string;
   qty: number;
   threshold: number;
+  consoAvg: number;
+  daysLeft: number;
 }
 interface ConsoRow {
   ref: string;
@@ -389,6 +391,7 @@ export default function Dashboard() {
   const [editVal, setEditVal] = useState("");
   const [stockSearch, setStockSearch] = useState("");
   const [thresholdsByRef, setThresholdsByRef] = useState<Record<string, number>>({});
+  const [avgMonthlyByRef, setAvgMonthlyByRef] = useState<Record<string, number>>({});
   const [watchlist, setWatchlist] = useState<Set<string>>(new Set());
   const [watchlistMode, setWatchlistMode] = useState(false);
   const [consoSearch, setConsoSearch] = useState("");
@@ -411,15 +414,14 @@ export default function Dashboard() {
   useEffect(() => {
     if (!session) return;
     supa.loadThresholds().then(t => {
-      // t is keyed by odoo_ref (string), we need to match to product ids after stock loads
-      // Store temporarily as ref-keyed
       setThresholdsByRef(t);
       setSupaReady(true);
     }).catch(e => {
       setSupaError("Supabase: " + e.message);
-      // Fallback to localStorage
-      try { const t = localStorage.getItem("wms_thresholds"); if (t) setThresholds(JSON.parse(t)); } catch {}
+      try { const t = localStorage.getItem("wms_thresholds"); if (t) setThresholds(JSON.parse(t)); } catch (e) {}
     });
+    // Load avg_monthly from Supabase
+    supa.loadAvgMonthly().then(avg => { setAvgMonthlyByRef(avg); }).catch(() => {});
     // Load cache ages
     supa.getStockCacheAge().then(d => setStockSyncedAt(d));
     supa.getConsoCacheAge().then(d => setConsoSyncedAt(d));
@@ -451,9 +453,10 @@ export default function Dashboard() {
   const loadAlerts = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
     try {
+      // 1. Load current stock from Odoo
       const quants = await odoo.searchRead(session, "stock.quant", [
         ["location_id.usage", "=", "internal"], ["quantity", ">", 0]
-      ], ["product_id", "quantity"], 2000);
+      ], ["product_id", "quantity"], 5000);
 
       const byProduct: Record<number, { name: string; ref: string; qty: number }> = {};
       for (const q of quants) {
@@ -463,7 +466,7 @@ export default function Dashboard() {
       }
       const pids = Object.keys(byProduct).map(Number);
       if (pids.length) {
-        const prods = await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code"], 2000);
+        const prods = await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code"], 5000);
         for (const p of prods) if (byProduct[p.id]) byProduct[p.id].ref = p.default_code || "";
       }
 
@@ -472,7 +475,29 @@ export default function Dashboard() {
       setStockMap(stockData);
       setStockSyncedAt(new Date());
 
-      // Match thresholdsByRef → productIds
+      // 2. Load stored conso from Supabase (last 3 months average)
+      const now = new Date();
+      const consoMonthsList: string[] = [];
+      for (let i = 1; i <= 3; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        consoMonthsList.push(d.toISOString().substring(0, 7));
+      }
+      const consoCache = await supa.loadConsoCache(consoMonthsList);
+      const consoByRef: Record<string, number> = {};
+      const consoCountByRef: Record<string, number> = {};
+      for (const cc of consoCache) {
+        if (!consoByRef[cc.odoo_ref]) { consoByRef[cc.odoo_ref] = 0; consoCountByRef[cc.odoo_ref] = 0; }
+        consoByRef[cc.odoo_ref] += cc.qty;
+        consoCountByRef[cc.odoo_ref]++;
+      }
+      // Average monthly then daily
+      const consoAvgDaily: Record<string, number> = {};
+      for (const ref of Object.keys(consoByRef)) {
+        const months = consoCountByRef[ref] || 1;
+        consoAvgDaily[ref] = (consoByRef[ref] / months) / 30;
+      }
+
+      // 3. Match thresholds + calculate days left
       const t: Record<number, number> = {};
       for (const [pid, data] of Object.entries(stockData)) {
         if (data.ref && thresholdsByRef[data.ref] !== undefined) t[Number(pid)] = thresholdsByRef[data.ref];
@@ -483,14 +508,22 @@ export default function Dashboard() {
       for (const [pidStr, data] of Object.entries(stockData)) {
         const pid = Number(pidStr);
         const thresh = t[pid];
-        // If watchlist mode, only alert on watched products
+        const avgDaily = consoAvgDaily[data.ref] || 0;
+        const consoAvg = avgDaily * 30; // monthly
+        const daysLeft = avgDaily > 0 ? Math.round(data.qty / avgDaily) : 9999;
+
         if (watchlistMode && watchlist.size > 0 && !watchlist.has(data.ref)) continue;
-        if (thresh !== undefined && data.qty <= thresh) alertList.push({ productId: pid, ref: data.ref, name: data.name, qty: data.qty, threshold: thresh });
+        // Alert if: has threshold and below OR has conso and < 45 days left
+        const belowThreshold = thresh !== undefined && data.qty <= thresh;
+        const lowDays = avgDaily > 0 && daysLeft < 45;
+        if (belowThreshold || lowDays) {
+          alertList.push({ productId: pid, ref: data.ref, name: data.name, qty: data.qty, threshold: thresh || 0, consoAvg: Math.round(consoAvg), daysLeft });
+        }
       }
-      alertList.sort((a, b) => (a.qty / a.threshold) - (b.qty / b.threshold));
+      alertList.sort((a, b) => a.daysLeft - b.daysLeft);
       setAlerts(alertList);
 
-      // Background: save stock cache to Supabase
+      // Save stock cache
       const cacheItems = Object.entries(stockData).map(([id, v]) => ({
         odoo_product_id: Number(id), odoo_ref: v.ref, product_name: v.name, qty_on_hand: v.qty
       }));
@@ -642,7 +675,7 @@ export default function Dashboard() {
       if (moveEnd) domain.push(["date", "<=", moveEnd + " 23:59:59"]);
 
       const rawMoves = await odoo.searchRead(session, "stock.move", domain,
-        ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids", "name", "product_id"], 500, "date desc");
+        ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids", "name", "product_id"], 10000, "date desc");
 
       // Get location usages
       const locIds = Array.from(new Set(rawMoves.flatMap((m: any) => [m.location_id?.[0], m.location_dest_id?.[0]]).filter(Boolean))) as number[];
@@ -809,7 +842,7 @@ export default function Dashboard() {
 
             {(() => {
               // Split alerts: critical (< 25% seuil or < 7j), warning (7-30j), ok
-              const criticalAlerts = alerts.filter(a => { const c = conso.find(c => c.ref === a.ref); const d = c ? c.avg / 30 : 0; const days = d > 0 ? Math.round(a.qty / d) : null; return days === null || days <= 7 || a.qty / a.threshold <= 0.25; });
+              const criticalAlerts = alerts.filter(a => { const avg = avgMonthlyByRef[a.ref] || (conso.find(c => c.ref === a.ref)?.avg || 0); const d = avg / 30; const days = d > 0 ? Math.round(a.qty / d) : null; return days === null || days <= 7 || a.qty / a.threshold <= 0.25; });
               const warningAlerts = alerts.filter(a => !criticalAlerts.includes(a));
 
               const AccordionSection = ({ open, onToggle, color, dot, pulseAnim, title, count, children }: any) => (
@@ -825,21 +858,19 @@ export default function Dashboard() {
               );
 
               const AlertCard = ({ a }: { a: typeof alerts[0] }) => {
-                const ratio = a.qty / a.threshold;
-                const color = ratio <= .25 ? "var(--danger)" : ratio <= .75 ? "var(--warning)" : "var(--orange)";
-                const bg = ratio <= .25 ? "var(--danger-soft)" : ratio <= .75 ? "var(--warning-soft)" : "rgba(249,115,22,.06)";
-                const consoRow = conso.find(c => c.ref === a.ref);
-                const dailyAvg = consoRow ? consoRow.avg / 30 : 0;
-                const daysLeft = dailyAvg > 0 ? Math.round(a.qty / dailyAvg) : null;
-                const daysLabel = daysLeft === null ? "—" : daysLeft <= 0 ? "Rupture !" : `${daysLeft}j`;
+                const daysLeft = a.daysLeft;
+                const color = daysLeft <= 7 ? "var(--danger)" : daysLeft <= 21 ? "var(--warning)" : "var(--orange)";
+                const bg = daysLeft <= 7 ? "var(--danger-soft)" : daysLeft <= 21 ? "var(--warning-soft)" : "rgba(249,115,22,.06)";
+                const daysLabel = daysLeft >= 9999 ? "—" : daysLeft <= 0 ? "Rupture !" : `${daysLeft}j`;
+                const ratio = a.threshold > 0 ? a.qty / a.threshold : 1;
                 return (
                   <div style={{ background: bg, borderLeft: `3px solid ${color}`, borderRadius: 8, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                     <div style={{ flex: 1, minWidth: 200 }}>
                       <div style={{ fontSize: 13, fontWeight: 600 }}>{a.ref && <span style={{ fontFamily: MONO, color: "var(--accent)", marginRight: 8, fontSize: 11 }}>[{a.ref}]</span>}{a.name}</div>
                       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
                         <span>Stock : <strong style={{ color }}>{a.qty}</strong></span>
-                        <span>Seuil : <strong>{a.threshold}</strong></span>
-                        {consoRow && <span>Moy : <strong>{consoRow.avg}/mois</strong></span>}
+                        {a.consoAvg > 0 && <span>Conso : <strong>{a.consoAvg}/mois</strong></span>}
+                        {a.threshold > 0 && <span>Seuil : <strong>{a.threshold}</strong></span>}
                       </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
@@ -970,17 +1001,19 @@ export default function Dashboard() {
                         if (!chunkPids.length) continue;
 
                         // Pour chaque chunk de produits, requête sur 12 mois d'un coup
-                        const lines = await odoo.searchRead(session, "stock.move.line", [
+                        const pickTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+                        const ptIds = pickTypes.map((pt: any) => pt.id);
+                        const moves = await odoo.searchRead(session, "stock.move", [
                           ["state", "=", "done"],
                           ["product_id", "in", chunkPids],
-                          ["location_id", "in", intLocIds],
-                          ["location_dest_id", "in", custLocIds],
+                          ["picking_type_id", "in", ptIds],
                           ["date", ">=", sd],
                           ["date", "<=", ed],
-                        ], ["product_id", "qty_done"], 10000);
+                        ], ["product_id", "quantity_done", "product_uom_qty"], 10000);
 
-                        for (const mv of lines) {
-                          byPid[mv.product_id[0]] = (byPid[mv.product_id[0]] || 0) + (mv.qty_done || 0);
+                        for (const mv of moves) {
+                          const qty = mv.quantity_done > 0 ? mv.quantity_done : mv.product_uom_qty || 0;
+                          byPid[mv.product_id[0]] = (byPid[mv.product_id[0]] || 0) + qty;
                         }
                       }
 
@@ -1003,6 +1036,11 @@ export default function Dashboard() {
 
                       // Save to Supabase
                       await supa.saveThresholdsBulk(supaItems);
+                      // Save avg_monthly
+                      const avgItems: Record<string, number> = {};
+                      for (const item of supaItems) avgItems[item.odoo_ref] = item.threshold;
+                      await supa.saveAvgMonthlyBulk(avgItems);
+                      setAvgMonthlyByRef(avgItems);
                       setThresholds(nt);
                       // Update thresholdsByRef
                       const newByRef: Record<string, number> = {};
