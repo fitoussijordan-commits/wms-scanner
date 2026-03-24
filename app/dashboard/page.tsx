@@ -922,7 +922,7 @@ export default function Dashboard() {
                 <div>
                   <div style={{ fontSize: 15, fontWeight: 700 }}>Gérer les seuils</div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
-                    Seuil = conso 12 mois ÷ 12.
+                    Seuil = consommation moyenne mensuelle (mois actifs).
                     {watchlist.size > 0 && <span style={{ marginLeft: 8, color: "var(--accent)", fontWeight: 600 }}>📋 {watchlist.size} produits en surveillance</span>}
                   </div>
                 </div>
@@ -988,27 +988,33 @@ export default function Dashboard() {
                       const refChunks: string[][] = [];
                       for (let i = 0; i < relevantRefs.length; i += 100) refChunks.push(relevantRefs.slice(i, i + 100));
 
-                      const byPid: Record<number, number> = {};
+                      const byPid: Record<number, { total: number; months: Set<string> }> = {};
+
+                      // Picking type outgoing (same as loadConso)
+                      const pickTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+                      const ptIds = pickTypes.map((pt: any) => pt.id);
+                      if (!ptIds.length) { setError("Aucun type de picking 'outgoing' trouvé"); setLoading(false); return; }
 
                       for (const chunk of refChunks) {
                         const prodsChunk = await odoo.searchRead(session, "product.product", [["default_code", "in", chunk]], ["id", "default_code"], chunk.length + 10);
                         const chunkPids = prodsChunk.map((p: any) => p.id);
                         if (!chunkPids.length) continue;
 
-                        // Pour chaque chunk de produits, requête sur 12 mois d'un coup
-                        const pickTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
-                        const ptIds = pickTypes.map((pt: any) => pt.id);
                         const moves = await odoo.searchRead(session, "stock.move", [
                           ["state", "=", "done"],
                           ["product_id", "in", chunkPids],
                           ["picking_type_id", "in", ptIds],
                           ["date", ">=", sd],
                           ["date", "<=", ed],
-                        ], ["product_id", "quantity_done", "product_uom_qty"], 10000);
+                        ], ["product_id", "quantity_done", "product_uom_qty", "date"], 10000);
 
                         for (const mv of moves) {
                           const qty = mv.quantity_done > 0 ? mv.quantity_done : mv.product_uom_qty || 0;
-                          byPid[mv.product_id[0]] = (byPid[mv.product_id[0]] || 0) + qty;
+                          const pid = mv.product_id[0];
+                          if (!byPid[pid]) byPid[pid] = { total: 0, months: new Set() };
+                          byPid[pid].total += qty;
+                          const month = (mv.date || "").substring(0, 7);
+                          if (month) byPid[pid].months.add(month);
                         }
                       }
 
@@ -1020,11 +1026,12 @@ export default function Dashboard() {
                       // seuil = total 12 mois / 12 (= avg mensuel, identique à loadConso)
                       const supaItems: supa.WmsThreshold[] = [];
                       const nt: Record<number, number> = {};
-                      for (const [pidStr, total] of Object.entries(byPid)) {
+                      for (const [pidStr, data] of Object.entries(byPid)) {
                         const pid = Number(pidStr);
                         const info = prodMap[pid];
                         if (!info?.ref) continue;
-                        const seuil = Math.max(1, Math.round(total / 12));
+                        const nbMonths = Math.max(1, data.months.size);
+                        const seuil = Math.max(1, Math.round(data.total / nbMonths));
                         nt[pid] = seuil;
                         supaItems.push({ odoo_ref: info.ref, threshold: seuil, product_name: info.name });
                       }
@@ -1042,7 +1049,7 @@ export default function Dashboard() {
                       for (const item of supaItems) newByRef[item.odoo_ref] = item.threshold;
                       setThresholdsByRef(newByRef);
 
-                      alert(`✓ ${supaItems.length} seuils calculés et figés dans Supabase.\nFormule : conso 12 mois ÷ 12 = 1 mois de stock moyen.`);
+                      alert(`✓ ${supaItems.length} seuils calculés et figés dans Supabase.\nFormule : total conso ÷ nb mois actifs = moyenne mensuelle.`);
                       loadAlerts();
                     } catch (e: any) { setError(e.message); }
                     finally { setLoading(false); }
