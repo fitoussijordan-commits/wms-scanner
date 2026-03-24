@@ -4739,40 +4739,66 @@ function PrepListScreen({ pickings, loading, error, onOpen, onScanPicking, onChe
 
             {isOpen && (
               <div style={{ marginTop: 8, paddingLeft: 4 }}>
-                {items.map((p: any) => {
-                  const moveCount = (p.move_ids_without_package || []).length;
-                  return (
-                    <div key={p.id} style={{ ...cardStyle, marginBottom: 8 }}>
-                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</div>
-                          {p.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{p.partner_id[1]}</div>}
-                          {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine: {p.origin}</div>}
-                          {p.carrier_id && (
-                            <div style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", display: "inline-block", padding: "2px 8px", borderRadius: 6, marginTop: 4 }}>
-                              🚚 {p.carrier_id[1]}
+                {(() => {
+                  // Group by partner_id for "parcours"
+                  const byPartner: Record<string, any[]> = {};
+                  for (const p of items) {
+                    const key = p.partner_id ? String(p.partner_id[0]) : "no_partner_" + p.id;
+                    if (!byPartner[key]) byPartner[key] = [];
+                    byPartner[key].push(p);
+                  }
+                  return Object.values(byPartner).map((group: any[]) => {
+                    const isGroup = group.length > 1;
+                    const groupLabel = group.map((p: any) => p.name).join(" + ");
+                    return (
+                      <div key={group[0].id} style={isGroup ? { ...cardStyle, marginBottom: 8, border: `2px solid ${C.blueBorder}` } : {}}>
+                        {isGroup && (
+                          <div style={{ padding: "8px 12px", background: C.blueSoft, borderRadius: "10px 10px 0 0", margin: "-16px -16px 10px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 800, color: C.blue }}>📦 Parcours groupé</div>
+                              <div style={{ fontSize: 11, color: C.textSec }}>{groupLabel}</div>
                             </div>
-                          )}
-                        </div>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6, flexShrink: 0 }}>Prêt</span>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: C.blue, background: C.white, padding: "2px 8px", borderRadius: 8 }}>{group.length} picks</span>
+                          </div>
+                        )}
+                        {group.map((p: any) => {
+                          const moveCount = (p.move_ids_without_package || []).length;
+                          return (
+                            <div key={p.id} style={isGroup ? { padding: "8px 0", borderBottom: `1px solid ${C.border}` } : { ...cardStyle, marginBottom: 8 }}>
+                              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</div>
+                                  {p.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{p.partner_id[1]}</div>}
+                                  {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine: {p.origin}</div>}
+                                  {p.carrier_id && (
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", display: "inline-block", padding: "2px 8px", borderRadius: 6, marginTop: 4 }}>
+                                      {p.carrier_id[1]}
+                                    </div>
+                                  )}
+                                </div>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6, flexShrink: 0 }}>Prêt</span>
+                              </div>
+                              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>{moveCount} article(s)</div>
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <button onClick={() => onOpen(p)} style={{ flex: 2, padding: "10px 0", background: C.text, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                                  Préparer
+                                </button>
+                                <button onClick={() => requestPrint({ type: "picking", title: p.name, barcode: p.name })}
+                                  style={{ padding: "10px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}
+                                  title="Imprimer code-barres colis">
+                                  {printerSmallIcon}
+                                </button>
+                                <button onClick={() => onReport(p.id)} style={{ padding: "10px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+                                  📄
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>{moveCount} article(s)</div>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <button onClick={() => onOpen(p)} style={{ flex: 2, padding: "10px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                          Préparer
-                        </button>
-                        <button onClick={() => requestPrint({ type: "picking", title: p.name, barcode: p.name })}
-                          style={{ padding: "10px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}
-                          title="Imprimer code-barres colis">
-                          {printerSmallIcon}
-                        </button>
-                        <button onClick={() => onReport(p.id)} style={{ padding: "10px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-                          📄
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  });
+                })()}
               </div>
             )}
           </div>
