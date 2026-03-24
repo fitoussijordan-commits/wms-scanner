@@ -514,10 +514,14 @@ export default function Dashboard() {
       const custLocIds = custLocs.map((l: any) => l.id);
       const intLocIds = intLocs.map((l: any) => l.id);
 
+      // Use stock.move for outgoing deliveries (picking_type_id.code = outgoing)
+      // This catches all moves regardless of intermediate locations (pack/output)
+      const pickTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+      const pickTypeIds = pickTypes.map((pt: any) => pt.id);
+
       const domain: any[] = [
         ["state", "=", "done"],
-        ["location_id", "in", intLocIds],
-        ["location_dest_id", "in", custLocIds],
+        ["picking_type_id", "in", pickTypeIds],
         ["date", ">=", startDate],
         ["date", "<=", endDate],
       ];
@@ -543,7 +547,7 @@ export default function Dashboard() {
         const pid = mv.product_id[0];
         const month = (mv.date || "").substring(0, 7);
         if (!month) continue;
-        const qty = mv.quantity_done || 0;
+        const qty = mv.quantity_done > 0 ? mv.quantity_done : mv.product_uom_qty || 0;
         if (!byProd[pid]) byProd[pid] = { name: mv.product_id[1], ref: "", months: {} };
         byProd[pid].months[month] = (byProd[pid].months[month] || 0) + qty;
       }
