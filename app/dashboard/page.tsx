@@ -547,14 +547,9 @@ export default function Dashboard() {
       const custLocIds = custLocs.map((l: any) => l.id);
       const intLocIds = intLocs.map((l: any) => l.id);
 
-      // Use stock.move for outgoing deliveries (picking_type_id.code = outgoing)
-      // This catches all moves regardless of intermediate locations (pack/output)
-      const pickTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
-      const pickTypeIds = pickTypes.map((pt: any) => pt.id);
-
       const domain: any[] = [
         ["state", "=", "done"],
-        ["picking_type_id", "in", pickTypeIds],
+        ["picking_code", "=", "outgoing"],
         ["date", ">=", startDate],
         ["date", "<=", endDate],
       ];
