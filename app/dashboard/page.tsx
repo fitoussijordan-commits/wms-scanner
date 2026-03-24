@@ -533,16 +533,19 @@ export default function Dashboard() {
         domain.push(["product_id", "in", searchedProdIds]);
       }
 
-      const allLines = await odoo.searchRead(session, "stock.move.line", domain,
-        ["product_id", "qty_done", "date"], 10000);
+      // Use stock.move (not stock.move.line) for reliable consumption data
+      // stock.move has state field and correct source/dest locations
+      const allMoves = await odoo.searchRead(session, "stock.move", domain,
+        ["product_id", "product_uom_qty", "quantity_done", "date"], 10000);
 
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
-      for (const ml of allLines) {
-        const pid = ml.product_id[0];
-        const month = (ml.date || "").substring(0, 7);
+      for (const mv of allMoves) {
+        const pid = mv.product_id[0];
+        const month = (mv.date || "").substring(0, 7);
         if (!month) continue;
-        if (!byProd[pid]) byProd[pid] = { name: ml.product_id[1], ref: "", months: {} };
-        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (ml.qty_done || 0);
+        const qty = mv.quantity_done || mv.product_uom_qty || 0;
+        if (!byProd[pid]) byProd[pid] = { name: mv.product_id[1], ref: "", months: {} };
+        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + qty;
       }
 
       const prodIds = Object.keys(byProd).map(Number);
