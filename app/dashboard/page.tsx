@@ -421,7 +421,7 @@ export default function Dashboard() {
       try { const t = localStorage.getItem("wms_thresholds"); if (t) setThresholds(JSON.parse(t)); } catch (e) {}
     });
     // Load avg_monthly from Supabase
-    supa.loadAvgMonthly().then(avg => { setAvgMonthlyByRef(avg); }).catch(() => {});
+    // supa.loadAvgMonthly().then(avg => { setAvgMonthlyByRef(avg); }).catch(() => {});
     // Load cache ages
     supa.getStockCacheAge().then(d => setStockSyncedAt(d));
     supa.getConsoCacheAge().then(d => setConsoSyncedAt(d));
