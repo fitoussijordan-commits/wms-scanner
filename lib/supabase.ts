@@ -183,3 +183,19 @@ export async function loadAvgMonthly(): Promise<Record<string, number>> {
   }
   return result;
 }
+
+export async function saveAvgMonthlyBulk(items: { odoo_ref: string; avg_monthly: number }[]): Promise<void> {
+  if (!items.length) return;
+  for (let i = 0; i < items.length; i += 500) {
+    const batch = items.slice(i, i + 500);
+    const { error } = await sb.from("wms_avg_monthly").upsert(
+      batch.map((item) => ({ ...item, updated_at: new Date().toISOString() })),
+      { onConflict: "odoo_ref" }
+    );
+    if (error) {
+      // Table might not exist, silently skip
+      console.warn("saveAvgMonthlyBulk:", error.message);
+      return;
+    }
+  }
+}
