@@ -962,94 +962,29 @@ export default function Dashboard() {
                       e.target.value = "";
                     }} />
                   </label>
-                  {/* Calculer et figer les seuils sur 12 mois */}
+                  {/* Calculer et figer les seuils depuis la consommation */}
                   <button className="wms-btn" onClick={async () => {
-                    if (!session) return;
+                    if (conso.length === 0) { alert("Charge d'abord la consommation dans l'onglet Consommation, puis reviens ici."); return; }
                     setLoading(true); setError("");
                     try {
-                      // MÊME LOGIQUE QUE loadConso — copie exacte
-                      const ms = monthsBack(12);
-                      const sd = ms[0] + "-01 00:00:00";
-                      const ed = new Date().toISOString().split("T")[0] + " 23:59:59";
-
-                      const [custLocs, intLocs] = await Promise.all([
-                        odoo.searchRead(session, "stock.location", [["usage", "=", "customer"]], ["id"], 100),
-                        odoo.searchRead(session, "stock.location", [["usage", "=", "internal"]], ["id"], 500),
-                      ]);
-                      const custLocIds = custLocs.map((l: any) => l.id);
-                      const intLocIds = intLocs.map((l: any) => l.id);
-
-                      // Récupère les product IDs depuis stockMap (filtrés watchlist si active)
-                      const relevantRefs = watchlistMode && watchlist.size > 0
-                        ? Array.from(watchlist)
-                        : Object.values(stockMap).map(s => s.ref).filter(Boolean);
-
-                      // Trouve les product IDs Odoo pour ces refs
-                      const refChunks: string[][] = [];
-                      for (let i = 0; i < relevantRefs.length; i += 100) refChunks.push(relevantRefs.slice(i, i + 100));
-
-                      const byPid: Record<number, { total: number; months: Set<string> }> = {};
-
-                      for (const chunk of refChunks) {
-                        const prodsChunk = await odoo.searchRead(session, "product.product", [["default_code", "in", chunk]], ["id", "default_code"], chunk.length + 10);
-                        const chunkPids = prodsChunk.map((p: any) => p.id);
-                        if (!chunkPids.length) continue;
-
-                        const moves = await odoo.searchRead(session, "stock.move", [
-                          ["state", "=", "done"],
-                          ["picking_code", "=", "outgoing"],
-                          ["product_id", "in", chunkPids],
-                          ["date", ">=", sd],
-                          ["date", "<=", ed],
-                        ], ["product_id", "quantity_done", "product_uom_qty", "date"], 10000);
-
-                        for (const mv of moves) {
-                          const qty = mv.quantity_done > 0 ? mv.quantity_done : mv.product_uom_qty || 0;
-                          const pid = mv.product_id[0];
-                          if (!byPid[pid]) byPid[pid] = { total: 0, months: new Set() };
-                          byPid[pid].total += qty;
-                          const month = (mv.date || "").substring(0, 7);
-                          if (month) byPid[pid].months.add(month);
-                        }
-                      }
-
-                      // Refs + noms
-                      const pids = Object.keys(byPid).map(Number);
-                      const prods = pids.length ? await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code", "name"], 2000) : [];
-                      const prodMap: Record<number, { ref: string; name: string }> = Object.fromEntries(prods.map((p: any) => [p.id, { ref: p.default_code || "", name: p.name || "" }]));
-
-                      // seuil = total 12 mois / 12 (= avg mensuel, identique à loadConso)
                       const supaItems: supa.WmsThreshold[] = [];
-                      const nt: Record<number, number> = {};
-                      for (const [pidStr, data] of Object.entries(byPid)) {
-                        const pid = Number(pidStr);
-                        const info = prodMap[pid];
-                        if (!info?.ref) continue;
-                        const nbMonths = Math.max(1, data.months.size);
-                        const seuil = Math.max(1, Math.round(data.total / nbMonths));
-                        nt[pid] = seuil;
-                        supaItems.push({ odoo_ref: info.ref, threshold: seuil, product_name: info.name });
+                      for (const row of conso) {
+                        if (!row.ref || row.avg <= 0) continue;
+                        supaItems.push({ odoo_ref: row.ref, threshold: row.avg, product_name: row.name });
                       }
-
-                      // Save to Supabase
                       await supa.saveThresholdsBulk(supaItems);
-                      // Save avg_monthly
                       const avgItems: Record<string, number> = {};
-                      for (const item of supaItems) avgItems[item.odoo_ref] = item.threshold;
+                      const newByRef: Record<string, number> = {};
+                      for (const item of supaItems) { avgItems[item.odoo_ref] = item.threshold; newByRef[item.odoo_ref] = item.threshold; }
                       await supa.saveAvgMonthlyBulk(avgItems);
                       setAvgMonthlyByRef(avgItems);
-                      setThresholds(nt);
-                      // Update thresholdsByRef
-                      const newByRef: Record<string, number> = {};
-                      for (const item of supaItems) newByRef[item.odoo_ref] = item.threshold;
                       setThresholdsByRef(newByRef);
-
-                      alert(`✓ ${supaItems.length} seuils calculés et figés dans Supabase.\nFormule : total conso ÷ nb mois actifs = moyenne mensuelle.`);
+                      alert(`✓ ${supaItems.length} seuils figés depuis la consommation.\nSeuil = moyenne mensuelle (${consoMonths} mois).`);
                       loadAlerts();
                     } catch (e: any) { setError(e.message); }
                     finally { setLoading(false); }
-                  }} disabled={loading} style={{ background: "var(--success-soft)", color: "var(--success)", border: "1px solid var(--success-border)", padding: "8px 14px", fontSize: 13 }}>
-                    {loading ? <Spinner /> : "⚡"} Calculer & figer seuils
+                  }} disabled={loading || conso.length === 0} style={{ background: "var(--success-soft)", color: "var(--success)", border: "1px solid var(--success-border)", padding: "8px 14px", fontSize: 13, opacity: conso.length === 0 ? 0.5 : 1 }}>
+                    {loading ? <Spinner /> : "⚡"} Figer seuils depuis conso{conso.length > 0 ? ` (${conso.length})` : ""}
                   </button>
                   <label className="wms-btn" style={{ background: "var(--purple-soft)", color: "var(--purple)", border: "1px solid var(--purple-border)", cursor: "pointer", padding: "8px 14px", fontSize: 13 }}>
                     {I.upload} Importer Excel
