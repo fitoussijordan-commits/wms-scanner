@@ -914,6 +914,19 @@ export default function Page() {
     setLoading(false);
   };
 
+  const refreshGroupMoveLines = async (picking: any): Promise<any[]> => {
+    if (!session) return [];
+    if (picking._groupIds) {
+      let all: any[] = [];
+      for (const id of picking._groupIds) {
+        const lines = await odoo.getPickingMoveLines(session, id);
+        all = all.concat(lines);
+      }
+      return all;
+    }
+    return await odoo.getPickingMoveLines(session, picking.id);
+  };
+
   const doPrepScan = async (code: string) => {
     const currentStep = prepStepRef.current;
     const currentLines = pickingMoveLinesRef.current;
@@ -1053,7 +1066,7 @@ export default function Page() {
       await odoo.setMoveLineQtyDone(session, ml.id, newQty, lotId || ml.lot_id?.[0] || null);
 
       // Refresh
-      const updatedLines = await odoo.getPickingMoveLines(session, currentPicking.id);
+      const updatedLines = await refreshGroupMoveLines(currentPicking);
       setPickingMoveLines(updatedLines);
 
       if (newQty >= (ml.reserved_uom_qty || 0)) {
@@ -1110,7 +1123,7 @@ export default function Page() {
       for (const ml of pending) {
         await odoo.setMoveLineQtyDone(session, ml.id, ml.reserved_uom_qty || 0, ml.lot_id?.[0] || null);
       }
-      const updatedLines = await odoo.getPickingMoveLines(session, selectedPicking.id);
+      const updatedLines = await refreshGroupMoveLines(selectedPicking);
       setPickingMoveLines(updatedLines);
       const done = new Set(Array.from(prepScanned));
       pending.forEach((ml: any) => done.add(ml.id));
@@ -1127,7 +1140,7 @@ export default function Page() {
     setLoading(true);
     try {
       await odoo.autoFillPicking(session, selectedPicking.id);
-      const mlines = await odoo.getPickingMoveLines(session, selectedPicking.id);
+      const mlines = await refreshGroupMoveLines(selectedPicking);
       setPickingMoveLines(mlines);
       const done = new Set<number>();
       mlines.forEach((ml: any) => { if (ml.qty_done > 0) done.add(ml.id); });
@@ -1156,7 +1169,7 @@ export default function Page() {
       try {
         await odoo.setMoveLineQtyDone(session, moveLineId, clamped, ml.lot_id?.[0] || null);
         // Refresh only this line silently
-        const updatedLines = await odoo.getPickingMoveLines(session, selectedPicking!.id);
+        const updatedLines = await refreshGroupMoveLines(selectedPicking!);
         setPickingMoveLines(updatedLines);
         setQtyOverrides(prev => { const n = { ...prev }; delete n[moveLineId]; return n; });
         if (clamped >= (ml.reserved_uom_qty || 0)) {
