@@ -184,8 +184,8 @@ export async function loadAvgMonthly(): Promise<Record<string, number>> {
   return result;
 }
 
-export async function saveAvgMonthlyBulk(items: { odoo_ref: string; avg_monthly: number }[]): Promise<void> {
-  if (!items.length) return;
+export async function saveAvgMonthlyBulk(input: { odoo_ref: string; avg_monthly: number }[] | Record<string, number>): Promise<void> {
+  const items = Array.isArray(input) ? input : Object.entries(input).map(([odoo_ref, avg_monthly]) => ({ odoo_ref, avg_monthly }));
   for (let i = 0; i < items.length; i += 500) {
     const batch = items.slice(i, i + 500);
     const { error } = await sb.from("wms_avg_monthly").upsert(
