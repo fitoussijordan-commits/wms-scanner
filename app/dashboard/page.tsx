@@ -569,7 +569,9 @@ export default function Dashboard() {
       let allMoves: any[] = [];
       for (const m of months) {
         const mStart = m + "-01 00:00:00";
-        const mEnd = m + "-31 23:59:59";
+        const [y, mo] = m.split("-").map(Number);
+        const lastDay = new Date(y, mo, 0).getDate();
+        const mEnd = m + "-" + String(lastDay).padStart(2, "0") + " 23:59:59";
         const monthDomain = [...domain.filter((d: any) => d[0] !== "date"), ["date", ">=", mStart], ["date", "<=", mEnd]];
         const page = await odoo.searchRead(session, "stock.move", monthDomain,
           ["product_id", "product_uom_qty", "quantity_done", "date"], 10000);
