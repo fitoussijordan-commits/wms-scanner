@@ -159,3 +159,27 @@ export async function saveWatchlist(items: WmsWatchlistItem[]): Promise<void> {
   const { error } = await sb.from("wms_watchlist").insert(items.map(i => ({ ...i, added_at: new Date().toISOString() })));
   if (error) throw new Error(error.message);
 }
+
+// ══════════════════════════════════════════
+// AVG MONTHLY (consommation moyenne par ref)
+// ══════════════════════════════════════════
+
+export async function loadAvgMonthly(): Promise<Record<string, number>> {
+  const { data, error } = await sb.from("wms_conso_cache").select("odoo_ref, qty");
+  if (error) throw new Error(error.message);
+  // Group by ref, compute average
+  const byRef: Record<string, { total: number; months: Set<string> }> = {};
+  // We need month info - re-fetch with month
+  const { data: d2, error: e2 } = await sb.from("wms_conso_cache").select("odoo_ref, month, qty");
+  if (e2) throw new Error(e2.message);
+  for (const r of (d2 || [])) {
+    if (!byRef[r.odoo_ref]) byRef[r.odoo_ref] = { total: 0, months: new Set() };
+    byRef[r.odoo_ref].total += r.qty || 0;
+    byRef[r.odoo_ref].months.add(r.month);
+  }
+  const result: Record<string, number> = {};
+  for (const [ref, v] of Object.entries(byRef)) {
+    result[ref] = v.months.size > 0 ? Math.round(v.total / v.months.size) : 0;
+  }
+  return result;
+}
