@@ -990,11 +990,6 @@ export default function Dashboard() {
 
                       const byPid: Record<number, { total: number; months: Set<string> }> = {};
 
-                      // Picking type outgoing (same as loadConso)
-                      const pickTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
-                      const ptIds = pickTypes.map((pt: any) => pt.id);
-                      if (!ptIds.length) { setError("Aucun type de picking 'outgoing' trouvé"); setLoading(false); return; }
-
                       for (const chunk of refChunks) {
                         const prodsChunk = await odoo.searchRead(session, "product.product", [["default_code", "in", chunk]], ["id", "default_code"], chunk.length + 10);
                         const chunkPids = prodsChunk.map((p: any) => p.id);
@@ -1002,8 +997,8 @@ export default function Dashboard() {
 
                         const moves = await odoo.searchRead(session, "stock.move", [
                           ["state", "=", "done"],
+                          ["picking_code", "=", "outgoing"],
                           ["product_id", "in", chunkPids],
-                          ["picking_type_id", "in", ptIds],
                           ["date", ">=", sd],
                           ["date", "<=", ed],
                         ], ["product_id", "quantity_done", "product_uom_qty", "date"], 10000);
