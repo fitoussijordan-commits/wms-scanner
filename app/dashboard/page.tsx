@@ -565,10 +565,16 @@ export default function Dashboard() {
         domain.push(["product_id", "in", searchedProdIds]);
       }
 
-      // Use stock.move (not stock.move.line) for reliable consumption data
-      // stock.move has state field and correct source/dest locations
-      const allMoves = await odoo.searchRead(session, "stock.move", domain,
-        ["product_id", "product_uom_qty", "quantity_done", "date"], 10000);
+      // Use stock.move - load month by month to avoid 10000 limit
+      let allMoves: any[] = [];
+      for (const m of months) {
+        const mStart = m + "-01 00:00:00";
+        const mEnd = m + "-31 23:59:59";
+        const monthDomain = [...domain.filter((d: any) => d[0] !== "date"), ["date", ">=", mStart], ["date", "<=", mEnd]];
+        const page = await odoo.searchRead(session, "stock.move", monthDomain,
+          ["product_id", "product_uom_qty", "quantity_done", "date"], 10000);
+        allMoves = allMoves.concat(page);
+      }
 
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
       for (const mv of allMoves) {
