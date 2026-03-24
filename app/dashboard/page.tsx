@@ -543,7 +543,7 @@ export default function Dashboard() {
         const pid = mv.product_id[0];
         const month = (mv.date || "").substring(0, 7);
         if (!month) continue;
-        const qty = mv.quantity_done || mv.product_uom_qty || 0;
+        const qty = mv.quantity_done || 0;
         if (!byProd[pid]) byProd[pid] = { name: mv.product_id[1], ref: "", months: {} };
         byProd[pid].months[month] = (byProd[pid].months[month] || 0) + qty;
       }
