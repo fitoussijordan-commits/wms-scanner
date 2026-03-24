@@ -547,45 +547,47 @@ export default function Dashboard() {
       const custLocIds = custLocs.map((l: any) => l.id);
       const intLocIds = intLocs.map((l: any) => l.id);
 
-      const domain: any[] = [
-        ["state", "=", "done"],
-        ["picking_code", "=", "outgoing"],
-        ["date", ">=", startDate],
-        ["date", "<=", endDate],
-      ];
 
+      let searchedProdIds: number[] = [];
       if (consoSearch.trim()) {
         const prods = await odoo.searchRead(session, "product.product", [
           "|",
           ["default_code", "=ilike", "%" + consoSearch.trim() + "%"],
           ["name", "=ilike", "%" + consoSearch.trim() + "%"],
         ], ["id"], 50);
-        const searchedProdIds = prods.map((p: any) => p.id);
+        searchedProdIds = prods.map((p: any) => p.id);
         if (!searchedProdIds.length) { setConso([]); setLoading(false); return; }
-        domain.push(["product_id", "in", searchedProdIds]);
       }
 
-      // Use stock.move - load month by month to avoid 10000 limit
-      let allMoves: any[] = [];
+      // Use stock.move.line month by month to avoid 10000 limit
+      let allLines: any[] = [];
       for (const m of months) {
         const mStart = m + "-01 00:00:00";
         const [y, mo] = m.split("-").map(Number);
         const lastDay = new Date(y, mo, 0).getDate();
         const mEnd = m + "-" + String(lastDay).padStart(2, "0") + " 23:59:59";
-        const monthDomain = [...domain.filter((d: any) => d[0] !== "date"), ["date", ">=", mStart], ["date", "<=", mEnd]];
-        const page = await odoo.searchRead(session, "stock.move", monthDomain,
-          ["product_id", "product_uom_qty", "quantity_done", "date"], 10000);
-        allMoves = allMoves.concat(page);
+        const monthDomain: any[] = [
+          ["state", "=", "done"],
+          ["location_id", "in", intLocIds],
+          ["location_dest_id", "in", custLocIds],
+          ["date", ">=", mStart],
+          ["date", "<=", mEnd],
+        ];
+        if (consoSearch.trim()) {
+          monthDomain.push(["product_id", "in", searchedProdIds]);
+        }
+        const page = await odoo.searchRead(session, "stock.move.line", monthDomain,
+          ["product_id", "qty_done", "date"], 10000);
+        allLines = allLines.concat(page);
       }
 
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
-      for (const mv of allMoves) {
-        const pid = mv.product_id[0];
-        const month = (mv.date || "").substring(0, 7);
+      for (const ml of allLines) {
+        const pid = ml.product_id[0];
+        const month = (ml.date || "").substring(0, 7);
         if (!month) continue;
-        const qty = mv.quantity_done > 0 ? mv.quantity_done : mv.product_uom_qty || 0;
-        if (!byProd[pid]) byProd[pid] = { name: mv.product_id[1], ref: "", months: {} };
-        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + qty;
+        if (!byProd[pid]) byProd[pid] = { name: ml.product_id[1], ref: "", months: {} };
+        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (ml.qty_done || 0);
       }
 
       const prodIds = Object.keys(byProd).map(Number);
