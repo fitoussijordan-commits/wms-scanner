@@ -886,6 +886,34 @@ export default function Page() {
     setLoading(false);
   };
 
+  const openGroupPicking = async (pickingGroup: any[]) => {
+    if (!session || pickingGroup.length === 0) return;
+    if (pickingGroup.length === 1) { openPicking(pickingGroup[0]); return; }
+    setLoading(true); setError("");
+    const mergedName = pickingGroup.map((p: any) => p.name).join(" + ");
+    const mergedPicking = { ...pickingGroup[0], name: mergedName, _groupIds: pickingGroup.map((p: any) => p.id) };
+    setSelectedPicking(mergedPicking);
+    setPrepScanned(new Set());
+    setPrepStep(null);
+    try {
+      let allMoves: any[] = [];
+      let allMlines: any[] = [];
+      for (const p of pickingGroup) {
+        const moves = await odoo.getPickingMoves(session, p.id);
+        const mlines = await odoo.getPickingMoveLines(session, p.id);
+        allMoves = allMoves.concat(moves);
+        allMlines = allMlines.concat(mlines);
+      }
+      setPickingMoves(allMoves);
+      setPickingMoveLines(allMlines);
+      const done = new Set<number>();
+      allMlines.forEach((ml: any) => { if (ml.qty_done > 0) done.add(ml.id); });
+      setPrepScanned(done);
+      setScreen("prepDetail");
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
   const doPrepScan = async (code: string) => {
     const currentStep = prepStepRef.current;
     const currentLines = pickingMoveLinesRef.current;
@@ -1424,6 +1452,7 @@ export default function Page() {
             loading={loading}
             error={error}
             onOpen={openPicking}
+            onOpenGroup={openGroupPicking}
             onScanPicking={openPickingByName}
             onCheckAvail={checkPickingAvailability}
             onRefresh={loadPickings}
@@ -4665,7 +4694,7 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
 // ============================================
 // PREPARATION LIST SCREEN
 // ============================================
-function PrepListScreen({ pickings, loading, error, onOpen, onScanPicking, onCheckAvail, onRefresh, onReport }: any) {
+function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanPicking, onCheckAvail, onRefresh, onReport }: any) {
   const [scanCode, setScanCode] = useState("");
   // Group by shipping_date (date d'expédition prévue), fallback date_deadline, then scheduled_date
   const grouped: Record<string, any[]> = {};
@@ -4753,12 +4782,15 @@ function PrepListScreen({ pickings, loading, error, onOpen, onScanPicking, onChe
                     return (
                       <div key={group[0].id} style={isGroup ? { ...cardStyle, marginBottom: 8, border: `2px solid ${C.blueBorder}` } : {}}>
                         {isGroup && (
-                          <div style={{ padding: "8px 12px", background: C.blueSoft, borderRadius: "10px 10px 0 0", margin: "-16px -16px 10px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <div>
-                              <div style={{ fontSize: 12, fontWeight: 800, color: C.blue }}>📦 Parcours groupé</div>
-                              <div style={{ fontSize: 11, color: C.textSec }}>{groupLabel}</div>
+                          <div style={{ padding: "8px 12px", background: C.blueSoft, borderRadius: "10px 10px 0 0", margin: "-16px -16px 10px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                              <div>
+                                <div style={{ fontSize: 12, fontWeight: 800, color: C.blue }}>Parcours groupé</div>
+                                <div style={{ fontSize: 11, color: C.textSec }}>{groupLabel}</div>
+                              </div>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: C.blue, background: C.white, padding: "2px 8px", borderRadius: 8 }}>{group.length} picks</span>
                             </div>
-                            <span style={{ fontSize: 11, fontWeight: 700, color: C.blue, background: C.white, padding: "2px 8px", borderRadius: 8 }}>{group.length} picks</span>
+                            <button onClick={() => onOpenGroup(group)} style={{ width: "100%", padding: "10px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Préparer tout le parcours</button>
                           </div>
                         )}
                         {group.map((p: any) => {
