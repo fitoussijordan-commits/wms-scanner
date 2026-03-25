@@ -668,9 +668,10 @@ export default function Dashboard() {
     try {
       const XLSX = await import("xlsx");
       const data = await file.arrayBuffer();
-      const wb = XLSX.read(data, { type: "array" });
+      // cellDates:true → SheetJS auto-converts date serials to JS Date objects
+      const wb = XLSX.read(data, { type: "array", cellDates: true });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
 
       if (rows.length < 2) throw new Error("Fichier vide ou format non reconnu");
 
@@ -690,8 +691,20 @@ export default function Dashboard() {
 
       // Extraire date commande + articles
       const firstDataRow = rows[headerRow + 1];
-      const rawOrderDate = firstDataRow?.[colOrderDate];
-      const orderDate = rawOrderDate ? new Date(rawOrderDate) : new Date();
+      const rawOrderDate = colOrderDate >= 0 ? firstDataRow?.[colOrderDate] : undefined;
+      let orderDate: Date;
+      if (!rawOrderDate) {
+        orderDate = new Date();
+      } else if (rawOrderDate instanceof Date) {
+        orderDate = rawOrderDate;
+      } else if (typeof rawOrderDate === "number") {
+        // Excel serial date (days since 1900-01-01 minus leap-year bug)
+        orderDate = new Date((rawOrderDate - 25569) * 86400000);
+      } else {
+        // String date — try direct parse, fall back to today
+        const parsed = new Date(String(rawOrderDate));
+        orderDate = isNaN(parsed.getTime()) ? new Date() : parsed;
+      }
       // Réception = 10 du mois suivant
       const receptionDate = new Date(orderDate.getFullYear(), orderDate.getMonth() + 1, 10);
       const batchId = `order_${orderDate.toISOString().split("T")[0]}`;
@@ -713,16 +726,23 @@ export default function Dashboard() {
       const supplierRefs = orderItems.map(i => i.supplierRef);
       const supplierToOdooRef: Record<string, string> = {};
       try {
+        // product.supplierinfo → product_code = ref fournisseur, product_tmpl_id = product.template
         const supplierInfos = await odoo.searchRead(session, "product.supplierinfo",
-          [["product_code", "in", supplierRefs]], ["product_code", "product_id"], 5000);
-        const productIds = Array.from(new Set(supplierInfos.map((si: any) => si.product_id?.[0]).filter(Boolean)));
-        if (productIds.length) {
-          const products = await odoo.searchRead(session, "product.product",
-            [["id", "in", productIds]], ["id", "default_code"], 5000);
-          const refById: Record<number, string> = {};
-          for (const p of products) refById[p.id] = p.default_code || "";
+          [["product_code", "in", supplierRefs]], ["product_code", "product_tmpl_id"], 5000);
+        const tmplIds = Array.from(new Set(
+          supplierInfos.map((si: any) => si.product_tmpl_id?.[0]).filter(Boolean)
+        )) as number[];
+        if (tmplIds.length) {
+          // Fetch default_code from product.template (always populated for simple products)
+          const templates = await odoo.searchRead(session, "product.template",
+            [["id", "in", tmplIds]], ["id", "default_code"], 5000);
+          const refByTmplId: Record<number, string> = {};
+          for (const t of templates) refByTmplId[t.id] = t.default_code || "";
           for (const si of supplierInfos) {
-            if (si.product_code && si.product_id?.[0]) supplierToOdooRef[si.product_code] = refById[si.product_id[0]] || "";
+            const tmplId = si.product_tmpl_id?.[0];
+            if (si.product_code && tmplId && refByTmplId[tmplId]) {
+              supplierToOdooRef[si.product_code] = refByTmplId[tmplId];
+            }
           }
         }
       } catch (e) { console.warn("Odoo supplier ref matching failed:", e); }
@@ -1146,38 +1166,85 @@ export default function Dashboard() {
                 );
               };
 
-              const exportAlerts = async (items: typeof alerts, filename: string, statut: string) => {
-                const XLSX = await import("xlsx");
+              const exportAlerts = (items: typeof alerts, filename: string, isCritical: boolean) => {
                 const today = new Date();
-                const rows = items.map(a => {
-                  let dateRupture = "";
+                const dateStr = today.toISOString().split("T")[0];
+                // Colors: dark header + red rows (critique) or orange rows (warning)
+                const headerBg = "#1e293b";
+                const headerColor = "#ffffff";
+                const rowBg = isCritical ? "#fee2e2" : "#fff7ed";
+                const rowColor = isCritical ? "#7f1d1d" : "#78350f";
+                const altBg = isCritical ? "#fecaca" : "#fed7aa";
+                const tagBg = isCritical ? "#ef4444" : "#f97316";
+                const statut = isCritical ? "Déjà en rupture" : "Rupture imminente";
+
+                const cellStyle = `font-family:Calibri,Arial,sans-serif;font-size:11pt;padding:8px 12px;border:1px solid #cbd5e1;`;
+                const hStyle = `${cellStyle}background:${headerBg};color:${headerColor};font-weight:bold;text-align:left;`;
+                const tagStyle = `display:inline-block;background:${tagBg};color:#fff;padding:2px 8px;border-radius:4px;font-size:10pt;font-weight:bold;`;
+
+                const tableRows = items.map((a, i) => {
+                  let dateRupture = "—";
                   if (a.daysLeft > 0 && a.daysLeft < 9999) {
                     const d = new Date(today.getTime() + a.daysLeft * 24 * 60 * 60 * 1000);
-                    dateRupture = d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "2-digit" }).replace(".", "");
+                    dateRupture = d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
+                  } else if (a.daysLeft <= 0) {
+                    dateRupture = "En rupture";
                   }
-                  return {
-                    "Réf": a.ref,
-                    "Désignation": a.name.replace(/\[.*?\]\s*/, ""),
-                    "Prochaine dispo": "",
-                    "Date prévue de rupture": dateRupture,
-                    "Statut": statut,
-                  };
-                });
-                const ws = XLSX.utils.json_to_sheet(rows);
-                ws["!cols"] = [{ wch: 12 }, { wch: 48 }, { wch: 20 }, { wch: 24 }, { wch: 22 }];
-                const wb = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(wb, ws, "Alertes");
-                XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split("T")[0]}.xlsx`);
+                  const prochaineDispo = a.incomingQty
+                    ? `📦 +${a.incomingQty} le ${a.incomingDate}`
+                    : "—";
+                  const bg = i % 2 === 0 ? rowBg : altBg;
+                  const rStyle = `${cellStyle}background:${bg};color:${rowColor};`;
+                  return `<tr>
+                    <td style="${rStyle}font-weight:600;">${a.ref}</td>
+                    <td style="${rStyle}">${a.name.replace(/\[.*?\]\s*/, "")}</td>
+                    <td style="${rStyle}">${prochaineDispo}</td>
+                    <td style="${rStyle}font-weight:600;">${dateRupture}</td>
+                    <td style="${rStyle}"><span style="${tagStyle}">${statut}</span></td>
+                  </tr>`;
+                }).join("");
+
+                const html = `
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
+<head><meta charset="UTF-8">
+<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
+<x:Name>Alertes</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+</head>
+<body>
+<table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%">
+  <thead>
+    <tr>
+      <th style="${hStyle}min-width:100px">Réf</th>
+      <th style="${hStyle}min-width:380px">Désignation</th>
+      <th style="${hStyle}min-width:160px">Prochaine dispo</th>
+      <th style="${hStyle}min-width:180px">Date prévue de rupture</th>
+      <th style="${hStyle}min-width:160px">Statut</th>
+    </tr>
+  </thead>
+  <tbody>${tableRows}</tbody>
+</table>
+</body></html>`;
+
+                const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `${filename}_${dateStr}.xls`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
               };
 
               return <>
                 {criticalAlerts.length > 0 && (
-                  <AccordionSection open={alertsUnderstockOpen} onToggle={() => setAlertsUnderstockOpen(o => !o)} color="var(--danger)" dot pulseAnim title="Critique — rupture imminente" count={criticalAlerts.length} onExport={() => exportAlerts(criticalAlerts, "alertes_critique", "Déjà en rupture")}>
+                  <AccordionSection open={alertsUnderstockOpen} onToggle={() => setAlertsUnderstockOpen(o => !o)} color="var(--danger)" dot pulseAnim title="Critique — rupture imminente" count={criticalAlerts.length} onExport={() => exportAlerts(criticalAlerts, "alertes_critique", true)}>
                     {criticalAlerts.map(a => <AlertCard key={a.productId} a={a} />)}
                   </AccordionSection>
                 )}
                 {warningAlerts.length > 0 && (
-                  <AccordionSection open={alertsWarningOpen} onToggle={() => setAlertsWarningOpen(o => !o)} color="var(--warning)" dot={false} pulseAnim={false} title="Attention — stock bas" count={warningAlerts.length} onExport={() => exportAlerts(warningAlerts, "alertes_stock_bas", "Rupture imminente")}>
+                  <AccordionSection open={alertsWarningOpen} onToggle={() => setAlertsWarningOpen(o => !o)} color="var(--warning)" dot={false} pulseAnim={false} title="Attention — stock bas" count={warningAlerts.length} onExport={() => exportAlerts(warningAlerts, "alertes_stock_bas", false)}>
                     {warningAlerts.map(a => <AlertCard key={a.productId} a={a} />)}
                   </AccordionSection>
                 )}
