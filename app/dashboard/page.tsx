@@ -671,7 +671,8 @@ export default function Dashboard() {
       // cellDates:true → SheetJS auto-converts date serials to JS Date objects
       const wb = XLSX.read(data, { type: "array", cellDates: true });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
+      // raw:true (défaut) + cellDates:true → dates = JS Date objects, nombres = number natifs (pas de formatage string)
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
       if (rows.length < 2) throw new Error("Fichier vide ou format non reconnu");
 
@@ -714,9 +715,12 @@ export default function Dashboard() {
         const row = rows[r];
         const supplierRef = String(row[colArticle] ?? "").trim();
         if (!supplierRef) continue;
-        // Gérer les nombres avec espaces : "11 000" → 11000
-        const rawQty = String(row[colQtyAvail] ?? "0").replace(/\s/g, "");
-        const qty = parseFloat(rawQty) || 0;
+        // Quantité : peut être un number natif ou une string "2 600" / "2\u00A0600" (espace insécable FR)
+        // On garde uniquement les chiffres (les quantités sont toujours entières)
+        const rawQtyVal = row[colQtyAvail];
+        const qty = typeof rawQtyVal === "number"
+          ? rawQtyVal
+          : parseFloat(String(rawQtyVal ?? "0").replace(/[^\d]/g, "")) || 0;
         const name = colDesc >= 0 ? String(row[colDesc] ?? "").trim() : supplierRef;
         if (qty > 0 && supplierRef) orderItems.push({ supplierRef, qty, name });
       }
@@ -1166,75 +1170,148 @@ export default function Dashboard() {
                 );
               };
 
-              const exportAlerts = (items: typeof alerts, filename: string, isCritical: boolean) => {
+              const exportAlerts = async (items: typeof alerts, filename: string, isCritical: boolean) => {
+                // ── Vrai .xlsx avec styles natifs via Open XML + fflate (ZIP) ──
+                const fflate = await import("fflate");
                 const today = new Date();
                 const dateStr = today.toISOString().split("T")[0];
-                // Colors: dark header + red rows (critique) or orange rows (warning)
-                const headerBg = "#1e293b";
-                const headerColor = "#ffffff";
-                const rowBg = isCritical ? "#fee2e2" : "#fff7ed";
-                const rowColor = isCritical ? "#7f1d1d" : "#78350f";
-                const altBg = isCritical ? "#fecaca" : "#fed7aa";
-                const tagBg = isCritical ? "#ef4444" : "#f97316";
                 const statut = isCritical ? "Déjà en rupture" : "Rupture imminente";
 
-                const cellStyle = `font-family:Calibri,Arial,sans-serif;font-size:11pt;padding:8px 12px;border:1px solid #cbd5e1;`;
-                const hStyle = `${cellStyle}background:${headerBg};color:${headerColor};font-weight:bold;text-align:left;`;
-                const tagStyle = `display:inline-block;background:${tagBg};color:#fff;padding:2px 8px;border-radius:4px;font-size:10pt;font-weight:bold;`;
+                // Palette couleurs ARGB (sans #)
+                const HDR_BG   = "FF1E293B";
+                const ROW_FILL = isCritical ? "FFFEE2E2" : "FFFFF7ED";
+                const ALT_FILL = isCritical ? "FFFECACA" : "FFFED7AA";
+                const ROW_FONT = isCritical ? "FF7F1D1D" : "FF78350F";
 
-                const tableRows = items.map((a, i) => {
+                // ── Shared strings ──
+                const strs: string[] = [];
+                const ss = (v: string) => { let i = strs.indexOf(v); if (i < 0) { i = strs.length; strs.push(v); } return i; };
+                const xmlEsc = (s: string) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+                const colLetter = (n: number) => { let s=""; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);}return s; };
+
+                const HEADERS = ["Réf","Désignation","Prochaine dispo","Date prévue de rupture","Statut"];
+                HEADERS.forEach(ss);
+
+                // ── Build row data ──
+                const dataRows: string[][] = items.map(a => {
                   let dateRupture = "—";
-                  if (a.daysLeft > 0 && a.daysLeft < 9999) {
-                    const d = new Date(today.getTime() + a.daysLeft * 24 * 60 * 60 * 1000);
-                    dateRupture = d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
-                  } else if (a.daysLeft <= 0) {
-                    dateRupture = "En rupture";
+                  if (a.daysLeft <= 0) dateRupture = "En rupture";
+                  else if (a.daysLeft < 9999) {
+                    const d = new Date(today.getTime() + a.daysLeft * 86400000);
+                    dateRupture = d.toLocaleDateString("fr-FR",{day:"2-digit",month:"short",year:"numeric"});
                   }
-                  const prochaineDispo = a.incomingQty
-                    ? `📦 +${a.incomingQty} le ${a.incomingDate}`
-                    : "—";
-                  const bg = i % 2 === 0 ? rowBg : altBg;
-                  const rStyle = `${cellStyle}background:${bg};color:${rowColor};`;
-                  return `<tr>
-                    <td style="${rStyle}font-weight:600;">${a.ref}</td>
-                    <td style="${rStyle}">${a.name.replace(/\[.*?\]\s*/, "")}</td>
-                    <td style="${rStyle}">${prochaineDispo}</td>
-                    <td style="${rStyle}font-weight:600;">${dateRupture}</td>
-                    <td style="${rStyle}"><span style="${tagStyle}">${statut}</span></td>
-                  </tr>`;
-                }).join("");
+                  const dispo = a.incomingQty ? `+${a.incomingQty} le ${a.incomingDate}` : "—";
+                  return [a.ref, a.name.replace(/\[.*?\]\s*/,""), dispo, dateRupture, statut];
+                });
+                dataRows.forEach(r => r.forEach(v => ss(v)));
 
-                const html = `
-<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
-<head><meta charset="UTF-8">
-<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
-<x:Name>Alertes</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
-</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
-</head>
-<body>
-<table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%">
-  <thead>
-    <tr>
-      <th style="${hStyle}min-width:100px">Réf</th>
-      <th style="${hStyle}min-width:380px">Désignation</th>
-      <th style="${hStyle}min-width:160px">Prochaine dispo</th>
-      <th style="${hStyle}min-width:180px">Date prévue de rupture</th>
-      <th style="${hStyle}min-width:160px">Statut</th>
-    </tr>
-  </thead>
-  <tbody>${tableRows}</tbody>
-</table>
-</body></html>`;
+                // ── Worksheet XML ──
+                const NCOLS = 5;
+                const colWidths = [14,52,22,24,22];
+                let wsRows = `<row r="1" ht="17" customHeight="1">`;
+                HEADERS.forEach((h,ci) => { wsRows+=`<c r="${colLetter(ci+1)}1" t="s" s="1"><v>${strs.indexOf(h)}</v></c>`; });
+                wsRows += `</row>`;
+                dataRows.forEach((r,ri) => {
+                  const rowNum = ri+2;
+                  const sIdx = ri%2===0 ? 2 : 3;
+                  wsRows += `<row r="${rowNum}" ht="15">`;
+                  r.forEach((v,ci) => { wsRows+=`<c r="${colLetter(ci+1)}${rowNum}" t="s" s="${sIdx}"><v>${strs.indexOf(v)}</v></c>`; });
+                  wsRows += `</row>`;
+                });
 
-                const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+                const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1"/></sheetView></sheetViews>
+<sheetFormatPr defaultRowHeight="15"/>
+<cols>${colWidths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join("")}</cols>
+<sheetData>${wsRows}</sheetData>
+<autoFilter ref="A1:${colLetter(NCOLS)}1"/>
+</worksheet>`;
+
+                // ── Styles XML ──
+                const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="3">
+  <font><sz val="11"/><name val="Calibri"/></font>
+  <font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
+  <font><sz val="11"/><color rgb="${ROW_FONT}"/><name val="Calibri"/></font>
+</fonts>
+<fills count="5">
+  <fill><patternFill patternType="none"/></fill>
+  <fill><patternFill patternType="gray125"/></fill>
+  <fill><patternFill patternType="solid"><fgColor rgb="${HDR_BG}"/><bgColor indexed="64"/></patternFill></fill>
+  <fill><patternFill patternType="solid"><fgColor rgb="${ROW_FILL}"/><bgColor indexed="64"/></patternFill></fill>
+  <fill><patternFill patternType="solid"><fgColor rgb="${ALT_FILL}"/><bgColor indexed="64"/></patternFill></fill>
+</fills>
+<borders count="2">
+  <border><left/><right/><top/><bottom/><diagonal/></border>
+  <border>
+    <left style="thin"><color rgb="FFCBD5E1"/></left>
+    <right style="thin"><color rgb="FFCBD5E1"/></right>
+    <top style="thin"><color rgb="FFCBD5E1"/></top>
+    <bottom style="thin"><color rgb="FFCBD5E1"/></bottom>
+    <diagonal/>
+  </border>
+</borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="4">
+  <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+  <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
+  <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
+  <xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
+</cellXfs>
+</styleSheet>`;
+
+                // ── Shared strings XML ──
+                const ssXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${strs.length}" uniqueCount="${strs.length}">
+${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
+</sst>`;
+
+                // ── Workbook + rels ──
+                const wbXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Alertes" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+
+                const ctXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>`;
+
+                const relsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`;
+
+                const wbRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>`;
+
+                const enc = (s: string) => fflate.strToU8(s);
+                const zipped = fflate.zipSync({
+                  "[Content_Types].xml": enc(ctXml),
+                  "_rels/.rels": enc(relsXml),
+                  "xl/workbook.xml": enc(wbXml),
+                  "xl/_rels/workbook.xml.rels": enc(wbRelsXml),
+                  "xl/styles.xml": enc(stylesXml),
+                  "xl/sharedStrings.xml": enc(ssXml),
+                  "xl/worksheets/sheet1.xml": enc(sheetXml),
+                });
+
+                const blob = new Blob([zipped.buffer as ArrayBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
                 const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `${filename}_${dateStr}.xls`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
+                const anchor = document.createElement("a");
+                anchor.href = url; anchor.download = `${filename}_${dateStr}.xlsx`;
+                document.body.appendChild(anchor); anchor.click();
+                document.body.removeChild(anchor); URL.revokeObjectURL(url);
               };
 
               return <>
