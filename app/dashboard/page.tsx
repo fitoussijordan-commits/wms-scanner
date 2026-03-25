@@ -531,7 +531,7 @@ export default function Dashboard() {
       }));
       supa.saveStockCache(cacheItems).catch(() => {});
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [session, thresholdsByRef]);
+  }, [session, thresholdsByRef, watchlist]);
 
   // ── IMPORT CONSO DEPUIS EXPORT ODOO (Tableau croisé dynamique) ──
   const importConsoFromOdoo = useCallback(async (file: File) => {
@@ -819,6 +819,8 @@ export default function Dashboard() {
   }, [session, moveRef, moveStart, moveEnd]);
 
   useEffect(() => { if (!session) return; if (tab === "alerts") { loadAlerts(); } if (tab === "conso") loadConso(); if (tab === "deliveries") loadDeliveries(); }, [tab, session]);
+  // Re-run loadAlerts quand la watchlist arrive depuis Supabase (évite le flash "tout le catalogue")
+  useEffect(() => { if (!session || tab !== "alerts") return; loadAlerts(); }, [watchlist]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Computed ──
   const months = useMemo(() => monthsBack(consoMonths), [consoMonths]);
