@@ -435,6 +435,7 @@ export default function Dashboard() {
   const [stockSyncedAt, setStockSyncedAt] = useState<Date | null>(null);
   const [consoSyncedAt, setConsoSyncedAt] = useState<Date | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [consoImporting, setConsoImporting] = useState(false);
 
   const saveThresholdsLocal = async (t: Record<number, number>) => {
     setThresholds(t);
@@ -531,6 +532,70 @@ export default function Dashboard() {
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, [session, thresholdsByRef]);
 
+  // ── IMPORT CONSO DEPUIS EXPORT ODOO (Tableau croisé dynamique) ──
+  const importConsoFromOdoo = useCallback(async (file: File) => {
+    setConsoImporting(true);
+    try {
+      const XLSX = await import("xlsx");
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+
+      const FR_MONTHS: Record<string, string> = {
+        "janvier": "01", "février": "02", "mars": "03", "avril": "04",
+        "mai": "05", "juin": "06", "juillet": "07", "août": "08",
+        "septembre": "09", "octobre": "10", "novembre": "11", "décembre": "12"
+      };
+
+      // Trouver la ligne d'en-têtes avec les noms de mois
+      let monthCols: { col: number; month: string }[] = [];
+      let dataStartRow = 4;
+      for (let r = 0; r < Math.min(6, rows.length); r++) {
+        const row = rows[r] || [];
+        const cols: { col: number; month: string }[] = [];
+        for (let c = 0; c < row.length; c++) {
+          const cell = String(row[c] ?? "").trim().toLowerCase();
+          const parts = cell.split(" ");
+          if (parts.length === 2 && FR_MONTHS[parts[0]] && /^\d{4}$/.test(parts[1])) {
+            cols.push({ col: c, month: `${parts[1]}-${FR_MONTHS[parts[0]]}` });
+          }
+        }
+        if (cols.length > 0) { monthCols = cols; dataStartRow = r + 2; break; }
+      }
+      if (monthCols.length === 0) throw new Error("Colonnes de mois introuvables. Vérifiez le format du fichier (tableau croisé Odoo avec mois en français).");
+
+      // Parser les lignes produit
+      const items: supa.WmsConsoCache[] = [];
+      for (let r = dataStartRow; r < rows.length; r++) {
+        const row = rows[r] || [];
+        const rawName = String(row[0] ?? "").trim();
+        if (!rawName || rawName.toLowerCase() === "total") continue;
+        const refMatch = rawName.match(/^\[([^\]]+)\]\s*(.*)/);
+        if (!refMatch) continue;
+        const ref = refMatch[1].trim();
+        const name = refMatch[2].trim();
+        for (const { col, month } of monthCols) {
+          const qty = Number(row[col]) || 0;
+          if (qty > 0) items.push({ odoo_ref: ref, product_name: name, month, qty });
+        }
+      }
+      if (items.length === 0) throw new Error("Aucune ligne de consommation trouvée. Vérifiez que le fichier contient des lignes [REF] Produit.");
+
+      await supa.saveConsoCache(items);
+      const avg = await supa.loadAvgMonthly();
+      setAvgMonthlyByRef(avg);
+      setConsoSyncedAt(new Date());
+      const nbProducts = new Set(items.map(i => i.odoo_ref)).size;
+      const nbMonths = new Set(items.map(i => i.month)).size;
+      alert(`✓ Import réussi !\n${nbProducts} produits · ${nbMonths} mois · ${items.length} entrées sauvegardées dans Supabase.`);
+      loadAlerts();
+    } catch (err: any) {
+      alert("Erreur import conso : " + err.message);
+    } finally {
+      setConsoImporting(false);
+    }
+  }, [loadAlerts]);
 
   const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
@@ -724,7 +789,7 @@ export default function Dashboard() {
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, [session, moveRef, moveStart, moveEnd]);
 
-  useEffect(() => { if (!session) return; if (tab === "alerts") { loadAlerts(); if (conso.length === 0) loadConso(); } if (tab === "conso") loadConso(); if (tab === "deliveries") loadDeliveries(); }, [tab, session]);
+  useEffect(() => { if (!session) return; if (tab === "alerts") { loadAlerts(); } if (tab === "conso") loadConso(); if (tab === "deliveries") loadDeliveries(); }, [tab, session]);
 
   // ── Computed ──
   const months = useMemo(() => monthsBack(consoMonths), [consoMonths]);
@@ -841,8 +906,21 @@ export default function Dashboard() {
           return (
           <div style={{ animation: "fadeIn .3s ease both" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}>
-              <div><h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Alertes stock</h2><p style={{ fontSize: 13, color: "var(--text-muted)" }}>Seuils min. configurables — jours restants estimés via la consommation moyenne</p></div>
-              <button className="wms-btn wms-btn-primary" onClick={async () => { await loadAlerts(); if (conso.length === 0) await loadConso(); }} disabled={loading}>{loading ? <Spinner /> : I.refresh} Actualiser</button>
+              <div>
+                <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Alertes stock</h2>
+                <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                  Seuils min. configurables — jours restants estimés via la consommation moyenne
+                  {consoSyncedAt && <span style={{ marginLeft: 10, color: "var(--success)", fontWeight: 600 }}>· conso importée le {consoSyncedAt.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}</span>}
+                  {!consoSyncedAt && Object.keys(avgMonthlyByRef).length === 0 && <span style={{ marginLeft: 10, color: "var(--warning)", fontWeight: 600 }}>· aucune conso chargée</span>}
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <label className="wms-btn" style={{ background: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-soft)" : "var(--accent-soft)", color: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success)" : "var(--accent)", border: `1px solid ${consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-border)" : "var(--accent-border)"}`, cursor: "pointer" }}>
+                  {consoImporting ? <Spinner /> : I.upload} {consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "Màj conso Odoo" : "Import conso Odoo"}
+                  <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; await importConsoFromOdoo(file); e.target.value = ""; }} disabled={consoImporting} />
+                </label>
+                <button className="wms-btn wms-btn-primary" onClick={loadAlerts} disabled={loading}>{loading ? <Spinner /> : I.refresh} Actualiser</button>
+              </div>
             </div>
 
             {(() => {
