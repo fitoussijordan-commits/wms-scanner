@@ -370,6 +370,7 @@ function MiniBarChart({ data, max }: { data: number[]; max: number }) {
 // MAIN DASHBOARD
 // ═════════════════════════════════════════════
 export default function Dashboard() {
+  const [mounted, setMounted] = useState(false); // évite le flash avant lecture localStorage
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState("");
@@ -415,7 +416,11 @@ export default function Dashboard() {
   const [alertsOverstockOpen, setAlertsOverstockOpen] = useState(true);
   const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
 
-  useEffect(() => { const s = loadSession(); if (s) setSession(s); const cfg = loadCfg(); if (cfg) { setUrl(cfg.u); setDb(cfg.d); } }, []);
+  useEffect(() => {
+    const s = loadSession(); if (s) setSession(s);
+    const cfg = loadCfg(); if (cfg) { setUrl(cfg.u); setDb(cfg.d); }
+    setMounted(true); // localStorage lu → on peut render
+  }, []);
   // Load thresholds from Supabase on login
   useEffect(() => {
     if (!session) return;
@@ -1048,6 +1053,14 @@ export default function Dashboard() {
   // ═══════════════════════════════════════
   // MAIN
   // ═══════════════════════════════════════
+  // Bloquer le render tant que localStorage n'a pas été lu (évite le flash FOUC)
+  if (!mounted) return (
+    <div className="wms-root" data-theme="light" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "var(--bg)" }}>
+      <style>{GLOBAL_CSS}</style>
+      <Spinner size={32} />
+    </div>
+  );
+
   return (
     <div className="wms-root" data-theme="light"><style>{GLOBAL_CSS}</style>
 
