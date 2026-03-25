@@ -1698,7 +1698,7 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
             {stock.map((q: any, i: number) => {
               if (!q.lot_id) return null;
               const sel = selLot?.id === q.lot_id[0];
-              const lq = q.quantity - (q.reserved_quantity || 0);
+              const lq = q.quantity;
               return (
                 <button key={i} onClick={() => { sel ? setSelLot(null) : setSelLot({ id: q.lot_id[0], name: q.lot_id[1] }); vibrate(); }}
                   style={{ padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", transition: "all .15s",
@@ -2721,7 +2721,7 @@ function LocCard({ loc, label, content, color, onRename, onClear }: { loc: any; 
           {grouped.slice(0, 20).map((p, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < grouped.length - 1 ? `1px solid ${C.border}` : "none", fontSize: 12 }}>
               <span style={{ color: C.text, fontWeight: 500, maxWidth: "70%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
-              <span style={{ fontWeight: 700, color: (p.qty - p.res) > 0 ? C.green : C.orange }}>{p.qty - p.res}</span>
+              <span style={{ fontWeight: 700, color: C.text }}>{p.qty}{p.res > 0 ? <span style={{ fontSize: 10, color: C.orange, marginLeft: 4 }}>({p.res} rés.)</span> : ""}</span>
             </div>
           ))}
         </div>
