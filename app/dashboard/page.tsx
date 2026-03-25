@@ -550,10 +550,16 @@ export default function Dashboard() {
         }
 
         if (watchlist.size > 0 && !watchlist.has(data.ref)) continue;
-        // Alert si: sous le seuil OU < 45 jours (calculé avec commande si dispo)
+
+        // Règle d'alerte :
+        // - Sans commande : alerte si qty < seuil OU couverture < 45j
+        // - Avec commande : alerte UNIQUEMENT si la couverture effective (stock + réception) reste < 45j
+        //   → si la commande compense suffisamment, le produit n'est plus à risque même si qty < seuil
         const belowThreshold = thresh !== undefined && data.qty <= thresh;
         const lowDays = avgDaily > 0 && daysLeft < 45;
-        if (belowThreshold || lowDays) {
+        const coveredByOrder = incomingQty !== undefined && !lowDays; // commande en cours ET couverture ok
+
+        if ((belowThreshold || lowDays) && !coveredByOrder) {
           alertList.push({ productId: pid, ref: data.ref, name: data.name, qty: data.qty, threshold: thresh || 0, consoAvg: Math.round(consoAvg), daysLeft, rawDaysLeft, incomingQty, incomingDate });
         }
       }
@@ -1115,8 +1121,11 @@ export default function Dashboard() {
             </div>
 
             {(() => {
-              // Split alerts: critical (< 25% seuil or < 7j), warning (7-30j), ok
-              const criticalAlerts = alerts.filter(a => { const avg = avgMonthlyByRef[a.ref] || (conso.find(c => c.ref === a.ref)?.avg || 0); const d = avg / 30; const days = d > 0 ? Math.round(a.qty / d) : null; return days === null || days <= 7 || a.qty / a.threshold <= 0.25; });
+              // Critique : couverture effective (daysLeft, commande incluse) ≤ 7j OU stock < 25% du seuil
+              // Attention : couverture 7-44j
+              const criticalAlerts = alerts.filter(a =>
+                a.daysLeft <= 0 || a.daysLeft <= 7 || (a.threshold > 0 && a.qty / a.threshold <= 0.25)
+              );
               const warningAlerts = alerts.filter(a => !criticalAlerts.includes(a));
 
               const AccordionSection = ({ open, onToggle, color, dot, pulseAnim, title, count, onExport, children }: any) => (
