@@ -232,6 +232,7 @@ const I = {
   check: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>,
   scanner: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>,
   chevronDown: <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"/></svg>,
+  download: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
   filter: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
   sortAsc: <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>,
   sortDesc: <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>,
@@ -956,14 +957,21 @@ export default function Dashboard() {
               const criticalAlerts = alerts.filter(a => { const avg = avgMonthlyByRef[a.ref] || (conso.find(c => c.ref === a.ref)?.avg || 0); const d = avg / 30; const days = d > 0 ? Math.round(a.qty / d) : null; return days === null || days <= 7 || a.qty / a.threshold <= 0.25; });
               const warningAlerts = alerts.filter(a => !criticalAlerts.includes(a));
 
-              const AccordionSection = ({ open, onToggle, color, dot, pulseAnim, title, count, children }: any) => (
+              const AccordionSection = ({ open, onToggle, color, dot, pulseAnim, title, count, onExport, children }: any) => (
                 <div style={{ marginBottom: 12 }}>
-                  <button onClick={onToggle} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: open ? "10px 10px 0 0" : 10, cursor: "pointer", fontFamily: "inherit", transition: "border-radius .2s" }}>
-                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0, animation: pulseAnim ? "pulse-dot 1.5s ease-in-out infinite" : "none" }} />
-                    <span style={{ fontSize: 12, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: ".8px", flex: 1, textAlign: "left" }}>{title}</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", fontFamily: MONO }}>{count} article{count > 1 ? "s" : ""}</span>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2.5" style={{ transform: open ? "rotate(180deg)" : "rotate(0)", transition: "transform .2s", flexShrink: 0 }}><path d="M6 9l6 6 6-6"/></svg>
-                  </button>
+                  <div style={{ display: "flex", alignItems: "stretch", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: open ? "10px 10px 0 0" : 10, overflow: "hidden" }}>
+                    <button onClick={onToggle} style={{ flex: 1, display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", transition: "background .12s" }}>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0, animation: pulseAnim ? "pulse-dot 1.5s ease-in-out infinite" : "none" }} />
+                      <span style={{ fontSize: 12, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: ".8px", flex: 1, textAlign: "left" }}>{title}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", fontFamily: MONO }}>{count} article{count > 1 ? "s" : ""}</span>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2.5" style={{ transform: open ? "rotate(180deg)" : "rotate(0)", transition: "transform .2s", flexShrink: 0 }}><path d="M6 9l6 6 6-6"/></svg>
+                    </button>
+                    {onExport && (
+                      <button onClick={(e) => { e.stopPropagation(); onExport(); }} title="Exporter en Excel" style={{ padding: "0 16px", background: "none", border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "var(--text-muted)", fontFamily: "inherit", whiteSpace: "nowrap", transition: "background .12s, color .12s" }} onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "var(--bg-hover)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)"; }} onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "none"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)"; }}>
+                        {I.download} Export Excel
+                      </button>
+                    )}
+                  </div>
                   {open && <div style={{ border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 10px 10px", padding: "12px", display: "grid", gap: 8 }}>{children}</div>}
                 </div>
               );
@@ -994,14 +1002,38 @@ export default function Dashboard() {
                 );
               };
 
+              const exportAlerts = async (items: typeof alerts, filename: string, statut: string) => {
+                const XLSX = await import("xlsx");
+                const today = new Date();
+                const rows = items.map(a => {
+                  let dateRupture = "";
+                  if (a.daysLeft > 0 && a.daysLeft < 9999) {
+                    const d = new Date(today.getTime() + a.daysLeft * 24 * 60 * 60 * 1000);
+                    dateRupture = d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "2-digit" }).replace(".", "");
+                  }
+                  return {
+                    "Réf": a.ref,
+                    "Désignation": a.name.replace(/\[.*?\]\s*/, ""),
+                    "Prochaine dispo": "",
+                    "Date prévue de rupture": dateRupture,
+                    "Statut": statut,
+                  };
+                });
+                const ws = XLSX.utils.json_to_sheet(rows);
+                ws["!cols"] = [{ wch: 12 }, { wch: 48 }, { wch: 20 }, { wch: 24 }, { wch: 22 }];
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Alertes");
+                XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split("T")[0]}.xlsx`);
+              };
+
               return <>
                 {criticalAlerts.length > 0 && (
-                  <AccordionSection open={alertsUnderstockOpen} onToggle={() => setAlertsUnderstockOpen(o => !o)} color="var(--danger)" dot pulseAnim title="Critique — rupture imminente" count={criticalAlerts.length}>
+                  <AccordionSection open={alertsUnderstockOpen} onToggle={() => setAlertsUnderstockOpen(o => !o)} color="var(--danger)" dot pulseAnim title="Critique — rupture imminente" count={criticalAlerts.length} onExport={() => exportAlerts(criticalAlerts, "alertes_critique", "Déjà en rupture")}>
                     {criticalAlerts.map(a => <AlertCard key={a.productId} a={a} />)}
                   </AccordionSection>
                 )}
                 {warningAlerts.length > 0 && (
-                  <AccordionSection open={alertsWarningOpen} onToggle={() => setAlertsWarningOpen(o => !o)} color="var(--warning)" dot={false} pulseAnim={false} title="Attention — stock bas" count={warningAlerts.length}>
+                  <AccordionSection open={alertsWarningOpen} onToggle={() => setAlertsWarningOpen(o => !o)} color="var(--warning)" dot={false} pulseAnim={false} title="Attention — stock bas" count={warningAlerts.length} onExport={() => exportAlerts(warningAlerts, "alertes_stock_bas", "Rupture imminente")}>
                     {warningAlerts.map(a => <AlertCard key={a.productId} a={a} />)}
                   </AccordionSection>
                 )}
@@ -1078,30 +1110,6 @@ export default function Dashboard() {
                       e.target.value = "";
                     }} />
                   </label>
-                  {/* Calculer et figer les seuils depuis la consommation */}
-                  <button className="wms-btn" onClick={async () => {
-                    if (conso.length === 0) { alert("Charge d'abord la consommation dans l'onglet Consommation, puis reviens ici."); return; }
-                    setLoading(true); setError("");
-                    try {
-                      const supaItems: supa.WmsThreshold[] = [];
-                      for (const row of conso) {
-                        if (!row.ref || row.avg <= 0) continue;
-                        supaItems.push({ odoo_ref: row.ref, threshold: row.avg, product_name: row.name });
-                      }
-                      await supa.saveThresholdsBulk(supaItems);
-                      const avgItems: Record<string, number> = {};
-                      const newByRef: Record<string, number> = {};
-                      for (const item of supaItems) { avgItems[item.odoo_ref] = item.threshold; newByRef[item.odoo_ref] = item.threshold; }
-                      await supa.saveAvgMonthlyBulk(avgItems);
-                      setAvgMonthlyByRef(avgItems);
-                      setThresholdsByRef(newByRef);
-                      alert(`✓ ${supaItems.length} seuils figés depuis la consommation.\nSeuil = moyenne mensuelle (${consoMonths} mois).`);
-                      loadAlerts();
-                    } catch (e: any) { setError(e.message); }
-                    finally { setLoading(false); }
-                  }} disabled={loading || conso.length === 0} style={{ background: "var(--success-soft)", color: "var(--success)", border: "1px solid var(--success-border)", padding: "8px 14px", fontSize: 13, opacity: conso.length === 0 ? 0.5 : 1 }}>
-                    {loading ? <Spinner /> : "⚡"} Figer seuils depuis conso{conso.length > 0 ? ` (${conso.length})` : ""}
-                  </button>
                   <label className="wms-btn" style={{ background: "var(--purple-soft)", color: "var(--purple)", border: "1px solid var(--purple-border)", cursor: "pointer", padding: "8px 14px", fontSize: 13 }}>
                     {I.upload} Importer Excel
                     <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={async (e) => {
