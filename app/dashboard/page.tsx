@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import * as odoo from "@/lib/odoo";
 import * as supa from "@/lib/supabase";
+import type { WmsPendingOrder } from "@/lib/supabase";
 
 // ─────────────────────────────────────────────
 // TYPES
@@ -442,7 +443,7 @@ export default function Dashboard() {
   const [syncing, setSyncing] = useState(false);
   const [consoImporting, setConsoImporting] = useState(false);
   const [orderImporting, setOrderImporting] = useState(false);
-  const [pendingOrders, setPendingOrders] = useState<supa.WmsPendingOrder[]>([]);
+  const [pendingOrders, setPendingOrders] = useState<WmsPendingOrder[]>([]);
 
   const saveThresholdsLocal = async (t: Record<number, number>) => {
     setThresholds(t);
