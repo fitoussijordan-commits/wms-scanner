@@ -184,6 +184,47 @@ export async function loadAvgMonthly(): Promise<Record<string, number>> {
   return result;
 }
 
+// ══════════════════════════════════════════
+// COMMANDES FOURNISSEUR EN COURS
+// ══════════════════════════════════════════
+
+export interface WmsPendingOrder {
+  id?: string;
+  batch_id: string;          // identifiant du lot = "order_YYYY-MM-DD"
+  supplier_ref: string;      // Article-No. fournisseur
+  odoo_ref?: string | null;  // default_code Odoo (matchée via product.supplierinfo)
+  product_name: string;
+  qty_incoming: number;
+  order_date: string;               // YYYY-MM-DD
+  expected_reception_date: string;  // YYYY-MM-DD
+  status: "pending" | "received";
+  created_at?: string;
+}
+
+/** Remplace toutes les lignes d'un batch (même batch_id) et insère les nouvelles */
+export async function savePendingOrders(orders: WmsPendingOrder[]): Promise<void> {
+  if (!orders.length) return;
+  await sb.from("wms_pending_orders").delete().eq("batch_id", orders[0].batch_id);
+  const { error } = await sb.from("wms_pending_orders").insert(orders);
+  if (error) throw new Error(error.message);
+}
+
+export async function loadPendingOrders(): Promise<WmsPendingOrder[]> {
+  const { data, error } = await sb
+    .from("wms_pending_orders")
+    .select("*")
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data || []) as WmsPendingOrder[];
+}
+
+/** Supprime tout un batch (utilisé à la réception) */
+export async function deletePendingOrderBatch(batch_id: string): Promise<void> {
+  const { error } = await sb.from("wms_pending_orders").delete().eq("batch_id", batch_id);
+  if (error) throw new Error(error.message);
+}
+
 export async function saveAvgMonthlyBulk(input: { odoo_ref: string; avg_monthly: number }[] | Record<string, number>): Promise<void> {
   const items = Array.isArray(input) ? input : Object.entries(input).map(([odoo_ref, avg_monthly]) => ({ odoo_ref, avg_monthly }));
   for (let i = 0; i < items.length; i += 500) {
