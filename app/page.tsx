@@ -1665,12 +1665,28 @@ function LocationDropdown({ locations, onSelect, excludeId }: { locations: any[]
 function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName, loading: parentLoading }: any) {
   const [qty, setQty] = useState(1);
   const [selLot, setSelLot] = useState<{ id: number; name: string } | null>(lot ? { id: lot.id, name: lot.name } : null);
+  const [lotQtys, setLotQtys] = useState<Record<number, number>>({});
   const total = stock.reduce((s: number, q: any) => s + q.quantity, 0);
   const reserved = stock.reduce((s: number, q: any) => s + (q.reserved_quantity || 0), 0);
   const avail = total - reserved;
   const lots = stock.filter((q: any) => q.lot_id);
+  const hasMultiLots = lots.length > 1;
 
   useEffect(() => { if (lot) setSelLot({ id: lot.id, name: lot.name }); else setSelLot(null); }, [lot]);
+
+  const totalLotQty = Object.values(lotQtys).reduce((s, n) => s + n, 0);
+  const doAdd = () => {
+    if (hasMultiLots && totalLotQty > 0) {
+      for (const [lotId, lqty] of Object.entries(lotQtys)) {
+        if (lqty > 0) {
+          const lotInfo = lots.find((q: any) => q.lot_id[0] === Number(lotId));
+          onAdd(lqty, Number(lotId), lotInfo?.lot_id[1] || null);
+        }
+      }
+    } else if (qty > 0) {
+      onAdd(qty, selLot?.id, selLot?.name);
+    }
+  };
 
   return (
     <Section>
@@ -1690,56 +1706,77 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
       </div>
       {srcName && <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14, textAlign: "center" }}>sur {srcName}</div>}
 
-      {/* Lot chips */}
+      {/* Lot selection */}
       {lots.length > 0 && (
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Lot</div>
-          <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 6 }}>
-            {stock.map((q: any, i: number) => {
-              if (!q.lot_id) return null;
-              const sel = selLot?.id === q.lot_id[0];
-              const lq = q.quantity;
-              return (
-                <button key={i} onClick={() => { sel ? setSelLot(null) : setSelLot({ id: q.lot_id[0], name: q.lot_id[1] }); vibrate(); }}
-                  style={{ padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", transition: "all .15s",
-                    background: sel ? C.blue : C.white, color: sel ? "#fff" : C.text,
-                    border: `1.5px solid ${sel ? C.blue : C.border}`,
-                  }}>
-                  {q.lot_id[1]} <span style={{ fontWeight: 400, opacity: 0.7 }}>({lq})</span>
-                </button>
-              );
-            })}
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Lots{hasMultiLots ? " — quantité par lot" : ""}</div>
+          {hasMultiLots ? (
+            <div style={{ display: "flex", flexDirection: "column" as const, gap: 6 }}>
+              {stock.map((q: any, i: number) => {
+                if (!q.lot_id) return null;
+                const lqty = lotQtys[q.lot_id[0]] || 0;
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: lqty > 0 ? C.blueSoft : C.white, border: `1.5px solid ${lqty > 0 ? C.blue : C.border}`, borderRadius: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{q.lot_id[1]}</div>
+                      <div style={{ fontSize: 10, color: C.textMuted }}>Stock: {q.quantity}{q.expiration_date ? " · " + q.expiration_date.substring(0, 10) : ""}</div>
+                    </div>
+                    <button onClick={() => setLotQtys(p => ({ ...p, [q.lot_id[0]]: Math.max(0, (p[q.lot_id[0]] || 0) - 1) }))} style={{ width: 30, height: 30, borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
+                    <input type="number" value={lqty || ""} onChange={e => { const v = parseInt(e.target.value) || 0; setLotQtys(p => ({ ...p, [q.lot_id[0]]: Math.max(0, v) })); }} onKeyDown={e => e.stopPropagation()} style={{ width: 50, textAlign: "center" as const, padding: "4px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 14, fontWeight: 700, fontFamily: "inherit" }} />
+                    <button onClick={() => setLotQtys(p => ({ ...p, [q.lot_id[0]]: (p[q.lot_id[0]] || 0) + 1 }))} style={{ width: 30, height: 30, borderRadius: 6, border: `1px solid ${C.border}`, background: C.blue, color: "#fff", fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+                    <button onClick={() => setLotQtys(p => ({ ...p, [q.lot_id[0]]: q.quantity }))} style={{ padding: "4px 8px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg, fontSize: 10, fontWeight: 700, cursor: "pointer", color: C.textSec }}>Tout</button>
+                  </div>
+                );
+              })}
+              {totalLotQty > 0 && <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, textAlign: "right" as const }}>Total: {totalLotQty}</div>}
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 6 }}>
+              {stock.map((q: any, i: number) => {
+                if (!q.lot_id) return null;
+                const sel = selLot?.id === q.lot_id[0];
+                return (
+                  <button key={i} onClick={() => { sel ? setSelLot(null) : setSelLot({ id: q.lot_id[0], name: q.lot_id[1] }); vibrate(); }}
+                    style={{ padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                      background: sel ? C.blue : C.white, color: sel ? "#fff" : C.text,
+                      border: `1.5px solid ${sel ? C.blue : C.border}`,
+                    }}>
+                    {q.lot_id[1]} <span style={{ fontWeight: 400, opacity: 0.7 }}>({q.quantity})</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Qty with +/- (only for single lot or no lots) */}
+      {(!hasMultiLots || lots.length === 0) && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>Quantité</div>
+          <div style={{ display: "flex", alignItems: "stretch", gap: 0, border: `1.5px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.white }}>
+            <button onClick={() => { if (qty > 1) { setQty(qty - 1); vibrate(); } }}
+              style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 26, fontWeight: 700, color: C.blue, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}` }}>−</button>
+            <input type="number" min="1" value={qty === 0 ? "" : qty}
+              onChange={e => { const raw = e.target.value; if (raw === "") { setQty(0); return; } const v = parseInt(raw); if (!isNaN(v) && v >= 0) setQty(v); }}
+              onBlur={() => { if (qty === 0) setQty(1); }}
+              onKeyDown={e => e.stopPropagation()}
+              style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 28, fontWeight: 800, border: "none", outline: "none", background: C.white, color: C.text, padding: "14px 4px", fontFamily: "'DM Mono', monospace" }} />
+            <button onClick={() => { setQty(qty + 1); vibrate(); }}
+              style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 26, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderLeft: `1px solid ${C.blue}` }}>+</button>
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+            {[1, 5, 10, 25, 50].map(n => (
+              <button key={n} onClick={() => { setQty(n); vibrate(); }}
+                style={{ flex: 1, padding: "8px 0", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                  background: qty === n ? C.blue : C.bg, color: qty === n ? "#fff" : C.textSec,
+                  border: `1px solid ${qty === n ? C.blue : C.border}`, transition: "all .1s",
+                }}>{n}</button>
+            ))}
           </div>
         </div>
       )}
 
-      {/* Qty with +/- */}
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>Quantité</div>
-        <div style={{ display: "flex", alignItems: "stretch", gap: 0, border: `1.5px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.white }}>
-          <button onClick={() => { if (qty > 1) { setQty(qty - 1); vibrate(); } }}
-            style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 26, fontWeight: 700, color: C.blue, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}` }}>−</button>
-          <input type="number" min="1" value={qty === 0 ? "" : qty}
-            onChange={e => { const raw = e.target.value; if (raw === "") { setQty(0); return; } const v = parseInt(raw); if (!isNaN(v) && v >= 0) setQty(v); }}
-            onBlur={() => { if (qty === 0) setQty(1); }}
-            onKeyDown={e => e.stopPropagation()}
-            style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 28, fontWeight: 800, border: "none", outline: "none", background: C.white, color: C.text, padding: "14px 4px", fontFamily: "'DM Mono', monospace" }} />
-          <button onClick={() => { setQty(qty + 1); vibrate(); }}
-            style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 26, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderLeft: `1px solid ${C.blue}` }}>+</button>
-        </div>
-        {/* Quick qty buttons */}
-        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-          {[1, 5, 10, 25, 50].map(n => (
-            <button key={n} onClick={() => { setQty(n); vibrate(); }}
-              style={{ flex: 1, padding: "8px 0", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
-                background: qty === n ? C.blue : C.bg, color: qty === n ? "#fff" : C.textSec,
-                border: `1px solid ${qty === n ? C.blue : C.border}`, transition: "all .1s",
-              }}>{n}</button>
-          ))}
-        </div>
-      </div>
-
-      {/* Quick mode: show route summary */}
       {quickMode && srcName && dstName && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 12, padding: "10px 14px", background: C.greenSoft, borderRadius: 10, border: `1px solid ${C.greenBorder}` }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{srcName}</span>
@@ -1748,12 +1785,12 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
         </div>
       )}
 
-      <button onClick={() => { if (qty > 0) onAdd(qty, selLot?.id, selLot?.name); }}
-        disabled={parentLoading}
-        style={{ width: "100%", padding: 14, background: quickMode ? C.green : C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700,
-          cursor: parentLoading ? "wait" : "pointer", fontFamily: "inherit", opacity: parentLoading ? 0.6 : 1, transition: "all .15s",
+      <button onClick={doAdd}
+        disabled={parentLoading || (hasMultiLots ? totalLotQty === 0 : qty === 0)}
+        style={{ width: "100%", padding: 14, background: quickMode ? C.green : C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700,
+          cursor: parentLoading ? "wait" : "pointer", fontFamily: "inherit", opacity: parentLoading ? 0.6 : 1,
         }}>
-        {parentLoading ? "Envoi en cours..." : quickMode ? `✓ Valider le transfert` : "Ajouter à la liste"}
+        {parentLoading ? "Envoi en cours..." : quickMode ? "✓ Valider le transfert" : hasMultiLots && totalLotQty > 0 ? `Ajouter ${totalLotQty} unités (${Object.values(lotQtys).filter(v => v > 0).length} lots)` : "Ajouter à la liste"}
       </button>
     </Section>
   );
