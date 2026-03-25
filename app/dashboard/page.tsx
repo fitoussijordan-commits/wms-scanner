@@ -513,7 +513,7 @@ export default function Dashboard() {
         const consoAvg = avgDaily * 30; // monthly
         const daysLeft = avgDaily > 0 ? Math.round(data.qty / avgDaily) : 9999;
 
-        if (watchlistMode && watchlist.size > 0 && !watchlist.has(data.ref)) continue;
+        if (watchlist.size > 0 && !watchlist.has(data.ref)) continue;
         // Alert if: has threshold and below OR has conso and < 45 days left
         const belowThreshold = thresh !== undefined && data.qty <= thresh;
         const lowDays = avgDaily > 0 && daysLeft < 45;
@@ -583,12 +583,40 @@ export default function Dashboard() {
       if (items.length === 0) throw new Error("Aucune ligne de consommation trouvée. Vérifiez que le fichier contient des lignes [REF] Produit.");
 
       await supa.saveConsoCache(items);
+
+      // ── Calcul seuils automatiques : moyenne mensuelle des 12 derniers mois ──
+      const now = new Date();
+      const last12: string[] = [];
+      for (let i = 1; i <= 12; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        last12.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+      }
+      const byRef12: Record<string, { name: string; total: number }> = {};
+      for (const item of items) {
+        if (!last12.includes(item.month)) continue;
+        if (!byRef12[item.odoo_ref]) byRef12[item.odoo_ref] = { name: item.product_name, total: 0 };
+        byRef12[item.odoo_ref].total += item.qty;
+      }
+      const thresholdItems: supa.WmsThreshold[] = [];
+      const newThresholdsByRef: Record<string, number> = {};
+      for (const [ref, v] of Object.entries(byRef12)) {
+        const avgMonthly = Math.round(v.total / 12);
+        if (avgMonthly > 0) {
+          thresholdItems.push({ odoo_ref: ref, threshold: avgMonthly, product_name: v.name });
+          newThresholdsByRef[ref] = avgMonthly;
+        }
+      }
+      if (thresholdItems.length > 0) {
+        await supa.saveThresholdsBulk(thresholdItems);
+        setThresholdsByRef(newThresholdsByRef);
+      }
+
       const avg = await supa.loadAvgMonthly();
       setAvgMonthlyByRef(avg);
       setConsoSyncedAt(new Date());
       const nbProducts = new Set(items.map(i => i.odoo_ref)).size;
       const nbMonths = new Set(items.map(i => i.month)).size;
-      alert(`✓ Import réussi !\n${nbProducts} produits · ${nbMonths} mois · ${items.length} entrées sauvegardées dans Supabase.`);
+      alert(`✓ Import réussi !\n${nbProducts} produits · ${nbMonths} mois importés.\n${thresholdItems.length} seuils calculés (moy. 12 derniers mois).`);
       loadAlerts();
     } catch (err: any) {
       alert("Erreur import conso : " + err.message);
