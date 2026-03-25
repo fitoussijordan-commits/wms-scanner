@@ -15,6 +15,10 @@ interface StockAlert {
   threshold: number;
   consoAvg: number;
   daysLeft: number;
+  // Commande fournisseur en cours
+  incomingQty?: number;
+  incomingDate?: string;
+  rawDaysLeft?: number; // daysLeft sans la commande (pour affichage)
 }
 interface ConsoRow {
   ref: string;
@@ -437,6 +441,8 @@ export default function Dashboard() {
   const [consoSyncedAt, setConsoSyncedAt] = useState<Date | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [consoImporting, setConsoImporting] = useState(false);
+  const [orderImporting, setOrderImporting] = useState(false);
+  const [pendingOrders, setPendingOrders] = useState<supa.WmsPendingOrder[]>([]);
 
   const saveThresholdsLocal = async (t: Record<number, number>) => {
     setThresholds(t);
@@ -506,20 +512,48 @@ export default function Dashboard() {
       }
       setThresholds(t);
 
+      // 4. Charger les commandes fournisseur en cours
+      let pendingByRef: Record<string, { qty: number; receptionDate: Date; dateStr: string }> = {};
+      try {
+        const pending = await supa.loadPendingOrders();
+        setPendingOrders(pending);
+        for (const o of pending) {
+          if (!o.odoo_ref) continue;
+          if (!pendingByRef[o.odoo_ref]) {
+            const rd = new Date(o.expected_reception_date + "T12:00:00");
+            pendingByRef[o.odoo_ref] = { qty: 0, receptionDate: rd, dateStr: rd.toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }) };
+          }
+          pendingByRef[o.odoo_ref].qty += o.qty_incoming;
+        }
+      } catch {}
+
       const alertList: StockAlert[] = [];
       for (const [pidStr, data] of Object.entries(stockData)) {
         const pid = Number(pidStr);
         const thresh = t[pid];
         const avgDaily = consoAvgDaily[data.ref] || 0;
         const consoAvg = avgDaily * 30; // monthly
-        const daysLeft = avgDaily > 0 ? Math.round(data.qty / avgDaily) : 9999;
+        const rawDaysLeft = avgDaily > 0 ? Math.round(data.qty / avgDaily) : 9999;
+
+        // Recalculer les jours restants en tenant compte de la commande en cours
+        let daysLeft = rawDaysLeft;
+        let incomingQty: number | undefined;
+        let incomingDate: string | undefined;
+        const pending = pendingByRef[data.ref];
+        if (pending && avgDaily > 0) {
+          const daysUntilReception = Math.max(0, Math.round((pending.receptionDate.getTime() - Date.now()) / 86400000));
+          const stockAtReception = Math.max(0, data.qty - avgDaily * daysUntilReception);
+          daysLeft = daysUntilReception + Math.round((stockAtReception + pending.qty) / avgDaily);
+          incomingQty = pending.qty;
+          incomingDate = pending.dateStr;
+        }
 
         if (watchlist.size > 0 && !watchlist.has(data.ref)) continue;
-        // Alert if: has threshold and below OR has conso and < 45 days left
+        // Alert si: sous le seuil OU < 45 jours (calculé avec commande si dispo)
         const belowThreshold = thresh !== undefined && data.qty <= thresh;
         const lowDays = avgDaily > 0 && daysLeft < 45;
         if (belowThreshold || lowDays) {
-          alertList.push({ productId: pid, ref: data.ref, name: data.name, qty: data.qty, threshold: thresh || 0, consoAvg: Math.round(consoAvg), daysLeft });
+          alertList.push({ productId: pid, ref: data.ref, name: data.name, qty: data.qty, threshold: thresh || 0, consoAvg: Math.round(consoAvg), daysLeft, rawDaysLeft, incomingQty, incomingDate });
         }
       }
       alertList.sort((a, b) => a.daysLeft - b.daysLeft);
@@ -625,6 +659,103 @@ export default function Dashboard() {
       setConsoImporting(false);
     }
   }, [loadAlerts]);
+
+  // ── IMPORT ORDER CONFIRMATION FOURNISSEUR ──
+  const importOrderConfirmation = useCallback(async (file: File) => {
+    if (!session) return;
+    setOrderImporting(true);
+    try {
+      const XLSX = await import("xlsx");
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+
+      if (rows.length < 2) throw new Error("Fichier vide ou format non reconnu");
+
+      // Détecter la ligne d'en-tête (contient "Article-No." ou "Article")
+      let headerRow = 0;
+      for (let r = 0; r < Math.min(5, rows.length); r++) {
+        if (rows[r].some((c: any) => String(c || "").toLowerCase().includes("article"))) { headerRow = r; break; }
+      }
+      const headers = (rows[headerRow] || []).map((h: any) => String(h || "").toLowerCase().trim());
+      const colArticle = headers.findIndex((h: string) => h.includes("article-no") || h.includes("article no") || h === "article-no.");
+      const colQtyAvail = headers.findIndex((h: string) => h.includes("quantity available") || h.includes("qty available"));
+      const colDesc = headers.findIndex((h: string) => h.includes("description"));
+      const colOrderDate = headers.findIndex((h: string) => h.includes("order date"));
+
+      if (colArticle === -1) throw new Error("Colonne 'Article-No.' introuvable dans le fichier");
+      if (colQtyAvail === -1) throw new Error("Colonne 'Quantity available' introuvable dans le fichier");
+
+      // Extraire date commande + articles
+      const firstDataRow = rows[headerRow + 1];
+      const rawOrderDate = firstDataRow?.[colOrderDate];
+      const orderDate = rawOrderDate ? new Date(rawOrderDate) : new Date();
+      // Réception = 10 du mois suivant
+      const receptionDate = new Date(orderDate.getFullYear(), orderDate.getMonth() + 1, 10);
+      const batchId = `order_${orderDate.toISOString().split("T")[0]}`;
+
+      const orderItems: { supplierRef: string; qty: number; name: string }[] = [];
+      for (let r = headerRow + 1; r < rows.length; r++) {
+        const row = rows[r];
+        const supplierRef = String(row[colArticle] ?? "").trim();
+        if (!supplierRef) continue;
+        // Gérer les nombres avec espaces : "11 000" → 11000
+        const rawQty = String(row[colQtyAvail] ?? "0").replace(/\s/g, "");
+        const qty = parseFloat(rawQty) || 0;
+        const name = colDesc >= 0 ? String(row[colDesc] ?? "").trim() : supplierRef;
+        if (qty > 0 && supplierRef) orderItems.push({ supplierRef, qty, name });
+      }
+      if (orderItems.length === 0) throw new Error("Aucun article avec quantité > 0 trouvé");
+
+      // Matcher les refs fournisseur avec les default_code Odoo via product.supplierinfo
+      const supplierRefs = orderItems.map(i => i.supplierRef);
+      const supplierToOdooRef: Record<string, string> = {};
+      try {
+        const supplierInfos = await odoo.searchRead(session, "product.supplierinfo",
+          [["product_code", "in", supplierRefs]], ["product_code", "product_id"], 5000);
+        const productIds = Array.from(new Set(supplierInfos.map((si: any) => si.product_id?.[0]).filter(Boolean)));
+        if (productIds.length) {
+          const products = await odoo.searchRead(session, "product.product",
+            [["id", "in", productIds]], ["id", "default_code"], 5000);
+          const refById: Record<number, string> = {};
+          for (const p of products) refById[p.id] = p.default_code || "";
+          for (const si of supplierInfos) {
+            if (si.product_code && si.product_id?.[0]) supplierToOdooRef[si.product_code] = refById[si.product_id[0]] || "";
+          }
+        }
+      } catch (e) { console.warn("Odoo supplier ref matching failed:", e); }
+
+      const pendingList: supa.WmsPendingOrder[] = orderItems.map(item => ({
+        batch_id: batchId,
+        supplier_ref: item.supplierRef,
+        odoo_ref: supplierToOdooRef[item.supplierRef] || null,
+        product_name: item.name,
+        qty_incoming: Math.round(item.qty),
+        order_date: orderDate.toISOString().split("T")[0],
+        expected_reception_date: receptionDate.toISOString().split("T")[0],
+        status: "pending" as const,
+      }));
+
+      await supa.savePendingOrders(pendingList);
+      const loaded = await supa.loadPendingOrders();
+      setPendingOrders(loaded);
+
+      const matched = pendingList.filter(o => o.odoo_ref).length;
+      const unmatched = pendingList.length - matched;
+      alert(
+        `✓ Commande importée !\n` +
+        `${pendingList.length} articles · ${matched} matchés avec Odoo${unmatched > 0 ? ` · ${unmatched} sans correspondance` : ""}.\n` +
+        `Réception prévue le ${receptionDate.toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" })}.\n\n` +
+        `Les alertes sont recalculées en intégrant ce stock entrant.`
+      );
+      loadAlerts();
+    } catch (err: any) {
+      alert("Erreur import commande : " + err.message);
+    } finally {
+      setOrderImporting(false);
+    }
+  }, [session, loadAlerts]);
 
   const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
@@ -950,6 +1081,10 @@ export default function Dashboard() {
                   {consoImporting ? <Spinner /> : I.upload} {consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "Màj conso Odoo" : "Import conso Odoo"}
                   <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; await importConsoFromOdoo(file); e.target.value = ""; }} disabled={consoImporting} />
                 </label>
+                <label className="wms-btn" style={{ background: pendingOrders.length > 0 ? "rgba(37,99,235,.12)" : "var(--bg-surface)", color: pendingOrders.length > 0 ? "var(--accent)" : "var(--text-secondary)", border: `1px solid ${pendingOrders.length > 0 ? "var(--accent-border)" : "var(--border)"}`, cursor: "pointer" }}>
+                  {orderImporting ? <Spinner /> : "📦"} {pendingOrders.length > 0 ? (() => { const nb = Array.from(new Set(pendingOrders.map(o => o.batch_id))).length; return `Màj commande (${nb} lot${nb > 1 ? "s" : ""})`; })() : "Import order confirmation"}
+                  <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; await importOrderConfirmation(file); e.target.value = ""; }} disabled={orderImporting} />
+                </label>
                 <button className="wms-btn wms-btn-primary" onClick={loadAlerts} disabled={loading}>{loading ? <Spinner /> : I.refresh} Actualiser</button>
               </div>
             </div>
@@ -980,25 +1115,31 @@ export default function Dashboard() {
 
               const AlertCard = ({ a }: { a: typeof alerts[0] }) => {
                 const daysLeft = a.daysLeft;
-                const color = daysLeft <= 7 ? "var(--danger)" : daysLeft <= 21 ? "var(--warning)" : "var(--orange)";
-                const bg = daysLeft <= 7 ? "var(--danger-soft)" : daysLeft <= 21 ? "var(--warning-soft)" : "rgba(249,115,22,.06)";
+                // Si commande en cours couvre le risque → couleur atténuée
+                const hasIncoming = !!a.incomingQty;
+                const color = hasIncoming ? "var(--success)" : daysLeft <= 7 ? "var(--danger)" : daysLeft <= 21 ? "var(--warning)" : "var(--orange)";
+                const bg = hasIncoming ? "var(--success-soft)" : daysLeft <= 7 ? "var(--danger-soft)" : daysLeft <= 21 ? "var(--warning-soft)" : "rgba(249,115,22,.06)";
+                const borderColor = hasIncoming ? "var(--success)" : color;
+                const rawLabel = a.rawDaysLeft !== undefined && a.rawDaysLeft < 9999 && a.rawDaysLeft !== daysLeft ? `${a.rawDaysLeft}j sans cde` : null;
                 const daysLabel = daysLeft >= 9999 ? "—" : daysLeft <= 0 ? "Rupture !" : `${daysLeft}j`;
                 const ratio = a.threshold > 0 ? a.qty / a.threshold : 1;
                 return (
-                  <div style={{ background: bg, borderLeft: `3px solid ${color}`, borderRadius: 8, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ background: bg, borderLeft: `3px solid ${borderColor}`, borderRadius: 8, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                     <div style={{ flex: 1, minWidth: 200 }}>
                       <div style={{ fontSize: 13, fontWeight: 600 }}>{a.ref && <span style={{ fontFamily: MONO, color: "var(--accent)", marginRight: 8, fontSize: 11 }}>[{a.ref}]</span>}{a.name}</div>
                       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
-                        <span>Stock : <strong style={{ color }}>{a.qty}</strong></span>
+                        <span>Stock : <strong style={{ color: hasIncoming ? "var(--text-primary)" : color }}>{a.qty}</strong></span>
                         {a.consoAvg > 0 && <span>Conso : <strong>{a.consoAvg}/mois</strong></span>}
                         {a.threshold > 0 && <span>Seuil : <strong>{a.threshold}</strong></span>}
+                        {hasIncoming && <span style={{ color: "var(--success)", fontWeight: 700 }}>📦 +{a.incomingQty} le {a.incomingDate}</span>}
                       </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+                      {rawLabel && <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: MONO }}>{rawLabel}</span>}
                       <div style={{ height: 6, width: 80, background: "rgba(128,128,128,.15)", borderRadius: 3, overflow: "hidden" }}>
-                        <div style={{ height: "100%", width: `${Math.min(ratio * 100, 100)}%`, background: color, borderRadius: 3 }} />
+                        <div style={{ height: "100%", width: `${Math.min(ratio * 100, 100)}%`, background: borderColor, borderRadius: 3 }} />
                       </div>
-                      <span style={{ fontSize: 13, fontWeight: 800, color, fontFamily: MONO, minWidth: 52, textAlign: "right" }}>{daysLabel}</span>
+                      <span style={{ fontSize: 13, fontWeight: 800, color: borderColor, fontFamily: MONO, minWidth: 52, textAlign: "right" }}>{daysLabel}</span>
                     </div>
                   </div>
                 );
@@ -1064,6 +1205,51 @@ export default function Dashboard() {
                     {I.check}<div><div style={{ fontSize: 15, fontWeight: 700, color: "var(--success)" }}>Tous les stocks sont OK</div><div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>Aucun article en sous-stock ou surstock.</div></div>
                   </div>
                 )}
+
+                {/* ── Section commandes fournisseur en cours ── */}
+                {pendingOrders.length > 0 && (() => {
+                  const batches = Array.from(new Map(pendingOrders.map(o => [o.batch_id, o])).values());
+                  return (
+                    <div style={{ marginTop: 24, borderTop: "1px solid var(--border)", paddingTop: 20 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-secondary)", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+                        📦 Commandes fournisseur en cours
+                        <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 400 }}>— impact déjà intégré dans les calculs ci-dessus</span>
+                      </div>
+                      {batches.map(batch => {
+                        const batchLines = pendingOrders.filter(o => o.batch_id === batch.batch_id);
+                        const matched = batchLines.filter(o => o.odoo_ref).length;
+                        const recDate = new Date(batch.expected_reception_date + "T12:00:00");
+                        const daysToRec = Math.round((recDate.getTime() - Date.now()) / 86400000);
+                        return (
+                          <div key={batch.batch_id} style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 18px", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                            <div>
+                              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                                Commande du {new Date(batch.order_date + "T12:00:00").toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" })}
+                                <span style={{ marginLeft: 12, fontSize: 11, fontFamily: MONO, color: "var(--accent)" }}>{batchLines.length} articles · {matched} matchés</span>
+                              </div>
+                              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>
+                                Réception prévue le <strong style={{ color: daysToRec <= 0 ? "var(--success)" : "var(--text-primary)" }}>
+                                  {recDate.toLocaleDateString("fr-FR", { day: "2-digit", month: "long" })}
+                                </strong>
+                                {daysToRec > 0 ? ` (dans ${daysToRec}j)` : " ✓ date passée"}
+                              </div>
+                            </div>
+                            <button className="wms-btn" onClick={async () => {
+                              if (!confirm(`Marquer la commande du ${new Date(batch.order_date + "T12:00:00").toLocaleDateString("fr-FR")} comme reçue ?\nCela supprimera les ${batchLines.length} articles de Supabase.`)) return;
+                              try {
+                                await supa.deletePendingOrderBatch(batch.batch_id);
+                                setPendingOrders(p => p.filter(o => o.batch_id !== batch.batch_id));
+                                loadAlerts();
+                              } catch (e: any) { alert("Erreur : " + e.message); }
+                            }} style={{ background: "var(--success-soft)", color: "var(--success)", border: "1px solid var(--success-border)", padding: "8px 16px", fontSize: 12 }}>
+                              ✓ Marquer reçue
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </>;
             })()}
             {/* Threshold manager */}
