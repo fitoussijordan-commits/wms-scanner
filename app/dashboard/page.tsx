@@ -899,7 +899,7 @@ export default function Dashboard() {
       const allPickings = [...outPickings.map((p: any) => ({ ...p, pickKind: "out" })), ...pickPickings.map((p: any) => ({ ...p, pickKind: "pick" }))];
 
       const byDate: Record<string, { count: number; lines: number }> = {};
-      for (const p of allPickings) {
+      for (const p of allPickings.filter((p: any) => p.pickKind === "out")) {
         const date = (p.date_done || "").substring(0, 10);
         if (!byDate[date]) byDate[date] = { count: 0, lines: 0 };
         byDate[date].count++;
