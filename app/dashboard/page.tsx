@@ -249,6 +249,7 @@ const TABS = [
   { key: "conso", label: "Consommation", icon: I.chart },
   { key: "deliveries", label: "Livraisons & Prépa.", icon: I.truck },
   { key: "moves", label: "Historique", icon: I.history },
+  { key: "stock-tracking", label: "Suivi stock", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
 ] as const;
 
 // ─────────────────────────────────────────────
@@ -1886,105 +1887,6 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
                 )}
               </div>
             </div>
-            {/* ══ SUIVI STOCK PRODUIT ══ */}
-            {moveRef.trim() && stockRunningBalance.length > 0 && (() => {
-              const totalEntrees = stockRunningBalance.filter(m => m.type === "Entrée" || m.type === "Ajustement +").reduce((s, m) => s + m.qty, 0);
-              const totalSorties = stockRunningBalance.filter(m => m.type === "Sortie" || m.type === "Ajustement −").reduce((s, m) => s + m.qty, 0);
-              const soldeTheorique = totalEntrees - totalSorties;
-              const maxBalance = Math.max(...stockRunningBalance.map(m => m.balance), 1);
-              const minBalance = Math.min(...stockRunningBalance.map(m => m.balance), 0);
-              const range = maxBalance - minBalance || 1;
-              const chartH = 80;
-
-              return (
-                <div style={{ marginBottom: 20, display: "grid", gap: 12 }}>
-                  {/* Header + KPIs */}
-                  <div className="wms-card" style={{ padding: "18px 20px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 2 }}>📊 Suivi de stock — <span style={{ color: "var(--accent)", fontFamily: MONO }}>{moveRef.trim()}</span></div>
-                        {moveProductName && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{moveProductName}</div>}
-                      </div>
-                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                        <div style={{ textAlign: "center", padding: "8px 14px", background: "var(--success-soft)", borderRadius: 8, minWidth: 80 }}>
-                          <div style={{ fontSize: 18, fontWeight: 800, color: "var(--success)", fontFamily: MONO }}>+{Math.round(totalEntrees)}</div>
-                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Entrées</div>
-                        </div>
-                        <div style={{ textAlign: "center", padding: "8px 14px", background: "var(--danger-soft)", borderRadius: 8, minWidth: 80 }}>
-                          <div style={{ fontSize: 18, fontWeight: 800, color: "var(--danger)", fontFamily: MONO }}>−{Math.round(totalSorties)}</div>
-                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Sorties</div>
-                        </div>
-                        <div style={{ textAlign: "center", padding: "8px 14px", background: soldeTheorique >= 0 ? "var(--accent-soft)" : "var(--danger-soft)", borderRadius: 8, minWidth: 80 }}>
-                          <div style={{ fontSize: 18, fontWeight: 800, color: soldeTheorique >= 0 ? "var(--accent)" : "var(--danger)", fontFamily: MONO }}>{Math.round(soldeTheorique)}</div>
-                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Solde théo.</div>
-                        </div>
-                        {moveProductCurrentStock !== null && (
-                          <div style={{ textAlign: "center", padding: "8px 14px", background: "rgba(99,102,241,.08)", borderRadius: 8, minWidth: 80 }}>
-                            <div style={{ fontSize: 18, fontWeight: 800, color: "#6366f1", fontFamily: MONO }}>{Math.round(moveProductCurrentStock)}</div>
-                            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Stock Odoo</div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Graphique solde cumulatif */}
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: ".4px" }}>Évolution du stock théorique</div>
-                    <svg width="100%" height={chartH + 20} style={{ overflow: "visible" }}>
-                      {/* Ligne zéro */}
-                      <line x1="0" y1={chartH - ((0 - minBalance) / range) * chartH} x2="100%" y2={chartH - ((0 - minBalance) / range) * chartH} stroke="var(--border)" strokeDasharray="3,3" strokeWidth="1" />
-                      {/* Aire sous la courbe */}
-                      {stockRunningBalance.length > 1 && (() => {
-                        const pts = stockRunningBalance.map((m, i) => {
-                          const x = (i / (stockRunningBalance.length - 1)) * 100;
-                          const y = chartH - ((m.balance - minBalance) / range) * chartH;
-                          return `${x}%,${y}`;
-                        });
-                        const first = `0%,${chartH}`;
-                        const last = `100%,${chartH}`;
-                        return (
-                          <>
-                            <defs>
-                              <linearGradient id="stockGrad" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.25" />
-                                <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
-                              </linearGradient>
-                            </defs>
-                            <polygon points={`${first} ${pts.join(" ")} ${last}`} fill="url(#stockGrad)" />
-                            <polyline points={pts.join(" ")} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" />
-                            {/* Points anomalies */}
-                            {stockRunningBalance.map((m, i) => {
-                              if (!m.isInventory && m.balance >= 0) return null;
-                              const x = (i / (stockRunningBalance.length - 1)) * 100;
-                              const y = chartH - ((m.balance - minBalance) / range) * chartH;
-                              return <circle key={i} cx={`${x}%`} cy={y} r={5} fill={m.balance < 0 ? "var(--danger)" : "var(--warning)"} />;
-                            })}
-                          </>
-                        );
-                      })()}
-                    </svg>
-                  </div>
-
-                  {/* Anomalies */}
-                  {stockAnomalies.length > 0 && (
-                    <div className="wms-card" style={{ padding: "16px 20px" }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>⚠️ Anomalies détectées ({stockAnomalies.length})</div>
-                      <div style={{ display: "grid", gap: 8 }}>
-                        {stockAnomalies.map((a, i) => (
-                          <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", background: a.severity === "error" ? "var(--danger-soft)" : "rgba(245,158,11,.08)", borderLeft: `3px solid ${a.severity === "error" ? "var(--danger)" : "var(--warning)"}`, borderRadius: 6 }}>
-                            <span style={{ fontSize: 14, flexShrink: 0 }}>{a.severity === "error" ? "🔴" : "🟡"}</span>
-                            <div style={{ flex: 1 }}>
-                              <div style={{ fontSize: 12, fontWeight: 600, color: a.severity === "error" ? "var(--danger)" : "var(--warning)", marginBottom: 2 }}>{a.label}</div>
-                              <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: MONO }}>{fmtDate(a.date)}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
             {moves.length > 0 && (
               <div className="wms-card">
                 <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -2051,6 +1953,171 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
             )}
             {moves.length === 0 && moveSearched && !loading && <EmptyState icon={I.search} title="Aucun mouvement trouvé" sub="Vérifiez vos critères et réessayez" />}
             {!moveSearched && !loading && <EmptyState icon={I.history} title="Entrez une référence ou une période" sub="pour afficher l'historique des mouvements" />}
+            {loading && <div style={{ textAlign: "center", padding: 40 }}><Spinner size={24} /></div>}
+          </div>
+        )}
+
+        {/* ══════════ SUIVI STOCK ══════════ */}
+        {tab === "stock-tracking" && (
+          <div style={{ animation: "fadeIn .3s ease both" }}>
+            <div style={{ marginBottom: 24 }}>
+              <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Suivi de stock produit</h2>
+              <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>Entrez une référence pour tracer l'historique complet et détecter les anomalies.</p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <input className="wms-input" value={moveRef} onChange={(e) => setMoveRef(e.target.value)} placeholder="Référence produit..." onKeyDown={(e) => e.key === "Enter" && loadMoves()} style={{ flex: 1, minWidth: 200 }} />
+                <input className="wms-input" type="date" value={moveStart} onChange={(e) => setMoveStart(e.target.value)} style={{ width: "auto" }} />
+                <span style={{ color: "var(--text-muted)" }}>→</span>
+                <input className="wms-input" type="date" value={moveEnd} onChange={(e) => setMoveEnd(e.target.value)} style={{ width: "auto" }} />
+                <button className="wms-btn wms-btn-primary" onClick={loadMoves} disabled={loading || !moveRef.trim()} style={{ opacity: !moveRef.trim() ? .5 : 1 }}>{loading ? <Spinner /> : I.search} Analyser</button>
+              </div>
+            </div>
+
+            {moveRef.trim() && stockRunningBalance.length > 0 && (() => {
+              const totalEntrees = stockRunningBalance.filter(m => m.type === "Entrée" || m.type === "Ajustement +").reduce((s, m) => s + m.qty, 0);
+              const totalSorties = stockRunningBalance.filter(m => m.type === "Sortie" || m.type === "Ajustement −").reduce((s, m) => s + m.qty, 0);
+              const soldeTheorique = totalEntrees - totalSorties;
+              const maxBalance = Math.max(...stockRunningBalance.map(m => m.balance), 1);
+              const minBalance = Math.min(...stockRunningBalance.map(m => m.balance), 0);
+              const range = maxBalance - minBalance || 1;
+              const chartH = 140;
+              return (
+                <div style={{ display: "grid", gap: 16 }}>
+                  {/* KPIs */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 12 }}>
+                    <div className="wms-card" style={{ padding: "16px 20px", borderLeft: "3px solid var(--success)" }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 6 }}>Entrées totales</div>
+                      <div style={{ fontSize: 26, fontWeight: 800, color: "var(--success)", fontFamily: MONO }}>+{Math.round(totalEntrees).toLocaleString("fr-FR")}</div>
+                    </div>
+                    <div className="wms-card" style={{ padding: "16px 20px", borderLeft: "3px solid var(--danger)" }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 6 }}>Sorties totales</div>
+                      <div style={{ fontSize: 26, fontWeight: 800, color: "var(--danger)", fontFamily: MONO }}>−{Math.round(totalSorties).toLocaleString("fr-FR")}</div>
+                    </div>
+                    <div className="wms-card" style={{ padding: "16px 20px", borderLeft: `3px solid ${soldeTheorique >= 0 ? "var(--accent)" : "var(--danger)"}` }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 6 }}>Solde théorique</div>
+                      <div style={{ fontSize: 26, fontWeight: 800, color: soldeTheorique >= 0 ? "var(--accent)" : "var(--danger)", fontFamily: MONO }}>{Math.round(soldeTheorique).toLocaleString("fr-FR")}</div>
+                    </div>
+                    {moveProductCurrentStock !== null && (
+                      <div className="wms-card" style={{ padding: "16px 20px", borderLeft: "3px solid #6366f1" }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 6 }}>Stock Odoo actuel</div>
+                        <div style={{ fontSize: 26, fontWeight: 800, color: "#6366f1", fontFamily: MONO }}>{Math.round(moveProductCurrentStock).toLocaleString("fr-FR")}</div>
+                      </div>
+                    )}
+                    <div className="wms-card" style={{ padding: "16px 20px", borderLeft: "3px solid var(--border)" }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 6 }}>Mouvements</div>
+                      <div style={{ fontSize: 26, fontWeight: 800, fontFamily: MONO }}>{stockRunningBalance.length}</div>
+                    </div>
+                  </div>
+
+                  {/* Graphique */}
+                  <div className="wms-card" style={{ padding: "20px 24px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700 }}>Évolution du stock théorique</div>
+                        {moveProductName && <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>{moveProductName}</div>}
+                      </div>
+                      <div style={{ display: "flex", gap: 12, fontSize: 11, color: "var(--text-muted)" }}>
+                        <span>⬤ <span style={{ color: "var(--accent)" }}>Solde</span></span>
+                        {stockAnomalies.length > 0 && <span>⬤ <span style={{ color: "var(--danger)" }}>Anomalie</span></span>}
+                      </div>
+                    </div>
+                    {/* Labels axe Y */}
+                    <div style={{ position: "relative" }}>
+                      <div style={{ position: "absolute", right: "100%", top: 0, paddingRight: 6, fontSize: 10, color: "var(--text-muted)", fontFamily: MONO }}>{Math.round(maxBalance)}</div>
+                      <div style={{ position: "absolute", right: "100%", top: "50%", paddingRight: 6, fontSize: 10, color: "var(--text-muted)", fontFamily: MONO, transform: "translateY(-50%)" }}>{Math.round((maxBalance + minBalance) / 2)}</div>
+                      <div style={{ position: "absolute", right: "100%", bottom: 20, paddingRight: 6, fontSize: 10, color: "var(--text-muted)", fontFamily: MONO }}>{Math.round(minBalance)}</div>
+                      <svg width="100%" height={chartH + 20} style={{ overflow: "visible", display: "block" }}>
+                        <line x1="0" y1={chartH - ((0 - minBalance) / range) * chartH} x2="100%" y2={chartH - ((0 - minBalance) / range) * chartH} stroke="var(--border)" strokeDasharray="4,4" strokeWidth="1" />
+                        {stockRunningBalance.length > 1 && (() => {
+                          const pts = stockRunningBalance.map((m, i) => {
+                            const x = (i / (stockRunningBalance.length - 1)) * 100;
+                            const y = chartH - ((m.balance - minBalance) / range) * chartH;
+                            return `${x}%,${y}`;
+                          });
+                          return (
+                            <>
+                              <defs>
+                                <linearGradient id="stGrad" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.3" />
+                                  <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
+                                </linearGradient>
+                              </defs>
+                              <polygon points={`0%,${chartH} ${pts.join(" ")} 100%,${chartH}`} fill="url(#stGrad)" />
+                              <polyline points={pts.join(" ")} fill="none" stroke="var(--accent)" strokeWidth="2.5" strokeLinejoin="round" />
+                              {stockRunningBalance.map((m, i) => {
+                                if (!m.isInventory && m.balance >= 0) return null;
+                                const x = (i / (stockRunningBalance.length - 1)) * 100;
+                                const y = chartH - ((m.balance - minBalance) / range) * chartH;
+                                return <circle key={i} cx={`${x}%`} cy={y} r={6} fill={m.balance < 0 ? "var(--danger)" : "var(--warning)"} stroke="white" strokeWidth="1.5" />;
+                              })}
+                            </>
+                          );
+                        })()}
+                      </svg>
+                      {/* Axe X labels (premier et dernier) */}
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--text-muted)", fontFamily: MONO, marginTop: 4 }}>
+                        <span>{fmtDate(stockRunningBalance[0].date)}</span>
+                        <span>{fmtDate(stockRunningBalance[stockRunningBalance.length - 1].date)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Anomalies */}
+                  {stockAnomalies.length > 0 && (
+                    <div className="wms-card" style={{ padding: "18px 20px" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>⚠️ Anomalies détectées — {stockAnomalies.length}</div>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {stockAnomalies.map((a, i) => (
+                          <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 16px", background: a.severity === "error" ? "var(--danger-soft)" : "rgba(245,158,11,.08)", borderLeft: `3px solid ${a.severity === "error" ? "var(--danger)" : "var(--warning)"}`, borderRadius: 8 }}>
+                            <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>{a.severity === "error" ? "🔴" : "🟡"}</span>
+                            <div>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: a.severity === "error" ? "var(--danger)" : "#b45309" }}>{a.label}</div>
+                              <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: MONO, marginTop: 2 }}>{fmtDate(a.date)}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Tableau détail mouvements */}
+                  <div className="wms-card"><div className="wms-scrollbar" style={{ overflowX: "auto" }}>
+                    <table className="wms-table">
+                      <thead><tr>
+                        <th>Date</th><th>Type</th><th style={{ textAlign: "right" }}>Qté</th><th style={{ textAlign: "right", color: "var(--accent)" }}>Solde</th><th>De</th><th>Vers</th><th>BL</th>
+                      </tr></thead>
+                      <tbody>
+                        {[...stockRunningBalance].reverse().map((m, i) => {
+                          const typeColors: Record<string, { bg: string; c: string }> = {
+                            "Entrée": { bg: "var(--success-soft)", c: "var(--success)" },
+                            "Sortie": { bg: "var(--danger-soft)", c: "var(--danger)" },
+                            "Ajustement +": { bg: "rgba(245,158,11,.1)", c: "var(--warning)" },
+                            "Ajustement −": { bg: "rgba(245,158,11,.1)", c: "var(--warning)" },
+                            "Interne": { bg: "var(--bg-surface)", c: "var(--text-muted)" },
+                          };
+                          const tc = typeColors[m.type] || typeColors["Interne"];
+                          return (
+                            <tr key={i} style={m.balance < 0 ? { background: "var(--danger-soft)" } : m.isInventory ? { background: "rgba(245,158,11,.06)" } : {}}>
+                              <td style={{ fontFamily: MONO, fontSize: 12, fontWeight: 600 }}>{fmtDate(m.date)}</td>
+                              <td><span className="wms-badge" style={{ background: tc.bg, color: tc.c }}>{m.type}</span></td>
+                              <td style={{ textAlign: "right", fontFamily: MONO, fontWeight: 700, color: m.delta > 0 ? "var(--success)" : m.delta < 0 ? "var(--danger)" : "var(--text-muted)" }}>
+                                {m.delta > 0 ? "+" : ""}{Math.round(m.delta)}
+                              </td>
+                              <td style={{ textAlign: "right", fontFamily: MONO, fontWeight: 800, color: m.balance < 0 ? "var(--danger)" : "var(--accent)" }}>{Math.round(m.balance)}</td>
+                              <td style={{ fontSize: 12, color: "var(--text-secondary)" }}>{m.from}</td>
+                              <td style={{ fontSize: 12, color: "var(--text-secondary)" }}>{m.to}</td>
+                              <td style={{ fontSize: 12, color: "var(--accent)", fontFamily: MONO }}>{m.picking}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div></div>
+                </div>
+              );
+            })()}
+
+            {moveRef.trim() && moves.length === 0 && moveSearched && !loading && <EmptyState icon={I.search} title="Aucun mouvement trouvé" sub={`Référence "${moveRef}" introuvable dans l'historique`} />}
+            {!moveRef.trim() && <EmptyState icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>} title="Entrez une référence produit" sub="pour analyser ses entrées, sorties et détecter les anomalies" />}
             {loading && <div style={{ textAlign: "center", padding: 40 }}><Spinner size={24} /></div>}
           </div>
         )}
