@@ -777,3 +777,7 @@ export async function getPickingPackages(session: OdooSession, pickingId: number
   }
   return Object.values(packages);
 }
+
+export async function setPackageWeight(session: OdooSession, packageId: number, weight: number) {
+  return write(session, "stock.quant.package", [packageId], { shipping_weight: weight });
+}

@@ -1492,6 +1492,7 @@ export default function Page() {
             onValidate={validatePrepPicking}
             onBack={() => { setScreen("prep"); setPrepStep(null); loadPickings(); }}
             onReport={openPickingReport}
+            session={session}
           />
         )}
 
@@ -4893,16 +4894,20 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
 // ============================================
 // PREPARATION DETAIL SCREEN
 // ============================================
-function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, qtyOverrides, onValidate, onBack, onReport }: any) {
+function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, qtyOverrides, onValidate, onBack, onReport, session }: any) {
   // ── qty helper: overrides take priority over moveLines data ──
   const getQty = (ml: any) => qtyOverrides?.[ml.id] !== undefined ? qtyOverrides[ml.id] : (ml.qty_done || 0);
 
-  // ── Colis state (local) ──
-  const [colis, setColis] = useState<{ id: number; lines: number[] }[]>([]);
+  // ── Colis state (synced with Odoo) ──
+  const [colis, setColis] = useState<{ id: number; odooPackageId: number | null; name: string; lines: number[]; weight: number | null; closed: boolean }[]>([]);
   const [currentColisId, setCurrentColisId] = useState<number | null>(null);
   const [colisLines, setColisLines] = useState<Set<number>>(new Set());
   const [showColisSummary, setShowColisSummary] = useState(false);
   const [locOk, setLocOk] = useState(false);
+  const [colisLoading, setColisLoading] = useState(false);
+  const [colisError, setColisError] = useState("");
+  const [weightInput, setWeightInput] = useState("");
+  const [showWeightModal, setShowWeightModal] = useState(false);
 
   // ── Compute sorted move lines one per card ──
   const allLines = useMemo(() => {
@@ -4932,15 +4937,58 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   }, [prepStep?.locId]);
 
   // ── Colis helpers ──
-  const openNewColis = () => {
-    const newId = colis.length + 1;
-    setColis(prev => [...prev, { id: newId, lines: [] }]);
-    setCurrentColisId(newId);
+  const openNewColis = async () => {
+    if (!session) return;
+    setColisLoading(true); setColisError("");
+    try {
+      // Call Odoo putInPack to create a real package
+      const result = await odoo.putInPack(session, picking.id, []);
+      // putInPack may return a wizard or the package info
+      let odooPackageId: number | null = null;
+      let packageName = "";
+      if (result && typeof result === "object" && result.res_id) {
+        odooPackageId = result.res_id;
+        packageName = result.name || `PACK${result.res_id}`;
+      }
+      // Reload packages from Odoo to get real data
+      const packages = await odoo.getPickingPackages(session, picking.id);
+      const latestPkg = packages.length ? packages[packages.length - 1] : null;
+      if (latestPkg) {
+        odooPackageId = latestPkg.id;
+        packageName = latestPkg.name;
+      }
+      const newId = colis.length + 1;
+      setColis(prev => [...prev, { id: newId, odooPackageId, name: packageName || `Colis ${newId}`, lines: [], weight: null, closed: false }]);
+      setCurrentColisId(newId);
+    } catch (e: any) {
+      setColisError(e.message || "Erreur création colis");
+    } finally { setColisLoading(false); }
   };
+
   const closeColis = () => {
     if (currentColisId === null) return;
-    setCurrentColisId(null);
+    setWeightInput("");
+    setShowWeightModal(true);
   };
+
+  const confirmCloseColis = async () => {
+    if (currentColisId === null || !session) return;
+    const w = parseFloat(weightInput);
+    if (isNaN(w) || w <= 0) { setColisError("Poids invalide"); return; }
+    setColisLoading(true); setColisError("");
+    try {
+      const currentPack = colis.find(c => c.id === currentColisId);
+      if (currentPack?.odooPackageId) {
+        await odoo.setPackageWeight(session, currentPack.odooPackageId, w);
+      }
+      setColis(prev => prev.map(c => c.id === currentColisId ? { ...c, weight: w, closed: true } : c));
+      setCurrentColisId(null);
+      setShowWeightModal(false);
+    } catch (e: any) {
+      setColisError(e.message || "Erreur enregistrement poids");
+    } finally { setColisLoading(false); }
+  };
+
   const addLineToColis = (lineId: number) => {
     if (currentColisId === null) return;
     setColisLines(prev => { const s = new Set(Array.from(prev)); s.add(lineId); return s; });
@@ -4960,8 +5008,15 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
       </div>
       {colis.length === 0 && <div style={{ color: C.textMuted, fontSize: 14, textAlign: "center", padding: 20 }}>Aucun colis créé</div>}
       {colis.map(c => (
-        <div key={c.id} style={{ background: C.bg, border: `1.5px solid ${C.border}`, borderRadius: 14, padding: 14, marginBottom: 10 }}>
-          <div style={{ fontWeight: 700, color: C.text, marginBottom: 8 }}>📦 Colis {c.id}</div>
+        <div key={c.id} style={{ background: C.bg, border: `1.5px solid ${c.closed ? C.greenBorder : C.border}`, borderRadius: 14, padding: 14, marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontWeight: 700, color: C.text }}>📦 {c.name || `Colis ${c.id}`}</div>
+            {c.weight !== null && (
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.green, background: C.greenSoft, borderRadius: 8, padding: "2px 8px" }}>
+                {c.weight} kg
+              </div>
+            )}
+          </div>
           {c.lines.length === 0
             ? <div style={{ fontSize: 12, color: C.textMuted }}>Vide</div>
             : c.lines.map(lid => {
@@ -5012,11 +5067,45 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         </div>
       </div>
 
+      {/* ── Weight modal ── */}
+      {showWeightModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: C.white, borderRadius: 20, padding: 24, width: "100%", maxWidth: 340 }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.text, marginBottom: 4 }}>Fermer le colis</div>
+            <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 16 }}>
+              {colis.find(c => c.id === currentColisId)?.name || `Colis ${currentColisId}`} — Saisir le poids
+            </div>
+            {colisError && <div style={{ background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca", borderRadius: 10, padding: "8px 12px", fontSize: 12, marginBottom: 12 }}>{colisError}</div>}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={weightInput}
+                onChange={e => setWeightInput(e.target.value)}
+                placeholder="0.00"
+                autoFocus
+                style={{ flex: 1, padding: "12px 14px", borderRadius: 12, border: `1.5px solid ${C.border}`, fontSize: 20, fontWeight: 700, fontFamily: "inherit", textAlign: "center", outline: "none" }}
+              />
+              <span style={{ fontSize: 16, fontWeight: 700, color: C.textSec }}>kg</span>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => { setShowWeightModal(false); setColisError(""); }} style={{ flex: 1, padding: 12, borderRadius: 12, border: `1.5px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                Annuler
+              </button>
+              <button onClick={confirmCloseColis} disabled={colisLoading} style={{ flex: 1, padding: 12, borderRadius: 12, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: colisLoading ? 0.6 : 1 }}>
+                {colisLoading ? "Envoi..." : "Valider"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Colis indicator ── */}
       {currentColisId !== null && (
         <div style={{ background: "#fff7ed", border: "1.5px solid #fed7aa", borderRadius: 12, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#c2410c" }}>
-            📦 Colis {currentColisId} en cours — {colis.find(c => c.id === currentColisId)?.lines.length || 0} article(s)
+            📦 {colis.find(c => c.id === currentColisId)?.name || `Colis ${currentColisId}`} — {colis.find(c => c.id === currentColisId)?.lines.length || 0} article(s)
           </div>
           <button onClick={closeColis} style={{ fontSize: 11, fontWeight: 700, color: "#c2410c", background: "#fed7aa", border: "none", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontFamily: "inherit" }}>
             Fermer colis
@@ -5125,14 +5214,15 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
       )}
 
       {/* ── Actions colis + validation ── */}
+      {colisError && !showWeightModal && <div style={{ background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca", borderRadius: 10, padding: "8px 12px", fontSize: 12, marginBottom: 8 }}>{colisError}</div>}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         {currentColisId === null ? (
-          <button onClick={openNewColis} style={{ flex: 1, padding: 12, background: "#fff7ed", color: "#c2410c", border: "1.5px solid #fed7aa", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-            📦 Nouveau colis
+          <button onClick={openNewColis} disabled={colisLoading} style={{ flex: 1, padding: 12, background: "#fff7ed", color: "#c2410c", border: "1.5px solid #fed7aa", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: colisLoading ? 0.6 : 1 }}>
+            {colisLoading ? "Création..." : "📦 Nouveau colis"}
           </button>
         ) : (
           <button onClick={closeColis} style={{ flex: 1, padding: 12, background: "#fff7ed", color: "#c2410c", border: "1.5px solid #fed7aa", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-            ✓ Fermer colis {currentColisId}
+            ✓ Fermer {colis.find(c => c.id === currentColisId)?.name || `colis ${currentColisId}`}
           </button>
         )}
         <button onClick={() => setShowColisSummary(true)} style={{ padding: "12px 14px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
