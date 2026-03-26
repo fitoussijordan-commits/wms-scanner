@@ -43,6 +43,7 @@ interface MoveRow {
   picking: string;
   partner: string;
   product: string;
+  isInventory?: boolean; // ajustement d'inventaire (correction de stock)
 }
 interface StockProduct {
   qty: number;
@@ -411,6 +412,8 @@ export default function Dashboard() {
   const [delPickingType, setDelPickingType] = useState<"all" | "out" | "pick">("all");
   const [prepStats, setPrepStats] = useState<{ name: string; picking: number; emballage: number; total: number }[]>([]);
   const [prepStatsLoading, setPrepStatsLoading] = useState(false);
+  const [moveProductCurrentStock, setMoveProductCurrentStock] = useState<number | null>(null);
+  const [moveProductName, setMoveProductName] = useState<string>("");
   const [consoColSort, setConsoColSort] = useState<{ col: string; dir: SortDir }>({ col: "total", dir: "desc" });
   const [alertsUnderstockOpen, setAlertsUnderstockOpen] = useState(true);
   const [alertsOverstockOpen, setAlertsOverstockOpen] = useState(true);
@@ -966,14 +969,16 @@ export default function Dashboard() {
 
       setMoves(rawMoves.map((m: any) => {
         const fromU = locUsage[m.location_id?.[0]] || ""; const toU = locUsage[m.location_dest_id?.[0]] || "";
-        const type = fromU === "supplier" || (toU === "internal" && fromU !== "internal") ? "Entrée"
-          : toU === "customer" || (fromU === "internal" && toU !== "internal") ? "Sortie" : "Interne";
+        const isInventory = fromU === "inventory" || toU === "inventory";
+        const type = fromU === "supplier" || (toU === "internal" && fromU !== "internal" && !isInventory) ? "Entrée"
+          : toU === "customer" || (fromU === "internal" && toU !== "internal" && !isInventory) ? "Sortie"
+          : isInventory ? (toU === "internal" ? "Ajustement +" : "Ajustement −") : "Interne";
         const pickId = m.picking_id?.[0];
         const prodName = m.product_id?.[1] || "—";
         const prodRef = hasRef ? "" : (prodRefs[m.product_id?.[0]] || "");
         const productLabel = prodRef ? `[${prodRef}] ${prodName}` : prodName;
         return {
-          date: m.date, type, qty: m.product_qty,
+          date: m.date, type, qty: m.product_qty, isInventory,
           lot: Array.isArray(m.lot_ids) ? m.lot_ids.join(", ") || "—" : "—",
           from: m.location_id?.[1] || "—", to: m.location_dest_id?.[1] || "—",
           picking: m.picking_id?.[1] || "—",
@@ -981,6 +986,27 @@ export default function Dashboard() {
           product: productLabel,
         };
       }));
+
+      // Si recherche par ref → fetcher le stock actuel Odoo pour le suivi
+      if (hasRef) {
+        try {
+          const refTrimmed = moveRef.trim();
+          const prodSearch = await odoo.searchRead(session, "product.product",
+            [["default_code", "=ilike", refTrimmed]], ["id", "display_name"], 1);
+          if (prodSearch.length) {
+            const prodId = prodSearch[0].id;
+            setMoveProductName(prodSearch[0].display_name || refTrimmed);
+            const quants = await odoo.searchRead(session, "stock.quant",
+              [["product_id", "=", prodId], ["location_id.usage", "=", "internal"]], ["qty_on_hand"], 500);
+            const total = quants.reduce((s: number, q: any) => s + (q.qty_on_hand || 0), 0);
+            setMoveProductCurrentStock(total);
+          }
+        } catch { setMoveProductCurrentStock(null); }
+      } else {
+        setMoveProductCurrentStock(null);
+        setMoveProductName("");
+      }
+
       setMoveColFilters({}); setMoveColSort({ col: "date", dir: "desc" });
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, [session, moveRef, moveStart, moveEnd]);
@@ -1020,6 +1046,67 @@ export default function Dashboard() {
     if (consoColSort.dir) { const d = consoColSort.dir === "asc" ? 1 : -1; const c = consoColSort.col; r.sort((a, b) => c === "ref" ? d * (a.ref || "").localeCompare(b.ref || "") : c === "name" ? d * a.name.localeCompare(b.name) : c === "avg" ? d * (a.avg - b.avg) : c === "total" ? d * (a.total - b.total) : d * ((a.months[c] || 0) - (b.months[c] || 0))); }
     return r;
   }, [conso, consoColSort]);
+
+  // ── Suivi stock : solde cumulatif chronologique ──
+  const stockRunningBalance = useMemo(() => {
+    if (!moveRef.trim() || !moves.length) return [];
+    // Trier du plus ancien au plus récent
+    const sorted = [...moves].sort((a, b) => a.date.localeCompare(b.date));
+    let balance = 0;
+    return sorted.map(m => {
+      const delta = m.type === "Entrée" || m.type === "Ajustement +" ? m.qty
+        : m.type === "Sortie" || m.type === "Ajustement −" ? -m.qty : 0;
+      balance += delta;
+      return { ...m, delta, balance };
+    });
+  }, [moves, moveRef]);
+
+  // ── Anomalies de stock ──
+  const stockAnomalies = useMemo(() => {
+    if (!stockRunningBalance.length) return [];
+    const anomalies: { date: string; label: string; severity: "error" | "warning"; qty?: number }[] = [];
+    const qtys = stockRunningBalance.filter(m => m.delta !== 0).map(m => Math.abs(m.delta));
+    const mean = qtys.reduce((s, v) => s + v, 0) / (qtys.length || 1);
+    const stddev = Math.sqrt(qtys.reduce((s, v) => s + (v - mean) ** 2, 0) / (qtys.length || 1));
+    for (const m of stockRunningBalance) {
+      if (m.balance < 0)
+        anomalies.push({ date: m.date, label: `Stock théorique négatif après ce mouvement (${Math.round(m.balance)})`, severity: "error", qty: m.qty });
+      if (m.isInventory)
+        anomalies.push({ date: m.date, label: `${m.type} : ajustement manuel de stock (${m.type === "Ajustement +" ? "+" : "−"}${m.qty})`, severity: "warning", qty: m.qty });
+      if (stddev > 0 && Math.abs(m.delta) > mean + 3 * stddev)
+        anomalies.push({ date: m.date, label: `Mouvement anormalement élevé (${m.qty} unités — ${Math.round(Math.abs(m.delta) / stddev)}σ)`, severity: "warning", qty: m.qty });
+    }
+    // Écart théorique vs stock Odoo actuel
+    if (moveProductCurrentStock !== null) {
+      const theoretical = stockRunningBalance[stockRunningBalance.length - 1].balance;
+      const diff = moveProductCurrentStock - theoretical;
+      if (Math.abs(diff) > 0.5)
+        anomalies.push({ date: "Aujourd'hui", label: `Écart solde théorique (${Math.round(theoretical)}) vs stock Odoo actuel (${Math.round(moveProductCurrentStock)}) : ${diff > 0 ? "+" : ""}${Math.round(diff)} unités non expliquées`, severity: Math.abs(diff) > 10 ? "error" : "warning" });
+    }
+    return anomalies;
+  }, [stockRunningBalance, moveProductCurrentStock]);
+
+  // ── Stats livraisons enrichies ──
+  const deliveryStatsEnriched = useMemo(() => {
+    if (!filteredDel.length) return null;
+    const sorted = [...filteredDel].sort((a, b) => b.count - a.count);
+    const bestDay = sorted[0];
+    const worstDay = sorted[sorted.length - 1];
+    // Heatmap par jour de la semaine (0=dim, 1=lun, …)
+    const DAYS_FR = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
+    const byWeekday: Record<number, { total: number; count: number }> = {};
+    for (const d of filteredDel) {
+      const dow = new Date(d.date).getDay();
+      if (!byWeekday[dow]) byWeekday[dow] = { total: 0, count: 0 };
+      byWeekday[dow].total += d.count;
+      byWeekday[dow].count++;
+    }
+    const weekdayAvg = Array.from({ length: 7 }, (_, i) =>
+      ({ label: DAYS_FR[i], avg: byWeekday[i] ? Math.round(byWeekday[i].total / byWeekday[i].count) : 0, days: byWeekday[i]?.count || 0 }));
+    const topPreparer = prepStats.length ? prepStats.reduce((a, b) => b.picking > a.picking ? b : a, prepStats[0]) : null;
+    const topPacker = prepStats.length ? prepStats.reduce((a, b) => b.emballage > a.emballage ? b : a, prepStats[0]) : null;
+    return { bestDay, worstDay, weekdayAvg, topPreparer, topPacker };
+  }, [filteredDel, prepStats]);
 
   const MONO = "'JetBrains Mono', monospace";
 
@@ -1635,31 +1722,86 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
             </div>
 
             {deliveries.length > 0 && <>
-              {/* Stat cards */}
-              <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
+              {/* ── KPI row ── */}
+              <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
                 <StatCard label="Jours" value={filteredDel.length} color="var(--accent)" delay={0} />
                 <StatCard label="Total prépa." value={filteredDel.reduce((s, d) => s + d.count, 0)} color="var(--success)" delay={50} />
                 <StatCard label="Lignes totales" value={filteredDel.reduce((s, d) => s + d.lines, 0)} color="var(--purple)" delay={100} />
                 <StatCard label="Moy./jour" value={filteredDel.length > 0 ? Math.round(filteredDel.reduce((s, d) => s + d.count, 0) / filteredDel.length) : 0} color="var(--warning)" delay={150} />
               </div>
 
-              {/* Stats préparateurs */}
+              {/* ── Highlights : best/worst day + podium ── */}
+              {deliveryStatsEnriched && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12, marginBottom: 20 }}>
+                  {/* Best day */}
+                  <div className="wms-card" style={{ padding: "16px 20px", borderLeft: "3px solid var(--success)" }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 6 }}>📈 Meilleure journée</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: "var(--success)", fontFamily: MONO }}>{deliveryStatsEnriched.bestDay.count}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{fmtDate(deliveryStatsEnriched.bestDay.date)} · {deliveryStatsEnriched.bestDay.lines} lignes</div>
+                  </div>
+                  {/* Worst day */}
+                  <div className="wms-card" style={{ padding: "16px 20px", borderLeft: "3px solid var(--warning)" }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 6 }}>📉 Journée la plus calme</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: "var(--warning)", fontFamily: MONO }}>{deliveryStatsEnriched.worstDay.count}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{fmtDate(deliveryStatsEnriched.worstDay.date)} · {deliveryStatsEnriched.worstDay.lines} lignes</div>
+                  </div>
+                  {/* Top préparateur */}
+                  {deliveryStatsEnriched.topPreparer && (
+                    <div className="wms-card" style={{ padding: "16px 20px", borderLeft: "3px solid var(--accent)" }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 6 }}>🥇 Top préparateur (Picking)</div>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: "var(--accent)" }}>{deliveryStatsEnriched.topPreparer.name}</div>
+                      <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{deliveryStatsEnriched.topPreparer.picking} picks · {deliveryStatsEnriched.topPreparer.total} total</div>
+                    </div>
+                  )}
+                  {/* Top emballeur */}
+                  {deliveryStatsEnriched.topPacker && (
+                    <div className="wms-card" style={{ padding: "16px 20px", borderLeft: "3px solid var(--purple)" }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 6 }}>📦 Top emballeur (OUT)</div>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: "var(--purple)" }}>{deliveryStatsEnriched.topPacker.name}</div>
+                      <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{deliveryStatsEnriched.topPacker.emballage} colis · {deliveryStatsEnriched.topPacker.total} total</div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── Heatmap jours de la semaine ── */}
+              {deliveryStatsEnriched && (() => {
+                const wdData = deliveryStatsEnriched.weekdayAvg.filter(w => w.days > 0);
+                const maxAvg = Math.max(...wdData.map(w => w.avg), 1);
+                return wdData.length > 1 ? (
+                  <div className="wms-card" style={{ padding: "18px 20px", marginBottom: 16 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 14 }}>📅 Activité moyenne par jour de semaine</div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "flex-end", height: 80 }}>
+                      {wdData.map((w, i) => (
+                        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", fontFamily: MONO }}>{w.avg > 0 ? w.avg : ""}</div>
+                          <div style={{ width: "100%", background: `rgba(59,130,246,${0.15 + (w.avg / maxAvg) * 0.75})`, borderRadius: 4, height: `${Math.max(6, (w.avg / maxAvg) * 60)}px`, transition: "height .5s ease" }} />
+                          <div style={{ fontSize: 11, fontWeight: 600, color: w.avg === maxAvg ? "var(--accent)" : "var(--text-muted)" }}>{w.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+
+              {/* ── Stats préparateurs (tableau complet) ── */}
               {prepStats.length > 0 && (
                 <div className="wms-card" style={{ marginBottom: 20 }}>
                   <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ fontSize: 14, fontWeight: 700 }}>👷 Stats par préparateur</div>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>👷 Classement préparateurs</div>
                     <div style={{ display: "flex", gap: 16, fontSize: 12, color: "var(--text-muted)" }}>
-                      <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "var(--accent)", marginRight: 5 }} />Picking (PICK)</span>
-                      <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "var(--success)", marginRight: 5 }} />Emballage (OUT)</span>
+                      <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "var(--accent)", marginRight: 5 }} />Picking</span>
+                      <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: "var(--success)", marginRight: 5 }} />Emballage</span>
                     </div>
                   </div>
                   <div style={{ padding: "16px 20px", display: "grid", gap: 12 }}>
                     {prepStats.map((s, i) => {
                       const maxTotal = Math.max(...prepStats.map(x => x.total), 1);
+                      const medals = ["🥇", "🥈", "🥉"];
                       return (
                         <div key={i} style={{ animation: `fadeIn .3s ease ${i * 40}ms both` }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                            <span style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</span>
+                            <span style={{ fontSize: 13, fontWeight: 600 }}>{medals[i] || `${i + 1}.`} {s.name}</span>
                             <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
                               <span style={{ color: "var(--accent)" }}>Picking: <strong>{s.picking}</strong></span>
                               <span style={{ color: "var(--success)" }}>Emballage: <strong>{s.emballage}</strong></span>
@@ -1677,13 +1819,12 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
                 </div>
               )}
 
-              {/* Mini bar chart */}
+              {/* ── Mini bar chart + table ── */}
               <div className="wms-card" style={{ padding: "18px 20px", marginBottom: 16 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 10, textTransform: "uppercase", letterSpacing: ".5px" }}>Préparations / jour</div>
                 <MiniBarChart data={[...filteredDel].reverse().map((d) => d.count)} max={Math.max(...filteredDel.map((d) => d.count), 1)} />
               </div>
 
-              {/* Table */}
               <div className="wms-card"><div className="wms-scrollbar" style={{ overflowX: "auto" }}>
                 <table className="wms-table">
                   <thead><tr>
@@ -1692,13 +1833,23 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
                     <FilterableHeader label="Lignes articles" colKey="lines" values={deliveries.map((d) => String(d.lines))} filterState={delColFilters} setFilterState={setDelColFilters} sortState={delColSort} setSortState={setDelColSort} align="center" />
                   </tr></thead>
                   <tbody>
-                    {filteredDel.map((d, i) => { const maxC = Math.max(...filteredDel.map((x) => x.count), 1); return (
-                      <tr key={i}>
-                        <td style={{ fontWeight: 600, fontFamily: MONO, fontSize: 12 }}>{fmtDate(d.date)}</td>
-                        <td style={{ textAlign: "center" }}><div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}><div style={{ height: 6, width: `${(d.count / maxC) * 80}px`, borderRadius: 3, minWidth: 4, overflow: "hidden" }}><div className="bar-fill" style={{ background: "var(--accent)", animationDelay: `${i * 30}ms` }} /></div><span style={{ fontWeight: 700, fontFamily: MONO, fontSize: 13 }}>{d.count}</span></div></td>
-                        <td style={{ textAlign: "center", fontWeight: 600, fontFamily: MONO, fontSize: 13, color: "var(--text-secondary)" }}>{d.lines}</td>
-                      </tr>
-                    ); })}
+                    {filteredDel.map((d, i) => {
+                      const maxC = Math.max(...filteredDel.map((x) => x.count), 1);
+                      const isBest = d.count === deliveryStatsEnriched?.bestDay.count;
+                      return (
+                        <tr key={i} style={isBest ? { background: "var(--success-soft)" } : {}}>
+                          <td style={{ fontWeight: 600, fontFamily: MONO, fontSize: 12 }}>{fmtDate(d.date)}</td>
+                          <td style={{ textAlign: "center" }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                              <div style={{ height: 6, width: `${(d.count / maxC) * 80}px`, borderRadius: 3, minWidth: 4, overflow: "hidden" }}><div className="bar-fill" style={{ background: isBest ? "var(--success)" : "var(--accent)", animationDelay: `${i * 30}ms` }} /></div>
+                              <span style={{ fontWeight: 700, fontFamily: MONO, fontSize: 13 }}>{d.count}</span>
+                              {isBest && <span style={{ fontSize: 11 }}>🏆</span>}
+                            </div>
+                          </td>
+                          <td style={{ textAlign: "center", fontWeight: 600, fontFamily: MONO, fontSize: 13, color: "var(--text-secondary)" }}>{d.lines}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div></div>
@@ -1735,6 +1886,105 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
                 )}
               </div>
             </div>
+            {/* ══ SUIVI STOCK PRODUIT ══ */}
+            {moveRef.trim() && stockRunningBalance.length > 0 && (() => {
+              const totalEntrees = stockRunningBalance.filter(m => m.type === "Entrée" || m.type === "Ajustement +").reduce((s, m) => s + m.qty, 0);
+              const totalSorties = stockRunningBalance.filter(m => m.type === "Sortie" || m.type === "Ajustement −").reduce((s, m) => s + m.qty, 0);
+              const soldeTheorique = totalEntrees - totalSorties;
+              const maxBalance = Math.max(...stockRunningBalance.map(m => m.balance), 1);
+              const minBalance = Math.min(...stockRunningBalance.map(m => m.balance), 0);
+              const range = maxBalance - minBalance || 1;
+              const chartH = 80;
+
+              return (
+                <div style={{ marginBottom: 20, display: "grid", gap: 12 }}>
+                  {/* Header + KPIs */}
+                  <div className="wms-card" style={{ padding: "18px 20px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 2 }}>📊 Suivi de stock — <span style={{ color: "var(--accent)", fontFamily: MONO }}>{moveRef.trim()}</span></div>
+                        {moveProductName && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{moveProductName}</div>}
+                      </div>
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                        <div style={{ textAlign: "center", padding: "8px 14px", background: "var(--success-soft)", borderRadius: 8, minWidth: 80 }}>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: "var(--success)", fontFamily: MONO }}>+{Math.round(totalEntrees)}</div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Entrées</div>
+                        </div>
+                        <div style={{ textAlign: "center", padding: "8px 14px", background: "var(--danger-soft)", borderRadius: 8, minWidth: 80 }}>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: "var(--danger)", fontFamily: MONO }}>−{Math.round(totalSorties)}</div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Sorties</div>
+                        </div>
+                        <div style={{ textAlign: "center", padding: "8px 14px", background: soldeTheorique >= 0 ? "var(--accent-soft)" : "var(--danger-soft)", borderRadius: 8, minWidth: 80 }}>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: soldeTheorique >= 0 ? "var(--accent)" : "var(--danger)", fontFamily: MONO }}>{Math.round(soldeTheorique)}</div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Solde théo.</div>
+                        </div>
+                        {moveProductCurrentStock !== null && (
+                          <div style={{ textAlign: "center", padding: "8px 14px", background: "rgba(99,102,241,.08)", borderRadius: 8, minWidth: 80 }}>
+                            <div style={{ fontSize: 18, fontWeight: 800, color: "#6366f1", fontFamily: MONO }}>{Math.round(moveProductCurrentStock)}</div>
+                            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Stock Odoo</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Graphique solde cumulatif */}
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: ".4px" }}>Évolution du stock théorique</div>
+                    <svg width="100%" height={chartH + 20} style={{ overflow: "visible" }}>
+                      {/* Ligne zéro */}
+                      <line x1="0" y1={chartH - ((0 - minBalance) / range) * chartH} x2="100%" y2={chartH - ((0 - minBalance) / range) * chartH} stroke="var(--border)" strokeDasharray="3,3" strokeWidth="1" />
+                      {/* Aire sous la courbe */}
+                      {stockRunningBalance.length > 1 && (() => {
+                        const pts = stockRunningBalance.map((m, i) => {
+                          const x = (i / (stockRunningBalance.length - 1)) * 100;
+                          const y = chartH - ((m.balance - minBalance) / range) * chartH;
+                          return `${x}%,${y}`;
+                        });
+                        const first = `0%,${chartH}`;
+                        const last = `100%,${chartH}`;
+                        return (
+                          <>
+                            <defs>
+                              <linearGradient id="stockGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.25" />
+                                <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
+                              </linearGradient>
+                            </defs>
+                            <polygon points={`${first} ${pts.join(" ")} ${last}`} fill="url(#stockGrad)" />
+                            <polyline points={pts.join(" ")} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" />
+                            {/* Points anomalies */}
+                            {stockRunningBalance.map((m, i) => {
+                              if (!m.isInventory && m.balance >= 0) return null;
+                              const x = (i / (stockRunningBalance.length - 1)) * 100;
+                              const y = chartH - ((m.balance - minBalance) / range) * chartH;
+                              return <circle key={i} cx={`${x}%`} cy={y} r={5} fill={m.balance < 0 ? "var(--danger)" : "var(--warning)"} />;
+                            })}
+                          </>
+                        );
+                      })()}
+                    </svg>
+                  </div>
+
+                  {/* Anomalies */}
+                  {stockAnomalies.length > 0 && (
+                    <div className="wms-card" style={{ padding: "16px 20px" }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>⚠️ Anomalies détectées ({stockAnomalies.length})</div>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {stockAnomalies.map((a, i) => (
+                          <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", background: a.severity === "error" ? "var(--danger-soft)" : "rgba(245,158,11,.08)", borderLeft: `3px solid ${a.severity === "error" ? "var(--danger)" : "var(--warning)"}`, borderRadius: 6 }}>
+                            <span style={{ fontSize: 14, flexShrink: 0 }}>{a.severity === "error" ? "🔴" : "🟡"}</span>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: a.severity === "error" ? "var(--danger)" : "var(--warning)", marginBottom: 2 }}>{a.label}</div>
+                              <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: MONO }}>{fmtDate(a.date)}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {moves.length > 0 && (
               <div className="wms-card">
                 <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
