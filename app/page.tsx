@@ -1357,10 +1357,10 @@ export default function Page() {
                 </div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Destination</div>
                 {/* Suggestions : emplacements où ce produit est déjà en stock */}
-                {allStock.filter(q => q.location_id[0] !== src.id && q.quantity > 0).length > 0 && (
+                {allStock.filter(q => q.location_id[0] !== src.id && q.quantity > 0 && locations.find((l: any) => l.id === q.location_id[0])?.usage === "internal").length > 0 && (
                   <div style={{ marginBottom: 10 }}>
                     <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, marginBottom: 6, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>📦 Déjà en stock ici</div>
-                    {allStock.filter(q => q.location_id[0] !== src.id && q.quantity > 0).map((q, i) => (
+                    {allStock.filter(q => q.location_id[0] !== src.id && q.quantity > 0 && locations.find((l: any) => l.id === q.location_id[0])?.usage === "internal").map((q, i) => (
                       <button key={i} onClick={() => {
                         const loc = locations.find((l: any) => l.id === q.location_id[0]);
                         if (loc) { setDst(loc); vibrateSuccess(); }
