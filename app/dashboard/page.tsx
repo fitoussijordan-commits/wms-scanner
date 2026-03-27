@@ -1057,8 +1057,8 @@ export default function Dashboard() {
       if (!found.has(rm[0]) && !/^\d+$/.test(rm[0])) found.set(rm[0], "product");
     }
 
-    // Codes purement numériques 6-10 chiffres → ref produit ou lot
-    const numRe = /\b\d{6,10}\b/g;
+    // Codes purement numériques 6-13 chiffres → ref produit, lot ou EAN
+    const numRe = /\b\d{6,13}\b/g;
     let nm; while ((nm = numRe.exec(text)) !== null) if (!found.has(nm[0])) found.set(nm[0], "product");
 
     const refs: LibreRef[] = Array.from(found.entries()).map(([raw, type]) => ({ raw, type }));
