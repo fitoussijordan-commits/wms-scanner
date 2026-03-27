@@ -163,7 +163,7 @@ export async function getProductsAtLocation(session: OdooSession, locationId: nu
   const quants = await searchRead(
     session, "stock.quant",
     [["location_id", "=", locationId], ["quantity", "!=", 0]],
-    ["id", "product_id", "lot_id", "quantity", "reserved_quantity", "inventory_quantity"],
+    ["id", "product_id", "location_id", "lot_id", "quantity", "reserved_quantity", "inventory_quantity"],
     500, "product_id"
   );
   // Enrich with lot expiration dates
