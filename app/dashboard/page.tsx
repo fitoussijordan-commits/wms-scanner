@@ -1045,21 +1045,21 @@ export default function Dashboard() {
 
     // Pickings WH/PICK/xxx WH/OUT/xxx etc.
     const pickingRe = /\bWH\/[A-Z]+\/\d+\b/g;
-    for (const m of text.matchAll(pickingRe)) found.set(m[0], "picking");
+    let pm; while ((pm = pickingRe.exec(text)) !== null) found.set(pm[0], "picking");
 
     // SO: S suivi de 4+ chiffres
     const soRe = /\bS\d{4,}\b/g;
-    for (const m of text.matchAll(soRe)) if (!found.has(m[0])) found.set(m[0], "so");
+    let sm; while ((sm = soRe.exec(text)) !== null) if (!found.has(sm[0])) found.set(sm[0], "so");
 
     // Refs produit: séquences alphanumériques de 5-15 chars (pas déjà détectées)
     const refRe = /\b([A-Z0-9]{5,15})\b/g;
-    for (const m of text.matchAll(refRe)) {
-      if (!found.has(m[0]) && !/^\d+$/.test(m[0])) found.set(m[0], "product");
+    let rm; while ((rm = refRe.exec(text)) !== null) {
+      if (!found.has(rm[0]) && !/^\d+$/.test(rm[0])) found.set(rm[0], "product");
     }
 
     // Codes purement numériques 6-10 chiffres → ref produit ou lot
     const numRe = /\b\d{6,10}\b/g;
-    for (const m of text.matchAll(numRe)) if (!found.has(m[0])) found.set(m[0], "product");
+    let nm; while ((nm = numRe.exec(text)) !== null) if (!found.has(nm[0])) found.set(nm[0], "product");
 
     const refs: LibreRef[] = Array.from(found.entries()).map(([raw, type]) => ({ raw, type }));
     setLibreRefs(refs);
