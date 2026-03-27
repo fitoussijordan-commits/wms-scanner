@@ -1356,22 +1356,33 @@ export default function Page() {
                   <span style={{ fontSize: 12, color: C.blue, fontWeight: 600 }}>Source: {src.name}</span>
                 </div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Destination</div>
-                {/* Suggestions : emplacements où ce produit est déjà en stock */}
-                {allStock.filter(q => q.location_id[0] !== src.id && q.quantity > 0 && locations.find((l: any) => l.id === q.location_id[0])?.usage === "internal").length > 0 && (
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, marginBottom: 6, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>📦 Déjà en stock ici</div>
-                    {allStock.filter(q => q.location_id[0] !== src.id && q.quantity > 0 && locations.find((l: any) => l.id === q.location_id[0])?.usage === "internal").map((q, i) => (
-                      <button key={i} onClick={() => {
-                        const loc = locations.find((l: any) => l.id === q.location_id[0]);
-                        if (loc) { setDst(loc); vibrateSuccess(); }
-                      }} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: C.greenSoft, border: `1.5px solid ${C.green}`, borderRadius: 8, marginBottom: 6, cursor: "pointer", fontFamily: "inherit" }}>
-                        <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{q.location_id[1]}</span>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: C.green }}>{q.quantity} en stock</span>
-                      </button>
-                    ))}
-                    <div style={{ fontSize: 11, color: C.textMuted, margin: "8px 0 6px" }}>Ou choisir un autre emplacement :</div>
-                  </div>
-                )}
+                {/* Suggestions : emplacements où ce produit est déjà en stock (groupés, >=3 niveaux) */}
+                {(() => {
+                  const suggestMap: Record<number, { loc: any; qty: number }> = {};
+                  for (const q of allStock) {
+                    if (q.location_id[0] === src.id || q.quantity <= 0) continue;
+                    const loc = locations.find((l: any) => l.id === q.location_id[0]);
+                    if (!loc || loc.usage !== "internal") continue;
+                    if ((loc.complete_name || "").split("/").length < 3) continue; // exclure WH/Sortie etc.
+                    if (!suggestMap[q.location_id[0]]) suggestMap[q.location_id[0]] = { loc, qty: 0 };
+                    suggestMap[q.location_id[0]].qty += q.quantity;
+                  }
+                  const suggestions = Object.values(suggestMap);
+                  if (suggestions.length === 0) return null;
+                  return (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, marginBottom: 6, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>📦 Déjà en stock ici</div>
+                      {suggestions.map((s, i) => (
+                        <button key={i} onClick={() => { setDst(s.loc); vibrateSuccess(); }}
+                          style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: C.greenSoft, border: `1.5px solid ${C.green}`, borderRadius: 8, marginBottom: 6, cursor: "pointer", fontFamily: "inherit" }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{s.loc.complete_name || s.loc.name}</span>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: C.green }}>{s.qty} en stock</span>
+                        </button>
+                      ))}
+                      <div style={{ fontSize: 11, color: C.textMuted, margin: "8px 0 6px" }}>Ou choisir un autre emplacement :</div>
+                    </div>
+                  );
+                })()}
                 <LocationDropdown locations={locations} onSelect={(loc) => { setDst(loc); vibrateSuccess(); }} excludeId={src.id} />
               </Section>
             )}
