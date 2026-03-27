@@ -1293,7 +1293,7 @@ export default function Page() {
           {/* CLASSIC MODE */}
           {transferMode === "classic" && <>
             <StepIndicator step={classicStep} steps={["Source", "Destination", "Produits"]} />
-            {src && <LocCard loc={src} label="Source" content={srcContent} color={C.blue} onRename={rename} onClear={() => { setSrc(null); setSrcContent([]); }} />}
+            {src && <LocCard loc={src} label="Source" content={srcContent} color={C.blue} onRename={rename} onClear={() => { setSrc(null); setSrcContent([]); }} onSelectProduct={classicStep === 2 ? doClassicScan : undefined} />}
             {dst && <LocCard loc={dst} label="Destination" content={dstContent} color={C.green} onRename={rename} onClear={() => { setDst(null); setDstContent([]); }} />}
 
             <Section>
@@ -2717,14 +2717,15 @@ function AutoInput({ locations, onScan, onPickLoc, placeholder }: any) {
   );
 }
 
-function LocCard({ loc, label, content, color, onRename, onClear }: { loc: any; label: string; content: any[]; color: string; onRename: (id: number, n: string) => void; onClear: () => void }) {
+function LocCard({ loc, label, content, color, onRename, onClear, onSelectProduct }: { loc: any; label: string; content: any[]; color: string; onRename: (id: number, n: string) => void; onClear: () => void; onSelectProduct?: (code: string) => void }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(loc.name);
   useEffect(() => setName(loc.name), [loc.name]);
+  useEffect(() => { if (onSelectProduct) setOpen(true); }, [onSelectProduct]);
   const grouped = Object.values(content.reduce((a: any, q: any) => {
     const k = q.product_id[0];
-    if (!a[k]) a[k] = { name: q.product_id[1], qty: 0, res: 0 };
+    if (!a[k]) a[k] = { name: q.product_id[1], qty: 0, res: 0, barcode: q.product_barcode || "", ref: q.product_ref || "" };
     a[k].qty += q.quantity; a[k].res += q.reserved_quantity || 0;
     return a;
   }, {})) as any[];
@@ -2756,12 +2757,24 @@ function LocCard({ loc, label, content, color, onRename, onClear }: { loc: any; 
       {open && (
         <div style={{ padding: "0 16px 12px", borderTop: `1px solid ${C.border}` }}>
           {grouped.length === 0 && <div style={{ padding: "10px 0", fontSize: 12, color: C.textMuted, textAlign: "center" }}>Vide</div>}
-          {grouped.slice(0, 20).map((p, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < grouped.length - 1 ? `1px solid ${C.border}` : "none", fontSize: 12 }}>
-              <span style={{ color: C.text, fontWeight: 500, maxWidth: "70%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
-              <span style={{ fontWeight: 700, color: C.text }}>{p.qty}{p.res > 0 ? <span style={{ fontSize: 10, color: C.orange, marginLeft: 4 }}>({p.res} rés.)</span> : ""}</span>
-            </div>
-          ))}
+          {grouped.slice(0, 20).map((p, i) => {
+            const clickable = !!onSelectProduct && !!(p.barcode || p.ref);
+            return clickable ? (
+              <button key={i} onClick={() => onSelectProduct!(p.barcode || p.ref)}
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "6px 0", borderBottom: i < grouped.length - 1 ? `1px solid ${C.border}` : "none", fontSize: 12, background: "none", border: "none", borderBottomColor: C.border, borderBottomStyle: "solid", borderBottomWidth: i < grouped.length - 1 ? 1 : 0, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                <span style={{ color: C.blue, fontWeight: 600, maxWidth: "70%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontWeight: 700, color: C.text }}>{p.qty}{p.res > 0 ? <span style={{ fontSize: 10, color: C.orange, marginLeft: 4 }}>({p.res} rés.)</span> : ""}</span>
+                  <span style={{ color: C.blue, fontSize: 14 }}>→</span>
+                </div>
+              </button>
+            ) : (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < grouped.length - 1 ? `1px solid ${C.border}` : "none", fontSize: 12 }}>
+                <span style={{ color: C.text, fontWeight: 500, maxWidth: "70%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+                <span style={{ fontWeight: 700, color: C.text }}>{p.qty}{p.res > 0 ? <span style={{ fontSize: 10, color: C.orange, marginLeft: 4 }}>({p.res} rés.)</span> : ""}</span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
