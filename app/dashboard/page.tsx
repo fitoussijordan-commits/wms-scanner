@@ -250,6 +250,7 @@ const TABS = [
   { key: "deliveries", label: "Livraisons & Prépa.", icon: I.truck },
   { key: "moves", label: "Historique", icon: I.history },
   { key: "stock-tracking", label: "Suivi stock", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
+  { key: "libre", label: "Mode Libre", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> },
 ] as const;
 
 // ─────────────────────────────────────────────
@@ -419,6 +420,30 @@ export default function Dashboard() {
   const [alertsUnderstockOpen, setAlertsUnderstockOpen] = useState(true);
   const [alertsOverstockOpen, setAlertsOverstockOpen] = useState(true);
   const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
+
+  // Mode Libre
+  type LibreRefType = "product" | "lot" | "so" | "picking" | "unknown";
+  type LibreRef = { raw: string; type: LibreRefType; id?: number; resolved?: any };
+  type LibreCol = { id: string; label: string; key: string };
+  const LIBRE_COLS: LibreCol[] = [
+    { id: "stock_dispo", label: "Stock disponible", key: "stock_dispo" },
+    { id: "stock_total", label: "Stock total", key: "stock_total" },
+    { id: "nom_produit", label: "Nom du produit", key: "nom_produit" },
+    { id: "ref_produit", label: "Référence produit", key: "ref_produit" },
+    { id: "lot_expiry", label: "Date d'expiration (lot)", key: "lot_expiry" },
+    { id: "lot_produit", label: "Produit du lot", key: "lot_produit" },
+    { id: "so_client", label: "Client (commande)", key: "so_client" },
+    { id: "so_statut", label: "Statut commande", key: "so_statut" },
+    { id: "so_montant", label: "Montant commande", key: "so_montant" },
+    { id: "picking_statut", label: "Statut BL", key: "picking_statut" },
+    { id: "picking_client", label: "Client BL", key: "picking_client" },
+  ];
+  const [libreText, setLibreText] = useState("");
+  const [libreRefs, setLibreRefs] = useState<LibreRef[]>([]);
+  const [libreCols, setLibreCols] = useState<LibreCol[]>([LIBRE_COLS[0]]);
+  const [libreRows, setLibreRows] = useState<Record<string, any>[]>([]);
+  const [libreLoading, setLibreLoading] = useState(false);
+  const [libreAnalyzed, setLibreAnalyzed] = useState(false);
 
   useEffect(() => {
     const s = loadSession(); if (s) setSession(s);
@@ -1011,6 +1036,131 @@ export default function Dashboard() {
       setMoveColFilters({}); setMoveColSort({ col: "date", dir: "desc" });
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, [session, moveRef, moveStart, moveEnd]);
+
+  // ── Mode Libre ──
+  const analyzeLibreText = useCallback(() => {
+    if (!libreText.trim()) return;
+    const text = libreText;
+    const found = new Map<string, LibreRefType>();
+
+    // Pickings WH/PICK/xxx WH/OUT/xxx etc.
+    const pickingRe = /\bWH\/[A-Z]+\/\d+\b/g;
+    for (const m of text.matchAll(pickingRe)) found.set(m[0], "picking");
+
+    // SO: S suivi de 4+ chiffres
+    const soRe = /\bS\d{4,}\b/g;
+    for (const m of text.matchAll(soRe)) if (!found.has(m[0])) found.set(m[0], "so");
+
+    // Refs produit: séquences alphanumériques de 5-15 chars (pas déjà détectées)
+    const refRe = /\b([A-Z0-9]{5,15})\b/g;
+    for (const m of text.matchAll(refRe)) {
+      if (!found.has(m[0]) && !/^\d+$/.test(m[0])) found.set(m[0], "product");
+    }
+
+    // Codes purement numériques 6-10 chiffres → ref produit ou lot
+    const numRe = /\b\d{6,10}\b/g;
+    for (const m of text.matchAll(numRe)) if (!found.has(m[0])) found.set(m[0], "product");
+
+    const refs: LibreRef[] = Array.from(found.entries()).map(([raw, type]) => ({ raw, type }));
+    setLibreRefs(refs);
+    setLibreRows([]);
+    setLibreAnalyzed(true);
+  }, [libreText]);
+
+  const generateLibreTable = useCallback(async () => {
+    if (!session || libreRefs.length === 0 || libreCols.length === 0) return;
+    setLibreLoading(true);
+    const rows: Record<string, any>[] = [];
+    for (const ref of libreRefs) {
+      const row: Record<string, any> = { "Référence": ref.raw, "Type": ref.type };
+      try {
+        if (ref.type === "product" || ref.type === "unknown") {
+          const needsProduct = libreCols.some(c => ["stock_dispo","stock_total","nom_produit","ref_produit"].includes(c.key));
+          if (needsProduct) {
+            const prods = await odoo.searchRead(session, "product.product",
+              ["|", ["default_code", "=", ref.raw], ["barcode", "=", ref.raw]],
+              ["id","name","default_code"], 1);
+            if (prods.length) {
+              const p = prods[0];
+              row["nom_produit"] = p.name;
+              row["ref_produit"] = p.default_code || ref.raw;
+              if (libreCols.some(c => c.key === "stock_dispo" || c.key === "stock_total")) {
+                const quants = await odoo.searchRead(session, "stock.quant",
+                  [["product_id","=",p.id],["location_id.usage","=","internal"]],
+                  ["quantity","reserved_quantity"], 500);
+                const total = quants.reduce((s: number, q: any) => s + q.quantity, 0);
+                const reserved = quants.reduce((s: number, q: any) => s + (q.reserved_quantity||0), 0);
+                row["stock_total"] = Math.round(total);
+                row["stock_dispo"] = Math.round(total - reserved);
+              }
+            } else {
+              row["_error"] = "Introuvable";
+            }
+          }
+        } else if (ref.type === "lot") {
+          const lots = await odoo.searchRead(session, "stock.lot",
+            [["name","=",ref.raw]], ["id","name","product_id","expiration_date","use_date"], 1);
+          if (lots.length) {
+            const l = lots[0];
+            row["lot_produit"] = l.product_id?.[1] || "";
+            row["lot_expiry"] = l.expiration_date || l.use_date || "";
+            if (libreCols.some(c => c.key === "stock_dispo" || c.key === "stock_total")) {
+              const quants = await odoo.searchRead(session, "stock.quant",
+                [["lot_id","=",l.id],["location_id.usage","=","internal"]],
+                ["quantity","reserved_quantity"], 100);
+              const total = quants.reduce((s: number, q: any) => s + q.quantity, 0);
+              const reserved = quants.reduce((s: number, q: any) => s + (q.reserved_quantity||0), 0);
+              row["stock_total"] = Math.round(total);
+              row["stock_dispo"] = Math.round(total - reserved);
+            }
+          } else {
+            row["_error"] = "Lot introuvable";
+          }
+        } else if (ref.type === "so") {
+          const orders = await odoo.searchRead(session, "sale.order",
+            [["name","=",ref.raw]], ["id","name","partner_id","state","amount_total"], 1);
+          if (orders.length) {
+            const o = orders[0];
+            const stateMap: Record<string,string> = { draft:"Devis", sent:"Devis envoyé", sale:"Confirmée", done:"Clôturée", cancel:"Annulée" };
+            row["so_client"] = o.partner_id?.[1] || "";
+            row["so_statut"] = stateMap[o.state] || o.state;
+            row["so_montant"] = o.amount_total?.toFixed(2) + " €";
+          } else {
+            row["_error"] = "Commande introuvable";
+          }
+        } else if (ref.type === "picking") {
+          const picks = await odoo.searchRead(session, "stock.picking",
+            [["name","=",ref.raw]], ["id","name","state","partner_id","carrier_id"], 1);
+          if (picks.length) {
+            const p = picks[0];
+            const stateMap: Record<string,string> = { draft:"Brouillon", waiting:"En attente", confirmed:"Confirmé", assigned:"Prêt", done:"Terminé", cancel:"Annulé" };
+            row["picking_statut"] = stateMap[p.state] || p.state;
+            row["picking_client"] = p.partner_id?.[1] || "";
+          } else {
+            row["_error"] = "BL introuvable";
+          }
+        }
+      } catch { row["_error"] = "Erreur requête"; }
+      rows.push(row);
+    }
+    setLibreRows(rows);
+    setLibreLoading(false);
+  }, [session, libreRefs, libreCols]);
+
+  const exportLibreExcel = useCallback(() => {
+    if (libreRows.length === 0) return;
+    const XLSX = require("xlsx");
+    const headers = ["Référence", "Type", ...libreCols.map(c => c.label)];
+    const data = libreRows.map(row => {
+      const r: any[] = [row["Référence"], row["Type"]];
+      for (const col of libreCols) r.push(row[col.key] ?? row["_error"] ?? "");
+      return r;
+    });
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Mode Libre");
+    XLSX.writeFile(wb, `export_libre_${new Date().toISOString().split("T")[0]}.xlsx`);
+  }, [libreRows, libreCols]);
 
   useEffect(() => { if (!session) return; if (tab === "alerts") { loadAlerts(); } if (tab === "conso") loadConso(); if (tab === "deliveries") loadDeliveries(); }, [tab, session]);
   // Re-run loadAlerts quand la watchlist arrive depuis Supabase (évite le flash "tout le catalogue")
@@ -2119,6 +2269,141 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
             {moveRef.trim() && moves.length === 0 && moveSearched && !loading && <EmptyState icon={I.search} title="Aucun mouvement trouvé" sub={`Référence "${moveRef}" introuvable dans l'historique`} />}
             {!moveRef.trim() && <EmptyState icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>} title="Entrez une référence produit" sub="pour analyser ses entrées, sorties et détecter les anomalies" />}
             {loading && <div style={{ textAlign: "center", padding: 40 }}><Spinner size={24} /></div>}
+          </div>
+        )}
+
+        {tab === "libre" && (
+          <div style={{ animation: "fadeIn .3s ease both" }}>
+            <div style={{ marginBottom: 24 }}>
+              <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Mode Libre</h2>
+              <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Collez n'importe quel texte contenant des références Odoo — le tableau se construit automatiquement.</p>
+            </div>
+
+            {/* Step 1: Texte brut */}
+            <div className="wms-card" style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 8 }}>1 · Coller le texte</div>
+              <textarea
+                value={libreText}
+                onChange={e => { setLibreText(e.target.value); setLibreAnalyzed(false); setLibreRefs([]); setLibreRows([]); }}
+                placeholder={"Colle ici un email, une liste, n'importe quel texte contenant des refs...\n\nEx: Commande S63165 — produit 1010120, lot ABC123, BL WH/PICK/36615"}
+                rows={6}
+                style={{ width: "100%", padding: "10px 12px", border: "1.5px solid var(--border)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", resize: "vertical", background: "var(--bg-surface)", color: "var(--text-primary)", boxSizing: "border-box" }}
+              />
+              <button className="wms-btn wms-btn-primary" onClick={analyzeLibreText} disabled={!libreText.trim()} style={{ marginTop: 10, opacity: !libreText.trim() ? .5 : 1 }}>
+                {I.search} Analyser le texte
+              </button>
+            </div>
+
+            {/* Step 2: Refs détectées */}
+            {libreAnalyzed && (
+              <div className="wms-card" style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 12 }}>
+                  2 · Références détectées ({libreRefs.length})
+                </div>
+                {libreRefs.length === 0 ? (
+                  <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Aucune référence détectée dans ce texte.</div>
+                ) : (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {libreRefs.map((r, i) => {
+                      const typeColors: Record<string, { bg: string; c: string; label: string }> = {
+                        product: { bg: "var(--accent-soft)", c: "var(--accent)", label: "Produit" },
+                        lot: { bg: "rgba(245,158,11,.12)", c: "var(--warning)", label: "Lot" },
+                        so: { bg: "var(--success-soft)", c: "var(--success)", label: "Commande" },
+                        picking: { bg: "rgba(139,92,246,.1)", c: "#7c3aed", label: "BL" },
+                        unknown: { bg: "var(--bg-hover)", c: "var(--text-muted)", label: "?" },
+                      };
+                      const tc = typeColors[r.type];
+                      return (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 20, background: tc.bg, border: `1px solid ${tc.c}20` }}>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: tc.c }}>{tc.label}</span>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)", fontFamily: MONO }}>{r.raw}</span>
+                          <button onClick={() => setLibreRefs(prev => prev.filter((_, j) => j !== i))}
+                            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: 14, lineHeight: 1, padding: 0, marginLeft: 2 }}>×</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Step 3: Colonnes */}
+            {libreAnalyzed && libreRefs.length > 0 && (
+              <div className="wms-card" style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 12 }}>3 · Colonnes à récupérer</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                  {libreCols.map((col, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, background: "var(--accent-soft)", border: "1.5px solid var(--accent)" }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)" }}>{col.label}</span>
+                      <button onClick={() => setLibreCols(prev => prev.filter((_, j) => j !== i))}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
+                    </div>
+                  ))}
+                  <select
+                    value=""
+                    onChange={e => {
+                      const col = LIBRE_COLS.find(c => c.id === e.target.value);
+                      if (col && !libreCols.find(c => c.id === col.id)) setLibreCols(prev => [...prev, col]);
+                    }}
+                    style={{ padding: "6px 12px", borderRadius: 8, border: "1.5px dashed var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+                    <option value="">+ Ajouter une colonne</option>
+                    {LIBRE_COLS.filter(c => !libreCols.find(lc => lc.id === c.id)).map(c => (
+                      <option key={c.id} value={c.id}>{c.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <button className="wms-btn wms-btn-primary" onClick={generateLibreTable} disabled={libreLoading || libreCols.length === 0}
+                  style={{ opacity: libreCols.length === 0 ? .5 : 1 }}>
+                  {libreLoading ? <><Spinner size={14} /> Chargement...</> : "⚡ Générer le tableau"}
+                </button>
+              </div>
+            )}
+
+            {/* Tableau résultat */}
+            {libreRows.length > 0 && (
+              <div className="wms-card">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>{libreRows.length} ligne(s)</div>
+                  <button className="wms-btn" onClick={exportLibreExcel} style={{ gap: 6 }}>{I.download} Exporter Excel</button>
+                </div>
+                <div className="wms-scrollbar" style={{ overflowX: "auto" }}>
+                  <table className="wms-table">
+                    <thead><tr>
+                      <th>Référence</th>
+                      <th>Type</th>
+                      {libreCols.map(c => <th key={c.id}>{c.label}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {libreRows.map((row, i) => (
+                        <tr key={i} style={row["_error"] ? { background: "var(--danger-soft)" } : {}}>
+                          <td style={{ fontFamily: MONO, fontWeight: 700, fontSize: 12 }}>{row["Référence"]}</td>
+                          <td>
+                            {(() => {
+                              const typeColors: Record<string, { bg: string; c: string; label: string }> = {
+                                product: { bg: "var(--accent-soft)", c: "var(--accent)", label: "Produit" },
+                                lot: { bg: "rgba(245,158,11,.12)", c: "var(--warning)", label: "Lot" },
+                                so: { bg: "var(--success-soft)", c: "var(--success)", label: "Commande" },
+                                picking: { bg: "rgba(139,92,246,.1)", c: "#7c3aed", label: "BL" },
+                                unknown: { bg: "var(--bg-hover)", c: "var(--text-muted)", label: "?" },
+                              };
+                              const tc = typeColors[row["Type"]] || typeColors["unknown"];
+                              return <span className="wms-badge" style={{ background: tc.bg, color: tc.c }}>{tc.label}</span>;
+                            })()}
+                          </td>
+                          {libreCols.map(c => (
+                            <td key={c.id} style={{ fontSize: 12 }}>
+                              {row["_error"] && !row[c.key]
+                                ? <span style={{ color: "var(--danger)", fontSize: 11 }}>{row["_error"]}</span>
+                                : row[c.key] ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
