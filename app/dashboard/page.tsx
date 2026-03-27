@@ -435,7 +435,6 @@ export default function Dashboard() {
     { id: "ref_fournisseur", label: "Référence fournisseur", key: "ref_fournisseur" },
     { id: "lots_en_stock", label: "Lots en stock", key: "lots_en_stock" },
     { id: "lot_expiry", label: "Date d'expiration (lot)", key: "lot_expiry" },
-    { id: "lot_produit", label: "Produit du lot", key: "lot_produit" },
     { id: "so_client", label: "Client (commande)", key: "so_client" },
     { id: "so_statut", label: "Statut commande", key: "so_statut" },
     { id: "so_montant", label: "Montant commande", key: "so_montant" },
@@ -1090,18 +1089,11 @@ export default function Dashboard() {
               row["ref_produit"] = p.default_code || ref.raw;
               if (libreCols.some(c => c.key === "poids")) row["poids"] = p.weight ? String(p.weight).replace(".", ",") : "";
               if (libreCols.some(c => c.key === "dimensions")) {
-                // Essaie les champs du module product_dimension, sinon volume
                 try {
                   const tmpl = await odoo.searchRead(session, "product.template",
-                    [["id","=",p.product_tmpl_id[0]]],
-                    ["product_length","product_width","product_height"], 1);
-                  const t = tmpl[0];
-                  if (t && (t.product_length || t.product_width || t.product_height)) {
-                    row["dimensions"] = `${t.product_length ?? 0}×${t.product_width ?? 0}×${t.product_height ?? 0}`;
-                  } else {
-                    row["dimensions"] = p.volume ? `Vol: ${p.volume} m³` : "";
-                  }
-                } catch { row["dimensions"] = p.volume ? `Vol: ${p.volume} m³` : ""; }
+                    [["id","=",p.product_tmpl_id[0]]], ["x_dimensions"], 1);
+                  row["dimensions"] = tmpl[0]?.x_dimensions || "";
+                } catch { row["dimensions"] = ""; }
               }
               if (libreCols.some(c => c.key === "ref_fournisseur")) {
                 const suppliersT = await odoo.searchRead(session, "product.supplierinfo",
