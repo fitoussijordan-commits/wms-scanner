@@ -4361,7 +4361,7 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
                   const diff = newQty - q.quantity;
                   return (
                     <div key={q.id} style={{ padding: "6px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
-                      <span style={{ fontWeight: 700 }}>{q.location_id[1]}</span>
+                      <span style={{ fontWeight: 700 }}>{selectedLocation ? (q.product_id?.[1] || "Produit") : q.location_id[1]}</span>
                       {q.lot_id && <span style={{ color: C.blue }}> · Lot {q.lot_id[1]}</span>}
                       <span style={{ color: C.textMuted }}> : {q.quantity} → </span>
                       <span style={{ fontWeight: 700, color: diff > 0 ? C.green : C.red }}>{newQty} ({diff > 0 ? "+" : ""}{diff})</span>
