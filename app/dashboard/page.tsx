@@ -430,6 +430,9 @@ export default function Dashboard() {
     { id: "stock_total", label: "Stock total", key: "stock_total" },
     { id: "nom_produit", label: "Nom du produit", key: "nom_produit" },
     { id: "ref_produit", label: "Référence produit", key: "ref_produit" },
+    { id: "poids", label: "Poids (kg)", key: "poids" },
+    { id: "volume", label: "Volume (m³)", key: "volume" },
+    { id: "ref_fournisseur", label: "Référence fournisseur", key: "ref_fournisseur" },
     { id: "lot_expiry", label: "Date d'expiration (lot)", key: "lot_expiry" },
     { id: "lot_produit", label: "Produit du lot", key: "lot_produit" },
     { id: "so_client", label: "Client (commande)", key: "so_client" },
@@ -1075,15 +1078,28 @@ export default function Dashboard() {
       const row: Record<string, any> = { "Référence": ref.raw, "Type": ref.type };
       try {
         if (ref.type === "product" || ref.type === "unknown") {
-          const needsProduct = libreCols.some(c => ["stock_dispo","stock_total","nom_produit","ref_produit"].includes(c.key));
+          const needsProduct = libreCols.some(c => ["stock_dispo","stock_total","nom_produit","ref_produit","poids","volume","ref_fournisseur"].includes(c.key));
           if (needsProduct) {
             const prods = await odoo.searchRead(session, "product.product",
               ["|", ["default_code", "=", ref.raw], ["barcode", "=", ref.raw]],
-              ["id","name","default_code"], 1);
+              ["id","name","default_code","weight","volume","product_tmpl_id"], 1);
             if (prods.length) {
               const p = prods[0];
               row["nom_produit"] = p.name;
               row["ref_produit"] = p.default_code || ref.raw;
+              if (libreCols.some(c => c.key === "poids")) row["poids"] = p.weight ?? "";
+              if (libreCols.some(c => c.key === "volume")) row["volume"] = p.volume ?? "";
+              if (libreCols.some(c => c.key === "ref_fournisseur")) {
+                const suppliers = await odoo.searchRead(session, "product.supplierinfo",
+                  [["product_id","=",p.id]], ["product_code","partner_id"], 1);
+                if (!suppliers.length && p.product_tmpl_id) {
+                  const suppliersT = await odoo.searchRead(session, "product.supplierinfo",
+                    [["product_tmpl_id","=",p.product_tmpl_id[0]]], ["product_code","partner_id"], 1);
+                  row["ref_fournisseur"] = suppliersT[0]?.product_code || "";
+                } else {
+                  row["ref_fournisseur"] = suppliers[0]?.product_code || "";
+                }
+              }
               if (libreCols.some(c => c.key === "stock_dispo" || c.key === "stock_total")) {
                 const quants = await odoo.searchRead(session, "stock.quant",
                   [["product_id","=",p.id],["location_id.usage","=","internal"]],
@@ -1149,17 +1165,26 @@ export default function Dashboard() {
 
   const exportLibreExcel = useCallback(() => {
     if (libreRows.length === 0) return;
-    const XLSX = require("xlsx");
-    const headers = ["Référence", "Type", ...libreCols.map(c => c.label)];
-    const data = libreRows.map(row => {
-      const r: any[] = [row["Référence"], row["Type"]];
-      for (const col of libreCols) r.push(row[col.key] ?? row["_error"] ?? "");
-      return r;
-    });
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Mode Libre");
-    XLSX.writeFile(wb, `export_libre_${new Date().toISOString().split("T")[0]}.xlsx`);
+    const headers = ["Référence", ...libreCols.map(c => c.label)];
+    const thStyle = `background:#1e293b;color:#fff;font-weight:700;padding:10px 14px;text-align:left;font-size:12px;letter-spacing:.3px;white-space:nowrap;border:1px solid #334155;`;
+    const tdStyle = (i: number) => `padding:8px 14px;font-size:12px;border:1px solid #e2e8f0;background:${i % 2 === 0 ? "#fff" : "#f8fafc"};color:#1e293b;`;
+    const refStyle = (i: number) => `${tdStyle(i)}font-weight:700;font-family:monospace;`;
+    const rows = libreRows.map((row, i) => {
+      const cells = [
+        `<td style="${refStyle(i)}">${row["Référence"] ?? ""}</td>`,
+        ...libreCols.map(col => {
+          const val = row[col.key] ?? (row["_error"] ? `<span style="color:#ef4444">${row["_error"]}</span>` : "—");
+          return `<td style="${tdStyle(i)}">${val}</td>`;
+        }),
+      ];
+      return `<tr>${cells.join("")}</tr>`;
+    }).join("");
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Export</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body><table><thead><tr>${headers.map(h => `<th style="${thStyle}">${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></body></html>`;
+    const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `export_libre_${new Date().toISOString().split("T")[0]}.xls`;
+    a.click(); URL.revokeObjectURL(url);
   }, [libreRows, libreCols]);
 
   useEffect(() => { if (!session) return; if (tab === "alerts") { loadAlerts(); } if (tab === "conso") loadConso(); if (tab === "deliveries") loadDeliveries(); }, [tab, session]);
