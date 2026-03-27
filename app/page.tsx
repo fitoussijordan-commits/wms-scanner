@@ -4885,7 +4885,8 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
                                 </div>
                                 <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6, flexShrink: 0 }}>Prêt</span>
                               </div>
-                              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>{moveCount} article(s)</div>
+                              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: p.user_id ? 4 : 10 }}>{moveCount} article(s)</div>
+                              {p.user_id && <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600, marginBottom: 10 }}>👤 {p.user_id[1]}</div>}
                               <div style={{ display: "flex", gap: 6 }}>
                                 <button onClick={() => onOpen(p)} style={{ flex: 2, padding: "10px 0", background: C.text, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
                                   Préparer
