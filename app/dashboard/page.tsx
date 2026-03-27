@@ -426,13 +426,14 @@ export default function Dashboard() {
   type LibreRef = { raw: string; type: LibreRefType; id?: number; resolved?: any };
   type LibreCol = { id: string; label: string; key: string };
   const LIBRE_COLS: LibreCol[] = [
-    { id: "stock_dispo", label: "Stock disponible", key: "stock_dispo" },
-    { id: "stock_total", label: "Stock total", key: "stock_total" },
+    { id: "stock_dispo", label: "Stock disponible (hors réservé)", key: "stock_dispo" },
+    { id: "stock_total", label: "Quantité en stock (physique)", key: "stock_total" },
     { id: "nom_produit", label: "Nom du produit", key: "nom_produit" },
     { id: "ref_produit", label: "Référence produit", key: "ref_produit" },
     { id: "poids", label: "Poids (kg)", key: "poids" },
-    { id: "volume", label: "Volume (m³)", key: "volume" },
+    { id: "dimensions", label: "Dimensions (L×l×h cm)", key: "dimensions" },
     { id: "ref_fournisseur", label: "Référence fournisseur", key: "ref_fournisseur" },
+    { id: "lots_en_stock", label: "Lots en stock", key: "lots_en_stock" },
     { id: "lot_expiry", label: "Date d'expiration (lot)", key: "lot_expiry" },
     { id: "lot_produit", label: "Produit du lot", key: "lot_produit" },
     { id: "so_client", label: "Client (commande)", key: "so_client" },
@@ -1078,7 +1079,7 @@ export default function Dashboard() {
       const row: Record<string, any> = { "Référence": ref.raw, "Type": ref.type };
       try {
         if (ref.type === "product" || ref.type === "unknown") {
-          const needsProduct = libreCols.some(c => ["stock_dispo","stock_total","nom_produit","ref_produit","poids","volume","ref_fournisseur"].includes(c.key));
+          const needsProduct = libreCols.some(c => ["stock_dispo","stock_total","nom_produit","ref_produit","poids","dimensions","ref_fournisseur","lots_en_stock"].includes(c.key));
           if (needsProduct) {
             const prods = await odoo.searchRead(session, "product.product",
               ["|", ["default_code", "=", ref.raw], ["barcode", "=", ref.raw]],
@@ -1087,27 +1088,44 @@ export default function Dashboard() {
               const p = prods[0];
               row["nom_produit"] = p.name;
               row["ref_produit"] = p.default_code || ref.raw;
-              if (libreCols.some(c => c.key === "poids")) row["poids"] = p.weight ?? "";
-              if (libreCols.some(c => c.key === "volume")) row["volume"] = p.volume ?? "";
-              if (libreCols.some(c => c.key === "ref_fournisseur")) {
-                const suppliers = await odoo.searchRead(session, "product.supplierinfo",
-                  [["product_id","=",p.id]], ["product_code","partner_id"], 1);
-                if (!suppliers.length && p.product_tmpl_id) {
-                  const suppliersT = await odoo.searchRead(session, "product.supplierinfo",
-                    [["product_tmpl_id","=",p.product_tmpl_id[0]]], ["product_code","partner_id"], 1);
-                  row["ref_fournisseur"] = suppliersT[0]?.product_code || "";
-                } else {
-                  row["ref_fournisseur"] = suppliers[0]?.product_code || "";
-                }
+              if (libreCols.some(c => c.key === "poids")) row["poids"] = p.weight ? String(p.weight).replace(".", ",") : "";
+              if (libreCols.some(c => c.key === "dimensions")) {
+                // Essaie les champs du module product_dimension, sinon volume
+                try {
+                  const tmpl = await odoo.searchRead(session, "product.template",
+                    [["id","=",p.product_tmpl_id[0]]],
+                    ["product_length","product_width","product_height"], 1);
+                  const t = tmpl[0];
+                  if (t && (t.product_length || t.product_width || t.product_height)) {
+                    row["dimensions"] = `${t.product_length ?? 0}×${t.product_width ?? 0}×${t.product_height ?? 0}`;
+                  } else {
+                    row["dimensions"] = p.volume ? `Vol: ${p.volume} m³` : "";
+                  }
+                } catch { row["dimensions"] = p.volume ? `Vol: ${p.volume} m³` : ""; }
               }
-              if (libreCols.some(c => c.key === "stock_dispo" || c.key === "stock_total")) {
+              if (libreCols.some(c => c.key === "ref_fournisseur")) {
+                const suppliersT = await odoo.searchRead(session, "product.supplierinfo",
+                  [["product_tmpl_id","=",p.product_tmpl_id[0]]], ["product_code","partner_id"], 1);
+                row["ref_fournisseur"] = suppliersT[0]?.product_code || "";
+              }
+              if (libreCols.some(c => c.key === "stock_dispo" || c.key === "stock_total" || c.key === "lots_en_stock")) {
                 const quants = await odoo.searchRead(session, "stock.quant",
                   [["product_id","=",p.id],["location_id.usage","=","internal"]],
-                  ["quantity","reserved_quantity"], 500);
+                  ["quantity","reserved_quantity","lot_id"], 500);
                 const total = quants.reduce((s: number, q: any) => s + q.quantity, 0);
                 const reserved = quants.reduce((s: number, q: any) => s + (q.reserved_quantity||0), 0);
                 row["stock_total"] = Math.round(total);
                 row["stock_dispo"] = Math.round(total - reserved);
+                if (libreCols.some(c => c.key === "lots_en_stock")) {
+                  const lotMap: Record<string, number> = {};
+                  for (const q of quants) {
+                    if (q.lot_id && q.quantity > 0) {
+                      const name = q.lot_id[1];
+                      lotMap[name] = (lotMap[name] || 0) + q.quantity;
+                    }
+                  }
+                  row["lots_en_stock"] = Object.entries(lotMap).map(([n,qty]) => `${n}: ${Math.round(qty as number)}`).join(" | ") || "";
+                }
               }
             } else {
               row["_error"] = "Introuvable";
