@@ -127,6 +127,37 @@ export async function saveConsoCache(items: WmsConsoCache[]): Promise<void> {
 }
 
 // ══════════════════════════════════════════
+// PRINT CONFIG (partagée entre tous les postes)
+// ══════════════════════════════════════════
+
+export interface WmsPrintConfig {
+  type: string;
+  printer_id: number | null;
+  label_width_mm: number;
+  label_height_mm: number;
+  updated_at?: string;
+}
+
+export async function loadPrintConfigs(): Promise<Record<string, WmsPrintConfig>> {
+  const { data, error } = await sb.from("wms_print_config").select("*");
+  if (error) throw new Error(error.message);
+  return Object.fromEntries((data || []).map((r: WmsPrintConfig) => [r.type, r]));
+}
+
+export async function savePrintConfig(
+  type: string,
+  printerId: number | null,
+  labelWidthMM: number,
+  labelHeightMM: number
+): Promise<void> {
+  const { error } = await sb.from("wms_print_config").upsert(
+    { type, printer_id: printerId, label_width_mm: labelWidthMM, label_height_mm: labelHeightMM, updated_at: new Date().toISOString() },
+    { onConflict: "type" }
+  );
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // UTILS
 // ══════════════════════════════════════════
 

@@ -627,6 +627,9 @@ export default function Page() {
   const [printReq, setPrintReq] = useState<PrintRequest | null>(null);
   useEffect(() => { _setPrintReq = setPrintReq; return () => { _setPrintReq = null; }; }, []);
 
+  // Synchro config imprimante depuis Supabase au démarrage (partage entre tous les postes)
+  useEffect(() => { pn.syncPrintConfigFromSupabase(); }, []);
+
   // Sync refs with state
   useEffect(() => { pickingMoveLinesRef.current = pickingMoveLines; }, [pickingMoveLines]);
   useEffect(() => { selectedPickingRef.current = selectedPicking; }, [selectedPicking]);

@@ -1,6 +1,7 @@
 // lib/printnode.ts — Client-side PrintNode helper
 // All API calls go through /api/printnode (server-side proxy)
 // API key is NEVER exposed to the browser
+import { loadPrintConfigs, savePrintConfig } from "./supabase";
 
 // ============================================
 // LABEL SIZE CONFIG
@@ -662,8 +663,16 @@ export function getLabelTypeConfig(type: LabelType): LabelTypeConfig {
 export function saveLabelTypeConfig(type: LabelType, config: Partial<LabelTypeConfig>) {
   try {
     const all = JSON.parse(localStorage.getItem(TYPE_CONFIG_KEY) || "{}");
-    all[type] = { ...getLabelTypeConfig(type), ...config };
+    const merged = { ...getLabelTypeConfig(type), ...config };
+    all[type] = merged;
     localStorage.setItem(TYPE_CONFIG_KEY, JSON.stringify(all));
+    // Sync vers Supabase en arrière-plan (sans bloquer l'UI)
+    savePrintConfig(
+      type,
+      merged.printerId,
+      merged.labelSize.widthMM,
+      merged.labelSize.heightMM
+    ).catch(e => console.warn("[printnode] savePrintConfig Supabase:", e.message));
   } catch {}
 }
 
@@ -672,4 +681,38 @@ export function getAllLabelTypeConfigs(): Record<LabelType, LabelTypeConfig> {
   const result = {} as Record<LabelType, LabelTypeConfig>;
   for (const t of types) result[t] = getLabelTypeConfig(t);
   return result;
+}
+
+/**
+ * Charge la config depuis Supabase et met à jour le localStorage local.
+ * À appeler une fois au démarrage de l'app pour synchroniser le poste.
+ */
+export async function syncPrintConfigFromSupabase(): Promise<void> {
+  try {
+    const remote = await loadPrintConfigs();
+    if (!Object.keys(remote).length) return;
+    const all = JSON.parse(localStorage.getItem(TYPE_CONFIG_KEY) || "{}");
+    for (const [type, row] of Object.entries(remote)) {
+      // On écrase le localStorage uniquement si la config distante est plus récente
+      // ou si ce type n'existe pas encore en local
+      if (!all[type]) {
+        all[type] = {
+          printerId: row.printer_id,
+          labelSize: { widthMM: Number(row.label_width_mm), heightMM: Number(row.label_height_mm) },
+        };
+      }
+    }
+    localStorage.setItem(TYPE_CONFIG_KEY, JSON.stringify(all));
+    // Met aussi à jour wms_printer_id et wms_label_size globaux si pas déjà définis
+    if (!getSavedPrinterId()) {
+      const fallback = remote["product"] || remote["lot"] || Object.values(remote)[0];
+      if (fallback?.printer_id) savePrinterId(fallback.printer_id);
+    }
+    if (!localStorage.getItem(LABEL_SIZE_KEY)) {
+      const fallback = remote["product"] || remote["lot"] || Object.values(remote)[0];
+      if (fallback) saveLabelSize({ widthMM: Number(fallback.label_width_mm), heightMM: Number(fallback.label_height_mm) });
+    }
+  } catch (e: any) {
+    console.warn("[printnode] syncPrintConfigFromSupabase:", e.message);
+  }
 }
