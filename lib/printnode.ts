@@ -684,26 +684,59 @@ export function getAllLabelTypeConfigs(): Record<LabelType, LabelTypeConfig> {
 }
 
 /**
- * Charge la config depuis Supabase et met à jour le localStorage local.
- * À appeler une fois au démarrage de l'app pour synchroniser le poste.
+ * Synchro bidirectionnelle config imprimante ↔ Supabase.
+ * - Si Supabase est vide → pousse la config locale (premier poste configuré)
+ * - Si Supabase a des données → les rapatrie en local (autres postes)
+ * À appeler une fois au démarrage de l'app.
  */
 export async function syncPrintConfigFromSupabase(): Promise<void> {
   try {
     const remote = await loadPrintConfigs();
-    if (!Object.keys(remote).length) return;
-    const all = JSON.parse(localStorage.getItem(TYPE_CONFIG_KEY) || "{}");
+    const local = JSON.parse(localStorage.getItem(TYPE_CONFIG_KEY) || "{}") as Record<string, LabelTypeConfig>;
+
+    if (!Object.keys(remote).length) {
+      // Supabase vide → on pousse toute la config locale existante
+      const pushPromises: Promise<void>[] = [];
+      const types: LabelType[] = ["product", "lot", "location", "palette", "palette_wms", "blank", "picking", "sendcloud", "packingslip"];
+      for (const type of types) {
+        const cfg = local[type];
+        if (cfg?.printerId) {
+          pushPromises.push(
+            savePrintConfig(type, cfg.printerId, cfg.labelSize.widthMM, cfg.labelSize.heightMM)
+              .catch(e => console.warn("[printnode] push config:", e.message))
+          );
+        }
+      }
+      // Pousse aussi la config globale (wms_printer_id) si pas de config par type
+      if (!pushPromises.length) {
+        const pid = getSavedPrinterId();
+        const sz = getLabelSize();
+        if (pid) {
+          for (const type of types) {
+            pushPromises.push(
+              savePrintConfig(type, pid, sz.widthMM, sz.heightMM)
+                .catch(e => console.warn("[printnode] push global config:", e.message))
+            );
+          }
+        }
+      }
+      await Promise.all(pushPromises);
+      return;
+    }
+
+    // Supabase a des données → on les applique en local
+    const updated = { ...local };
     for (const [type, row] of Object.entries(remote)) {
-      // On écrase le localStorage uniquement si la config distante est plus récente
-      // ou si ce type n'existe pas encore en local
-      if (!all[type]) {
-        all[type] = {
+      if (!updated[type]) {
+        updated[type] = {
           printerId: row.printer_id,
           labelSize: { widthMM: Number(row.label_width_mm), heightMM: Number(row.label_height_mm) },
         };
       }
     }
-    localStorage.setItem(TYPE_CONFIG_KEY, JSON.stringify(all));
-    // Met aussi à jour wms_printer_id et wms_label_size globaux si pas déjà définis
+    localStorage.setItem(TYPE_CONFIG_KEY, JSON.stringify(updated));
+
+    // Met à jour les clés globales si pas encore définies
     if (!getSavedPrinterId()) {
       const fallback = remote["product"] || remote["lot"] || Object.values(remote)[0];
       if (fallback?.printer_id) savePrinterId(fallback.printer_id);
