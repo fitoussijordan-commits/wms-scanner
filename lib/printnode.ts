@@ -724,15 +724,13 @@ export async function syncPrintConfigFromSupabase(): Promise<void> {
       return;
     }
 
-    // Supabase a des données → on les applique en local
+    // Supabase a des données → on écrase toujours le local avec la config distante
     const updated = { ...local };
     for (const [type, row] of Object.entries(remote)) {
-      if (!updated[type]) {
-        updated[type] = {
-          printerId: row.printer_id,
-          labelSize: { widthMM: Number(row.label_width_mm), heightMM: Number(row.label_height_mm) },
-        };
-      }
+      updated[type] = {
+        printerId: row.printer_id,
+        labelSize: { widthMM: Number(row.label_width_mm), heightMM: Number(row.label_height_mm) },
+      };
     }
     localStorage.setItem(TYPE_CONFIG_KEY, JSON.stringify(updated));
 
