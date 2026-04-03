@@ -630,6 +630,23 @@ export default function Page() {
   // Synchro config imprimante depuis Supabase au démarrage (partage entre tous les postes)
   useEffect(() => { pn.syncPrintConfigFromSupabase(); }, []);
 
+  // Auto-update : détecte un nouveau déploiement et vide le cache navigateur
+  useEffect(() => {
+    const buildId = (window as any).__NEXT_DATA__?.buildId;
+    if (!buildId) return;
+    const cached = localStorage.getItem("wms_build_id");
+    if (cached && cached !== buildId) {
+      localStorage.setItem("wms_build_id", buildId);
+      // Vide les caches service worker
+      if ("caches" in window) {
+        caches.keys().then(names => names.forEach(n => caches.delete(n)));
+      }
+      window.location.reload();
+    } else {
+      localStorage.setItem("wms_build_id", buildId);
+    }
+  }, []);
+
   // Sync refs with state
   useEffect(() => { pickingMoveLinesRef.current = pickingMoveLines; }, [pickingMoveLines]);
   useEffect(() => { selectedPickingRef.current = selectedPicking; }, [selectedPicking]);
