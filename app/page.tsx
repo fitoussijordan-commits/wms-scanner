@@ -5413,7 +5413,7 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
     if (!printId) { setError("Aucune imprimante Palettes WMS configurée (Paramètres)"); return; }
     const zpl = palZPL(p, ls);
     try {
-      const res = await fetch("/api/printnode", {
+      const res = await fetch(`/api/printnode?t=${Date.now()}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "print", printerId: printId, title: p.numero, content: btoa(unescape(encodeURIComponent(zpl))), source: "WMS Scanner" }),
       });
@@ -5619,7 +5619,7 @@ const batchPrint = async () => {
       const zpl = palZPL(p, []);
 
       // Modification ici : Ajout de cache et vérification de réponse
-      const res = await fetch("/api/printnode", { 
+      const res = await fetch(`/api/printnode?t=${Date.now()}`, { 
         method: "POST", 
         headers: { "Content-Type": "application/json" },
         cache: "no-store", // <--- Empêche le navigateur de bégayer
