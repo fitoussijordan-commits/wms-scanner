@@ -5604,25 +5604,47 @@ function PalettesScreen({ onBack, session, getPalettePrinter, onScanRef }: {
 
   const handleLookup = async () => { await universalSearch(lookupInput); };
 
-  const batchPrint = async () => {
-    const n = parseInt(batchQty) || 0;
-    if (n < 1 || n > 50) { setError("Entre 1 et 50"); return; }
-    const printId = getPalettePrinter?.();
-    if (!printId) { setError("Aucune imprimante configurée"); return; }
-    setLoading(true); setError("");
-    let ok = 0;
-    for (let i = 0; i < n; i++) {
-      try {
-        const p = await palCreate();
-        const zpl = palZPL(p, []);
-        await fetch("/api/printnode", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "print", printerId: printId, title: p.numero, content: btoa(unescape(encodeURIComponent(zpl))), source: "WMS Scanner" }) });
-        ok++;
-      } catch { /* skip */ }
+const batchPrint = async () => {
+  const n = parseInt(batchQty) || 0;
+  if (n < 1 || n > 50) { setError("Entre 1 et 50"); return; }
+  const printId = getPalettePrinter?.();
+  if (!printId) { setError("Aucune imprimante configurée"); return; }
+  
+  setLoading(true); setError("");
+  let ok = 0;
+
+  for (let i = 0; i < n; i++) {
+    try {
+      const p = await palCreate();
+      const zpl = palZPL(p, []);
+
+      // Modification ici : Ajout de cache et vérification de réponse
+      const res = await fetch("/api/printnode", { 
+        method: "POST", 
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store", // <--- Empêche le navigateur de bégayer
+        body: JSON.stringify({ 
+          action: "print", 
+          printerId: printId, 
+          title: p.numero, 
+          content: btoa(unescape(encodeURIComponent(zpl))), 
+          source: "WMS Scanner" 
+        }) 
+      });
+
+      if (res.ok) ok++;
+      
+      // Petit délai de 100ms pour laisser respirer l'imprimante/API
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+    } catch (e) { 
+      console.error("Erreur impression item " + i, e);
     }
-    showSuccess("✓ " + ok + " étiquette" + (ok > 1 ? "s" : "") + " imprimée" + (ok > 1 ? "s" : ""));
-    setLoading(false);
-  };
+  }
+
+  showSuccess("✓ " + ok + " étiquette" + (ok > 1 ? "s" : "") + " imprimée" + (ok > 1 ? "s" : ""));
+  setLoading(false);
+};
 
   const sortirVersPicking = async (ligneId: number, qtySortie: number) => {
     if (qtySortie <= 0 || !curPalRef.current) return;
