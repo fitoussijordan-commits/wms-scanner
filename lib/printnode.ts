@@ -48,6 +48,9 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
 // ============================================
 async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1): Promise<number> {
   const fullZpl = qty > 1 ? Array(qty).fill(zpl).join("\n") : zpl;
+  // Encode en UTF-8 base64 : ^CI28 dans le ZPL attend de l'UTF-8
+  // btoa(fullZpl) seul encode en Latin-1 → les accents cassent l'impression
+  const content = btoa(unescape(encodeURIComponent(fullZpl)));
   const res = await fetch("/api/printnode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -55,7 +58,7 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
       action: "print",
       printerId,
       title,
-      content: btoa(fullZpl),
+      content,
       source: "WMS Scanner",
     }),
   });
