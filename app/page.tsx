@@ -2827,8 +2827,8 @@ function ProductResult({ product, stock, onRename }: { product: any; stock: any[
           <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{product.name}{product.active === false && <Chip color={C.orange}>archivé</Chip>}</div>
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{product.default_code || ""} {product.barcode ? `· ${product.barcode}` : ""}</div>
         </div>
-        {product.barcode && (
-          <button onClick={() => requestPrint({ type: "product", title: product.name, barcode: product.barcode, ref: product.default_code, productName: product.name })}
+        {(product.barcode || product.default_code) && (
+          <button onClick={() => requestPrint({ type: "product", title: product.name, barcode: product.barcode || product.default_code, ref: product.default_code, productName: product.name })}
             style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", marginLeft: 8, flexShrink: 0 }}
             title="Imprimer étiquette">
             {printerIcon}
