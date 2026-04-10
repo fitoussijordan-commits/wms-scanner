@@ -559,29 +559,35 @@ function useScannerListener(onScan: (code: string) => void, enabled: boolean) {
 
   useEffect(() => {
     if (!enabled) return;
+    const flush = (tgt?: HTMLElement) => {
+      // Filtre les caractères de contrôle injectés par certains DataWedge
+      const code = buf.current.replace(/[^\x20-\x7E\u00C0-\u024F]/g, "").trim();
+      buf.current = "";
+      if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+      if (code.length >= 3) {
+        cb.current(code);
+        // Vide le champ input si le scan est tombé dedans
+        if (tgt instanceof HTMLInputElement) {
+          const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+          if (s) { s.call(tgt, ""); tgt.dispatchEvent(new Event("input", { bubbles: true })); }
+        }
+      }
+    };
+
     const handle = (e: KeyboardEvent) => {
       const tgt = e.target as HTMLElement;
-      const inInput = tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.tagName === "SELECT";
-      if (e.key === "Enter") {
-        if (buf.current.length >= 3) {
-          e.preventDefault(); e.stopPropagation();
-          const code = buf.current; buf.current = "";
-          if (timer.current) { clearTimeout(timer.current); timer.current = null; }
-          cb.current(code);
-          if (inInput && tgt instanceof HTMLInputElement) {
-            const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-            if (s) { s.call(tgt, ""); tgt.dispatchEvent(new Event("input", { bubbles: true })); }
-          }
-          return;
-        }
-        buf.current = "";
-        if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+      // Enter ou Tab = terminateur DataWedge
+      if (e.key === "Enter" || e.key === "Tab") {
+        if (buf.current.length >= 3) { e.preventDefault(); e.stopPropagation(); }
+        flush(tgt instanceof HTMLInputElement ? tgt : undefined);
         return;
       }
+      // Ignore les touches non-imprimables (Shift, Ctrl, Alt, F1…)
       if (e.key.length !== 1) return;
       buf.current += e.key;
+      // Timeout 80ms — plus sûr sur Zebra en WiFi chargé (était 50ms)
       if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => { buf.current = ""; timer.current = null; }, 50);
+      timer.current = setTimeout(() => flush(), 80);
     };
     window.addEventListener("keydown", handle, true);
     return () => { window.removeEventListener("keydown", handle, true); if (timer.current) clearTimeout(timer.current); };
@@ -766,6 +772,13 @@ export default function Page() {
 
   const logout = () => { setSession(null); clearSess(); setScreen("login"); resetTransfer(); };
   const goHome = () => { setScreen("home"); resetTransfer(); clearLookup(); };
+
+  // Charge le compteur de prépas en arrière-plan dès que la home est affichée
+  useEffect(() => {
+    if (screen === "home" && session) {
+      odoo.getOutgoingPickings(session).then(p => setPickings(p)).catch(() => {});
+    }
+  }, [screen, session]);
 
   // Lookup
   const clearLookup = () => { setLookupResult(null); setLookupStock([]); setLookupType(""); setError(""); };
@@ -1356,15 +1369,19 @@ export default function Page() {
             <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginBottom: 10, paddingLeft: 2 }}>Opérations</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {[
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Transfert", color: "#2563eb", onClick: () => { resetTransfer(); setScreen("transfer"); } },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>, label: "Préparation", color: "#7c3aed", onClick: () => { loadPickings(); setScreen("prep"); } },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Arrivage", color: "#059669", onClick: () => setScreen("arrival") },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>, label: "Palettes WMS", color: "#0f766e", onClick: () => setScreen("palettes") },
+                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Transfert", color: "#2563eb", onClick: () => { resetTransfer(); setScreen("transfer"); }, badge: null },
+                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>, label: "Préparation", color: "#7c3aed", onClick: () => { loadPickings(); setScreen("prep"); }, badge: pickings.length > 0 ? pickings.length : null },
+                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Arrivage", color: "#059669", onClick: () => setScreen("arrival"), badge: null },
+                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>, label: "Palettes WMS", color: "#0f766e", onClick: () => setScreen("palettes"), badge: null },
               ].map((btn, i) => (
                 <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 8, padding: "18px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, cursor: "pointer", fontFamily: "inherit", boxShadow: C.shadow, position: "relative" as const }}>
                   <div style={{ width: 40, height: 40, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>{btn.icon}</div>
                   <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{btn.label}</span>
-                  <div style={{ position: "absolute" as const, top: 8, right: 8, width: 6, height: 6, borderRadius: 3, background: btn.color }} />
+                  {btn.badge !== null ? (
+                    <div style={{ position: "absolute" as const, top: 7, right: 7, minWidth: 20, height: 20, borderRadius: 10, background: btn.color, color: "#fff", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 5px" }}>{btn.badge}</div>
+                  ) : (
+                    <div style={{ position: "absolute" as const, top: 8, right: 8, width: 6, height: 6, borderRadius: 3, background: btn.color }} />
+                  )}
                 </button>
               ))}
             </div>
