@@ -605,7 +605,7 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1392,6 +1392,7 @@ export default function Page() {
               {[
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>, label: "Ajustement", onClick: () => setScreen("inventory") },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock") },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel") },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels") },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; } },
               ].map((btn, i) => (
@@ -1669,6 +1670,9 @@ export default function Page() {
 
         {screen === "inventory" && session && (
           <InventoryScreen session={session} onBack={goHome} onToast={showToast} initialProduct={inventoryInitProduct} />
+        )}
+        {screen === "reprintLabel" && session && (
+          <ReprintLabelScreen session={session} onBack={goHome} onToast={showToast} />
         )}
         {screen === "negativeStock" && session && (
           <NegativeStockScreen session={session} onBack={goHome} onToast={showToast} onGoToInventory={(p) => { setInventoryInitProduct(p); setScreen("inventory"); }} />
@@ -4271,6 +4275,177 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 // ============================================================
 // NEGATIVE STOCK SCREEN
 // ============================================================
+// ============================================================
+// REPRINT LABEL SCREEN — Réimprimer étiquette transporteur
+// ============================================================
+function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [pickings, setPickings] = useState<any[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [attachments, setAttachments] = useState<Record<number, any[]>>({});
+  const [loadingAttach, setLoadingAttach] = useState<Record<number, boolean>>({});
+  const [printing, setPrinting] = useState<Record<number, boolean>>({});
+  const [resending, setResending] = useState<Record<number, boolean>>({});
+
+  const search = async (q = query) => {
+    if (!q.trim() && pickings.length === 0) return;
+    setSearching(true);
+    try {
+      const results = await odoo.searchDoneOutPickings(session, q);
+      setPickings(results);
+      if (results.length === 0) onToast("Aucun OUT trouvé");
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setSearching(false);
+  };
+
+  const loadAttachments = async (pickingId: number) => {
+    if (attachments[pickingId]) return; // déjà chargé
+    setLoadingAttach(prev => ({ ...prev, [pickingId]: true }));
+    try {
+      const att = await odoo.getPickingAttachments(session, pickingId);
+      setAttachments(prev => ({ ...prev, [pickingId]: att }));
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setLoadingAttach(prev => ({ ...prev, [pickingId]: false }));
+  };
+
+  const toggleExpand = (id: number) => {
+    const next = expanded === id ? null : id;
+    setExpanded(next);
+    if (next !== null) loadAttachments(next);
+  };
+
+  const printAttachment = async (pickingId: number, att: any) => {
+    setPrinting(prev => ({ ...prev, [att.id]: true }));
+    try {
+      const cfg = pn.getLabelTypeConfig("blank");
+      const pid = cfg.printerId || pn.getSavedPrinterId();
+      if (!pid) { onToast("⚠️ Aucune imprimante configurée"); return; }
+      const result = await pn.printPdfLabel(pid, att.datas, att.name);
+      if (result.success) onToast(`✅ ${att.name} envoyé à l'imprimante`);
+      else onToast("❌ " + (result.error || "Erreur impression"));
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setPrinting(prev => ({ ...prev, [att.id]: false }));
+  };
+
+  const resendToShipper = async (picking: any) => {
+    setResending(prev => ({ ...prev, [picking.id]: true }));
+    try {
+      await odoo.resendToShipper(session, picking.id);
+      onToast("✅ Demande envoyée au transporteur — rechargez les pièces jointes");
+      // Refresh les pièces jointes après un délai
+      setTimeout(async () => {
+        setAttachments(prev => { const n = { ...prev }; delete n[picking.id]; return n; });
+        loadAttachments(picking.id);
+      }, 3000);
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setResending(prev => ({ ...prev, [picking.id]: false }));
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>Réimprimer étiquette</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>Bons de livraison validés (OUT)</div>
+        </div>
+      </div>
+
+      {/* Barre de recherche */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && search()}
+          placeholder="WH/OUT/00123, partenaire, réf..."
+          style={{ flex: 1, padding: "10px 14px", border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }}
+          autoFocus
+        />
+        <button onClick={() => search()} disabled={searching}
+          style={{ padding: "10px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: searching ? 0.6 : 1 }}>
+          {searching ? "…" : "🔍"}
+        </button>
+      </div>
+
+      {/* Récents si pas de recherche */}
+      {pickings.length === 0 && !searching && (
+        <button onClick={() => search("")}
+          style={{ width: "100%", padding: 12, background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 13, color: C.textMuted, fontFamily: "inherit" }}>
+          Afficher les 50 derniers OUT validés
+        </button>
+      )}
+
+      {/* Liste des pickings */}
+      {pickings.map(p => {
+        const isOpen = expanded === p.id;
+        const atts = attachments[p.id] || [];
+        const loading = loadingAttach[p.id];
+        const dateStr = p.date_done ? new Date(p.date_done).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+        return (
+          <div key={p.id} style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 10, overflow: "hidden", boxShadow: C.shadow }}>
+            {/* Header picking */}
+            <button onClick={() => toggleExpand(p.id)}
+              style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</span>
+                  {p.carrier_id && <span style={{ fontSize: 11, color: "#7c3aed", background: "#f3e8ff", padding: "2px 6px", borderRadius: 4, fontWeight: 600 }}>{p.carrier_id[1]}</span>}
+                </div>
+                {p.partner_id && <div style={{ fontSize: 12, color: C.textMuted }}>{p.partner_id[1]}</div>}
+                <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+                  {p.origin && <span style={{ fontSize: 11, color: C.textMuted }}>Origine : {p.origin}</span>}
+                  {p.carrier_tracking_ref && <span style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>🚚 {p.carrier_tracking_ref}</span>}
+                  {dateStr && <span style={{ fontSize: 11, color: C.textMuted }}>{dateStr}</span>}
+                </div>
+              </div>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"
+                style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .2s", flexShrink: 0 }}>
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+
+            {/* Détail — pièces jointes + actions */}
+            {isOpen && (
+              <div style={{ borderTop: `1px solid ${C.border}`, padding: "12px 14px" }}>
+                {loading && <div style={{ color: C.textMuted, fontSize: 13 }}>Chargement des étiquettes…</div>}
+
+                {!loading && atts.length === 0 && (
+                  <div style={{ color: C.textMuted, fontSize: 13, marginBottom: 12 }}>
+                    Aucune étiquette PDF trouvée en pièces jointes.
+                  </div>
+                )}
+
+                {!loading && atts.map(att => (
+                  <div key={att.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "8px 10px", background: C.bg, borderRadius: 8 }}>
+                    <span style={{ fontSize: 12, flex: 1, color: C.text, fontWeight: 500 }}>📄 {att.name}</span>
+                    <button
+                      onClick={() => printAttachment(p.id, att)}
+                      disabled={printing[att.id]}
+                      style={{ padding: "5px 12px", background: C.blue, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: printing[att.id] ? 0.6 : 1 }}>
+                      {printing[att.id] ? "…" : "🖨 Imprimer"}
+                    </button>
+                  </div>
+                ))}
+
+                {/* Re-envoyer au transporteur */}
+                <button
+                  onClick={() => resendToShipper(p)}
+                  disabled={resending[p.id]}
+                  style={{ width: "100%", marginTop: 6, padding: "8px 0", background: resending[p.id] ? C.border : "#7c3aed", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: resending[p.id] ? 0.7 : 1 }}>
+                  {resending[p.id] ? "Envoi en cours…" : "🚚 Redemander étiquette au transporteur"}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function NegativeStockScreen({ session, onBack, onToast, onGoToInventory }: { session: any; onBack: () => void; onToast: (m: string) => void; onGoToInventory: (product: { id: number; productName: string }) => void }) {
   const [groups, setGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);

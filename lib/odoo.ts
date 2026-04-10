@@ -422,6 +422,39 @@ export async function createInternalTransfer(
   return pickingId;
 }
 
+// Recherche les OUT validés (state=done) par nom/origine/partenaire
+export async function searchDoneOutPickings(session: OdooSession, query: string): Promise<any[]> {
+  const domain: any[] = [["state", "=", "done"], ["picking_type_code", "=", "outgoing"]];
+  const trimmed = query.trim();
+  if (trimmed) {
+    domain.push("|", "|", "|",
+      ["name", "ilike", trimmed],
+      ["origin", "ilike", trimmed],
+      ["partner_id.name", "ilike", trimmed],
+      ["carrier_tracking_ref", "ilike", trimmed],
+    );
+  }
+  return searchRead(session, "stock.picking",
+    domain,
+    ["id", "name", "origin", "partner_id", "carrier_id", "carrier_tracking_ref", "date_done", "state"],
+    50, "date_done desc"
+  );
+}
+
+// Récupère les pièces jointes PDF d'un picking (labels transporteur)
+export async function getPickingAttachments(session: OdooSession, pickingId: number): Promise<any[]> {
+  return searchRead(session, "ir.attachment",
+    [["res_model", "=", "stock.picking"], ["res_id", "=", pickingId], ["mimetype", "ilike", "pdf"]],
+    ["id", "name", "datas", "mimetype", "create_date"],
+    20
+  );
+}
+
+// Re-déclenche l'envoi au transporteur (peut fonctionner si le picking est toujours accessible)
+export async function resendToShipper(session: OdooSession, pickingId: number): Promise<void> {
+  await callMethod(session, "stock.picking", "send_to_shipper", [[pickingId]]);
+}
+
 export async function validatePicking(session: OdooSession, pickingId: number) {
   const result = await callMethod(session, "stock.picking", "button_validate", [[pickingId]]);
 
