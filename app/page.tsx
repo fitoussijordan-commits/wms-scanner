@@ -613,6 +613,7 @@ export default function Page() {
   const [toast, setToast] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [scanFlash, setScanFlash] = useState<"ok" | "err" | null>(null);
+  const [inventoryInitProduct, setInventoryInitProduct] = useState<{ id: number; productName: string } | null>(null);
 
   const flashScan = (type: "ok" | "err") => {
     playBeep(type);
@@ -771,7 +772,7 @@ export default function Page() {
   };
 
   const logout = () => { setSession(null); clearSess(); setScreen("login"); resetTransfer(); };
-  const goHome = () => { setScreen("home"); resetTransfer(); clearLookup(); };
+  const goHome = () => { setScreen("home"); resetTransfer(); clearLookup(); setInventoryInitProduct(null); };
 
   // Charge le compteur de prépas en arrière-plan dès que la home est affichée
   useEffect(() => {
@@ -1667,10 +1668,10 @@ export default function Page() {
         )}
 
         {screen === "inventory" && session && (
-          <InventoryScreen session={session} onBack={goHome} onToast={showToast} />
+          <InventoryScreen session={session} onBack={goHome} onToast={showToast} initialProduct={inventoryInitProduct} />
         )}
         {screen === "negativeStock" && session && (
-          <NegativeStockScreen session={session} onBack={goHome} onToast={showToast} />
+          <NegativeStockScreen session={session} onBack={goHome} onToast={showToast} onGoToInventory={(p) => { setInventoryInitProduct(p); setScreen("inventory"); }} />
         )}
 
         {/* HIDDEN: E-shop screen — pas au point
@@ -4270,7 +4271,7 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 // ============================================================
 // NEGATIVE STOCK SCREEN
 // ============================================================
-function NegativeStockScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+function NegativeStockScreen({ session, onBack, onToast, onGoToInventory }: { session: any; onBack: () => void; onToast: (m: string) => void; onGoToInventory: (product: { id: number; productName: string }) => void }) {
   const [groups, setGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -4355,7 +4356,15 @@ function NegativeStockScreen({ session, onBack, onToast }: { session: any; onBac
             <div style={{ padding: "8px 14px 12px" }}>
               {group.quants.map((q: any) => (
                 <div key={q.id} style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10, marginTop: 10 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 2 }}>{q.product_id[1]}</div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{q.product_id[1]}</div>
+                    <button
+                      onClick={() => onGoToInventory({ id: q.product_id[0], productName: q.product_id[1] })}
+                      style={{ fontSize: 11, fontWeight: 600, color: C.blue, background: C.blueSoft, border: "none", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: "inherit" }}
+                    >
+                      Ajuster →
+                    </button>
+                  </div>
                   {q.lot_id && <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>Lot : {q.lot_id[1]}</div>}
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <div style={{ padding: "4px 10px", background: "#fef2f2", borderRadius: 6, fontSize: 13, fontWeight: 700, color: "#dc2626", minWidth: 60, textAlign: "center" as const }}>
@@ -4387,7 +4396,7 @@ function NegativeStockScreen({ session, onBack, onToast }: { session: any; onBac
   );
 }
 
-function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+function InventoryScreen({ session, onBack, onToast, initialProduct }: { session: any; onBack: () => void; onToast: (m: string) => void; initialProduct?: { id: number; productName: string } | null }) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -4420,6 +4429,11 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
     } catch (e: any) { onToast("Erreur: " + e.message); }
     setSearching(false);
   };
+
+  // Pré-sélectionne un produit si on arrive depuis Stock négatif
+  useEffect(() => {
+    if (initialProduct) selectItem({ kind: "product", id: initialProduct.id, productName: initialProduct.productName });
+  }, []);
 
   useScannerListener((code) => {
     setQuery(code);
