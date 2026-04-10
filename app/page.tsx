@@ -431,6 +431,33 @@ function vibrate(pattern: number | number[] = 30) {
 function vibrateSuccess() { vibrate([30, 50, 30]); }
 function vibrateError() { vibrate([100, 30, 100]); }
 
+// ── Audio beep (Web Audio API) ────────────────────────────────────────────────
+function playBeep(type: "ok" | "err") {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    if (type === "ok") {
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(1320, ctx.currentTime + 0.08);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.25);
+    } else {
+      osc.frequency.setValueAtTime(300, ctx.currentTime);
+      osc.frequency.setValueAtTime(180, ctx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.35, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.35);
+    }
+    osc.onended = () => ctx.close();
+  } catch {}
+}
+
 // ============================================
 // LABEL PRINTING — Modal + PrintNode/fallback
 // ============================================
@@ -579,6 +606,14 @@ export default function Page() {
   const [locations, setLocations] = useState<any[]>([]);
   const [toast, setToast] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [scanFlash, setScanFlash] = useState<"ok" | "err" | null>(null);
+
+  const flashScan = (type: "ok" | "err") => {
+    playBeep(type);
+    if (type === "ok") vibrateSuccess(); else vibrateError();
+    setScanFlash(type);
+    setTimeout(() => setScanFlash(null), 500);
+  };
 
   // Transfer mode
   const [transferMode, setTransferMode] = useState<"classic" | "quick">("classic");
@@ -989,7 +1024,7 @@ export default function Page() {
           );
           if (pending.length === 0) {
             showToast(`Aucun article à prendre à ${r.data.name}`);
-            vibrateError();
+            flashScan("err");
             return;
           }
           // Lock on first pending line at this location
@@ -1000,11 +1035,11 @@ export default function Page() {
             productName: ml.product_id[1], lotName: ml.lot_id?.[1] || undefined,
             remaining,
           });
-          vibrateSuccess();
+          flashScan("ok");
           showToast(`📍 ${r.data.name} → Scannez ${ml.lot_id ? ml.lot_id[1] : ml.product_id[1]}`);
         } else {
           showToast("⚠ Scannez d'abord un emplacement source");
-          vibrateError();
+          flashScan("err");
         }
         return;
       }
@@ -1043,7 +1078,7 @@ export default function Page() {
             productId = rawLotsLike[0].product_id?.[0] || null;
           } else {
             showToast(`⚠ Lot "${code}" introuvable`);
-            vibrateError();
+            flashScan("err");
             return;
           }
         }
@@ -1066,12 +1101,12 @@ export default function Page() {
           (m.qty_done || 0) < (m.reserved_uom_qty || 0)
         );
       }
-      if (!ml) { showToast("Ligne introuvable à cet emplacement"); vibrateError(); return; }
+      if (!ml) { showToast("Ligne introuvable à cet emplacement"); flashScan("err"); return; }
 
       // Check if product matches (only if we got product info from scan)
       if (productId && ml.product_id[0] !== productId) {
         showToast(`⚠ Mauvais produit — attendu: ${ml.product_id[1]}`);
-        vibrateError();
+        flashScan("err");
         return;
       }
 
@@ -1094,7 +1129,7 @@ export default function Page() {
       }
 
       const remaining = (ml.reserved_uom_qty || 0) - newQty;
-      vibrateSuccess();
+      flashScan("ok");
       showToast(`✓ ${lotName || ml.product_id[1]} · ${newQty}/${ml.reserved_uom_qty || 0}`);
 
       const morePending = updatedLines.filter((m: any) =>
@@ -1110,7 +1145,7 @@ export default function Page() {
       } else {
         updatePrepStep(prev => prev ? { ...prev, lineId: ml.id, remaining } : null);
       }
-    } catch (e: any) { setError(e.message); vibrateError(); }
+    } catch (e: any) { setError(e.message); flashScan("err"); }
   };
 
   // Ref to always call latest doPrepScan (avoids stale closure)
@@ -1237,7 +1272,7 @@ export default function Page() {
   if (screen === "login") return <Login onLogin={login} loading={loading} error={error} />;
 
   return (
-    <Shell toast={toast}>
+    <Shell toast={toast} flash={scanFlash}>
       <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} />
 
       <main style={{ maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px" }}>
@@ -1831,7 +1866,7 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
 // ============================================
 // SHARED COMPONENTS
 // ============================================
-function Shell({ children, toast }: { children: React.ReactNode; toast: string }) {
+function Shell({ children, toast, flash }: { children: React.ReactNode; toast: string; flash?: "ok" | "err" | null }) {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans', 'SF Pro Display', -apple-system, sans-serif" }}>
       <style>{`
@@ -1839,10 +1874,18 @@ function Shell({ children, toast }: { children: React.ReactNode; toast: string }
         @keyframes slideUp { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:translateY(0) } }
         @keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
         @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.5 } }
+        @keyframes scanFlashAnim { 0% { opacity:0.55 } 100% { opacity:0 } }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         input[type=number] { -moz-appearance: textfield; }
       `}</style>
+      {flash && (
+        <div key={flash + Date.now()} style={{
+          position: "fixed", inset: 0, zIndex: 9999, pointerEvents: "none",
+          background: flash === "ok" ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.55)",
+          animation: "scanFlashAnim 0.5s ease-out forwards",
+        }} />
+      )}
       {toast && <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 999, background: C.text, color: "#fff", padding: "10px 20px", borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: C.shadowLg, animation: "fadeIn .15s" }}>{toast}</div>}
       {children}
     </div>
