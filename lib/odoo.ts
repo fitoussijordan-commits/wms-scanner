@@ -834,3 +834,69 @@ export async function getPickingPackages(session: OdooSession, pickingId: number
 export async function setPackageWeight(session: OdooSession, packageId: number, weight: number) {
   return write(session, "stock.quant.package", [packageId], { shipping_weight: weight });
 }
+
+// ============================================
+// COLIS TNT — Ajout d'un colis sur un OUT validé + envoi transporteur
+// ============================================
+
+/**
+ * Crée un nouveau colis (stock.quant.package) avec le poids donné,
+ * l'associe à un picking validé, appelle send_to_shipper pour générer
+ * une nouvelle étiquette TNT, puis retourne les nouvelles pièces jointes.
+ *
+ * Stratégie : sur un picking validé (state=done) on ne peut plus modifier
+ * les move lines. On crée un package standalone avec le poids, puis on
+ * appelle send_to_shipper en passant le package dans le contexte.
+ * Odoo génère une étiquette pour chaque package listé dans package_ids
+ * du contexte.
+ */
+export async function addPackageAndSendToShipper(
+  session: OdooSession,
+  pickingId: number,
+  weightKg: number
+): Promise<{ packageId: number; attachments: any[] }> {
+  // 1. Récupérer les pièces jointes existantes avant envoi
+  const attachmentsBefore = await searchRead(
+    session, "ir.attachment",
+    [["res_model", "=", "stock.picking"], ["res_id", "=", pickingId], ["mimetype", "ilike", "pdf"]],
+    ["id"], 100
+  );
+  const existingIds = new Set(attachmentsBefore.map((a: any) => a.id));
+
+  // 2. Créer le package avec le poids
+  const packageId = await create(session, "stock.quant.package", {
+    shipping_weight: weightKg,
+  }) as number;
+
+  // 3. Lier le package au picking via write sur stock.picking
+  //    (Odoo accepte d'écrire package_ids sur un done picking pour l'expédition)
+  try {
+    await write(session, "stock.picking", [pickingId], {
+      package_ids: [[4, packageId]],
+    });
+  } catch {
+    // Certaines versions d'Odoo n'acceptent pas ça — on continue quand même
+  }
+
+  // 4. Appeler send_to_shipper avec le package dans le contexte
+  await call(session, "/web/dataset/call_kw", {
+    model: "stock.picking",
+    method: "send_to_shipper",
+    args: [[pickingId]],
+    kwargs: {
+      context: { default_package_id: packageId, force_package_id: packageId },
+    },
+  });
+
+  // 5. Attendre un peu puis récupérer les nouvelles pièces jointes
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  const attachmentsAfter = await searchRead(
+    session, "ir.attachment",
+    [["res_model", "=", "stock.picking"], ["res_id", "=", pickingId], ["mimetype", "ilike", "pdf"]],
+    ["id", "name", "datas", "create_date"],
+    100
+  );
+  const newAttachments = attachmentsAfter.filter((a: any) => !existingIds.has(a.id));
+
+  return { packageId, attachments: newAttachments };
+}
