@@ -614,6 +614,7 @@ export default function Page() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [scanFlash, setScanFlash] = useState<"ok" | "err" | null>(null);
   const [inventoryInitProduct, setInventoryInitProduct] = useState<{ id: number; productName: string } | null>(null);
+  const [lockWarning, setLockWarning] = useState<{ lockedBy: string; since: Date; picking: any } | null>(null);
 
   const flashScan = (type: "ok" | "err") => {
     playBeep(type);
@@ -662,6 +663,8 @@ export default function Page() {
   const prepLotCache = useRef<Map<string, any>>(new Map()); // lot name.lower → lot obj
   // Debounce ref for background refresh after optimistic writes
   const bgRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track si on a déjà posé le verrou sur le picking en cours
+  const hasClaimedPrep = useRef(false);
 
   const preCachePrepData = async (mlines: any[]) => {
     if (!session) return;
@@ -960,8 +963,21 @@ export default function Page() {
     } catch (e: any) { setError(e.message); setLoading(false); }
   };
 
-  const openPicking = async (picking: any) => {
+  const openPicking = async (picking: any, force = false) => {
     if (!session) return;
+    // Vérifier si un autre préparateur est déjà dessus
+    if (!force && picking.id) {
+      try {
+        const lock = await odoo.getPickingLock(session, picking.id);
+        if (lock && lock.lockedBy !== session.name) {
+          setLockWarning({ lockedBy: lock.lockedBy, since: lock.since, picking });
+          return;
+        }
+      } catch {}
+    }
+    // NE PAS claim ici — on claim au premier scan pour ne pas bloquer
+    // quelqu'un qui ouvre juste pour regarder
+    hasClaimedPrep.current = false;
     setLoading(true); setError("");
     setSelectedPicking(picking);
     setPrepScanned(new Set());
@@ -1182,6 +1198,12 @@ export default function Page() {
 
       if (newQty >= (ml.reserved_uom_qty || 0)) {
         setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(ml.id); return n; });
+      }
+
+      // ── Claim au premier scan (verrou préparateur) ──────────────────────
+      if (!hasClaimedPrep.current && session && currentPicking?.id) {
+        hasClaimedPrep.current = true;
+        odoo.claimPicking(session, currentPicking.id).catch(() => {});
       }
 
       flashScan("ok");
@@ -1637,8 +1659,18 @@ export default function Page() {
             onAutoFill={autoFillPicking}
             onAdjustQty={adjustMoveLineQty}
             qtyOverrides={qtyOverrides}
-            onValidate={validatePrepPicking}
-            onBack={() => { setScreen("prep"); setPrepStep(null); loadPickings(); }}
+            onValidate={async () => {
+              if (session && selectedPicking?.id) {
+                try { await odoo.releasePicking(session, selectedPicking.id); } catch {}
+              }
+              validatePrepPicking();
+            }}
+            onBack={async () => {
+              if (session && selectedPicking?.id) {
+                try { await odoo.releasePicking(session, selectedPicking.id); } catch {}
+              }
+              setScreen("prep"); setPrepStep(null); loadPickings();
+            }}
             onReport={openPickingReport}
             session={session}
           />
@@ -1687,6 +1719,35 @@ export default function Page() {
 
       {/* Print Modal — rendered at root level for z-index */}
       {printReq && <PrintModal req={printReq} onClose={() => setPrintReq(null)} onToast={showToast} />}
+
+      {/* Lock Warning Modal */}
+      {lockWarning && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 9000, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div style={{ background: "#fff", borderRadius: 16, padding: 24, maxWidth: 360, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+            <div style={{ fontSize: 32, textAlign: "center" as const, marginBottom: 12 }}>🔒</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.text, textAlign: "center" as const, marginBottom: 8 }}>
+              BL déjà en cours de préparation
+            </div>
+            <div style={{ fontSize: 14, color: C.textMuted, textAlign: "center" as const, marginBottom: 20, lineHeight: 1.5 }}>
+              <strong style={{ color: C.text }}>{lockWarning.lockedBy}</strong> est en train de préparer{" "}
+              <strong style={{ color: C.text }}>{lockWarning.picking?.name}</strong> depuis{" "}
+              {Math.round((Date.now() - lockWarning.since.getTime()) / 60000)} min.
+            </div>
+            <div style={{ display: "flex", gap: 10, flexDirection: "column" as const }}>
+              <button
+                onClick={() => { setLockWarning(null); }}
+                style={{ padding: "12px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                ← Revenir à la liste
+              </button>
+              <button
+                onClick={() => { const p = lockWarning.picking; setLockWarning(null); openPicking(p, true); }}
+                style={{ padding: "10px 0", background: "none", border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 14, color: C.textMuted, cursor: "pointer", fontFamily: "inherit" }}>
+                Ouvrir quand même
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Shell>
   );
 }

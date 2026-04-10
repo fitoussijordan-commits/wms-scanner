@@ -795,6 +795,52 @@ export async function setConfigParam(session: OdooSession, key: string, value: s
 }
 
 // ============================================
+// VERROU DE PRÉPARATION — évite que 2 personnes préparent le même BL
+// ============================================
+
+const PREP_LOCK_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+interface PrepLock {
+  userName: string;
+  since: string; // ISO timestamp
+}
+
+export async function claimPicking(session: OdooSession, pickingId: number): Promise<void> {
+  const key = `wms_prep_lock_${pickingId}`;
+  const val: PrepLock = { userName: session.name, since: new Date().toISOString() };
+  await setConfigParam(session, key, JSON.stringify(val));
+}
+
+export async function releasePicking(session: OdooSession, pickingId: number): Promise<void> {
+  try {
+    const key = `wms_prep_lock_${pickingId}`;
+    // Seulement libérer si c'est nous qui avons le verrou
+    const raw = await getConfigParam(session, key);
+    if (!raw) return;
+    const lock: PrepLock = JSON.parse(raw);
+    if (lock.userName === session.name) {
+      await setConfigParam(session, key, "");
+    }
+  } catch {}
+}
+
+export async function getPickingLock(session: OdooSession, pickingId: number): Promise<{ lockedBy: string; since: Date } | null> {
+  try {
+    const key = `wms_prep_lock_${pickingId}`;
+    const raw = await getConfigParam(session, key);
+    if (!raw) return null;
+    const lock: PrepLock = JSON.parse(raw);
+    if (!lock.userName) return null;
+    const since = new Date(lock.since);
+    // Verrou expiré ?
+    if (Date.now() - since.getTime() > PREP_LOCK_TTL_MS) return null;
+    return { lockedBy: lock.userName, since };
+  } catch {
+    return null;
+  }
+}
+
+// ============================================
 // COLIS / PUT IN PACK
 // ============================================
 
