@@ -809,6 +809,11 @@ export async function claimPicking(session: OdooSession, pickingId: number): Pro
   const key = `wms_prep_lock_${pickingId}`;
   const val: PrepLock = { userName: session.name, since: new Date().toISOString() };
   await setConfigParam(session, key, JSON.stringify(val));
+  // Écrire user_id sur le picking pour que le responsable affiché dans Odoo
+  // soit le vrai préparateur (et non celui qui a fait la vérif de dispo)
+  try {
+    await write(session, "stock.picking", [pickingId], { user_id: session.uid });
+  } catch {}
 }
 
 export async function releasePicking(session: OdooSession, pickingId: number): Promise<void> {
