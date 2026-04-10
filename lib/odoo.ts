@@ -795,56 +795,6 @@ export async function setConfigParam(session: OdooSession, key: string, value: s
 }
 
 // ============================================
-// VERROU DE PRÉPARATION — évite que 2 personnes préparent le même BL
-// Stratégie : on utilise user_id du picking comme indicateur.
-// ir.config_parameter n'est écrivable que par les admins → pas fiable.
-// ============================================
-
-/**
- * Claim : écrit user_id = session.uid sur le picking.
- * Double effet : marque le vrai préparateur (et non celui qui a fait action_assign)
- * ET sert de verrou visible pour les autres.
- */
-export async function claimPicking(session: OdooSession, pickingId: number): Promise<void> {
-  await write(session, "stock.picking", [pickingId], { user_id: session.uid });
-}
-
-/**
- * Release : pas nécessaire avec cette stratégie —
- * user_id reste sur le préparateur, ce qui est l'info souhaitée.
- */
-export async function releasePicking(_session: OdooSession, _pickingId: number): Promise<void> {
-  // No-op intentionnel : on garde user_id = préparateur après validation
-}
-
-/**
- * Vérifie si un autre utilisateur est assigné au picking.
- * Lit le champ user_id directement sur le picking.
- */
-export async function getPickingLock(
-  session: OdooSession,
-  pickingId: number
-): Promise<{ lockedBy: string; since: Date } | null> {
-  try {
-    const res = await searchRead(session, "stock.picking",
-      [["id", "=", pickingId]],
-      ["user_id", "write_date"],
-      1
-    );
-    if (!res.length) return null;
-    const p = res[0];
-    if (!p.user_id || p.user_id[0] === session.uid) return null;
-    // user_id est quelqu'un d'autre → verrou actif
-    return {
-      lockedBy: p.user_id[1] as string,
-      since: new Date(p.write_date || Date.now()),
-    };
-  } catch {
-    return null;
-  }
-}
-
-// ============================================
 // COLIS / PUT IN PACK
 // ============================================
 
