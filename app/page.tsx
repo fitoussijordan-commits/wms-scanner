@@ -660,13 +660,13 @@ export default function Page() {
     if (!session) return;
     try {
       // Locations used in this picking
-      const locIds = [...new Set(mlines.map((l: any) => l.location_id?.[0]).filter(Boolean))];
+      const locIds = Array.from(new Set(mlines.map((l: any) => l.location_id?.[0]).filter(Boolean)));
       if (locIds.length) {
         const locs = await odoo.searchRead(session, "stock.location", [["id", "in", locIds]], ["id", "name", "complete_name", "barcode"], 200);
         locs.forEach((l: any) => { if (l.barcode) prepLocCache.current.set(l.barcode.toLowerCase(), l); });
       }
       // Lots used in this picking
-      const lotIds = [...new Set(mlines.map((l: any) => l.lot_id?.[0]).filter(Boolean))];
+      const lotIds = Array.from(new Set(mlines.map((l: any) => l.lot_id?.[0]).filter(Boolean)));
       if (lotIds.length) {
         const lots = await odoo.searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "name", "product_id"], 500);
         lots.forEach((l: any) => { prepLotCache.current.set(l.name.toLowerCase(), { lot: l, product: { id: l.product_id?.[0] } }); });
