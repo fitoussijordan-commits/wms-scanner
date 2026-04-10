@@ -243,8 +243,11 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
   const canvasRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const scale = 1;
-  const canvasW = template.widthMM * PX_PER_MM * scale;
+  // Auto-scale : le canvas ne dépasse jamais 300px de large (laisse place au panel propriétés)
+  const MAX_CANVAS_PX = 300;
+  const naturalW = template.widthMM * PX_PER_MM;
+  const scale = Math.min(1, MAX_CANVAS_PX / naturalW);
+  const canvasW = naturalW * scale;
   const canvasH = template.heightMM * PX_PER_MM * scale;
 
   const updateEl = useCallback((id: string, patch: Partial<LabelElement>) => {
@@ -279,7 +282,7 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
     e.preventDefault();
     setSelected(id);
     const el = template.elements.find(el => el.id === id)!;
-    setDragging({ id, ox: e.clientX - mm2px(el.x), oy: e.clientY - mm2px(el.y) });
+    setDragging({ id, ox: e.clientX - mm2px(el.x) * scale, oy: e.clientY - mm2px(el.y) * scale });
   };
 
   const onResizeDown = (e: React.MouseEvent, id: string) => {
@@ -291,16 +294,16 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (dragging) {
-        const x = snap(px2mm(e.clientX - dragging.ox));
-        const y = snap(px2mm(e.clientY - dragging.oy));
+        const x = snap(px2mm((e.clientX - dragging.ox) / scale));
+        const y = snap(px2mm((e.clientY - dragging.oy) / scale));
         updateEl(dragging.id, {
           x: Math.max(0, Math.min(template.widthMM - 2, x)),
           y: Math.max(0, Math.min(template.heightMM - 1, y)),
         });
       }
       if (resizing) {
-        const dw = px2mm(e.clientX - resizing.ox);
-        const dh = px2mm(e.clientY - resizing.oy);
+        const dw = px2mm((e.clientX - resizing.ox) / scale);
+        const dh = px2mm((e.clientY - resizing.oy) / scale);
         updateEl(resizing.id, {
           w: Math.max(2, snap(resizing.ow + dw)),
           h: Math.max(1, snap(resizing.oh + dh)),
