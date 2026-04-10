@@ -605,7 +605,7 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1390,6 +1390,7 @@ export default function Page() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
               {[
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>, label: "Ajustement", onClick: () => setScreen("inventory") },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock") },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels") },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; } },
               ].map((btn, i) => (
@@ -1667,6 +1668,9 @@ export default function Page() {
 
         {screen === "inventory" && session && (
           <InventoryScreen session={session} onBack={goHome} onToast={showToast} />
+        )}
+        {screen === "negativeStock" && session && (
+          <NegativeStockScreen session={session} onBack={goHome} onToast={showToast} />
         )}
 
         {/* HIDDEN: E-shop screen — pas au point
@@ -4263,6 +4267,126 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 // ============================================
 // INVENTORY ADJUSTMENT SCREEN
 // ============================================
+// ============================================================
+// NEGATIVE STOCK SCREEN
+// ============================================================
+function NegativeStockScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+  const [groups, setGroups] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [corrections, setCorrections] = useState<Record<number, string>>({}); // quantId → new qty string
+  const [saving, setSaving] = useState<Record<number, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+
+  const load = async () => {
+    setLoading(true); setError("");
+    try {
+      const g = await odoo.getNegativeStockQuants(session);
+      setGroups(g);
+      // Expand all by default if few locations
+      if (g.length <= 5) {
+        const all: Record<number, boolean> = {};
+        g.forEach((gr: any) => { all[gr.locationId] = true; });
+        setExpanded(all);
+      }
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const totalCount = groups.reduce((acc, g) => acc + g.quants.length, 0);
+
+  const applyCorrection = async (quant: any) => {
+    const raw = corrections[quant.id];
+    if (raw === undefined || raw === "") return;
+    const newQty = parseFloat(raw);
+    if (isNaN(newQty)) return;
+    setSaving(prev => ({ ...prev, [quant.id]: true }));
+    try {
+      await odoo.applyInventoryAdjustment(session, quant.id, newQty);
+      onToast(`✅ Corrigé : ${quant.product_id[1]}`);
+      setCorrections(prev => { const n = { ...prev }; delete n[quant.id]; return n; });
+      await load(); // Refresh
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setSaving(prev => { const n = { ...prev }; delete n[quant.id]; return n; });
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>Stock négatif</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>{loading ? "Chargement…" : `${totalCount} ligne(s) sur ${groups.length} emplacement(s)`}</div>
+        </div>
+        <button onClick={load} style={{ marginLeft: "auto", background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, color: C.textMuted }}>
+          ↺ Refresh
+        </button>
+      </div>
+
+      {error && <Alert type="error">{error}</Alert>}
+
+      {!loading && groups.length === 0 && (
+        <Alert type="success">Aucun stock négatif 🎉</Alert>
+      )}
+
+      {loading && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement…</div>}
+
+      {groups.map((group: any) => (
+        <div key={group.locationId} style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 10, overflow: "hidden", boxShadow: C.shadow }}>
+          {/* Header emplacement */}
+          <button
+            onClick={() => setExpanded(prev => ({ ...prev, [group.locationId]: !prev[group.locationId] }))}
+            style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: "#fef2f2", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#991b1b" }}>{group.locationName}</div>
+              <div style={{ fontSize: 11, color: "#b91c1c" }}>{group.quants.length} produit(s) en négatif</div>
+            </div>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" style={{ transform: expanded[group.locationId] ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .2s" }}><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+
+          {/* Lignes produits */}
+          {expanded[group.locationId] && (
+            <div style={{ padding: "8px 14px 12px" }}>
+              {group.quants.map((q: any) => (
+                <div key={q.id} style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10, marginTop: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 2 }}>{q.product_id[1]}</div>
+                  {q.lot_id && <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>Lot : {q.lot_id[1]}</div>}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ padding: "4px 10px", background: "#fef2f2", borderRadius: 6, fontSize: 13, fontWeight: 700, color: "#dc2626", minWidth: 60, textAlign: "center" as const }}>
+                      {q.quantity}
+                    </div>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+                    <input
+                      type="number"
+                      placeholder="Qté corrigée"
+                      value={corrections[q.id] ?? ""}
+                      onChange={e => setCorrections(prev => ({ ...prev, [q.id]: e.target.value }))}
+                      style={{ flex: 1, padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", textAlign: "center" as const }}
+                    />
+                    <button
+                      onClick={() => applyCorrection(q)}
+                      disabled={saving[q.id] || corrections[q.id] === undefined || corrections[q.id] === ""}
+                      style={{ padding: "6px 14px", background: corrections[q.id] !== undefined && corrections[q.id] !== "" ? C.green : C.border, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: saving[q.id] ? 0.6 : 1 }}
+                    >
+                      {saving[q.id] ? "…" : "✓"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");

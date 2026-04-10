@@ -724,6 +724,25 @@ export async function createInventoryAdjustment(
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 }
 
+// Tous les emplacements avec stock négatif (pour corrections)
+export async function getNegativeStockQuants(session: OdooSession): Promise<any[]> {
+  const quants = await searchRead(
+    session, "stock.quant",
+    [["quantity", "<", 0], ["location_id.usage", "=", "internal"]],
+    ["id", "product_id", "location_id", "lot_id", "quantity", "reserved_quantity"],
+    500
+  );
+  // Grouper par emplacement
+  const byLoc: Record<number, { locationId: number; locationName: string; quants: any[] }> = {};
+  for (const q of quants) {
+    const locId = q.location_id[0];
+    const locName = q.location_id[1];
+    if (!byLoc[locId]) byLoc[locId] = { locationId: locId, locationName: locName, quants: [] };
+    byLoc[locId].quants.push(q);
+  }
+  return Object.values(byLoc).sort((a, b) => a.locationName.localeCompare(b.locationName));
+}
+
 // ============================================
 // CONFIG PARAMETERS (shared settings via Odoo)
 // ============================================
