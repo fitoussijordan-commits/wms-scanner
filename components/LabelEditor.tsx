@@ -210,7 +210,7 @@ function PropsPanel({ el, onChange, onDelete }: { el: LabelElement; onChange: (e
       {el.type === "text" && <>
         {inp("Texte", el.text || "", v => onChange({ ...el, text: v }))}
         {row2(
-          numInp("Taille (pt)", el.fontSize || 12, v => onChange({ ...el, fontSize: Math.max(6, Math.min(72, v)) })),
+          numInp("Taille (pt)", el.fontSize || 12, v => onChange({ ...el, fontSize: Math.max(6, Math.min(288, v)) })),
           <div>
             <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, textTransform: "uppercase" as const, marginBottom: 3 }}>Alignement</div>
             <select value={el.align || "left"} onChange={e => onChange({ ...el, align: e.target.value as any })}
