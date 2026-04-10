@@ -649,6 +649,31 @@ export default function Page() {
   const pickingMoveLinesRef = useRef<any[]>([]);
   const selectedPickingRef = useRef<any>(null);
 
+  // ── Prep speed cache ──────────────────────────────────────────────────────
+  // Pre-loaded at picking open so scan lookups are local (zero Odoo call)
+  const prepLocCache = useRef<Map<string, any>>(new Map()); // barcode.lower → location obj
+  const prepLotCache = useRef<Map<string, any>>(new Map()); // lot name.lower → lot obj
+  // Debounce ref for background refresh after optimistic writes
+  const bgRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const preCachePrepData = async (mlines: any[]) => {
+    if (!session) return;
+    try {
+      // Locations used in this picking
+      const locIds = [...new Set(mlines.map((l: any) => l.location_id?.[0]).filter(Boolean))];
+      if (locIds.length) {
+        const locs = await odoo.searchRead(session, "stock.location", [["id", "in", locIds]], ["id", "name", "complete_name", "barcode"], 200);
+        locs.forEach((l: any) => { if (l.barcode) prepLocCache.current.set(l.barcode.toLowerCase(), l); });
+      }
+      // Lots used in this picking
+      const lotIds = [...new Set(mlines.map((l: any) => l.lot_id?.[0]).filter(Boolean))];
+      if (lotIds.length) {
+        const lots = await odoo.searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "name", "product_id"], 500);
+        lots.forEach((l: any) => { prepLotCache.current.set(l.name.toLowerCase(), { lot: l, product: { id: l.product_id?.[0] } }); });
+      }
+    } catch {}
+  };
+
   // Wrapper: updates both state and ref immediately (no async useEffect delay)
   const updatePrepStep = (val: typeof prepStep | ((prev: typeof prepStep) => typeof prepStep)) => {
     const newVal = typeof val === "function" ? val(prepStepRef.current) : val;
@@ -937,6 +962,9 @@ export default function Page() {
       mlines.forEach((ml: any) => { if (ml.qty_done > 0) done.add(ml.id); });
       setPrepScanned(done);
       setScreen("prepDetail");
+      // Pre-cache locations + lots for instant scan lookup
+      prepLocCache.current.clear(); prepLotCache.current.clear();
+      preCachePrepData(mlines);
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
@@ -965,6 +993,9 @@ export default function Page() {
       allMlines.forEach((ml: any) => { if (ml.qty_done > 0) done.add(ml.id); });
       setPrepScanned(done);
       setScreen("prepDetail");
+      // Pre-cache locations + lots for instant scan lookup
+      prepLocCache.current.clear(); prepLotCache.current.clear();
+      preCachePrepData(allMlines);
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
@@ -989,35 +1020,57 @@ export default function Page() {
     if (!code || !session || !currentPicking) return;
     setError("");
     try {
-      // Optimisation : requête ciblée selon le step (au lieu de 8 requêtes smartScan)
       let r: any;
       if (!currentStep) {
-        // Step 1 : on attend un emplacement
-        const locs = await odoo.searchRead(session, "stock.location",
-          [["barcode", "=", code.trim()]], ["id", "name", "complete_name", "barcode"], 1);
-        r = locs.length ? { type: "location", data: locs[0] }
-          : (await odoo.searchRead(session, "stock.location",
-              [["barcode", "ilike", code.trim()]], ["id", "name", "complete_name", "barcode"], 1))
-            .map((l: any) => ({ type: "location", data: l }))[0]
-            || { type: "not_found", code };
-      } else {
-        // Step 2 : on attend un lot
-        const lots = await odoo.searchRead(session, "stock.lot",
-          [["name", "=", code.trim()]], ["id", "name", "product_id"], 1);
-        if (lots.length) {
-          r = { type: "lot", data: { lot: lots[0], product: { id: lots[0].product_id?.[0] } } };
+        // ── STEP 1 : emplacement ─────────────────────────────────────────────
+        // Cache hit (instant, zéro réseau)
+        const cached = prepLocCache.current.get(code.trim().toLowerCase());
+        if (cached) {
+          r = { type: "location", data: cached };
         } else {
-          const lotsI = await odoo.searchRead(session, "stock.lot",
-            [["name", "ilike", code.trim()]], ["id", "name", "product_id"], 1);
-          r = lotsI.length
-            ? { type: "lot", data: { lot: lotsI[0], product: { id: lotsI[0].product_id?.[0] } } }
-            : { type: "not_found", code };
+          // Fallback Odoo
+          const locs = await odoo.searchRead(session, "stock.location",
+            [["barcode", "=", code.trim()]], ["id", "name", "complete_name", "barcode"], 1);
+          r = locs.length ? { type: "location", data: locs[0] }
+            : (await odoo.searchRead(session, "stock.location",
+                [["barcode", "ilike", code.trim()]], ["id", "name", "complete_name", "barcode"], 1))
+              .map((l: any) => ({ type: "location", data: l }))[0]
+              || { type: "not_found", code };
+          // Add to cache for next scan
+          if (r?.type === "location") prepLocCache.current.set(code.trim().toLowerCase(), r.data);
+        }
+      } else {
+        // ── STEP 2 : lot/produit ─────────────────────────────────────────────
+        // Cache hit
+        const cachedLot = prepLotCache.current.get(code.trim().toLowerCase());
+        if (cachedLot) {
+          r = { type: "lot", data: cachedLot };
+        } else {
+          // Check if it's a location barcode (re-scan)
+          const cachedLoc = prepLocCache.current.get(code.trim().toLowerCase());
+          if (cachedLoc) { r = { type: "location", data: cachedLoc }; }
+          else {
+            // Fallback Odoo
+            const lots = await odoo.searchRead(session, "stock.lot",
+              [["name", "=", code.trim()]], ["id", "name", "product_id"], 1);
+            if (lots.length) {
+              r = { type: "lot", data: { lot: lots[0], product: { id: lots[0].product_id?.[0] } } };
+              prepLotCache.current.set(code.trim().toLowerCase(), r.data);
+            } else {
+              const lotsI = await odoo.searchRead(session, "stock.lot",
+                [["name", "ilike", code.trim()]], ["id", "name", "product_id"], 1);
+              if (lotsI.length) {
+                r = { type: "lot", data: { lot: lotsI[0], product: { id: lotsI[0].product_id?.[0] } } };
+                prepLotCache.current.set(code.trim().toLowerCase(), r.data);
+              } else { r = { type: "not_found", code }; }
+            }
+          }
         }
       }
-      // STEP 1: No active step → expect a location scan
+
+      // ── STEP 1 : traitement emplacement ──────────────────────────────────
       if (!currentStep) {
         if (r.type === "location") {
-          // Find move lines at this location that still need qty
           const locId = r.data.id;
           const pending = currentLines.filter((ml: any) =>
             ml.location_id && ml.location_id[0] === locId && (ml.qty_done || 0) < (ml.reserved_uom_qty || 0)
@@ -1027,7 +1080,6 @@ export default function Page() {
             flashScan("err");
             return;
           }
-          // Lock on first pending line at this location
           const ml = pending[0];
           const remaining = (ml.reserved_uom_qty || 0) - (ml.qty_done || 0);
           updatePrepStep({
@@ -1044,12 +1096,10 @@ export default function Page() {
         return;
       }
 
-      // STEP 2: Location already scanned → expect product or lot
-      // Also handle raw code as lot name if smartScan returns nothing useful
+      // ── STEP 2 : traitement lot/produit ──────────────────────────────────
       let productId: number | null = null;
       let lotId: number | null = null;
       let lotName: string | null = null;
-      let scannedCode = code;
 
       if (r.type === "product") {
         productId = r.data.id;
@@ -1058,24 +1108,20 @@ export default function Page() {
         lotId = r.data.lot.id;
         lotName = r.data.lot.name;
       } else if (r.type === "location") {
-        // Re-scanning a location while step is active → reset step and re-process
         updatePrepStep(null);
         doPrepScan(code);
         return;
       } else {
-        // Unknown barcode — treat as raw lot name (common on carton labels)
+        // Dernier recours : lot brut
         const rawLots = await odoo.searchRead(session, "stock.lot", [["name", "=", code.trim()]], ["id", "name", "product_id"], 1);
         if (rawLots.length) {
-          lotId = rawLots[0].id;
-          lotName = rawLots[0].name;
-          productId = rawLots[0].product_id?.[0] || null;
+          lotId = rawLots[0].id; lotName = rawLots[0].name; productId = rawLots[0].product_id?.[0] || null;
+          prepLotCache.current.set(code.trim().toLowerCase(), { lot: rawLots[0], product: { id: productId } });
         } else {
-          // Last resort: try ilike (partial match)
           const rawLotsLike = await odoo.searchRead(session, "stock.lot", [["name", "ilike", code.trim()]], ["id", "name", "product_id"], 5);
           if (rawLotsLike.length === 1) {
-            lotId = rawLotsLike[0].id;
-            lotName = rawLotsLike[0].name;
-            productId = rawLotsLike[0].product_id?.[0] || null;
+            lotId = rawLotsLike[0].id; lotName = rawLotsLike[0].name; productId = rawLotsLike[0].product_id?.[0] || null;
+            prepLotCache.current.set(code.trim().toLowerCase(), { lot: rawLotsLike[0], product: { id: productId } });
           } else {
             showToast(`⚠ Lot "${code}" introuvable`);
             flashScan("err");
@@ -1084,10 +1130,8 @@ export default function Page() {
         }
       }
 
-      // Find the move line — by lineId first, then by product+location if not found
       let ml = currentLines.find((m: any) => m.id === currentStep!.lineId);
       if (!ml && productId) {
-        // Fallback: find by product at this location with qty remaining
         ml = currentLines.find((m: any) =>
           m.location_id?.[0] === currentStep!.locId &&
           m.product_id[0] === productId &&
@@ -1095,7 +1139,6 @@ export default function Page() {
         );
       }
       if (!ml) {
-        // Last fallback: any line at this location with qty remaining
         ml = currentLines.find((m: any) =>
           m.location_id?.[0] === currentStep!.locId &&
           (m.qty_done || 0) < (m.reserved_uom_qty || 0)
@@ -1103,36 +1146,34 @@ export default function Page() {
       }
       if (!ml) { showToast("Ligne introuvable à cet emplacement"); flashScan("err"); return; }
 
-      // Check if product matches (only if we got product info from scan)
       if (productId && ml.product_id[0] !== productId) {
         showToast(`⚠ Mauvais produit — attendu: ${ml.product_id[1]}`);
         flashScan("err");
         return;
       }
 
-      // Lot différent du lot attendu → warning orange mais on accepte
       if (lotName && ml.lot_id && ml.lot_id[1] !== lotName) {
         showToast(`🟠 Lot différent: ${lotName} (attendu ${ml.lot_id[1]}) — accepté`);
-        // Use the scanned lot id for the write
       }
 
-      // Increment qty_done by 1
       const newQty = (ml.qty_done || 0) + 1;
-      await odoo.setMoveLineQtyDone(session, ml.id, newQty, lotId || ml.lot_id?.[0] || null);
+      const remaining = (ml.reserved_uom_qty || 0) - newQty;
 
-      // Refresh
-      const updatedLines = await refreshGroupMoveLines(currentPicking);
-      setPickingMoveLines(updatedLines);
+      // ── Mise à jour optimiste (instantanée) ──────────────────────────────
+      const optimisticLines = currentLines.map((m: any) =>
+        m.id === ml.id ? { ...m, qty_done: newQty } : m
+      );
+      pickingMoveLinesRef.current = optimisticLines;
+      setPickingMoveLines(optimisticLines);
 
       if (newQty >= (ml.reserved_uom_qty || 0)) {
         setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(ml.id); return n; });
       }
 
-      const remaining = (ml.reserved_uom_qty || 0) - newQty;
       flashScan("ok");
       showToast(`✓ ${lotName || ml.product_id[1]} · ${newQty}/${ml.reserved_uom_qty || 0}`);
 
-      const morePending = updatedLines.filter((m: any) =>
+      const morePending = optimisticLines.filter((m: any) =>
         m.location_id && m.location_id[0] === currentStep!.locId && (m.qty_done || 0) < (m.reserved_uom_qty || 0)
       );
       if (morePending.length === 0) {
@@ -1145,6 +1186,27 @@ export default function Page() {
       } else {
         updatePrepStep(prev => prev ? { ...prev, lineId: ml.id, remaining } : null);
       }
+
+      // ── Écriture Odoo en arrière-plan (non bloquant) ─────────────────────
+      const writeQty = newQty;
+      const writeLotId = lotId || ml.lot_id?.[0] || null;
+      odoo.setMoveLineQtyDone(session, ml.id, writeQty, writeLotId).then(() => {
+        // Refresh silencieux 3s après le dernier scan pour resync Odoo → local
+        if (bgRefreshTimer.current) clearTimeout(bgRefreshTimer.current);
+        bgRefreshTimer.current = setTimeout(async () => {
+          try {
+            const fresh = await refreshGroupMoveLines(selectedPickingRef.current);
+            if (fresh.length) {
+              pickingMoveLinesRef.current = fresh;
+              setPickingMoveLines(fresh);
+            }
+          } catch {}
+        }, 3000);
+      }).catch((e: any) => {
+        setError(`Erreur sync Odoo: ${e.message}`);
+        flashScan("err");
+      });
+
     } catch (e: any) { setError(e.message); flashScan("err"); }
   };
 
