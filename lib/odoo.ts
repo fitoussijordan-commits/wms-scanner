@@ -868,36 +868,7 @@ export async function addPackageAndSendToShipper(
     shipping_weight: weightKg,
   }) as number;
 
-  // 3. Récupérer une move line existante pour réutiliser ses références
-  const existingLines = await searchRead(
-    session, "stock.move.line",
-    [["picking_id", "=", pickingId]],
-    ["id", "product_id", "product_uom_id", "move_id", "location_id", "location_dest_id"],
-    1
-  );
-
-  // 4. Créer une move line avec result_package_id = nouveau colis
-  //    qty_done=0 pour ne pas modifier le stock, juste exposer le package
-  let moveLineId: number | null = null;
-  if (existingLines.length > 0) {
-    const ref = existingLines[0];
-    try {
-      moveLineId = await create(session, "stock.move.line", {
-        picking_id: pickingId,
-        move_id: ref.move_id?.[0] || false,
-        product_id: ref.product_id[0],
-        product_uom_id: ref.product_uom_id?.[0] || 1,
-        qty_done: 0,
-        location_id: ref.location_id[0],
-        location_dest_id: ref.location_dest_id[0],
-        result_package_id: packageId,
-      }) as number;
-    } catch {
-      // Odoo peut refuser sur un picking done — on tente quand même send_to_shipper
-    }
-  }
-
-  // 5. Mettre à jour le shipping_weight et le nombre de colis sur le picking
+  // 3. Mettre à jour le shipping_weight et le nombre de colis sur le picking
   //    pour que le transporteur envoie le bon nombre de labels
   try {
     const picking = await searchRead(session, "stock.picking",
@@ -917,17 +888,10 @@ export async function addPackageAndSendToShipper(
     // Champs peuvent être readonly — on continue
   }
 
-  // 6. Appeler send_to_shipper
+  // 4. Appeler send_to_shipper
   await callMethod(session, "stock.picking", "send_to_shipper", [[pickingId]]);
 
-  // 7. Nettoyer la move line fantôme (optionnel — évite de polluer l'historique)
-  if (moveLineId !== null) {
-    try {
-      await callMethod(session, "stock.move.line", "unlink", [[moveLineId]]);
-    } catch {}
-  }
-
-  // 8. Attendre puis récupérer les nouvelles pièces jointes
+  // 5. Attendre puis récupérer les nouvelles pièces jointes
   await new Promise(resolve => setTimeout(resolve, 2000));
   const attachmentsAfter = await searchRead(
     session, "ir.attachment",
