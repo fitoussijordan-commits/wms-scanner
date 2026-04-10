@@ -841,21 +841,21 @@ export async function setPackageWeight(session: OdooSession, packageId: number, 
 
 /**
  * Crée un nouveau colis (stock.quant.package) avec le poids donné,
- * l'associe à un picking validé, appelle send_to_shipper pour générer
- * une nouvelle étiquette TNT, puis retourne les nouvelles pièces jointes.
+ * l'associe à un picking validé via une move line (result_package_id),
+ * appelle send_to_shipper pour générer une nouvelle étiquette TNT.
  *
- * Stratégie : sur un picking validé (state=done) on ne peut plus modifier
- * les move lines. On crée un package standalone avec le poids, puis on
- * appelle send_to_shipper en passant le package dans le contexte.
- * Odoo génère une étiquette pour chaque package listé dans package_ids
- * du contexte.
+ * Stratégie : `package_ids` sur stock.picking est un champ calculé —
+ * on ne peut pas l'écrire directement. La seule façon de lier un package
+ * à un picking est via stock.move.line.result_package_id. On crée donc
+ * une ligne "fantôme" (qty_done=0) sur une move existante pour exposer
+ * le nouveau colis au transporteur.
  */
 export async function addPackageAndSendToShipper(
   session: OdooSession,
   pickingId: number,
   weightKg: number
 ): Promise<{ packageId: number; attachments: any[] }> {
-  // 1. Récupérer les pièces jointes existantes avant envoi
+  // 1. Snapshot des pièces jointes avant
   const attachmentsBefore = await searchRead(
     session, "ir.attachment",
     [["res_model", "=", "stock.picking"], ["res_id", "=", pickingId], ["mimetype", "ilike", "pdf"]],
@@ -868,28 +868,67 @@ export async function addPackageAndSendToShipper(
     shipping_weight: weightKg,
   }) as number;
 
-  // 3. Lier le package au picking via write sur stock.picking
-  //    (Odoo accepte d'écrire package_ids sur un done picking pour l'expédition)
-  try {
-    await write(session, "stock.picking", [pickingId], {
-      package_ids: [[4, packageId]],
-    });
-  } catch {
-    // Certaines versions d'Odoo n'acceptent pas ça — on continue quand même
+  // 3. Récupérer une move line existante pour réutiliser ses références
+  const existingLines = await searchRead(
+    session, "stock.move.line",
+    [["picking_id", "=", pickingId]],
+    ["id", "product_id", "product_uom_id", "move_id", "location_id", "location_dest_id"],
+    1
+  );
+
+  // 4. Créer une move line avec result_package_id = nouveau colis
+  //    qty_done=0 pour ne pas modifier le stock, juste exposer le package
+  let moveLineId: number | null = null;
+  if (existingLines.length > 0) {
+    const ref = existingLines[0];
+    try {
+      moveLineId = await create(session, "stock.move.line", {
+        picking_id: pickingId,
+        move_id: ref.move_id?.[0] || false,
+        product_id: ref.product_id[0],
+        product_uom_id: ref.product_uom_id?.[0] || 1,
+        qty_done: 0,
+        location_id: ref.location_id[0],
+        location_dest_id: ref.location_dest_id[0],
+        result_package_id: packageId,
+      }) as number;
+    } catch {
+      // Odoo peut refuser sur un picking done — on tente quand même send_to_shipper
+    }
   }
 
-  // 4. Appeler send_to_shipper avec le package dans le contexte
-  await call(session, "/web/dataset/call_kw", {
-    model: "stock.picking",
-    method: "send_to_shipper",
-    args: [[pickingId]],
-    kwargs: {
-      context: { default_package_id: packageId, force_package_id: packageId },
-    },
-  });
+  // 5. Mettre à jour le shipping_weight et le nombre de colis sur le picking
+  //    pour que le transporteur envoie le bon nombre de labels
+  try {
+    const picking = await searchRead(session, "stock.picking",
+      [["id", "=", pickingId]],
+      ["shipping_weight", "number_of_packages"],
+      1
+    );
+    if (picking.length > 0) {
+      const currentWeight = picking[0].shipping_weight || 0;
+      const currentPkgs = picking[0].number_of_packages || 1;
+      await write(session, "stock.picking", [pickingId], {
+        shipping_weight: currentWeight + weightKg,
+        number_of_packages: currentPkgs + 1,
+      });
+    }
+  } catch {
+    // Champs peuvent être readonly — on continue
+  }
 
-  // 5. Attendre un peu puis récupérer les nouvelles pièces jointes
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  // 6. Appeler send_to_shipper
+  await callMethod(session, "stock.picking", "send_to_shipper", [[pickingId]]);
+
+  // 7. Nettoyer la move line fantôme (optionnel — évite de polluer l'historique)
+  if (moveLineId !== null) {
+    try {
+      await callMethod(session, "stock.move.line", "unlink", [[moveLineId]]);
+    } catch {}
+  }
+
+  // 8. Attendre puis récupérer les nouvelles pièces jointes
+  await new Promise(resolve => setTimeout(resolve, 2000));
   const attachmentsAfter = await searchRead(
     session, "ir.attachment",
     [["res_model", "=", "stock.picking"], ["res_id", "=", pickingId], ["mimetype", "ilike", "pdf"]],
@@ -898,5 +937,10 @@ export async function addPackageAndSendToShipper(
   );
   const newAttachments = attachmentsAfter.filter((a: any) => !existingIds.has(a.id));
 
-  return { packageId, attachments: newAttachments };
+  // Si aucune nouvelle pièce jointe détectée (certains modules écrasent l'existante),
+  // retourner toutes les pièces jointes actuelles pour permettre l'impression
+  return {
+    packageId,
+    attachments: newAttachments.length > 0 ? newAttachments : attachmentsAfter,
+  };
 }
