@@ -168,6 +168,28 @@ function ElementPreview({ el, scale }: { el: LabelElement; scale: number }) {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// NumInput — état local pour éviter que la contrainte min/max
+// n'écrase la saisie en cours (ex: taper "100" ne voit pas "6" s'afficher)
+// ─────────────────────────────────────────────────────────────────
+function NumInput({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
+  const [local, setLocal] = useState(String(value));
+  // Sync si la valeur externe change (ex: reset de l'élément)
+  useEffect(() => { setLocal(String(value)); }, [value]);
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, textTransform: "uppercase" as const, marginBottom: 3 }}>{label}</div>
+      <input
+        type="number"
+        value={local}
+        onChange={e => setLocal(e.target.value)}
+        onBlur={() => { const n = Number(local); if (!isNaN(n)) onChange(n); }}
+        style={{ width: "100%", padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "inherit", boxSizing: "border-box" as const }}
+      />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Properties panel
 // ─────────────────────────────────────────────────────────────────
 function PropsPanel({ el, onChange, onDelete }: { el: LabelElement; onChange: (e: LabelElement) => void; onDelete: () => void }) {
@@ -184,11 +206,7 @@ function PropsPanel({ el, onChange, onDelete }: { el: LabelElement; onChange: (e
   );
 
   const numInp = (label: string, val: number, onCh: (v: number) => void) => (
-    <div>
-      <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, textTransform: "uppercase" as const, marginBottom: 3 }}>{label}</div>
-      <input type="number" value={val} onChange={e => onCh(Number(e.target.value))}
-        style={{ width: "100%", padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "inherit", boxSizing: "border-box" as const }} />
-    </div>
+    <NumInput label={label} value={val} onChange={onCh} />
   );
 
   return (
