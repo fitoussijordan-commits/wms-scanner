@@ -2052,13 +2052,6 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
       setLabelTemplate(prev => ({ ...prev, widthMM: labelSize.widthMM, heightMM: labelSize.heightMM }));
     }
   }, [labelSize, tab]);
-
-  // Sync canvas size when label size changes
-  useEffect(() => {
-    if (tab === "blank") {
-      setLabelTemplate(prev => ({ ...prev, widthMM: labelSize.widthMM, heightMM: labelSize.heightMM }));
-    }
-  }, [labelSize, tab]);
   const [qty, setQty] = useState(1);
   const [loading, setLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -2325,8 +2318,8 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
         {tab === "blank" && (
           <div>
             <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
-              <button onClick={() => { const w = labelSize.widthMM; const h = labelSize.heightMM; if (w < h) saveSize({ widthMM: h, heightMM: w }); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${labelSize.widthMM > labelSize.heightMM ? C.text : C.border}`, background: labelSize.widthMM > labelSize.heightMM ? C.bg : C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: labelSize.widthMM > labelSize.heightMM ? C.text : C.textMuted }}>↔ Paysage</button>
-              <button onClick={() => { const w = labelSize.widthMM; const h = labelSize.heightMM; if (w > h) saveSize({ widthMM: h, heightMM: w }); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${labelSize.widthMM <= labelSize.heightMM ? C.text : C.border}`, background: labelSize.widthMM <= labelSize.heightMM ? C.bg : C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: labelSize.widthMM <= labelSize.heightMM ? C.text : C.textMuted }}>↕ Portrait</button>
+              <button onClick={() => { const big = Math.max(labelSize.widthMM, labelSize.heightMM); const small = Math.min(labelSize.widthMM, labelSize.heightMM); const s = { widthMM: big, heightMM: small }; saveSize(s); setLabelTemplate(prev => ({ ...prev, widthMM: big, heightMM: small })); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${labelSize.widthMM >= labelSize.heightMM ? C.text : C.border}`, background: labelSize.widthMM >= labelSize.heightMM ? C.bg : C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: labelSize.widthMM >= labelSize.heightMM ? C.text : C.textMuted }}>↔ Paysage</button>
+              <button onClick={() => { const big = Math.max(labelSize.widthMM, labelSize.heightMM); const small = Math.min(labelSize.widthMM, labelSize.heightMM); const s = { widthMM: small, heightMM: big }; saveSize(s); setLabelTemplate(prev => ({ ...prev, widthMM: small, heightMM: big })); }} style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${labelSize.widthMM < labelSize.heightMM ? C.text : C.border}`, background: labelSize.widthMM < labelSize.heightMM ? C.bg : C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: labelSize.widthMM < labelSize.heightMM ? C.text : C.textMuted }}>↕ Portrait</button>
             </div>
             <LabelEditor
               template={labelTemplate}
