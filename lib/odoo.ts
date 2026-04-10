@@ -796,50 +796,49 @@ export async function setConfigParam(session: OdooSession, key: string, value: s
 
 // ============================================
 // VERROU DE PRÉPARATION — évite que 2 personnes préparent le même BL
+// Stratégie : on utilise user_id du picking comme indicateur.
+// ir.config_parameter n'est écrivable que par les admins → pas fiable.
 // ============================================
 
-const PREP_LOCK_TTL_MS = 30 * 60 * 1000; // 30 minutes
-
-interface PrepLock {
-  userName: string;
-  since: string; // ISO timestamp
-}
-
+/**
+ * Claim : écrit user_id = session.uid sur le picking.
+ * Double effet : marque le vrai préparateur (et non celui qui a fait action_assign)
+ * ET sert de verrou visible pour les autres.
+ */
 export async function claimPicking(session: OdooSession, pickingId: number): Promise<void> {
-  const key = `wms_prep_lock_${pickingId}`;
-  const val: PrepLock = { userName: session.name, since: new Date().toISOString() };
-  await setConfigParam(session, key, JSON.stringify(val));
-  // Écrire user_id sur le picking pour que le responsable affiché dans Odoo
-  // soit le vrai préparateur (et non celui qui a fait la vérif de dispo)
-  try {
-    await write(session, "stock.picking", [pickingId], { user_id: session.uid });
-  } catch {}
+  await write(session, "stock.picking", [pickingId], { user_id: session.uid });
 }
 
-export async function releasePicking(session: OdooSession, pickingId: number): Promise<void> {
-  try {
-    const key = `wms_prep_lock_${pickingId}`;
-    // Seulement libérer si c'est nous qui avons le verrou
-    const raw = await getConfigParam(session, key);
-    if (!raw) return;
-    const lock: PrepLock = JSON.parse(raw);
-    if (lock.userName === session.name) {
-      await setConfigParam(session, key, "");
-    }
-  } catch {}
+/**
+ * Release : pas nécessaire avec cette stratégie —
+ * user_id reste sur le préparateur, ce qui est l'info souhaitée.
+ */
+export async function releasePicking(_session: OdooSession, _pickingId: number): Promise<void> {
+  // No-op intentionnel : on garde user_id = préparateur après validation
 }
 
-export async function getPickingLock(session: OdooSession, pickingId: number): Promise<{ lockedBy: string; since: Date } | null> {
+/**
+ * Vérifie si un autre utilisateur est assigné au picking.
+ * Lit le champ user_id directement sur le picking.
+ */
+export async function getPickingLock(
+  session: OdooSession,
+  pickingId: number
+): Promise<{ lockedBy: string; since: Date } | null> {
   try {
-    const key = `wms_prep_lock_${pickingId}`;
-    const raw = await getConfigParam(session, key);
-    if (!raw) return null;
-    const lock: PrepLock = JSON.parse(raw);
-    if (!lock.userName) return null;
-    const since = new Date(lock.since);
-    // Verrou expiré ?
-    if (Date.now() - since.getTime() > PREP_LOCK_TTL_MS) return null;
-    return { lockedBy: lock.userName, since };
+    const res = await searchRead(session, "stock.picking",
+      [["id", "=", pickingId]],
+      ["user_id", "write_date"],
+      1
+    );
+    if (!res.length) return null;
+    const p = res[0];
+    if (!p.user_id || p.user_id[0] === session.uid) return null;
+    // user_id est quelqu'un d'autre → verrou actif
+    return {
+      lockedBy: p.user_id[1] as string,
+      since: new Date(p.write_date || Date.now()),
+    };
   } catch {
     return null;
   }
