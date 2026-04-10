@@ -5526,6 +5526,45 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
     if (prepStep) setLocOk(true);
   }, [prepStep?.locId]);
 
+  // ── Charger les colis existants depuis Odoo au montage ──
+  useEffect(() => {
+    if (!session || !picking?.id) return;
+    odoo.getPickingPackages(session, picking.id).then(pkgs => {
+      if (!pkgs.length) return;
+      const loaded = pkgs.map((pkg: any, i: number) => ({
+        id: i + 1,
+        odooPackageId: pkg.id,
+        name: pkg.name,
+        lines: pkg.lines.map((l: any) => l.id),
+        weight: pkg.shipping_weight || pkg.pack_weight || null,
+        closed: true,
+      }));
+      setColis(loaded);
+      setCurrentColisId(null);
+    }).catch(() => {});
+  }, [picking?.id]);
+
+  // ── Auto-assigner les lignes complétées au colis ouvert ──
+  const prevDoneRef = useRef<Set<number>>(new Set());
+  const currentColisIdRef = useRef<number | null>(null);
+  useEffect(() => { currentColisIdRef.current = currentColisId; }, [currentColisId]);
+
+  useEffect(() => {
+    const cid = currentColisIdRef.current;
+    if (cid === null) return; // Pas de colis ouvert
+    const nowDone = new Set(
+      allLines.filter((ml: any) => (qtyOverrides?.[ml.id] ?? ml.qty_done ?? 0) >= (ml.reserved_uom_qty || 1)).map((ml: any) => ml.id)
+    );
+    const newlyDone = allLines.filter((ml: any) => nowDone.has(ml.id) && !prevDoneRef.current.has(ml.id));
+    if (newlyDone.length > 0) {
+      setColis(prev => prev.map(c => c.id === cid ? {
+        ...c,
+        lines: Array.from(new Set([...c.lines, ...newlyDone.map((ml: any) => ml.id)])),
+      } : c));
+    }
+    prevDoneRef.current = nowDone;
+  }, [moveLines, qtyOverrides]);
+
   // ── Colis helpers ──
   const openNewColis = async () => {
     if (!session) return;
