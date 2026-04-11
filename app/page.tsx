@@ -1349,7 +1349,7 @@ export default function Page() {
 
   return (
     <Shell toast={toast} flash={scanFlash}>
-      <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} />
+      <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} />
 
       <main style={{ maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px" }}>
 
@@ -1390,12 +1390,12 @@ export default function Page() {
             <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginTop: 20, marginBottom: 10, paddingLeft: 2 }}>Outils</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
               {[
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>, label: "Ajustement", onClick: () => setScreen("inventory") },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock") },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel") },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels") },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; } },
-              ].map((btn, i) => (
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>, label: "Ajustement", onClick: () => setScreen("inventory"), admin: false },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: true },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels"), admin: false },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; }, admin: true },
+              ].filter(btn => !btn.admin || (session && odoo.isAdmin(session))).map((btn, i) => (
                 <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 6, padding: "14px 6px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}>
                   {btn.icon}
                   <span style={{ fontSize: 11, fontWeight: 600, color: C.textSec }}>{btn.label}</span>
@@ -1645,7 +1645,7 @@ export default function Page() {
         )}
 
         {/* ===== SETTINGS ===== */}
-        {screen === "settings" && (
+        {screen === "settings" && session && odoo.isAdmin(session) && (
           <SettingsScreen onBack={goHome} session={session} />
         )}
 
@@ -1671,10 +1671,10 @@ export default function Page() {
         {screen === "inventory" && session && (
           <InventoryScreen session={session} onBack={goHome} onToast={showToast} initialProduct={inventoryInitProduct} />
         )}
-        {screen === "reprintLabel" && session && (
+        {screen === "reprintLabel" && session && odoo.isAdmin(session) && (
           <ReprintLabelScreen session={session} onBack={goHome} onToast={showToast} />
         )}
-        {screen === "negativeStock" && session && (
+        {screen === "negativeStock" && session && odoo.isAdmin(session) && (
           <NegativeStockScreen session={session} onBack={goHome} onToast={showToast} onGoToInventory={(p) => { setInventoryInitProduct(p); setScreen("inventory"); }} />
         )}
 
@@ -1981,7 +1981,7 @@ function Shell({ children, toast, flash }: { children: React.ReactNode; toast: s
   );
 }
 
-function Header({ name, onLogout, onHome, onSettings }: { name?: string; onLogout: () => void; onHome: () => void; onSettings: () => void }) {
+function Header({ name, onLogout, onHome, onSettings, isAdmin }: { name?: string; onLogout: () => void; onHome: () => void; onSettings: () => void; isAdmin?: boolean }) {
   return (
     <header style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1992,7 +1992,7 @@ function Header({ name, onLogout, onHome, onSettings }: { name?: string; onLogou
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.green, boxShadow: `0 0 6px ${C.green}` }} />
         <span style={{ fontSize: 12, color: C.textSec }}>{name}</span>
-        <button onClick={onSettings} style={iconBtn}>{settingsIcon}</button>
+        {isAdmin && <button onClick={onSettings} style={iconBtn}>{settingsIcon}</button>}
         <button onClick={onLogout} style={iconBtn}>{logoutIcon}</button>
       </div>
     </header>
