@@ -596,7 +596,16 @@ function useScannerListener(onScan: (code: string) => void, enabled: boolean) {
 
 // Session
 function saveSession(s: odoo.OdooSession) { try { sessionStorage.setItem("wms_s", JSON.stringify(s)); } catch {} }
-function loadSess(): odoo.OdooSession | null { try { const s = sessionStorage.getItem("wms_s"); return s ? JSON.parse(s) : null; } catch { return null; } }
+function loadSess(): odoo.OdooSession | null {
+  try {
+    const s = sessionStorage.getItem("wms_s");
+    if (!s) return null;
+    const parsed = JSON.parse(s);
+    // Session sans login = ancienne version → forcer reconnexion
+    if (!parsed.login) { sessionStorage.removeItem("wms_s"); return null; }
+    return parsed;
+  } catch { return null; }
+}
 function clearSess() { try { sessionStorage.removeItem("wms_s"); } catch {} }
 function saveCfg(u: string, d: string) { try { localStorage.setItem("wms_c", JSON.stringify({ u, d })); } catch {} }
 function loadCfg(): { u: string; d: string } | null { try { const c = localStorage.getItem("wms_c"); return c ? JSON.parse(c) : null; } catch { return null; } }
