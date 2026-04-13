@@ -4660,8 +4660,8 @@ function WaitingOrdersScreen({
 
       if (state === "assigned") {
         onToast("✅ Commande prête ! Impression du bon…");
-        // Imprimer le bon de préparation
-        const cfg = pn.getLabelTypeConfig("blank");
+        // Imprimer le bon de préparation sur l'imprimante "packingslip" (A4)
+        const cfg = pn.getLabelTypeConfig("packingslip");
         const printerId = cfg.printerId || pn.getSavedPrinterId();
         if (printerId) {
           try {
@@ -5369,7 +5369,7 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
     { key: "picking", label: "Étiquette colis (picking)", icon: "📦", hasSize: true },
     // HIDDEN: E-shop — pas au point
     // { key: "sendcloud", label: "Étiquette SendCloud", icon: "🚚", hasSize: false },
-    // { key: "packingslip", label: "Bon de livraison (BL)", icon: "📄", hasSize: false },
+    { key: "packingslip", label: "Bon de préparation (A4)", icon: "📄", hasSize: false },
   ];
 
   const [configs, setConfigs] = useState<Record<LabelType, pn.LabelTypeConfig>>(() => pn.getAllLabelTypeConfigs());
