@@ -234,19 +234,21 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
   }
   if (!typeIds.length) return [];
 
-  // Filtre de date : seulement les commandes des 7 derniers jours ou à venir
-  // Évite les vieux BL bloqués depuis des mois
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 7);
-  const cutoffStr = cutoff.toISOString().replace("T", " ").substring(0, 19);
+  // Trouver l'ID du tag "Transmise" — seules ces commandes doivent apparaître
+  const transmiseTags = await searchRead(session, "crm.tag", [["name", "ilike", "transmise"]], ["id", "name"], 10);
+  const transmiseTagIds: number[] = transmiseTags.map((t: any) => t.id);
+
+  const domain: any[] = [
+    ["picking_type_id", "in", typeIds],
+    ["state", "in", ["confirmed", "waiting", "partially_available"]],
+  ];
+  if (transmiseTagIds.length > 0) {
+    domain.push(["x_studio_etiquettes_commande", "in", transmiseTagIds]);
+  }
 
   const pickings = await searchRead(
     session, "stock.picking",
-    [
-      ["picking_type_id", "in", typeIds],
-      ["state", "in", ["confirmed", "waiting", "partially_available"]],
-      ["scheduled_date", ">=", cutoffStr],
-    ],
+    domain,
     PICKING_FIELDS,
     200,
     "scheduled_date asc, date_deadline asc, id asc"
