@@ -217,11 +217,11 @@ export async function renameLocation(session: OdooSession, locationId: number, n
 }
 
 // ============================================
-// COMMANDES EN ATTENTE — copie exacte de getOutgoingPickings, état != assigned
+// COMMANDES EN ATTENTE — même logique que getOutgoingPickings, état != assigned
 // ============================================
 
 export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
-  // Même résolution de picking types que getOutgoingPickings
+  // Même picking types que getOutgoingPickings
   const types = await searchRead(session, "stock.picking.type", [["code", "=", "internal"], ["name", "ilike", "pick"]], ["id", "name"], 10);
   let typeIds = types.map((t: any) => t.id);
   if (!typeIds.length) {
@@ -234,19 +234,25 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
   }
   if (!typeIds.length) return [];
 
-  // Même requête — seul changement : état pas encore prêt au lieu de "assigned"
+  // Filtre de date : seulement les commandes des 7 derniers jours ou à venir
+  // Évite les vieux BL bloqués depuis des mois
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 7);
+  const cutoffStr = cutoff.toISOString().replace("T", " ").substring(0, 19);
+
   const pickings = await searchRead(
     session, "stock.picking",
     [
       ["picking_type_id", "in", typeIds],
       ["state", "in", ["confirmed", "waiting", "partially_available"]],
+      ["scheduled_date", ">=", cutoffStr],
     ],
     PICKING_FIELDS,
     200,
-    "date_deadline asc, scheduled_date asc, id asc"
+    "scheduled_date asc, date_deadline asc, id asc"
   );
 
-  // Même enrichissement date depuis OUT lié + sale.order (copie de getOutgoingPickings)
+  // Même enrichissement date depuis OUT lié + sale.order (identique à getOutgoingPickings)
   const groupIds = Array.from(new Set(pickings.map((p: any) => p.group_id?.[0]).filter(Boolean)));
   if (groupIds.length > 0) {
     const outTypes = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
@@ -279,25 +285,7 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
     }
   }
 
-  // Filtre tag "En attente" — INCLURE uniquement ces pickings
-  // (getOutgoingPickings les exclut, ici on veut exactement eux)
-  const allTagIds = Array.from(new Set(
-    pickings.flatMap((p: any) => p.x_studio_etiquettes_commande || [])
-  )) as number[];
-  let enAttenteIds: number[] = [];
-  if (allTagIds.length > 0) {
-    const tags = await searchRead(session, "crm.tag", [["id", "in", allTagIds]], ["id", "name"], allTagIds.length);
-    enAttenteIds = tags.filter((t: any) => t.name?.toLowerCase().includes("en attente")).map((t: any) => t.id);
-  }
-  const filteredPickings = enAttenteIds.length > 0
-    ? pickings.filter((p: any) => {
-        const pTags: number[] = p.x_studio_etiquettes_commande || [];
-        return pTags.some((tid: number) => enAttenteIds.includes(tid));
-      })
-    : pickings;
-
-  // Date finale (même logique que getOutgoingPickings)
-  for (const p of filteredPickings) {
+  for (const p of pickings) {
     if (!p.shipping_date) {
       p.shipping_date = p.x_studio_date_dexpdition_prvue || p.date_deadline || p.scheduled_date || null;
     } else if (p.x_studio_date_dexpdition_prvue) {
@@ -305,13 +293,13 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
     }
   }
 
-  filteredPickings.sort((a: any, b: any) => {
+  pickings.sort((a: any, b: any) => {
     const da = a.shipping_date || "9999";
     const db = b.shipping_date || "9999";
     return da < db ? -1 : da > db ? 1 : 0;
   });
 
-  return filteredPickings;
+  return pickings;
 }
 
 /**
