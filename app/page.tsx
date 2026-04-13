@@ -4593,7 +4593,7 @@ function WaitingOrdersScreen({
   const [pickings, setPickings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [processing, setProcessing] = useState<Record<number, boolean>>({});
+  const [processing, setProcessing] = useState<Record<string, boolean>>({});
   const [results, setResults] = useState<Record<number, { state: string; missingLines: any[] }>>({});
 
   const load = async () => {
@@ -4601,7 +4601,6 @@ function WaitingOrdersScreen({
     try {
       const p = await odoo.getWaitingPickings(session);
       setPickings(p);
-      // Auto-expand first date group
       if (p.length > 0) {
         const firstDate = p[0].shipping_date?.split("T")[0] || "Sans date";
         setExpanded({ [firstDate]: true });
@@ -4612,29 +4611,41 @@ function WaitingOrdersScreen({
 
   useEffect(() => { load(); }, []);
 
-  // Group by date
+  // Grouper d'abord par date, puis par client (même date + même partner_id)
   const groups = useMemo(() => {
-    const map: Record<string, any[]> = {};
+    const dateMap: Record<string, { key: string; label: string; clientMap: Record<string, any[]> }> = {};
     for (const p of pickings) {
       const raw = p.shipping_date;
-      let key = "Sans date";
-      let label = "Sans date";
+      let dateKey = "Sans date";
+      let dateLabel = "Sans date";
       if (raw) {
         const d = new Date(raw);
-        key = d.toISOString().split("T")[0];
+        dateKey = d.toISOString().split("T")[0];
         const today = new Date(); today.setHours(0,0,0,0);
-        const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
-        const diff = Math.round((d.setHours(0,0,0,0) - today.getTime()) / 86400000);
-        if (diff === 0) label = "Aujourd'hui";
-        else if (diff === 1) label = "Demain";
-        else if (diff < 0) label = `⚠️ En retard · ${new Date(raw).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })}`;
-        else label = new Date(raw).toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "long" });
+        const diff = Math.round((new Date(raw).setHours(0,0,0,0) - today.getTime()) / 86400000);
+        if (diff === 0) dateLabel = "Aujourd'hui";
+        else if (diff === 1) dateLabel = "Demain";
+        else if (diff < 0) dateLabel = `⚠️ En retard · ${new Date(raw).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })}`;
+        else dateLabel = new Date(raw).toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "long" });
       }
-      if (!map[key]) map[key] = [];
-      map[key].push({ ...p, _dateKey: key, _dateLabel: label });
+      if (!dateMap[dateKey]) dateMap[dateKey] = { key: dateKey, label: dateLabel, clientMap: {} };
+      // Clé de regroupement client = partner_id (même client, même date → même groupe)
+      const clientKey = String(p.partner_id?.[0] || "0");
+      if (!dateMap[dateKey].clientMap[clientKey]) dateMap[dateKey].clientMap[clientKey] = [];
+      dateMap[dateKey].clientMap[clientKey].push(p);
     }
-    return Object.entries(map).sort(([a], [b]) => a < b ? -1 : 1)
-      .map(([key, items]) => ({ key, label: items[0]._dateLabel, items }));
+    return Object.values(dateMap)
+      .sort((a, b) => a.key < b.key ? -1 : 1)
+      .map(dg => ({
+        ...dg,
+        clientGroups: Object.entries(dg.clientMap).map(([clientKey, items]) => ({
+          clientKey,
+          clientName: items[0].partner_id?.[1] || "Client inconnu",
+          items,
+          groupId: `${dg.key}_${clientKey}`,
+        })),
+        totalCount: Object.values(dg.clientMap).reduce((s, arr) => s + arr.length, 0),
+      }));
   }, [pickings]);
 
   const stateLabel = (s: string) => ({
@@ -4644,54 +4655,52 @@ function WaitingOrdersScreen({
     assigned: { text: "Prêt ✓", color: "#16a34a", bg: "#dcfce7" },
   }[s] || { text: s, color: "#6b7280", bg: "#f3f4f6" });
 
-  const startPrep = async (picking: any) => {
-    setProcessing(prev => ({ ...prev, [picking.id]: true }));
+  // Traite un ou plusieurs pickings (groupe client même date)
+  const startPrepGroup = async (groupId: string, pickingsGroup: any[]) => {
+    setProcessing(prev => ({ ...prev, [groupId]: true }));
+    const cfg = pn.getLabelTypeConfig("packingslip");
+    const printerId = cfg.printerId || pn.getSavedPrinterId();
+    let printedCount = 0;
+    let readyCount = 0;
+
     try {
-      onToast("🔍 Vérification de la disponibilité…");
-      const { state, missingLines } = await odoo.checkAvailabilityAndGetResult(session, picking.id);
+      const label = pickingsGroup.length > 1
+        ? `${pickingsGroup.length} commandes`
+        : pickingsGroup[0].name;
+      onToast(`🔍 Vérification de la disponibilité — ${label}…`);
 
-      // Écrire user_id = utilisateur courant comme responsable de la prépa
-      try { await odoo.write(session, "stock.picking", [picking.id], { user_id: session.uid }); } catch {}
+      for (const picking of pickingsGroup) {
+        const { state, missingLines } = await odoo.checkAvailabilityAndGetResult(session, picking.id);
+        try { await odoo.write(session, "stock.picking", [picking.id], { user_id: session.uid }); } catch {}
+        setResults(prev => ({ ...prev, [picking.id]: { state, missingLines } }));
+        setPickings(prev => prev.map(p => p.id === picking.id ? { ...p, state } : p));
 
-      setResults(prev => ({ ...prev, [picking.id]: { state, missingLines } }));
-
-      // Mettre à jour l'état local du picking
-      setPickings(prev => prev.map(p => p.id === picking.id ? { ...p, state } : p));
-
-      if (state === "assigned") {
-        onToast("✅ Commande prête ! Impression du bon…");
-        // Imprimer le bon de préparation sur l'imprimante "packingslip" (A4)
-        const cfg = pn.getLabelTypeConfig("packingslip");
-        const printerId = cfg.printerId || pn.getSavedPrinterId();
-        if (printerId) {
-          let b64: string | null = null;
-          try {
-            const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
-            b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate);
-          } catch (e: any) {
-            onToast(`❌ Erreur PDF Odoo : ${e.message}`);
+        if (state === "assigned") {
+          readyCount++;
+          if (printerId) {
+            try {
+              const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
+              const b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate);
+              if (b64) {
+                const r = await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
+                if (r.success) printedCount++;
+                else onToast(`❌ Impression ${picking.name} : ${r.error}`);
+              }
+            } catch (e: any) { onToast(`❌ PDF ${picking.name} : ${e.message}`); }
           }
-          if (b64) {
-            const result = await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
-            if (result.success) {
-              onToast(`✅ Bon de prépa ${picking.name} imprimé`);
-            } else {
-              onToast(`❌ Erreur impression : ${result.error}`);
-            }
-          } else if (!b64) {
-            onToast(`⚠️ PDF vide — vérifier le template dans Paramètres`);
-          }
-        } else {
-          onToast(`⚠️ Aucune imprimante configurée pour "Bon de préparation (A4)"`);
+        } else if (missingLines.length > 0) {
+          const names = missingLines.slice(0, 2).map((m: any) => `${m.product} (−${m.missing})`).join(", ");
+          onToast(`⚠️ ${picking.name} — manquants : ${names}`);
         }
-      } else if (missingLines.length > 0) {
-        const names = missingLines.slice(0, 3).map((m: any) => `${m.product} (manque ${m.missing})`).join(", ");
-        onToast(`⚠️ Manquants : ${names}${missingLines.length > 3 ? "…" : ""}`);
-      } else {
-        onToast(`⚠️ ${picking.name} reste en attente`);
+      }
+
+      if (readyCount > 0 && printerId) {
+        onToast(`✅ ${readyCount} commande${readyCount > 1 ? "s" : ""} prête${readyCount > 1 ? "s" : ""} — ${printedCount} bon${printedCount > 1 ? "s" : ""} imprimé${printedCount > 1 ? "s" : ""}`);
+      } else if (readyCount > 0) {
+        onToast(`✅ ${readyCount} commande${readyCount > 1 ? "s" : ""} prête${readyCount > 1 ? "s" : ""} — aucune imprimante configurée`);
       }
     } catch (e: any) { onToast("❌ " + e.message); }
-    setProcessing(prev => ({ ...prev, [picking.id]: false }));
+    setProcessing(prev => ({ ...prev, [groupId]: false }));
   };
 
   return (
@@ -4719,19 +4728,20 @@ function WaitingOrdersScreen({
         </div>
       )}
 
-      {/* Groups by date */}
+      {/* Groupes par date */}
       {groups.map(group => {
-        const isOpen = expanded[group.key] !== false && (expanded[group.key] === true || group.items.some((p: any) => p.shipping_date?.startsWith(new Date().toISOString().split("T")[0])));
-        const hasLate = group.key < new Date().toISOString().split("T")[0] && group.key !== "Sans date";
+        const today = new Date().toISOString().split("T")[0];
+        const isOpen = expanded[group.key] !== false && (expanded[group.key] === true || group.key <= today);
+        const hasLate = group.key < today && group.key !== "Sans date";
         return (
           <div key={group.key} style={{ marginBottom: 12 }}>
-            {/* Date header */}
+            {/* En-tête date */}
             <button
-              onClick={() => setExpanded(prev => ({ ...prev, [group.key]: !prev[group.key] }))}
+              onClick={() => setExpanded(prev => ({ ...prev, [group.key]: !isOpen }))}
               style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: hasLate ? "#fef2f2" : C.bg, border: `1px solid ${hasLate ? "#fecaca" : C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", marginBottom: 6 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 13, fontWeight: 700, color: hasLate ? C.red : C.text }}>{group.label}</span>
-                <span style={{ fontSize: 11, background: hasLate ? "#fecaca" : C.border, color: hasLate ? C.red : C.textMuted, padding: "1px 7px", borderRadius: 10, fontWeight: 600 }}>{group.items.length}</span>
+                <span style={{ fontSize: 11, background: hasLate ? "#fecaca" : C.border, color: hasLate ? C.red : C.textMuted, padding: "1px 7px", borderRadius: 10, fontWeight: 600 }}>{group.totalCount}</span>
               </div>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"
                 style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .2s" }}>
@@ -4739,51 +4749,60 @@ function WaitingOrdersScreen({
               </svg>
             </button>
 
-            {/* Pickings in this group */}
-            {isOpen && group.items.map((p: any) => {
-              const busy = processing[p.id];
-              const result = results[p.id];
-              const sl = stateLabel(result ? result.state : p.state);
+            {/* Sous-groupes par client */}
+            {isOpen && group.clientGroups.map(cg => {
+              const isGroupBusy = processing[cg.groupId];
+              const allAssigned = cg.items.every((p: any) => results[p.id]?.state === "assigned");
+              const someResult = cg.items.some((p: any) => results[p.id]);
+              const isMulti = cg.items.length > 1;
+
               return (
-                <div key={p.id} style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 8, padding: "12px 14px", boxShadow: C.shadow }}>
-                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
-                        <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</span>
-                        <span style={{ fontSize: 11, color: sl.color, background: sl.bg, padding: "2px 7px", borderRadius: 5, fontWeight: 600 }}>{sl.text}</span>
-                        {p.carrier_id && <span style={{ fontSize: 11, color: "#7c3aed", background: "#f3e8ff", padding: "2px 6px", borderRadius: 4, fontWeight: 600 }}>{p.carrier_id[1]}</span>}
-                      </div>
-                      {p.partner_id && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>{p.partner_id[1]}</div>}
-                      {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine : {p.origin}</div>}
-                      <div style={{ fontSize: 11, color: C.textMuted }}>{(p.move_ids_without_package || []).length} article{(p.move_ids_without_package || []).length !== 1 ? "s" : ""}</div>
-                    </div>
+                <div key={cg.groupId} style={{ background: C.white, borderRadius: 12, border: `1.5px solid ${isMulti ? C.blue : C.border}`, marginBottom: 8, padding: "12px 14px", boxShadow: C.shadow }}>
+                  {/* Nom client (en-tête du groupe) */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: isMulti ? 8 : 4 }}>
+                    {isMulti && <span style={{ fontSize: 11, background: C.blueSoft, color: C.blue, padding: "2px 7px", borderRadius: 6, fontWeight: 700 }}>×{cg.items.length}</span>}
+                    <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{cg.clientName}</span>
+                    {cg.items[0]?.carrier_id && <span style={{ fontSize: 11, color: "#7c3aed", background: "#f3e8ff", padding: "2px 6px", borderRadius: 4, fontWeight: 600 }}>{cg.items[0].carrier_id[1]}</span>}
                   </div>
 
-                  {/* Manquants si partiel */}
-                  {result && result.missingLines.length > 0 && (
-                    <div style={{ marginTop: 8, padding: "8px 10px", background: "#fef3c7", borderRadius: 8, border: "1px solid #fcd34d" }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", marginBottom: 4 }}>⚠️ Manquants</div>
-                      {result.missingLines.slice(0, 5).map((m: any, i: number) => (
-                        <div key={i} style={{ fontSize: 11, color: "#92400e" }}>
-                          {m.product} — manque {m.missing} / {m.needed}
+                  {/* Liste des pickings du groupe */}
+                  {cg.items.map((p: any) => {
+                    const result = results[p.id];
+                    const sl = stateLabel(result ? result.state : p.state);
+                    return (
+                      <div key={p.id} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: isMulti ? `1px solid ${C.border}` : "none" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{p.name}</span>
+                          <span style={{ fontSize: 11, color: sl.color, background: sl.bg, padding: "2px 6px", borderRadius: 5, fontWeight: 600 }}>{sl.text}</span>
                         </div>
-                      ))}
-                      {result.missingLines.length > 5 && <div style={{ fontSize: 11, color: "#92400e" }}>+{result.missingLines.length - 5} autres…</div>}
-                    </div>
-                  )}
+                        {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Réf : {p.origin}</div>}
+                        <div style={{ fontSize: 11, color: C.textMuted }}>{(p.move_ids_without_package || []).length} article{(p.move_ids_without_package || []).length !== 1 ? "s" : ""}</div>
+                        {/* Manquants si partiel */}
+                        {result && result.missingLines.length > 0 && (
+                          <div style={{ marginTop: 4, padding: "6px 8px", background: "#fef3c7", borderRadius: 7, border: "1px solid #fcd34d" }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", marginBottom: 2 }}>⚠️ Manquants</div>
+                            {result.missingLines.slice(0, 3).map((m: any, i: number) => (
+                              <div key={i} style={{ fontSize: 11, color: "#92400e" }}>{m.product} — manque {m.missing}</div>
+                            ))}
+                            {result.missingLines.length > 3 && <div style={{ fontSize: 11, color: "#92400e" }}>+{result.missingLines.length - 3} autres…</div>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
 
-                  {/* Bouton Commencer prépa */}
-                  {(result?.state !== "assigned") && (
+                  {/* Bouton unique pour tout le groupe */}
+                  {!allAssigned && (
                     <button
-                      onClick={() => startPrep(p)}
-                      disabled={busy}
-                      style={{ width: "100%", marginTop: 10, padding: "10px 0", background: busy ? C.border : C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: busy ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: busy ? 0.7 : 1 }}>
-                      {busy ? "Vérification…" : "▶ Commencer prépa"}
+                      onClick={() => startPrepGroup(cg.groupId, cg.items)}
+                      disabled={isGroupBusy}
+                      style={{ width: "100%", marginTop: 6, padding: "10px 0", background: isGroupBusy ? C.border : C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: isGroupBusy ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: isGroupBusy ? 0.7 : 1 }}>
+                      {isGroupBusy ? "Vérification…" : isMulti ? `▶ Commencer prépa (${cg.items.length} BL)` : "▶ Commencer prépa"}
                     </button>
                   )}
-                  {result?.state === "assigned" && (
-                    <div style={{ marginTop: 8, padding: "8px 10px", background: "#dcfce7", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#166534", textAlign: "center" as const }}>
-                      ✅ Prête — bon imprimé
+                  {allAssigned && someResult && (
+                    <div style={{ marginTop: 6, padding: "8px 10px", background: "#dcfce7", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#166534", textAlign: "center" as const }}>
+                      ✅ {isMulti ? `${cg.items.length} BL prêts — bons imprimés` : "Prête — bon imprimé"}
                     </div>
                   )}
                 </div>
