@@ -221,32 +221,89 @@ export async function renameLocation(session: OdooSession, locationId: number, n
 // ============================================
 
 export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
+  // Utilise les mêmes picking type IDs que getOutgoingPickings
+  // pour être cohérent avec le dashboard Odoo
+  const types = await searchRead(session, "stock.picking.type", [["code", "=", "internal"], ["name", "ilike", "pick"]], ["id"], 10);
+  let typeIds = types.map((t: any) => t.id);
+  if (!typeIds.length) {
+    const t2 = await searchRead(session, "stock.picking.type", [["sequence_code", "=", "PICK"]], ["id"], 10);
+    typeIds = t2.map((t: any) => t.id);
+  }
+  if (!typeIds.length) {
+    const t3 = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+    typeIds = t3.map((t: any) => t.id);
+  }
+  if (!typeIds.length) return [];
+
   const pickings = await searchRead(
     session, "stock.picking",
     [
+      ["picking_type_id", "in", typeIds],
       ["state", "in", ["confirmed", "waiting", "partially_available"]],
-      ["picking_type_code", "=", "outgoing"],
     ],
     ["id", "name", "state", "scheduled_date", "date_deadline", "partner_id",
-     "origin", "carrier_id", "move_ids_without_package", "x_studio_date_dexpdition_prvue",
-     "user_id"],
+     "origin", "carrier_id", "move_ids_without_package", "group_id",
+     "x_studio_date_dexpdition_prvue", "x_studio_etiquettes_commande", "user_id"],
     200,
     "date_deadline asc, scheduled_date asc, id asc"
   );
 
+  // Appliquer le même filtre tag "En attente" que getOutgoingPickings
+  const tagIds = Array.from(new Set(
+    pickings.flatMap((p: any) => p.x_studio_etiquettes_commande || [])
+  )) as number[];
+  let excludeTagIds: number[] = [];
+  if (tagIds.length > 0) {
+    const tags = await searchRead(session, "crm.tag", [["id", "in", tagIds]], ["id", "name"], tagIds.length);
+    excludeTagIds = tags.filter((t: any) => t.name?.toLowerCase().includes("en attente")).map((t: any) => t.id);
+  }
+  const filtered = excludeTagIds.length > 0
+    ? pickings.filter((p: any) => {
+        const pTags: number[] = p.x_studio_etiquettes_commande || [];
+        return !pTags.some((tid: number) => excludeTagIds.includes(tid));
+      })
+    : pickings;
+
   // Enrichir avec date d'expédition prévue
-  for (const p of pickings) {
-    p.shipping_date = p.x_studio_date_dexpdition_prvue || p.date_deadline || p.scheduled_date || null;
+  // Si PICK, remonter la date depuis l'OUT lié via group_id
+  const groupIds = Array.from(new Set(filtered.map((p: any) => p.group_id?.[0]).filter(Boolean))) as number[];
+  if (groupIds.length > 0) {
+    const outTypes = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+    const outTypeIds = outTypes.map((t: any) => t.id);
+    if (outTypeIds.length) {
+      const outPickings = await searchRead(session, "stock.picking",
+        [["group_id", "in", groupIds], ["picking_type_id", "in", outTypeIds]],
+        ["id", "group_id", "scheduled_date", "date_deadline", "origin", "carrier_id", "partner_id"],
+        500
+      );
+      const outByGroup: Record<number, any> = {};
+      for (const op of outPickings) { if (op.group_id) outByGroup[op.group_id[0]] = op; }
+      for (const p of filtered) {
+        const gid = p.group_id?.[0];
+        if (gid && outByGroup[gid]) {
+          const outP = outByGroup[gid];
+          p.shipping_date = p.x_studio_date_dexpdition_prvue || outP.date_deadline || outP.scheduled_date || p.date_deadline || p.scheduled_date || null;
+          if (!p.origin && outP.origin) p.origin = outP.origin;
+          if (!p.carrier_id && outP.carrier_id) p.carrier_id = outP.carrier_id;
+          if (!p.partner_id && outP.partner_id) p.partner_id = outP.partner_id;
+        } else {
+          p.shipping_date = p.x_studio_date_dexpdition_prvue || p.date_deadline || p.scheduled_date || null;
+        }
+      }
+    }
+  } else {
+    for (const p of filtered) {
+      p.shipping_date = p.x_studio_date_dexpdition_prvue || p.date_deadline || p.scheduled_date || null;
+    }
   }
 
-  // Trier par date d'expédition
-  pickings.sort((a: any, b: any) => {
+  filtered.sort((a: any, b: any) => {
     const da = a.shipping_date || "9999";
     const db = b.shipping_date || "9999";
     return da < db ? -1 : da > db ? 1 : 0;
   });
 
-  return pickings;
+  return filtered;
 }
 
 /**
