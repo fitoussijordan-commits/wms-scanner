@@ -614,7 +614,7 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1381,6 +1381,7 @@ export default function Page() {
               {[
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Transfert", color: "#2563eb", onClick: () => { resetTransfer(); setScreen("transfer"); }, badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>, label: "Préparation", color: "#7c3aed", onClick: () => { loadPickings(); setScreen("prep"); }, badge: pickings.length > 0 ? pickings.length : null },
+                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>, label: "En attente", color: "#f59e0b", onClick: () => setScreen("waitingOrders"), badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Arrivage", color: "#059669", onClick: () => setScreen("arrival"), badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>, label: "Palettes WMS", color: "#0f766e", onClick: () => setScreen("palettes"), badge: null },
               ].map((btn, i) => (
@@ -1685,6 +1686,14 @@ export default function Page() {
         )}
         {screen === "negativeStock" && session && odoo.isAdmin(session) && (
           <NegativeStockScreen session={session} onBack={goHome} onToast={showToast} onGoToInventory={(p) => { setInventoryInitProduct(p); setScreen("inventory"); }} />
+        )}
+        {screen === "waitingOrders" && session && (
+          <WaitingOrdersScreen
+            session={session}
+            onBack={goHome}
+            onToast={showToast}
+            onStartPrep={(picking) => { openPicking(picking); }}
+          />
         )}
 
         {/* HIDDEN: E-shop screen — pas au point
@@ -4565,6 +4574,215 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
                 </button>
               </div>
             )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================
+// WAITING ORDERS SCREEN — Commandes en attente
+// ============================================================
+function WaitingOrdersScreen({
+  session, onBack, onToast, onStartPrep,
+}: {
+  session: any; onBack: () => void; onToast: (m: string) => void;
+  onStartPrep: (picking: any) => void;
+}) {
+  const [pickings, setPickings] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [processing, setProcessing] = useState<Record<number, boolean>>({});
+  const [results, setResults] = useState<Record<number, { state: string; missingLines: any[] }>>({});
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const p = await odoo.getWaitingPickings(session);
+      setPickings(p);
+      // Auto-expand first date group
+      if (p.length > 0) {
+        const firstDate = p[0].shipping_date?.split("T")[0] || "Sans date";
+        setExpanded({ [firstDate]: true });
+      }
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  // Group by date
+  const groups = useMemo(() => {
+    const map: Record<string, any[]> = {};
+    for (const p of pickings) {
+      const raw = p.shipping_date;
+      let key = "Sans date";
+      let label = "Sans date";
+      if (raw) {
+        const d = new Date(raw);
+        key = d.toISOString().split("T")[0];
+        const today = new Date(); today.setHours(0,0,0,0);
+        const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+        const diff = Math.round((d.setHours(0,0,0,0) - today.getTime()) / 86400000);
+        if (diff === 0) label = "Aujourd'hui";
+        else if (diff === 1) label = "Demain";
+        else if (diff < 0) label = `⚠️ En retard · ${new Date(raw).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })}`;
+        else label = new Date(raw).toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "long" });
+      }
+      if (!map[key]) map[key] = [];
+      map[key].push({ ...p, _dateKey: key, _dateLabel: label });
+    }
+    return Object.entries(map).sort(([a], [b]) => a < b ? -1 : 1)
+      .map(([key, items]) => ({ key, label: items[0]._dateLabel, items }));
+  }, [pickings]);
+
+  const stateLabel = (s: string) => ({
+    confirmed: { text: "Confirmé", color: "#f59e0b", bg: "#fef3c7" },
+    waiting: { text: "En attente", color: "#6b7280", bg: "#f3f4f6" },
+    partially_available: { text: "Partiel", color: "#3b82f6", bg: "#eff6ff" },
+    assigned: { text: "Prêt ✓", color: "#16a34a", bg: "#dcfce7" },
+  }[s] || { text: s, color: "#6b7280", bg: "#f3f4f6" });
+
+  const startPrep = async (picking: any) => {
+    setProcessing(prev => ({ ...prev, [picking.id]: true }));
+    try {
+      onToast("🔍 Vérification de la disponibilité…");
+      const { state, missingLines } = await odoo.checkAvailabilityAndGetResult(session, picking.id);
+
+      // Écrire user_id = utilisateur courant comme responsable de la prépa
+      try { await odoo.write(session, "stock.picking", [picking.id], { user_id: session.uid }); } catch {}
+
+      setResults(prev => ({ ...prev, [picking.id]: { state, missingLines } }));
+
+      // Mettre à jour l'état local du picking
+      setPickings(prev => prev.map(p => p.id === picking.id ? { ...p, state } : p));
+
+      if (state === "assigned") {
+        onToast("✅ Commande prête ! Impression du bon…");
+        // Imprimer le bon de préparation
+        const cfg = pn.getLabelTypeConfig("blank");
+        const printerId = cfg.printerId || pn.getSavedPrinterId();
+        if (printerId) {
+          try {
+            const b64 = await odoo.getPickingReportBase64(session, picking.id);
+            if (b64) {
+              await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
+              onToast(`✅ Bon de prépa ${picking.name} imprimé`);
+            } else {
+              onToast(`✅ Prêt — ouvrir le BL pour imprimer le bon`);
+            }
+          } catch { onToast(`✅ Prêt — impression manuelle nécessaire`); }
+        } else {
+          onToast(`✅ ${picking.name} est prêt — aucune imprimante configurée`);
+        }
+        // Proposer d'ouvrir la prépa
+        onStartPrep({ ...picking, state: "assigned" });
+      } else if (missingLines.length > 0) {
+        const names = missingLines.slice(0, 3).map((m: any) => `${m.product} (manque ${m.missing})`).join(", ");
+        onToast(`⚠️ Manquants : ${names}${missingLines.length > 3 ? "…" : ""}`);
+      } else {
+        onToast(`⚠️ ${picking.name} reste en attente`);
+      }
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setProcessing(prev => ({ ...prev, [picking.id]: false }));
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>Commandes en attente</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>{pickings.length} commande{pickings.length !== 1 ? "s" : ""} · En attente de dispo</div>
+        </div>
+        <button onClick={load} disabled={loading} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, color: C.textMuted, fontFamily: "inherit" }}>
+          {loading ? "…" : "↻ Actualiser"}
+        </button>
+      </div>
+
+      {loading && <div style={{ textAlign: "center", padding: 40, color: C.textMuted, fontSize: 14 }}>Chargement…</div>}
+
+      {!loading && pickings.length === 0 && (
+        <div style={{ textAlign: "center", padding: 40, color: C.textMuted, fontSize: 14 }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
+          Aucune commande en attente
+        </div>
+      )}
+
+      {/* Groups by date */}
+      {groups.map(group => {
+        const isOpen = expanded[group.key] !== false && (expanded[group.key] === true || group.items.some((p: any) => p.shipping_date?.startsWith(new Date().toISOString().split("T")[0])));
+        const hasLate = group.key < new Date().toISOString().split("T")[0] && group.key !== "Sans date";
+        return (
+          <div key={group.key} style={{ marginBottom: 12 }}>
+            {/* Date header */}
+            <button
+              onClick={() => setExpanded(prev => ({ ...prev, [group.key]: !prev[group.key] }))}
+              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: hasLate ? "#fef2f2" : C.bg, border: `1px solid ${hasLate ? "#fecaca" : C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", marginBottom: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: hasLate ? C.red : C.text }}>{group.label}</span>
+                <span style={{ fontSize: 11, background: hasLate ? "#fecaca" : C.border, color: hasLate ? C.red : C.textMuted, padding: "1px 7px", borderRadius: 10, fontWeight: 600 }}>{group.items.length}</span>
+              </div>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"
+                style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .2s" }}>
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+
+            {/* Pickings in this group */}
+            {isOpen && group.items.map((p: any) => {
+              const busy = processing[p.id];
+              const result = results[p.id];
+              const sl = stateLabel(result ? result.state : p.state);
+              return (
+                <div key={p.id} style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 8, padding: "12px 14px", boxShadow: C.shadow }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</span>
+                        <span style={{ fontSize: 11, color: sl.color, background: sl.bg, padding: "2px 7px", borderRadius: 5, fontWeight: 600 }}>{sl.text}</span>
+                        {p.carrier_id && <span style={{ fontSize: 11, color: "#7c3aed", background: "#f3e8ff", padding: "2px 6px", borderRadius: 4, fontWeight: 600 }}>{p.carrier_id[1]}</span>}
+                      </div>
+                      {p.partner_id && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>{p.partner_id[1]}</div>}
+                      {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine : {p.origin}</div>}
+                      <div style={{ fontSize: 11, color: C.textMuted }}>{(p.move_ids_without_package || []).length} article{(p.move_ids_without_package || []).length !== 1 ? "s" : ""}</div>
+                    </div>
+                  </div>
+
+                  {/* Manquants si partiel */}
+                  {result && result.missingLines.length > 0 && (
+                    <div style={{ marginTop: 8, padding: "8px 10px", background: "#fef3c7", borderRadius: 8, border: "1px solid #fcd34d" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", marginBottom: 4 }}>⚠️ Manquants</div>
+                      {result.missingLines.slice(0, 5).map((m: any, i: number) => (
+                        <div key={i} style={{ fontSize: 11, color: "#92400e" }}>
+                          {m.product} — manque {m.missing} / {m.needed}
+                        </div>
+                      ))}
+                      {result.missingLines.length > 5 && <div style={{ fontSize: 11, color: "#92400e" }}>+{result.missingLines.length - 5} autres…</div>}
+                    </div>
+                  )}
+
+                  {/* Bouton Commencer prépa */}
+                  {(result?.state !== "assigned") && (
+                    <button
+                      onClick={() => startPrep(p)}
+                      disabled={busy}
+                      style={{ width: "100%", marginTop: 10, padding: "10px 0", background: busy ? C.border : C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: busy ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: busy ? 0.7 : 1 }}>
+                      {busy ? "Vérification…" : "▶ Commencer prépa"}
+                    </button>
+                  )}
+                  {result?.state === "assigned" && (
+                    <div style={{ marginTop: 8, padding: "8px 10px", background: "#dcfce7", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#166534", textAlign: "center" as const }}>
+                      ✅ Prête — bon imprimé
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         );
       })}

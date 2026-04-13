@@ -217,6 +217,110 @@ export async function renameLocation(session: OdooSession, locationId: number, n
 }
 
 // ============================================
+// COMMANDES EN ATTENTE — pickings non encore prêts
+// ============================================
+
+export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
+  const pickings = await searchRead(
+    session, "stock.picking",
+    [
+      ["state", "in", ["confirmed", "waiting", "partially_available"]],
+      ["picking_type_code", "=", "outgoing"],
+    ],
+    ["id", "name", "state", "scheduled_date", "date_deadline", "partner_id",
+     "origin", "carrier_id", "move_ids_without_package", "x_studio_date_dexpdition_prvue",
+     "user_id"],
+    200,
+    "date_deadline asc, scheduled_date asc, id asc"
+  );
+
+  // Enrichir avec date d'expédition prévue
+  for (const p of pickings) {
+    p.shipping_date = p.x_studio_date_dexpdition_prvue || p.date_deadline || p.scheduled_date || null;
+  }
+
+  // Trier par date d'expédition
+  pickings.sort((a: any, b: any) => {
+    const da = a.shipping_date || "9999";
+    const db = b.shipping_date || "9999";
+    return da < db ? -1 : da > db ? 1 : 0;
+  });
+
+  return pickings;
+}
+
+/**
+ * Vérifie la dispo d'un picking (action_assign), relit son état,
+ * et retourne l'état résultant + les move lines manquantes si partiel.
+ */
+export async function checkAvailabilityAndGetResult(
+  session: OdooSession,
+  pickingId: number
+): Promise<{ state: string; missingLines: any[] }> {
+  await callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
+
+  const [picking] = await searchRead(session, "stock.picking",
+    [["id", "=", pickingId]], ["state"], 1);
+  const state = picking?.state || "confirmed";
+
+  let missingLines: any[] = [];
+  if (state !== "assigned") {
+    // Récupérer les lignes avec manquants
+    const mlines = await searchRead(session, "stock.move.line",
+      [["picking_id", "=", pickingId]],
+      ["product_id", "lot_id", "reserved_uom_qty", "qty_done"], 200);
+    const moves = await searchRead(session, "stock.move",
+      [["picking_id", "=", pickingId], ["state", "!=", "cancel"]],
+      ["product_id", "product_uom_qty", "reserved_availability"], 200);
+    missingLines = moves.filter((m: any) =>
+      (m.product_uom_qty || 0) > (m.reserved_availability || 0)
+    ).map((m: any) => ({
+      product: m.product_id[1],
+      needed: m.product_uom_qty,
+      available: m.reserved_availability || 0,
+      missing: (m.product_uom_qty || 0) - (m.reserved_availability || 0),
+    }));
+  }
+
+  return { state, missingLines };
+}
+
+/**
+ * Récupère le bon de préparation en base64 via le moteur de rapports Odoo.
+ * Retourne null si non disponible.
+ */
+export async function getPickingReportBase64(
+  session: OdooSession,
+  pickingId: number
+): Promise<string | null> {
+  try {
+    const result = await call(session, "/web/dataset/call_kw", {
+      model: "ir.actions.report",
+      method: "_render_qweb_pdf",
+      args: ["stock.report_picking", [pickingId]],
+      kwargs: {},
+    });
+    // result peut être [b64string, "pdf"] ou juste b64
+    if (Array.isArray(result)) return result[0] as string;
+    return result as string;
+  } catch {
+    // Fallback: essayer avec le nom de rapport alternatif
+    try {
+      const result = await call(session, "/web/dataset/call_kw", {
+        model: "ir.actions.report",
+        method: "_render_qweb_pdf",
+        args: ["stock.report_deliveryslip", [pickingId]],
+        kwargs: {},
+      });
+      if (Array.isArray(result)) return result[0] as string;
+      return result as string;
+    } catch {
+      return null;
+    }
+  }
+}
+
+// ============================================
 // PREPARATION — Outgoing pickings
 // ============================================
 
