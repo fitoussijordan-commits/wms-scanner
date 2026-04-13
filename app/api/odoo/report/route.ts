@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
-async function addDateOverlay(pdfBytes: ArrayBuffer): Promise<Uint8Array> {
+async function addDateOverlay(pdfBytes: ArrayBuffer, overlayDate?: string): Promise<Uint8Array> {
   try {
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const pages = pdfDoc.getPages();
@@ -14,9 +14,17 @@ async function addDateOverlay(pdfBytes: ArrayBuffer): Promise<Uint8Array> {
     const page = pages[0];
     const { width } = page.getSize();
 
-    // Date du jour au format DD/MM
-    const now = new Date();
-    const dateStr = now.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" });
+    // Utiliser la date passée (date du BL) ou aujourd'hui en fallback
+    let dateStr: string;
+    if (overlayDate) {
+      const d = new Date(overlayDate);
+      dateStr = isNaN(d.getTime())
+        ? overlayDate.substring(0, 5) // si déjà "14/04" par ex.
+        : d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" });
+    } else {
+      const now = new Date();
+      dateStr = now.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" });
+    }
 
     const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const fontSize = 48;
@@ -56,7 +64,7 @@ async function addDateOverlay(pdfBytes: ArrayBuffer): Promise<Uint8Array> {
 
 export async function POST(req: NextRequest) {
   try {
-    const { odooUrl, sessionId, reportName, recordId } = await req.json();
+    const { odooUrl, sessionId, reportName, recordId, overlayDate } = await req.json();
 
     if (!odooUrl || !reportName || !recordId) {
       return NextResponse.json({ error: "odooUrl, reportName et recordId requis" }, { status: 400 });
@@ -87,8 +95,8 @@ export async function POST(req: NextRequest) {
 
     const buffer = await res.arrayBuffer();
 
-    // Ajouter la date du jour en overlay sur la première page
-    const pdfWithDate = await addDateOverlay(buffer);
+    // Ajouter la date du BL en overlay sur la première page
+    const pdfWithDate = await addDateOverlay(buffer, overlayDate);
     const base64 = Buffer.from(pdfWithDate).toString("base64");
 
     return NextResponse.json({ base64 });

@@ -4666,7 +4666,8 @@ function WaitingOrdersScreen({
         if (printerId) {
           let b64: string | null = null;
           try {
-            b64 = await odoo.getPickingReportBase64(session, picking.id);
+            const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
+            b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate);
           } catch (e: any) {
             onToast(`❌ Erreur PDF Odoo : ${e.message}`);
           }
