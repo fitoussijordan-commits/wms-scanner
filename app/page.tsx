@@ -1655,7 +1655,7 @@ export default function Page() {
         )}
 
         {/* ===== SETTINGS ===== */}
-        {screen === "settings" && session && odoo.isAdmin(session) && (
+        {screen === "settings" && session && (
           <SettingsScreen onBack={goHome} session={session} />
         )}
 
@@ -2010,7 +2010,7 @@ function Header({ name, onLogout, onHome, onSettings, isAdmin }: { name?: string
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.green, boxShadow: `0 0 6px ${C.green}` }} />
         <span style={{ fontSize: 12, color: C.textSec }}>{name}</span>
-        {isAdmin && <button onClick={onSettings} style={iconBtn}>{settingsIcon}</button>}
+        <button onClick={onSettings} style={iconBtn}>{settingsIcon}</button>
         <button onClick={onLogout} style={iconBtn}>{logoutIcon}</button>
       </div>
     </header>
