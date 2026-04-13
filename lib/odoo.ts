@@ -363,40 +363,35 @@ export function savePrepReportName(reportName: string): void {
 }
 
 /**
- * Récupère le bon de préparation en base64 via le moteur de rapports Odoo.
- * Utilise le rapport configuré dans les paramètres (défaut: stock.report_picking).
+ * Récupère le bon de préparation en base64 via l'endpoint HTTP /report/pdf/ d'Odoo.
+ * Plus fiable que _render_qweb_pdf (compatible toutes versions Odoo).
  */
 export async function getPickingReportBase64(
   session: OdooSession,
   pickingId: number,
   reportName?: string
-): Promise<string | null> {
+): Promise<string> {
   const name = reportName || getSavedPrepReportName();
-  try {
-    const result = await call(session, "/web/dataset/call_kw", {
-      model: "ir.actions.report",
-      method: "_render_qweb_pdf",
-      args: [name, [pickingId]],
-      kwargs: {},
-    });
-    if (Array.isArray(result)) return result[0] as string;
-    return result as string;
-  } catch {
-    // Fallback si le rapport configuré échoue
-    if (name !== "stock.report_picking") {
-      try {
-        const result = await call(session, "/web/dataset/call_kw", {
-          model: "ir.actions.report",
-          method: "_render_qweb_pdf",
-          args: ["stock.report_picking", [pickingId]],
-          kwargs: {},
-        });
-        if (Array.isArray(result)) return result[0] as string;
-        return result as string;
-      } catch {}
-    }
-    return null;
+
+  const res = await fetch("/api/odoo/report", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      odooUrl: session.config.url,
+      sessionId: session.sessionId,
+      reportName: name,
+      recordId: pickingId,
+    }),
+  });
+
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    throw new Error(data.error || `Erreur rapport ${res.status}`);
   }
+  if (!data.base64) {
+    throw new Error("PDF vide retourné par Odoo");
+  }
+  return data.base64;
 }
 
 // ============================================
