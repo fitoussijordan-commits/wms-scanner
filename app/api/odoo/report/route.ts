@@ -5,66 +5,80 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
-async function addDateOverlay(pdfBytes: ArrayBuffer, overlayDate?: string): Promise<Uint8Array> {
+async function addDateOverlay(pdfBytes: ArrayBuffer, overlayDate?: string, overlayIndex?: number, overlayTotal?: number): Promise<Uint8Array> {
   try {
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const pages = pdfDoc.getPages();
     if (pages.length === 0) return new Uint8Array(pdfBytes);
 
     const page = pages[0];
-    const { width } = page.getSize();
+    const { width, height } = page.getSize();
 
-    // Utiliser la date passée (date du BL) ou aujourd'hui en fallback
+    // Date du BL au format DD/MM
     let dateStr: string;
     if (overlayDate) {
       const d = new Date(overlayDate);
       dateStr = isNaN(d.getTime())
-        ? overlayDate.substring(0, 5) // si déjà "14/04" par ex.
+        ? overlayDate.substring(0, 5)
         : d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" });
     } else {
-      const now = new Date();
-      dateStr = now.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" });
+      dateStr = new Date().toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" });
     }
 
     const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-    const fontSize = 48;
-    const textWidth = font.widthOfTextAtSize(dateStr, fontSize);
 
-    // Positionné en haut à droite du logo (zone gauche, haut de page)
-    // PDF coordinates: origin bottom-left
-    const pageHeight = page.getSize().height;
-    const x = width / 2 - textWidth / 2; // centré horizontalement
-    const y = pageHeight - 90; // ~3cm du haut
+    // -- Date en gros au centre --
+    const dateFontSize = 48;
+    const dateWidth = font.widthOfTextAtSize(dateStr, dateFontSize);
+    const dateX = width / 2 - dateWidth / 2;
+    const dateY = height - 90;
 
-    // Rectangle blanc semi-transparent derrière la date pour lisibilité
+    // Fond blanc derrière la date
+    const boxW = dateWidth + (overlayTotal && overlayTotal > 1 ? 120 : 20);
+    const boxX = width / 2 - boxW / 2;
     page.drawRectangle({
-      x: x - 10,
-      y: y - 10,
-      width: textWidth + 20,
-      height: fontSize + 16,
+      x: boxX,
+      y: dateY - 10,
+      width: boxW,
+      height: dateFontSize + 16,
       color: rgb(1, 1, 1),
-      opacity: 0.85,
+      opacity: 0.9,
     });
 
     page.drawText(dateStr, {
-      x,
-      y,
-      size: fontSize,
+      x: dateX,
+      y: dateY,
+      size: dateFontSize,
       font,
       color: rgb(0.08, 0.08, 0.08),
-      opacity: 1,
     });
+
+    // -- Numéro de position (ex: 2/3) si groupe --
+    if (overlayIndex !== undefined && overlayTotal !== undefined && overlayTotal > 1) {
+      const posStr = `${overlayIndex}/${overlayTotal}`;
+      const posFontSize = 36;
+      const posWidth = font.widthOfTextAtSize(posStr, posFontSize);
+      const posX = dateX + dateWidth + 12;
+      const posY = dateY + (dateFontSize - posFontSize) / 2;
+
+      page.drawText(posStr, {
+        x: posX,
+        y: posY,
+        size: posFontSize,
+        font,
+        color: rgb(0.15, 0.45, 0.9), // bleu
+      });
+    }
 
     return pdfDoc.save();
   } catch {
-    // Si l'overlay échoue, retourner le PDF original
     return new Uint8Array(pdfBytes);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const { odooUrl, sessionId, reportName, recordId, overlayDate } = await req.json();
+    const { odooUrl, sessionId, reportName, recordId, overlayDate, overlayIndex, overlayTotal } = await req.json();
 
     if (!odooUrl || !reportName || !recordId) {
       return NextResponse.json({ error: "odooUrl, reportName et recordId requis" }, { status: 400 });
@@ -95,8 +109,8 @@ export async function POST(req: NextRequest) {
 
     const buffer = await res.arrayBuffer();
 
-    // Ajouter la date du BL en overlay sur la première page
-    const pdfWithDate = await addDateOverlay(buffer, overlayDate);
+    // Ajouter la date du BL + numéro de position en overlay sur la première page
+    const pdfWithDate = await addDateOverlay(buffer, overlayDate, overlayIndex, overlayTotal);
     const base64 = Buffer.from(pdfWithDate).toString("base64");
 
     return NextResponse.json({ base64 });

@@ -370,7 +370,9 @@ export async function getPickingReportBase64(
   session: OdooSession,
   pickingId: number,
   reportName?: string,
-  overlayDate?: string
+  overlayDate?: string,
+  overlayIndex?: number,
+  overlayTotal?: number
 ): Promise<string> {
   const name = reportName || getSavedPrepReportName();
 
@@ -383,6 +385,8 @@ export async function getPickingReportBase64(
       reportName: name,
       recordId: pickingId,
       overlayDate,
+      overlayIndex,
+      overlayTotal,
     }),
   });
 

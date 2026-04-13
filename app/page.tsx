@@ -4669,7 +4669,9 @@ function WaitingOrdersScreen({
         : pickingsGroup[0].name;
       onToast(`🔍 Vérification de la disponibilité — ${label}…`);
 
-      for (const picking of pickingsGroup) {
+      const total = pickingsGroup.length;
+      for (let i = 0; i < total; i++) {
+        const picking = pickingsGroup[i];
         const { state, missingLines } = await odoo.checkAvailabilityAndGetResult(session, picking.id);
         try { await odoo.write(session, "stock.picking", [picking.id], { user_id: session.uid }); } catch {}
         setResults(prev => ({ ...prev, [picking.id]: { state, missingLines } }));
@@ -4680,7 +4682,8 @@ function WaitingOrdersScreen({
           if (printerId) {
             try {
               const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
-              const b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate);
+              // Passer index (1-based) et total pour afficher "1/2", "2/2" etc. sur le BL
+              const b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate, i + 1, total);
               if (b64) {
                 const r = await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
                 if (r.success) printedCount++;
