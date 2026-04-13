@@ -5375,6 +5375,23 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
   const [configs, setConfigs] = useState<Record<LabelType, pn.LabelTypeConfig>>(() => pn.getAllLabelTypeConfigs());
   const [openType, setOpenType] = useState<LabelType | null>(null);
 
+  // Rapport bon de préparation
+  const [reportList, setReportList] = useState<{ id: number; name: string; report_name: string }[]>([]);
+  const [selectedReport, setSelectedReport] = useState<string>(() => odoo.getSavedPrepReportName());
+  const [loadingReports, setLoadingReports] = useState(false);
+
+  const fetchReports = async () => {
+    if (!session) return;
+    setLoadingReports(true);
+    try {
+      const list = await odoo.getPickingReportList(session);
+      setReportList(list);
+    } catch (e: any) { setMsg("Erreur rapports: " + e.message); }
+    setLoadingReports(false);
+  };
+
+  useEffect(() => { fetchReports(); }, []);
+
   const SIZES = [
     { label: "50×30", w: 50, h: 30 }, { label: "70×45", w: 70, h: 45 },
     { label: "100×70", w: 100, h: 70 }, { label: "100×150", w: 100, h: 150 },
@@ -5455,6 +5472,32 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
           <Alert type="info">Ajoute PRINTNODE_API_KEY dans les variables Vercel pour activer PrintNode.</Alert>
         </Section>
       )}
+
+      {/* Rapport bon de préparation */}
+      <Section>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>📄 Rapport bon de préparation</div>
+        <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 10 }}>Utilisé lors du "Commencer prépa" dans les commandes en attente.</div>
+        {loadingReports ? (
+          <div style={{ fontSize: 12, color: C.textMuted }}>Chargement des rapports Odoo…</div>
+        ) : reportList.length === 0 ? (
+          <button onClick={fetchReports} style={{ fontSize: 12, color: C.blue, background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit" }}>
+            Charger les rapports disponibles
+          </button>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column" as const, gap: 6 }}>
+            {reportList.map(r => (
+              <button key={r.id} onClick={() => { setSelectedReport(r.report_name); odoo.savePrepReportName(r.report_name); setMsg(`✓ Rapport sélectionné : ${r.name}`); setTimeout(() => setMsg(""), 2000); }}
+                style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: selectedReport === r.report_name ? "#eff6ff" : C.bg, border: `1.5px solid ${selectedReport === r.report_name ? C.blue : C.border}`, borderRadius: 9, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+                <div style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${selectedReport === r.report_name ? C.blue : C.border}`, background: selectedReport === r.report_name ? C.blue : "transparent", flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: selectedReport === r.report_name ? 700 : 500, color: C.text }}>{r.name}</div>
+                  <div style={{ fontSize: 10, color: C.textMuted }}>{r.report_name}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </Section>
 
       {/* Per-type configs */}
       <Section>

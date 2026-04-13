@@ -235,11 +235,17 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
   }
   if (!typeIds.length) return [];
 
+  // Filtre de date : on ne remonte que les 90 derniers jours pour éviter les vieux BL bloqués
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - 90);
+  const cutoff = cutoffDate.toISOString().split("T")[0] + " 00:00:00";
+
   const pickings = await searchRead(
     session, "stock.picking",
     [
       ["picking_type_id", "in", typeIds],
       ["state", "in", ["confirmed", "waiting", "partially_available"]],
+      ["scheduled_date", ">=", cutoff],
     ],
     ["id", "name", "state", "scheduled_date", "date_deadline", "partner_id",
      "origin", "carrier_id", "move_ids_without_package", "group_id",
@@ -248,21 +254,8 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
     "date_deadline asc, scheduled_date asc, id asc"
   );
 
-  // Appliquer le même filtre tag "En attente" que getOutgoingPickings
-  const tagIds = Array.from(new Set(
-    pickings.flatMap((p: any) => p.x_studio_etiquettes_commande || [])
-  )) as number[];
-  let excludeTagIds: number[] = [];
-  if (tagIds.length > 0) {
-    const tags = await searchRead(session, "crm.tag", [["id", "in", tagIds]], ["id", "name"], tagIds.length);
-    excludeTagIds = tags.filter((t: any) => t.name?.toLowerCase().includes("en attente")).map((t: any) => t.id);
-  }
-  const filtered = excludeTagIds.length > 0
-    ? pickings.filter((p: any) => {
-        const pTags: number[] = p.x_studio_etiquettes_commande || [];
-        return !pTags.some((tid: number) => excludeTagIds.includes(tid));
-      })
-    : pickings;
+  // NOTE: on n'exclut PAS le tag "En attente" ici — c'est précisément ces commandes qu'on veut afficher
+  const filtered = pickings;
 
   // Enrichir avec date d'expédition prévue
   // Si PICK, remonter la date depuis l'OUT lié via group_id
@@ -343,37 +336,59 @@ export async function checkAvailabilityAndGetResult(
 }
 
 /**
+ * Liste tous les rapports PDF disponibles pour stock.picking.
+ * Utilisé dans les Paramètres pour choisir le bon de préparation.
+ */
+export async function getPickingReportList(session: OdooSession): Promise<{ id: number; name: string; report_name: string }[]> {
+  return searchRead(session, "ir.actions.report",
+    [["model", "=", "stock.picking"], ["report_type", "ilike", "qweb"]],
+    ["id", "name", "report_name"],
+    50, "name asc"
+  );
+}
+
+const PREP_REPORT_KEY = "wms_prep_report_name";
+export function getSavedPrepReportName(): string {
+  try { return localStorage.getItem(PREP_REPORT_KEY) || "stock.report_picking"; } catch { return "stock.report_picking"; }
+}
+export function savePrepReportName(reportName: string): void {
+  try { localStorage.setItem(PREP_REPORT_KEY, reportName); } catch {}
+}
+
+/**
  * Récupère le bon de préparation en base64 via le moteur de rapports Odoo.
- * Retourne null si non disponible.
+ * Utilise le rapport configuré dans les paramètres (défaut: stock.report_picking).
  */
 export async function getPickingReportBase64(
   session: OdooSession,
-  pickingId: number
+  pickingId: number,
+  reportName?: string
 ): Promise<string | null> {
+  const name = reportName || getSavedPrepReportName();
   try {
     const result = await call(session, "/web/dataset/call_kw", {
       model: "ir.actions.report",
       method: "_render_qweb_pdf",
-      args: ["stock.report_picking", [pickingId]],
+      args: [name, [pickingId]],
       kwargs: {},
     });
-    // result peut être [b64string, "pdf"] ou juste b64
     if (Array.isArray(result)) return result[0] as string;
     return result as string;
   } catch {
-    // Fallback: essayer avec le nom de rapport alternatif
-    try {
-      const result = await call(session, "/web/dataset/call_kw", {
-        model: "ir.actions.report",
-        method: "_render_qweb_pdf",
-        args: ["stock.report_deliveryslip", [pickingId]],
-        kwargs: {},
-      });
-      if (Array.isArray(result)) return result[0] as string;
-      return result as string;
-    } catch {
-      return null;
+    // Fallback si le rapport configuré échoue
+    if (name !== "stock.report_picking") {
+      try {
+        const result = await call(session, "/web/dataset/call_kw", {
+          model: "ir.actions.report",
+          method: "_render_qweb_pdf",
+          args: ["stock.report_picking", [pickingId]],
+          kwargs: {},
+        });
+        if (Array.isArray(result)) return result[0] as string;
+        return result as string;
+      } catch {}
     }
+    return null;
   }
 }
 
