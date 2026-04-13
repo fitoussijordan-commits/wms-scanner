@@ -1156,6 +1156,16 @@ export default function Page() {
             lotId = rawLotsLike[0].id; lotName = rawLotsLike[0].name; productId = rawLotsLike[0].product_id?.[0] || null;
             prepLotCache.current.set(code.trim().toLowerCase(), { lot: rawLotsLike[0], product: { id: productId } });
           } else {
+            // Pas un lot — peut-être un emplacement scanné hors parcours
+            const locFallback = await odoo.searchRead(session, "stock.location",
+              [["barcode", "=", code.trim()]], ["id", "name", "complete_name", "barcode"], 1);
+            if (locFallback.length) {
+              // C'est un emplacement → on bascule dessus sans bloquer
+              prepLocCache.current.set(code.trim().toLowerCase(), locFallback[0]);
+              updatePrepStep(null);
+              doPrepScan(code);
+              return;
+            }
             showToast(`⚠ Lot "${code}" introuvable`);
             flashScan("err");
             return;
