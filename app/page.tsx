@@ -4664,20 +4664,25 @@ function WaitingOrdersScreen({
         const cfg = pn.getLabelTypeConfig("packingslip");
         const printerId = cfg.printerId || pn.getSavedPrinterId();
         if (printerId) {
+          let b64: string | null = null;
           try {
-            const b64 = await odoo.getPickingReportBase64(session, picking.id);
-            if (b64) {
-              await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
+            b64 = await odoo.getPickingReportBase64(session, picking.id);
+          } catch (e: any) {
+            onToast(`❌ Erreur PDF Odoo : ${e.message}`);
+          }
+          if (b64) {
+            const result = await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
+            if (result.success) {
               onToast(`✅ Bon de prépa ${picking.name} imprimé`);
             } else {
-              onToast(`✅ Prêt — ouvrir le BL pour imprimer le bon`);
+              onToast(`❌ Erreur impression : ${result.error}`);
             }
-          } catch { onToast(`✅ Prêt — impression manuelle nécessaire`); }
+          } else if (!b64) {
+            onToast(`⚠️ PDF vide — vérifier le template dans Paramètres`);
+          }
         } else {
-          onToast(`✅ ${picking.name} est prêt — aucune imprimante configurée`);
+          onToast(`⚠️ Aucune imprimante configurée pour "Bon de préparation (A4)"`);
         }
-        // Proposer d'ouvrir la prépa
-        onStartPrep({ ...picking, state: "assigned" });
       } else if (missingLines.length > 0) {
         const names = missingLines.slice(0, 3).map((m: any) => `${m.product} (manque ${m.missing})`).join(", ");
         onToast(`⚠️ Manquants : ${names}${missingLines.length > 3 ? "…" : ""}`);
