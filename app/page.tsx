@@ -5390,7 +5390,12 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
     setLoadingReports(false);
   };
 
-  useEffect(() => { fetchReports(); }, []);
+  // Charger les rapports quand on ouvre la section packingslip
+  useEffect(() => {
+    if (openType === "packingslip" && reportList.length === 0 && !loadingReports) {
+      fetchReports();
+    }
+  }, [openType]);
 
   const SIZES = [
     { label: "50×30", w: 50, h: 30 }, { label: "70×45", w: 70, h: 45 },
@@ -5473,32 +5478,6 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
         </Section>
       )}
 
-      {/* Rapport bon de préparation */}
-      <Section>
-        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>📄 Rapport bon de préparation</div>
-        <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 10 }}>Utilisé lors du "Commencer prépa" dans les commandes en attente.</div>
-        {loadingReports ? (
-          <div style={{ fontSize: 12, color: C.textMuted }}>Chargement des rapports Odoo…</div>
-        ) : reportList.length === 0 ? (
-          <button onClick={fetchReports} style={{ fontSize: 12, color: C.blue, background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit" }}>
-            Charger les rapports disponibles
-          </button>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column" as const, gap: 6 }}>
-            {reportList.map(r => (
-              <button key={r.id} onClick={() => { setSelectedReport(r.report_name); odoo.savePrepReportName(r.report_name); setMsg(`✓ Rapport sélectionné : ${r.name}`); setTimeout(() => setMsg(""), 2000); }}
-                style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: selectedReport === r.report_name ? "#eff6ff" : C.bg, border: `1.5px solid ${selectedReport === r.report_name ? C.blue : C.border}`, borderRadius: 9, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
-                <div style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${selectedReport === r.report_name ? C.blue : C.border}`, background: selectedReport === r.report_name ? C.blue : "transparent", flexShrink: 0 }} />
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: selectedReport === r.report_name ? 700 : 500, color: C.text }}>{r.name}</div>
-                  <div style={{ fontSize: 10, color: C.textMuted }}>{r.report_name}</div>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </Section>
-
       {/* Per-type configs */}
       <Section>
         <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>⚙️ Configuration par type d'étiquette</div>
@@ -5574,6 +5553,33 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
                       <span style={{ color: C.textMuted, fontSize: 11 }}>mm</span>
                     </div>
                   </div>
+
+                  {/* Rapport PDF — uniquement pour packingslip */}
+                  {key === "packingslip" && (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 6 }}>Rapport Odoo à imprimer</div>
+                      {loadingReports ? (
+                        <div style={{ fontSize: 12, color: C.textMuted }}>Chargement…</div>
+                      ) : reportList.length === 0 ? (
+                        <button onClick={fetchReports} style={{ fontSize: 12, color: C.blue, background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit" }}>
+                          Charger les rapports disponibles
+                        </button>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column" as const, gap: 5 }}>
+                          {reportList.map(r => (
+                            <button key={r.id} onClick={() => { setSelectedReport(r.report_name); odoo.savePrepReportName(r.report_name); setMsg(`✓ ${r.name}`); setTimeout(() => setMsg(""), 2000); }}
+                              style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: selectedReport === r.report_name ? "#eff6ff" : C.bg, border: `1.5px solid ${selectedReport === r.report_name ? C.blue : C.border}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+                              <div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${selectedReport === r.report_name ? C.blue : C.border}`, background: selectedReport === r.report_name ? C.blue : "transparent", flexShrink: 0 }} />
+                              <div>
+                                <div style={{ fontSize: 12, fontWeight: selectedReport === r.report_name ? 700 : 500, color: C.text }}>{r.name}</div>
+                                <div style={{ fontSize: 10, color: C.textMuted }}>{r.report_name}</div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Test button */}
                   {hasKey && cfg.printerId && (

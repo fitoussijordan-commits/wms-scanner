@@ -235,18 +235,22 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
   }
   if (!typeIds.length) return [];
 
-  // Filtre de date : on ne remonte que les 90 derniers jours pour éviter les vieux BL bloqués
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - 90);
-  const cutoff = cutoffDate.toISOString().split("T")[0] + " 00:00:00";
+  // Trouver l'ID du tag "En attente" — on veut UNIQUEMENT les pickings qui ont ce tag
+  const enAttenteTags = await searchRead(session, "crm.tag", [["name", "ilike", "en attente"]], ["id", "name"], 10);
+  const enAttenteTagIds: number[] = enAttenteTags.map((t: any) => t.id);
+
+  // Construire le domaine : PICK + état non-done + tag "En attente" présent
+  const domain: any[] = [
+    ["picking_type_id", "in", typeIds],
+    ["state", "in", ["confirmed", "waiting", "partially_available"]],
+  ];
+  if (enAttenteTagIds.length > 0) {
+    domain.push(["x_studio_etiquettes_commande", "in", enAttenteTagIds]);
+  }
 
   const pickings = await searchRead(
     session, "stock.picking",
-    [
-      ["picking_type_id", "in", typeIds],
-      ["state", "in", ["confirmed", "waiting", "partially_available"]],
-      ["scheduled_date", ">=", cutoff],
-    ],
+    domain,
     ["id", "name", "state", "scheduled_date", "date_deadline", "partner_id",
      "origin", "carrier_id", "move_ids_without_package", "group_id",
      "x_studio_date_dexpdition_prvue", "x_studio_etiquettes_commande", "user_id"],
@@ -254,7 +258,6 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
     "date_deadline asc, scheduled_date asc, id asc"
   );
 
-  // NOTE: on n'exclut PAS le tag "En attente" ici — c'est précisément ces commandes qu'on veut afficher
   const filtered = pickings;
 
   // Enrichir avec date d'expédition prévue
@@ -340,11 +343,13 @@ export async function checkAvailabilityAndGetResult(
  * Utilisé dans les Paramètres pour choisir le bon de préparation.
  */
 export async function getPickingReportList(session: OdooSession): Promise<{ id: number; name: string; report_name: string }[]> {
-  return searchRead(session, "ir.actions.report",
-    [["model", "=", "stock.picking"], ["report_type", "ilike", "qweb"]],
-    ["id", "name", "report_name"],
-    50, "name asc"
-  );
+  // Passer lang: fr_FR pour obtenir les noms traduits (ex: "Bon de préparation simplifié 2")
+  return call(session, "/web/dataset/call_kw", {
+    model: "ir.actions.report",
+    method: "search_read",
+    args: [[["model", "=", "stock.picking"], ["report_type", "ilike", "qweb"]]],
+    kwargs: { fields: ["id", "name", "report_name"], limit: 50, order: "name asc", context: { lang: "fr_FR" } },
+  });
 }
 
 const PREP_REPORT_KEY = "wms_prep_report_name";
