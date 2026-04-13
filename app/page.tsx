@@ -4663,15 +4663,14 @@ function WaitingOrdersScreen({
     let printedCount = 0;
     let readyCount = 0;
 
-    try {
-      const label = pickingsGroup.length > 1
-        ? `${pickingsGroup.length} commandes`
-        : pickingsGroup[0].name;
-      onToast(`🔍 Vérification de la disponibilité — ${label}…`);
+    const label = pickingsGroup.length > 1 ? `${pickingsGroup.length} commandes` : pickingsGroup[0].name;
+    onToast(`🔍 Vérification de la disponibilité — ${label}…`);
 
-      const total = pickingsGroup.length;
-      for (let i = 0; i < total; i++) {
-        const picking = pickingsGroup[i];
+    const total = pickingsGroup.length;
+    for (let i = 0; i < total; i++) {
+      const picking = pickingsGroup[i];
+      // Chaque picking a son propre try/catch — une erreur n'arrête pas les suivants
+      try {
         const { state, missingLines } = await odoo.checkAvailabilityAndGetResult(session, picking.id);
         try { await odoo.write(session, "stock.picking", [picking.id], { user_id: session.uid }); } catch {}
         setResults(prev => ({ ...prev, [picking.id]: { state, missingLines } }));
@@ -4682,7 +4681,6 @@ function WaitingOrdersScreen({
           if (printerId) {
             try {
               const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
-              // Passer index (1-based) et total pour afficher "1/2", "2/2" etc. sur le BL
               const b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate, i + 1, total);
               if (b64) {
                 const r = await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
@@ -4695,14 +4693,17 @@ function WaitingOrdersScreen({
           const names = missingLines.slice(0, 2).map((m: any) => `${m.product} (−${m.missing})`).join(", ");
           onToast(`⚠️ ${picking.name} — manquants : ${names}`);
         }
+      } catch (e: any) {
+        onToast(`❌ ${picking.name} : ${e.message}`);
+        // On continue quand même avec les pickings suivants
       }
+    }
 
-      if (readyCount > 0 && printerId) {
-        onToast(`✅ ${readyCount} commande${readyCount > 1 ? "s" : ""} prête${readyCount > 1 ? "s" : ""} — ${printedCount} bon${printedCount > 1 ? "s" : ""} imprimé${printedCount > 1 ? "s" : ""}`);
-      } else if (readyCount > 0) {
-        onToast(`✅ ${readyCount} commande${readyCount > 1 ? "s" : ""} prête${readyCount > 1 ? "s" : ""} — aucune imprimante configurée`);
-      }
-    } catch (e: any) { onToast("❌ " + e.message); }
+    if (readyCount > 0 && printerId) {
+      onToast(`✅ ${readyCount} commande${readyCount > 1 ? "s" : ""} prête${readyCount > 1 ? "s" : ""} — ${printedCount} bon${printedCount > 1 ? "s" : ""} imprimé${printedCount > 1 ? "s" : ""}`);
+    } else if (readyCount > 0) {
+      onToast(`✅ ${readyCount} commande${readyCount > 1 ? "s" : ""} prête${readyCount > 1 ? "s" : ""} — aucune imprimante configurée`);
+    }
     setProcessing(prev => ({ ...prev, [groupId]: false }));
   };
 
