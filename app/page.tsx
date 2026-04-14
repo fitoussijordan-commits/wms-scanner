@@ -5869,28 +5869,28 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   const totalLines = allLines.length;
   const allDone = totalLines > 0 && doneLines === totalLines;
 
-  // Progression par colis (= par picking source)
-  // Chaque move line a picking_id[0]. Un colis est "fait" quand toutes ses lignes sont complètes.
+  // Progression en unités (quantités réelles scannées)
+  const totalUnits = allLines.reduce((s: number, ml: any) => s + (ml.reserved_uom_qty || 0), 0);
+  const doneUnits = allLines.reduce((s: number, ml: any) => s + Math.min(getQty(ml), ml.reserved_uom_qty || 0), 0);
+
+  // Progression par colis (= par picking source) — utile seulement en groupe
   const colisProgress = useMemo(() => {
-    const groups = new Map<number, { total: number; done: number; name: string }>();
+    const groups = new Map<number, { total: number; done: number }>();
     for (const ml of allLines) {
       const pid = ml.picking_id?.[0];
-      const pname = ml.picking_id?.[1] || "—";
       if (!pid) continue;
-      if (!groups.has(pid)) groups.set(pid, { total: 0, done: 0, name: pname });
+      if (!groups.has(pid)) groups.set(pid, { total: 0, done: 0 });
       const g = groups.get(pid)!;
       g.total++;
       if (getQty(ml) >= (ml.reserved_uom_qty || 0)) g.done++;
     }
     const entries = Array.from(groups.values());
-    const totalColis = entries.length || 1;
+    const totalColis = entries.length;
     const doneColis = entries.filter(g => g.done === g.total).length;
-    return { totalColis, doneColis };
+    return { totalColis, doneColis, isGroup: totalColis > 1 };
   }, [allLines, doneLines]);
 
-  const progress = colisProgress.totalColis > 0
-    ? Math.round((colisProgress.doneColis / colisProgress.totalColis) * 100)
-    : 0;
+  const progress = totalUnits > 0 ? Math.round((doneUnits / totalUnits) * 100) : 0;
 
   // locOk suit exactement prepStep : true quand un emplacement est scanné, false sinon
   // (remplace les deux anciens useEffect qui laissaient locOk=true après déviation terminée)
@@ -6061,14 +6061,9 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Progression</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: allDone ? C.green : C.blue }}>
-              {colisProgress.doneColis}/{colisProgress.totalColis} colis
-            </span>
-            <span style={{ fontSize: 11, color: C.textMuted }}>
-              ({doneLines}/{totalLines} réf)
-            </span>
-          </div>
+          <span style={{ fontSize: 13, fontWeight: 700, color: allDone ? C.green : C.blue }}>
+            {doneUnits}/{totalUnits} produits
+          </span>
         </div>
         <div style={{ height: 8, borderRadius: 4, background: C.bg, overflow: "hidden", border: `1px solid ${C.border}` }}>
           <div style={{ height: "100%", width: `${progress}%`, borderRadius: 4, background: allDone ? C.green : C.blue, transition: "width .3s" }} />
