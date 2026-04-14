@@ -4361,6 +4361,35 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const [resending, setResending] = useState<Record<number, boolean>>({});
   const [newWeight, setNewWeight] = useState<Record<number, string>>({});
   const [addingPkg, setAddingPkg] = useState<Record<number, boolean>>({});
+  const [printingPdf, setPrintingPdf] = useState(false);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
+
+  const printLocalPdf = () => pdfInputRef.current?.click();
+
+  const handlePdfFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPrintingPdf(true);
+    try {
+      const cfg = pn.getLabelTypeConfig("blank");
+      const pid = cfg.printerId || pn.getSavedPrinterId();
+      if (!pid) { onToast("⚠️ Aucune imprimante configurée dans les paramètres"); setPrintingPdf(false); return; }
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          resolve(result.split(",")[1]); // strip data:application/pdf;base64,
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const result = await pn.printPdfLabel(pid, base64, file.name);
+      if (result.success) onToast(`✅ "${file.name}" envoyé à l'imprimante`);
+      else onToast("❌ " + (result.error || "Erreur impression"));
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setPrintingPdf(false);
+    if (pdfInputRef.current) pdfInputRef.current.value = "";
+  };
 
   const search = async (q = query) => {
     if (!q.trim() && pickings.length === 0) return;
@@ -4488,6 +4517,13 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
           {searching ? "…" : "🔍"}
         </button>
       </div>
+
+      {/* Imprimer un PDF local (étiquette transporteur générée ailleurs) */}
+      <input ref={pdfInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handlePdfFile} />
+      <button onClick={printLocalPdf} disabled={printingPdf}
+        style={{ width: "100%", padding: 12, background: printingPdf ? C.bg : "#f0fdf4", border: `1.5px solid ${C.greenBorder}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, color: C.green, fontFamily: "inherit", marginBottom: 12, opacity: printingPdf ? 0.6 : 1 }}>
+        {printingPdf ? "Envoi en cours…" : "🖨️ Imprimer un PDF depuis mon Mac"}
+      </button>
 
       {pickings.length === 0 && !searching && (
         <button onClick={() => search("")}
