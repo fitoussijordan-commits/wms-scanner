@@ -1160,10 +1160,22 @@ export default function Page() {
             const locFallback = await odoo.searchRead(session, "stock.location",
               [["barcode", "=", code.trim()]], ["id", "name", "complete_name", "barcode"], 1);
             if (locFallback.length) {
-              // C'est un emplacement → on bascule dessus sans bloquer
-              prepLocCache.current.set(code.trim().toLowerCase(), locFallback[0]);
-              updatePrepStep(null);
-              doPrepScan(code);
+              const newLoc = locFallback[0];
+              prepLocCache.current.set(code.trim().toLowerCase(), newLoc);
+              const locId = newLoc.id;
+              const pending = currentLines.filter((ml: any) =>
+                ml.location_id && ml.location_id[0] === locId && (ml.qty_done || 0) < (ml.reserved_uom_qty || 0)
+              );
+              if (pending.length === 0) {
+                showToast(`Aucun article à prendre à ${newLoc.name}`);
+                flashScan("err");
+                return;
+              }
+              const ml = pending[0];
+              const remaining = (ml.reserved_uom_qty || 0) - (ml.qty_done || 0);
+              updatePrepStep({ locId, locName: newLoc.name, lineId: ml.id, productName: ml.product_id[1], lotName: ml.lot_id?.[1] || undefined, remaining });
+              flashScan("ok");
+              showToast(`📍 ${newLoc.name} → Scannez ${ml.lot_id ? ml.lot_id[1] : ml.product_id[1]}`);
               return;
             }
             showToast(`⚠ Lot "${code}" introuvable`);
@@ -5837,6 +5849,15 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
     return allLines.find((ml: any) => getQty(ml) < (ml.reserved_uom_qty || 0));
   }, [allLines]);
 
+  // Quand on dévie du circuit (scan d'un emplacement hors ordre), prepStep pointe
+  // vers la vraie ligne scannée. On affiche cette ligne dans la carte, pas currentLine.
+  const activeLine = useMemo(() => {
+    if (locOk && prepStep) {
+      return allLines.find((ml: any) => ml.id === prepStep.lineId) || currentLine;
+    }
+    return currentLine;
+  }, [locOk, prepStep?.lineId, allLines, currentLine]);
+
   const doneLines = allLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).length;
   const totalLines = allLines.length;
   const allDone = totalLines > 0 && doneLines === totalLines;
@@ -6092,7 +6113,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           {/* Emplacement */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
             <div style={{ background: locOk ? C.greenSoft : C.blueSoft, border: `1px solid ${locOk ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "6px 12px", fontSize: 18, fontWeight: 900, color: locOk ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center" }}>
-              📍 {shortLoc(currentLine.location_id?.[1] || "—")}
+              📍 {locOk && prepStep ? shortLoc(prepStep.locName) : shortLoc(currentLine.location_id?.[1] || "—")}
             </div>
             {locOk && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
@@ -6101,13 +6122,13 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 
           {/* Produit */}
           <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b", marginBottom: 6, lineHeight: 1.3 }}>
-            {currentLine.product_id[1]}
+            {activeLine?.product_id[1]}
           </div>
 
           {/* Lot */}
-          {currentLine.lot_id && (
+          {activeLine?.lot_id && (
             <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 700, color: "#475569", marginBottom: 10 }}>
-              🏷️ Lot {currentLine.lot_id[1]}
+              🏷️ Lot {activeLine.lot_id[1]}
             </div>
           )}
 
@@ -6116,31 +6137,31 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
             {/* Compteur +/- */}
             <div style={{ display: "flex", alignItems: "stretch", gap: 0, border: `1.5px solid ${C.border}`, borderRadius: 14, overflow: "hidden", background: C.white, marginBottom: 10 }}>
               <button
-                onClick={() => onAdjustQty(currentLine.id, getQty(currentLine) - 1)}
-                disabled={loading || (currentLine.qty_done || 0) <= 0}
-                style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 24, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}`, opacity: getQty(currentLine) <= 0 ? 0.3 : 1 }}>
+                onClick={() => activeLine && onAdjustQty(activeLine.id, getQty(activeLine) - 1)}
+                disabled={loading || !activeLine || (activeLine.qty_done || 0) <= 0}
+                style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 24, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}`, opacity: !activeLine || getQty(activeLine) <= 0 ? 0.3 : 1 }}>
                 −
               </button>
               <div style={{ flex: 1, textAlign: "center", padding: "12px 4px", minWidth: 0 }}>
-                <span style={{ fontSize: 36, fontWeight: 900, color: C.text }}>{getQty(currentLine)}</span>
+                <span style={{ fontSize: 36, fontWeight: 900, color: C.text }}>{activeLine ? getQty(activeLine) : 0}</span>
                 <span style={{ fontSize: 18, color: C.textMuted, margin: "0 4px" }}>/</span>
-                <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{currentLine.reserved_uom_qty || 0}</span>
-                <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 4 }}>{currentLine.product_uom_id?.[1] || ""}</span>
+                <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{activeLine?.reserved_uom_qty || 0}</span>
+                <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 4 }}>{activeLine?.product_uom_id?.[1] || ""}</span>
               </div>
               <button
-                onClick={() => onAdjustQty(currentLine.id, getQty(currentLine) + 1)}
-                disabled={loading || (currentLine.qty_done || 0) >= (currentLine.reserved_uom_qty || 0)}
-                style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 24, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderLeft: `1px solid ${C.blue}`, opacity: getQty(currentLine) >= (currentLine.reserved_uom_qty || 0) ? 0.3 : 1 }}>
+                onClick={() => activeLine && onAdjustQty(activeLine.id, getQty(activeLine) + 1)}
+                disabled={loading || !activeLine || (activeLine.qty_done || 0) >= (activeLine.reserved_uom_qty || 0)}
+                style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 24, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderLeft: `1px solid ${C.blue}`, opacity: !activeLine || getQty(activeLine) >= (activeLine.reserved_uom_qty || 0) ? 0.3 : 1 }}>
                 +
               </button>
             </div>
             {/* Bouton "Tout mettre" — visible dès qu'on a scanné au moins 1 */}
-            {locOk && getQty(currentLine) > 0 && getQty(currentLine) < (currentLine.reserved_uom_qty || 0) && (
+            {activeLine && locOk && getQty(activeLine) > 0 && getQty(activeLine) < (activeLine.reserved_uom_qty || 0) && (
               <button
-                onClick={() => onAdjustQty(currentLine.id, currentLine.reserved_uom_qty || 0)}
+                onClick={() => activeLine && onAdjustQty(activeLine.id, activeLine.reserved_uom_qty || 0)}
                 disabled={loading}
                 style={{ width: "100%", padding: "11px 0", borderRadius: 12, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(34,197,94,0.35)", letterSpacing: 0.3 }}>
-                ✓ Tout mettre — {currentLine.reserved_uom_qty || 0} {currentLine.product_uom_id?.[1] || ""}
+                ✓ Tout mettre — {activeLine.reserved_uom_qty || 0} {activeLine.product_uom_id?.[1] || ""}
               </button>
             )}
           </div>
@@ -6155,9 +6176,10 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
               onScan(code);
               if (currentLine && locOk) {
                 // Line will be done after scan — add to current colis
-                const newQty = (currentLine.qty_done || 0) + 1;
-                if (newQty >= (currentLine.reserved_uom_qty || 0)) {
-                  addLineToColis(currentLine.id);
+                const lineForColis = activeLine || currentLine;
+                const newQty = (lineForColis?.qty_done || 0) + 1;
+                if (lineForColis && newQty >= (lineForColis.reserved_uom_qty || 0)) {
+                  addLineToColis(lineForColis.id);
                 }
               }
             }}
