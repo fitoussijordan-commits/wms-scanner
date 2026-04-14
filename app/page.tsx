@@ -995,10 +995,10 @@ export default function Page() {
       const done = new Set<number>();
       mlines.forEach((ml: any) => { if (ml.qty_done > 0) done.add(ml.id); });
       setPrepScanned(done);
-      setScreen("prepDetail");
-      // Pre-cache locations + lots for instant scan lookup
+      // Pré-cache AVANT d'afficher l'écran → 0 appel réseau au premier scan
       prepLocCache.current.clear(); prepLotCache.current.clear();
-      preCachePrepData(mlines);
+      await preCachePrepData(mlines);
+      setScreen("prepDetail");
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
@@ -1026,10 +1026,10 @@ export default function Page() {
       const done = new Set<number>();
       allMlines.forEach((ml: any) => { if (ml.qty_done > 0) done.add(ml.id); });
       setPrepScanned(done);
-      setScreen("prepDetail");
-      // Pre-cache locations + lots for instant scan lookup
+      // Pré-cache AVANT d'afficher l'écran → 0 appel réseau au premier scan
       prepLocCache.current.clear(); prepLotCache.current.clear();
-      preCachePrepData(allMlines);
+      await preCachePrepData(allMlines);
+      setScreen("prepDetail");
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
@@ -1247,9 +1247,11 @@ export default function Page() {
       const writeQty = newQty;
       const writeLotId = lotId || ml.lot_id?.[0] || null;
       odoo.setMoveLineQtyDone(session, ml.id, writeQty, writeLotId).then(() => {
-        // Refresh silencieux 3s après le dernier scan pour resync Odoo → local
+        // Refresh silencieux 5s après le DERNIER scan — annulé si scan actif
         if (bgRefreshTimer.current) clearTimeout(bgRefreshTimer.current);
         bgRefreshTimer.current = setTimeout(async () => {
+          // Ne pas refresher si un scan est en cours de traitement
+          if (scanProcessingRef.current) return;
           try {
             const fresh = await refreshGroupMoveLines(selectedPickingRef.current);
             if (fresh.length) {
@@ -1257,7 +1259,7 @@ export default function Page() {
               setPickingMoveLines(fresh);
             }
           } catch {}
-        }, 3000);
+        }, 5000);
       }).catch((e: any) => {
         setError(`Erreur sync Odoo: ${e.message}`);
         flashScan("err");
@@ -1279,8 +1281,8 @@ export default function Page() {
     while (scanQueueRef.current.length > 0) {
       const code = scanQueueRef.current.shift()!;
       await doPrepScanRef.current(code);
-      // Petit délai pour laisser le ref se mettre à jour avant le prochain scan
-      await new Promise(r => setTimeout(r, 50));
+      // Yield pour laisser React flusher le state avant le prochain scan
+      await new Promise(r => setTimeout(r, 0));
     }
     scanProcessingRef.current = false;
   }, []);
