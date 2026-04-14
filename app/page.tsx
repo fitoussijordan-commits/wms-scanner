@@ -1292,7 +1292,8 @@ export default function Page() {
     if (!session || !selectedPicking || !prepStep) return;
     setLoading(true);
     try {
-      const pending = pickingMoveLines.filter((ml: any) =>
+      // Utiliser le ref (toujours à jour) plutôt que l'état React (peut être en retard)
+      const pending = pickingMoveLinesRef.current.filter((ml: any) =>
         ml.location_id && ml.location_id[0] === prepStep.locId && (ml.qty_done || 0) < (ml.reserved_uom_qty || 0)
       );
       for (const ml of pending) {
@@ -1349,6 +1350,18 @@ export default function Page() {
         setQtyOverrides(prev => { const n = { ...prev }; delete n[moveLineId]; return n; });
         if (clamped >= (ml.reserved_uom_qty || 0)) {
           setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(moveLineId); return n; });
+          // Si la ligne complétée appartient à l'emplacement en déviation,
+          // vérifier s'il reste des articles → si non, sortir du prepStep
+          const currentStep = prepStepRef.current;
+          if (currentStep && ml.location_id?.[0] === currentStep.locId) {
+            const morePending = updatedLines.filter((m: any) =>
+              m.location_id?.[0] === currentStep.locId && (m.qty_done || 0) < (m.reserved_uom_qty || 0)
+            );
+            if (morePending.length === 0) {
+              updatePrepStep(null);
+              showToast(`✓ Emplacement ${currentStep.locName} terminé`);
+            }
+          }
         }
       } catch (e: any) { setError(e.message); }
     }, 800);
