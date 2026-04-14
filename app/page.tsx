@@ -431,6 +431,50 @@ function vibrate(pattern: number | number[] = 30) {
 function vibrateSuccess() { vibrate([30, 50, 30]); }
 function vibrateError() { vibrate([100, 30, 100]); }
 
+// ── FF7 Victory Fanfare (Web Audio API — synthèse pure, pas de fichier) ──────
+function playFF7Victory() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.28, ctx.currentTime);
+    master.connect(ctx.destination);
+
+    // Notes : FF7 victory fanfare (Do-Mi-Sol-Do-Mi-Sol-Do-Do-Fa-Fa-Fa-Fa-Sol)
+    // Fréquences en Hz
+    const notes: [number, number, number][] = [
+      // [freq, start, duration]
+      [523.25, 0.00, 0.12],  // C5
+      [659.25, 0.13, 0.12],  // E5
+      [783.99, 0.26, 0.12],  // G5
+      [1046.5, 0.39, 0.22],  // C6
+      [783.99, 0.62, 0.12],  // G5
+      [1046.5, 0.75, 0.55],  // C6 tenu
+      [880.00, 1.32, 0.12],  // A5
+      [932.33, 1.45, 0.12],  // Bb5
+      [987.77, 1.58, 0.12],  // B5
+      [1046.5, 1.71, 0.55],  // C6 final tenu
+    ];
+
+    notes.forEach(([freq, start, dur]) => {
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.connect(env);
+      env.connect(master);
+      osc.type = "square";
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+      env.gain.setValueAtTime(0, ctx.currentTime + start);
+      env.gain.linearRampToValueAtTime(1, ctx.currentTime + start + 0.01);
+      env.gain.setValueAtTime(1, ctx.currentTime + start + dur - 0.03);
+      env.gain.linearRampToValueAtTime(0, ctx.currentTime + start + dur);
+      osc.start(ctx.currentTime + start);
+      osc.stop(ctx.currentTime + start + dur + 0.05);
+    });
+
+    // Ferme le contexte après la fin
+    setTimeout(() => { try { ctx.close(); } catch {} }, 3000);
+  } catch {}
+}
+
 // ── Audio beep (Web Audio API) ────────────────────────────────────────────────
 function playBeep(type: "ok" | "err") {
   try {
@@ -1357,6 +1401,7 @@ export default function Page() {
     try {
       await odoo.validatePicking(session, selectedPicking.id);
       vibrateSuccess();
+      playFF7Victory();
       showToast(`✅ ${selectedPicking.name} validé`);
       setScreen("prep");
       setSelectedPicking(null);
