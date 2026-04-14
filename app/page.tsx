@@ -432,64 +432,8 @@ function vibrateSuccess() { vibrate([30, 50, 30]); }
 function vibrateError() { vibrate([100, 30, 100]); }
 
 // ── Préférences son (localStorage) ───────────────────────────────────────────
-const SOUND_KEY = "wms_sounds_enabled";
-function isSoundEnabled(): boolean {
-  try { const v = localStorage.getItem(SOUND_KEY); return v === null ? true : v === "1"; } catch { return true; }
-}
-function setSoundEnabled(val: boolean) {
-  try { localStorage.setItem(SOUND_KEY, val ? "1" : "0"); } catch {}
-}
-
-// ── FF7 Victory Fanfare ───────────────────────────────────────────────────────
-// Place le fichier dans /public/ff7-victory.mp3 pour activer le vrai son.
-// Fallback automatique sur synthèse Web Audio si le fichier est absent.
-function playFF7Victory() {
-  if (!isSoundEnabled()) return;
-  try {
-    const audio = new Audio("/ff7-victory.mp3");
-    audio.volume = 0.7;
-    // Fallback uniquement si le fichier ne charge pas (404, format invalide...)
-    audio.onerror = () => playFF7VictorySynth();
-    audio.play().catch(() => {
-      // Ignorer les erreurs play() (ex: AbortError si on rejoue rapidement)
-    });
-  } catch {
-    playFF7VictorySynth();
-  }
-}
-
-function playFF7VictorySynth() {
-  try {
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const master = ctx.createGain();
-    master.gain.setValueAtTime(0.28, ctx.currentTime);
-    master.connect(ctx.destination);
-    const notes: [number, number, number][] = [
-      [523.25, 0.00, 0.12], [659.25, 0.13, 0.12], [783.99, 0.26, 0.12],
-      [1046.5, 0.39, 0.22], [783.99, 0.62, 0.12], [1046.5, 0.75, 0.55],
-      [880.00, 1.32, 0.12], [932.33, 1.45, 0.12], [987.77, 1.58, 0.12],
-      [1046.5, 1.71, 0.55],
-    ];
-    notes.forEach(([freq, start, dur]) => {
-      const osc = ctx.createOscillator();
-      const env = ctx.createGain();
-      osc.connect(env); env.connect(master);
-      osc.type = "square";
-      osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
-      env.gain.setValueAtTime(0, ctx.currentTime + start);
-      env.gain.linearRampToValueAtTime(1, ctx.currentTime + start + 0.01);
-      env.gain.setValueAtTime(1, ctx.currentTime + start + dur - 0.03);
-      env.gain.linearRampToValueAtTime(0, ctx.currentTime + start + dur);
-      osc.start(ctx.currentTime + start);
-      osc.stop(ctx.currentTime + start + dur + 0.05);
-    });
-    setTimeout(() => { try { ctx.close(); } catch {} }, 3000);
-  } catch {}
-}
-
 // ── Audio beep (Web Audio API) ────────────────────────────────────────────────
 function playBeep(type: "ok" | "err") {
-  if (!isSoundEnabled()) return;
   try {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
 
@@ -1414,7 +1358,6 @@ export default function Page() {
     try {
       await odoo.validatePicking(session, selectedPicking.id);
       vibrateSuccess();
-      playFF7Victory();
       showToast(`✅ ${selectedPicking.name} validé`);
       setScreen("prep");
       setSelectedPicking(null);
@@ -5471,14 +5414,6 @@ function EshopChariotSkus({ session }: { session: any }) {
 }
 
 function SettingsScreen({ onBack, session }: { onBack: () => void; session: any }) {
-  const [soundEnabled, setSoundEnabledState] = useState<boolean>(() => isSoundEnabled());
-  const toggleSound = () => {
-    const next = !soundEnabled;
-    setSoundEnabled(next);
-    setSoundEnabledState(next);
-    if (next) playFF7Victory(); // petite démo au réactivation
-  };
-
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   const [loadingP, setLoadingP] = useState(false);
   const [msg, setMsg] = useState("");
@@ -5578,34 +5513,6 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
         </button>
         <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Paramètres</h2>
       </div>
-
-      {/* ── Son ── */}
-      <Section>
-        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>🔊 Sons</div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0" }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Activer les sons</div>
-            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Bips de scan · Fanfare FF7 à la validation</div>
-          </div>
-          <button
-            onClick={toggleSound}
-            style={{
-              width: 52, height: 30, borderRadius: 15, border: "none", cursor: "pointer",
-              background: soundEnabled ? C.green : C.border,
-              position: "relative", transition: "background .2s", flexShrink: 0,
-              padding: 0,
-            }}
-          >
-            <div style={{
-              width: 24, height: 24, borderRadius: "50%", background: "#fff",
-              position: "absolute", top: 3,
-              left: soundEnabled ? 25 : 3,
-              transition: "left .2s",
-              boxShadow: "0 1px 4px rgba(0,0,0,.2)",
-            }} />
-          </button>
-        </div>
-      </Section>
 
       {/* Load printers */}
       {hasKey && (
