@@ -9,6 +9,63 @@ import * as pn from "@/lib/printnode";
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
 
 
+// ── Helpers PDF ─────────────────────────────────────────────────────────────────
+
+/** Convertit un Uint8Array en base64 (chunked pour éviter stack overflow) */
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 8192;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    // Array.from pour compatibilité TS strict (évite spread de Uint8Array)
+    binary += String.fromCharCode(...Array.from(bytes.subarray(i, i + chunk)));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Recadre automatiquement les marges blanches d'un PDF.
+ * Utilise TrimBox/ArtBox/BleedBox si disponibles (PDFs pro),
+ * sinon coupe 20 pt (~7 mm) sur chaque bord.
+ */
+async function cropPdfWhiteMargins(bytes: Uint8Array): Promise<Uint8Array> {
+  const { PDFDocument, PDFName } = await import("pdf-lib");
+  const pdfDoc = await PDFDocument.load(bytes);
+  for (const page of pdfDoc.getPages()) {
+    const media = page.getMediaBox(); // {x, y, width, height}
+    let box: { x: number; y: number; x2: number; y2: number } | null = null;
+
+    // 1) Essayer TrimBox / ArtBox / BleedBox (standard prépresse)
+    for (const name of ["TrimBox", "ArtBox", "BleedBox"]) {
+      try {
+        const node = page.node.lookup(PDFName.of(name));
+        if (node) {
+          const arr = (node as any)
+            .asArray()
+            .map((n: any) => (n as any).numberValue as number);
+          if (arr.length === 4 && arr[2] > arr[0] && arr[3] > arr[1]) {
+            box = { x: arr[0], y: arr[1], x2: arr[2], y2: arr[3] };
+            break;
+          }
+        }
+      } catch {}
+    }
+
+    // 2) Fallback : couper 20 pt sur chaque bord
+    if (!box) {
+      const t = 20;
+      box = { x: media.x + t, y: media.y + t, x2: media.x + media.width - t, y2: media.y + media.height - t };
+    }
+
+    const newBox = pdfDoc.context.obj([box.x, box.y, box.x2, box.y2]);
+    page.node.set(PDFName.of("MediaBox"), newBox);
+    page.node.set(PDFName.of("CropBox"), newBox);
+    for (const name of ["TrimBox", "ArtBox", "BleedBox"]) {
+      try { page.node.delete(PDFName.of(name)); } catch {}
+    }
+  }
+  return pdfDoc.save();
+}
+
 // ── E-shop Packing Slip PDF (reproduit le format SendCloud) ────────────────────
 async function generateEshopPackingSlipPDF(order: {
   order_number: string;
@@ -4374,15 +4431,19 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
       const cfg = pn.getLabelTypeConfig("blank");
       const pid = cfg.printerId || pn.getSavedPrinterId();
       if (!pid) { onToast("⚠️ Aucune imprimante configurée dans les paramètres"); setPrintingPdf(false); return; }
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result as string;
-          resolve(result.split(",")[1]); // strip data:application/pdf;base64,
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+
+      // Lire le PDF brut
+      const rawBuffer = await file.arrayBuffer();
+      let pdfBytes: Uint8Array = new Uint8Array(rawBuffer);
+
+      // Recadrer les marges blanches automatiquement
+      try {
+        pdfBytes = await cropPdfWhiteMargins(pdfBytes) as Uint8Array;
+      } catch (cropErr) {
+        console.warn("PDF crop échoué, utilisation de l'original:", cropErr);
+      }
+
+      const base64 = uint8ArrayToBase64(pdfBytes);
       const result = await pn.printPdfLabel(pid, base64, file.name);
       if (result.success) onToast(`✅ "${file.name}" envoyé à l'imprimante`);
       else onToast("❌ " + (result.error || "Erreur impression"));
