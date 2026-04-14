@@ -518,7 +518,7 @@ export async function getPickingMoveLines(session: OdooSession, pickingId: numbe
   return searchRead(
     session, "stock.move.line",
     [["picking_id", "=", pickingId]],
-    ["id", "product_id", "lot_id", "location_id", "location_dest_id", "qty_done", "reserved_uom_qty"],
+    ["id", "product_id", "lot_id", "location_id", "location_dest_id", "qty_done", "reserved_uom_qty", "picking_id"],
     200,
     "product_id"
   );

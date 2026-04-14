@@ -5864,7 +5864,29 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   const doneLines = allLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).length;
   const totalLines = allLines.length;
   const allDone = totalLines > 0 && doneLines === totalLines;
-  const progress = totalLines > 0 ? Math.round((doneLines / totalLines) * 100) : 0;
+
+  // Progression par colis (= par picking source)
+  // Chaque move line a picking_id[0]. Un colis est "fait" quand toutes ses lignes sont complètes.
+  const colisProgress = useMemo(() => {
+    const groups = new Map<number, { total: number; done: number; name: string }>();
+    for (const ml of allLines) {
+      const pid = ml.picking_id?.[0];
+      const pname = ml.picking_id?.[1] || "—";
+      if (!pid) continue;
+      if (!groups.has(pid)) groups.set(pid, { total: 0, done: 0, name: pname });
+      const g = groups.get(pid)!;
+      g.total++;
+      if (getQty(ml) >= (ml.reserved_uom_qty || 0)) g.done++;
+    }
+    const entries = Array.from(groups.values());
+    const totalColis = entries.length || 1;
+    const doneColis = entries.filter(g => g.done === g.total).length;
+    return { totalColis, doneColis };
+  }, [allLines, doneLines]);
+
+  const progress = colisProgress.totalColis > 0
+    ? Math.round((colisProgress.doneColis / colisProgress.totalColis) * 100)
+    : 0;
 
   // locOk suit exactement prepStep : true quand un emplacement est scanné, false sinon
   // (remplace les deux anciens useEffect qui laissaient locOk=true après déviation terminée)
@@ -6035,7 +6057,14 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Progression</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: allDone ? C.green : C.blue }}>{doneLines}/{totalLines}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: allDone ? C.green : C.blue }}>
+              {colisProgress.doneColis}/{colisProgress.totalColis} colis
+            </span>
+            <span style={{ fontSize: 11, color: C.textMuted }}>
+              ({doneLines}/{totalLines} réf)
+            </span>
+          </div>
         </div>
         <div style={{ height: 8, borderRadius: 4, background: C.bg, overflow: "hidden", border: `1px solid ${C.border}` }}>
           <div style={{ height: "100%", width: `${progress}%`, borderRadius: 4, background: allDone ? C.green : C.blue, transition: "width .3s" }} />
