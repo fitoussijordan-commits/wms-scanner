@@ -5878,6 +5878,21 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
     return currentLine;
   }, [locOk, prepStep?.lineId, allLines, currentLine]);
 
+  // Fusion visuelle : même produit + même lot + même emplacement → afficher le total combiné
+  // (Odoo crée 1 ligne par BL, on les fusionne à l'écran sans toucher aux écritures Odoo)
+  const effectiveQty = useMemo(() => {
+    if (!activeLine) return { done: 0, total: 0, isMerged: false };
+    const siblings = allLines.filter((ml: any) =>
+      ml.location_id?.[0] === activeLine.location_id?.[0] &&
+      ml.product_id?.[0] === activeLine.product_id?.[0] &&
+      (ml.lot_id?.[0] ?? null) === (activeLine.lot_id?.[0] ?? null)
+    );
+    if (siblings.length <= 1) return { done: getQty(activeLine), total: activeLine.reserved_uom_qty || 0, isMerged: false };
+    const done = siblings.reduce((s: number, ml: any) => s + Math.min(getQty(ml), ml.reserved_uom_qty || 0), 0);
+    const total = siblings.reduce((s: number, ml: any) => s + (ml.reserved_uom_qty || 0), 0);
+    return { done, total, isMerged: true };
+  }, [activeLine, allLines]);
+
   const doneLines = allLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).length;
   const totalLines = allLines.length;
   const allDone = totalLines > 0 && doneLines === totalLines;
@@ -6184,10 +6199,11 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
                 −
               </button>
               <div style={{ flex: 1, textAlign: "center", padding: "12px 4px", minWidth: 0 }}>
-                <span style={{ fontSize: 36, fontWeight: 900, color: C.text }}>{activeLine ? getQty(activeLine) : 0}</span>
+                <span style={{ fontSize: 36, fontWeight: 900, color: C.text }}>{effectiveQty.done}</span>
                 <span style={{ fontSize: 18, color: C.textMuted, margin: "0 4px" }}>/</span>
-                <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{activeLine?.reserved_uom_qty || 0}</span>
+                <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{effectiveQty.total}</span>
                 <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 4 }}>{activeLine?.product_uom_id?.[1] || ""}</span>
+                {effectiveQty.isMerged && <span style={{ fontSize: 10, color: C.textMuted, display: "block", marginTop: 2 }}>lignes fusionnées</span>}
               </div>
               <button
                 onClick={() => activeLine && onAdjustQty(activeLine.id, getQty(activeLine) + 1)}
@@ -6197,12 +6213,12 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
               </button>
             </div>
             {/* Bouton "Tout mettre" — visible dès qu'on a scanné au moins 1 */}
-            {activeLine && locOk && getQty(activeLine) > 0 && getQty(activeLine) < (activeLine.reserved_uom_qty || 0) && (
+            {activeLine && locOk && effectiveQty.done > 0 && effectiveQty.done < effectiveQty.total && (
               <button
                 onClick={() => activeLine && onAdjustQty(activeLine.id, activeLine.reserved_uom_qty || 0)}
                 disabled={loading}
                 style={{ width: "100%", padding: "11px 0", borderRadius: 12, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(34,197,94,0.35)", letterSpacing: 0.3 }}>
-                ✓ Tout mettre — {activeLine.reserved_uom_qty || 0} {activeLine.product_uom_id?.[1] || ""}
+                ✓ Tout mettre — {effectiveQty.total} {activeLine.product_uom_id?.[1] || ""}
               </button>
             )}
           </div>
