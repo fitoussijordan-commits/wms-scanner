@@ -5866,14 +5866,11 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   const allDone = totalLines > 0 && doneLines === totalLines;
   const progress = totalLines > 0 ? Math.round((doneLines / totalLines) * 100) : 0;
 
-  // When a new line becomes current, reset locOk
-  const currentLineId = currentLine?.id;
-  useEffect(() => { setLocOk(false); }, [currentLineId]);
-
-  // Track when loc scan succeeds via prepStep changes
+  // locOk suit exactement prepStep : true quand un emplacement est scanné, false sinon
+  // (remplace les deux anciens useEffect qui laissaient locOk=true après déviation terminée)
   useEffect(() => {
-    if (prepStep) setLocOk(true);
-  }, [prepStep?.locId]);
+    setLocOk(!!prepStep);
+  }, [prepStep]);
 
   // ── Charger les colis existants depuis Odoo au montage ──
   useEffect(() => {
