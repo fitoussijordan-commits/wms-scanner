@@ -1358,12 +1358,16 @@ export default function Page() {
     if (!session || !selectedPicking) return;
     setLoading(true); setError("");
     try {
-      await odoo.validatePicking(session, selectedPicking.id);
+      // Groupe de BL → valider chacun individuellement
+      const ids: number[] = selectedPicking._groupIds || [selectedPicking.id];
+      for (const id of ids) {
+        await odoo.validatePicking(session, id);
+      }
       vibrateSuccess();
       showToast(`✅ ${selectedPicking.name} validé`);
       setScreen("prep");
       setSelectedPicking(null);
-      await loadPickings(); // refresh list
+      await loadPickings();
     } catch (e: any) { setError(e.message); vibrateError(); }
     setLoading(false);
   };
