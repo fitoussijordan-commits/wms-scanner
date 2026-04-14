@@ -431,8 +431,18 @@ function vibrate(pattern: number | number[] = 30) {
 function vibrateSuccess() { vibrate([30, 50, 30]); }
 function vibrateError() { vibrate([100, 30, 100]); }
 
+// ── Préférences son (localStorage) ───────────────────────────────────────────
+const SOUND_KEY = "wms_sounds_enabled";
+function isSoundEnabled(): boolean {
+  try { const v = localStorage.getItem(SOUND_KEY); return v === null ? true : v === "1"; } catch { return true; }
+}
+function setSoundEnabled(val: boolean) {
+  try { localStorage.setItem(SOUND_KEY, val ? "1" : "0"); } catch {}
+}
+
 // ── FF7 Victory Fanfare (Web Audio API — synthèse pure, pas de fichier) ──────
 function playFF7Victory() {
+  if (!isSoundEnabled()) return;
   try {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     const master = ctx.createGain();
@@ -477,6 +487,7 @@ function playFF7Victory() {
 
 // ── Audio beep (Web Audio API) ────────────────────────────────────────────────
 function playBeep(type: "ok" | "err") {
+  if (!isSoundEnabled()) return;
   try {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
 
@@ -5458,6 +5469,14 @@ function EshopChariotSkus({ session }: { session: any }) {
 }
 
 function SettingsScreen({ onBack, session }: { onBack: () => void; session: any }) {
+  const [soundEnabled, setSoundEnabledState] = useState<boolean>(() => isSoundEnabled());
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    setSoundEnabledState(next);
+    if (next) playFF7Victory(); // petite démo au réactivation
+  };
+
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   const [loadingP, setLoadingP] = useState(false);
   const [msg, setMsg] = useState("");
@@ -5557,6 +5576,34 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
         </button>
         <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Paramètres</h2>
       </div>
+
+      {/* ── Son ── */}
+      <Section>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>🔊 Sons</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0" }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Activer les sons</div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Bips de scan · Fanfare FF7 à la validation</div>
+          </div>
+          <button
+            onClick={toggleSound}
+            style={{
+              width: 52, height: 30, borderRadius: 15, border: "none", cursor: "pointer",
+              background: soundEnabled ? C.green : C.border,
+              position: "relative", transition: "background .2s", flexShrink: 0,
+              padding: 0,
+            }}
+          >
+            <div style={{
+              width: 24, height: 24, borderRadius: "50%", background: "#fff",
+              position: "absolute", top: 3,
+              left: soundEnabled ? 25 : 3,
+              transition: "left .2s",
+              boxShadow: "0 1px 4px rgba(0,0,0,.2)",
+            }} />
+          </button>
+        </div>
+      </Section>
 
       {/* Load printers */}
       {hasKey && (
