@@ -758,8 +758,7 @@ export default function Page() {
   const updatePrepStep = (val: typeof prepStep | ((prev: typeof prepStep) => typeof prepStep)) => {
     const newVal = typeof val === "function" ? val(prepStepRef.current) : val;
     prepStepRef.current = newVal;
-    // Si on remet à null (fin d'emplacement), vider la queue pour éviter scans parasites
-    if (newVal === null) scanQueueRef.current = [];
+    // Ne pas vider la queue : un scan de l'emplacement suivant peut déjà être en attente
     setPrepStep(newVal);
   };
 
@@ -1297,23 +1296,11 @@ export default function Page() {
       }
 
       // ── Écriture Odoo en arrière-plan (non bloquant) ─────────────────────
+      // Pas de refresh après écriture : l'état optimiste est déjà correct.
+      // Un refresh écraserait les scans récents avec des données potentiellement périmées.
       const writeQty = newQty;
       const writeLotId = lotId || ml.lot_id?.[0] || null;
-      odoo.setMoveLineQtyDone(session, ml.id, writeQty, writeLotId).then(() => {
-        // Refresh silencieux 5s après le DERNIER scan — annulé si scan actif
-        if (bgRefreshTimer.current) clearTimeout(bgRefreshTimer.current);
-        bgRefreshTimer.current = setTimeout(async () => {
-          // Ne pas refresher si un scan est en cours de traitement
-          if (scanProcessingRef.current) return;
-          try {
-            const fresh = await refreshGroupMoveLines(selectedPickingRef.current);
-            if (fresh.length) {
-              pickingMoveLinesRef.current = fresh;
-              setPickingMoveLines(fresh);
-            }
-          } catch {}
-        }, 5000);
-      }).catch((e: any) => {
+      odoo.setMoveLineQtyDone(session, ml.id, writeQty, writeLotId).catch((e: any) => {
         setError(`Erreur sync Odoo: ${e.message}`);
         flashScan("err");
       });
@@ -1397,14 +1384,15 @@ export default function Page() {
     debounceTimers.current[moveLineId] = setTimeout(async () => {
       try {
         await odoo.setMoveLineQtyDone(session, moveLineId, clamped, ml.lot_id?.[0] || null);
-        // Refresh only this line silently
-        const updatedLines = await refreshGroupMoveLines(selectedPicking!);
+        // Mise à jour locale uniquement — pas de refresh Odoo pour éviter d'écraser les scans récents
+        const updatedLines = pickingMoveLinesRef.current.map((m: any) =>
+          m.id === moveLineId ? { ...m, qty_done: clamped } : m
+        );
+        pickingMoveLinesRef.current = updatedLines;
         setPickingMoveLines(updatedLines);
         setQtyOverrides(prev => { const n = { ...prev }; delete n[moveLineId]; return n; });
         if (clamped >= (ml.reserved_uom_qty || 0)) {
           setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(moveLineId); return n; });
-          // Si la ligne complétée appartient à l'emplacement en déviation,
-          // vérifier s'il reste des articles → si non, sortir du prepStep
           const currentStep = prepStepRef.current;
           if (currentStep && ml.location_id?.[0] === currentStep.locId) {
             const morePending = updatedLines.filter((m: any) =>
