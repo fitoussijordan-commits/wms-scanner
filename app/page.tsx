@@ -877,12 +877,38 @@ export default function Page() {
       knownOrderIdsRef.current = new Set();
     }
 
+    const playNotifSound = () => {
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const notes = [880, 1100, 1320];
+        notes.forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.type = "sine";
+          osc.frequency.value = freq;
+          const t = ctx.currentTime + i * 0.12;
+          gain.gain.setValueAtTime(0.25, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+          osc.start(t);
+          osc.stop(t + 0.25);
+        });
+      } catch {}
+    };
+
     const checkNewOrders = async () => {
       try {
+        // Vérifie la préférence utilisateur
+        const notifEnabled = localStorage.getItem("wms_notif_enabled") !== "false";
+        if (!notifEnabled) return;
+
         const all = await odoo.getWaitingPickings(session);
-        // Filtre sur la date du jour
+        // Filtre sur la date du jour — même champ que WaitingOrdersScreen (shipping_date)
         const todayPickings = all.filter((p: any) => {
-          const d: string = p.scheduled_date || p.date_deadline || "";
+          const d: string = p.shipping_date || p.scheduled_date || p.date_deadline || "";
           return d.startsWith(todayStr);
         });
 
@@ -892,6 +918,11 @@ export default function Page() {
         if (newPickings.length > 0) {
           const names: string[] = newPickings.map((p: any) => p.name || p.origin || `#${p.id}`);
           setNewOrderNotif({ count: newPickings.length, names });
+
+          // Son de notification
+          if (localStorage.getItem("wms_notif_sound") !== "false") {
+            playNotifSound();
+          }
 
           // Notification navigateur
           if (typeof Notification !== "undefined" && Notification.permission === "granted") {
@@ -5758,6 +5789,22 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
   const [msg, setMsg] = useState("");
   const [hasKey, setHasKey] = useState(true);
 
+  // Préférences notifications
+  const [notifEnabled, setNotifEnabled] = useState<boolean>(() => {
+    try { return localStorage.getItem("wms_notif_enabled") !== "false"; } catch { return true; }
+  });
+  const [notifSound, setNotifSound] = useState<boolean>(() => {
+    try { return localStorage.getItem("wms_notif_sound") !== "false"; } catch { return true; }
+  });
+  const toggleNotif = (val: boolean) => {
+    setNotifEnabled(val);
+    localStorage.setItem("wms_notif_enabled", val ? "true" : "false");
+  };
+  const toggleSound = (val: boolean) => {
+    setNotifSound(val);
+    localStorage.setItem("wms_notif_sound", val ? "true" : "false");
+  };
+
   // Per-type config state
   type LabelType = pn.LabelType;
   const LABEL_TYPES: { key: LabelType; label: string; icon: string; hasSize: boolean }[] = [
@@ -5994,6 +6041,35 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
             </div>
           );
         })}
+      </Section>
+
+      {/* Notifications nouvelles commandes */}
+      <Section>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>🔔 Notifications commandes</div>
+        {/* Toggle activation */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 8 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Nouvelles commandes du jour</div>
+            <div style={{ fontSize: 11, color: C.textMuted }}>Bannière + notif navigateur (desktop uniquement)</div>
+          </div>
+          <button
+            onClick={() => toggleNotif(!notifEnabled)}
+            style={{ width: 44, height: 24, borderRadius: 12, border: "none", cursor: "pointer", background: notifEnabled ? C.green : C.border, position: "relative", transition: "background .2s", flexShrink: 0 }}>
+            <div style={{ position: "absolute", top: 3, left: notifEnabled ? 23 : 3, width: 18, height: 18, borderRadius: 9, background: "#fff", transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }} />
+          </button>
+        </div>
+        {/* Toggle son */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}` }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Son de notification</div>
+            <div style={{ fontSize: 11, color: C.textMuted }}>Bip sonore à chaque nouvelle commande</div>
+          </div>
+          <button
+            onClick={() => toggleSound(!notifSound)}
+            style={{ width: 44, height: 24, borderRadius: 12, border: "none", cursor: "pointer", background: notifSound ? C.green : C.border, position: "relative", transition: "background .2s", flexShrink: 0 }}>
+            <div style={{ position: "absolute", top: 3, left: notifSound ? 23 : 3, width: 18, height: 18, borderRadius: 9, background: "#fff", transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }} />
+          </button>
+        </div>
       </Section>
 
       {msg && (
