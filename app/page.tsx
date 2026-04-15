@@ -1337,29 +1337,73 @@ export default function Page() {
         }
       }
 
-      let ml = currentLines.find((m: any) => m.id === currentStep!.lineId);
+      // ── Copie de travail des lignes (peut être augmentée si déviation lot) ──
+      let workLines = currentLines;
 
-      // ── Priorité au lot scanné : si un lot a été scanné, chercher d'abord
-      //    la ligne qui correspond à CE lot à cet emplacement.
-      //    Sinon on incrémenterait la mauvaise ligne (celle du lot attendu).
+      let ml = workLines.find((m: any) => m.id === currentStep!.lineId);
+
       if (lotId) {
-        const lotMatch = currentLines.find((m: any) =>
+        // Cherche une ligne existante pour ce lot à cet emplacement
+        // (sans restriction qty : inclut les lignes déjà créées pour déviations)
+        const lotMatch = workLines.find((m: any) =>
           m.location_id?.[0] === currentStep!.locId &&
-          m.lot_id?.[0] === lotId &&
-          (m.qty_done || 0) < (m.reserved_uom_qty || 0)
+          m.lot_id?.[0] === lotId
         );
-        if (lotMatch) ml = lotMatch;
+
+        if (lotMatch) {
+          ml = lotMatch;
+        } else if (ml && lotId !== (ml.lot_id?.[0] ?? null)) {
+          // ── Déviation lot : le lot scanné n'a pas de ligne dans le BL ──────
+          // Solution Odoo correcte : créer une nouvelle stock.move.line pour ce lot.
+          // On ne modifie PAS lot_id sur la ligne réservée (Odoo peut le rejeter).
+          try {
+            const moveId = Array.isArray(ml.move_id) ? ml.move_id[0] : (ml.move_id || 0);
+            const productUomId = Array.isArray(ml.product_uom_id) ? ml.product_uom_id[0] : (ml.product_uom_id || 1);
+            const newLineId = await odoo.createDeviationMoveLine(session, {
+              moveId,
+              pickingId: currentPicking.id,
+              productId: ml.product_id[0],
+              productUomId,
+              lotId,
+              locationId: ml.location_id[0],
+              locationDestId: ml.location_dest_id[0],
+            });
+            // Ligne synthétique en état local (id réel retourné par Odoo)
+            const deviationLine: any = {
+              id: newLineId,
+              product_id: ml.product_id,
+              lot_id: [lotId, lotName || ""],
+              location_id: ml.location_id,
+              location_dest_id: ml.location_dest_id,
+              qty_done: 0,
+              reserved_uom_qty: 0,
+              picking_id: ml.picking_id,
+              move_id: ml.move_id,
+              product_uom_id: ml.product_uom_id,
+            };
+            workLines = [...workLines, deviationLine];
+            pickingMoveLinesRef.current = workLines;
+            setPickingMoveLines(workLines);
+            ml = deviationLine;
+            showToast(`🟠 Déviation lot : nouvelle ligne créée pour ${lotName}`);
+          } catch (e: any) {
+            // Fallback si la création Odoo échoue : on reste sur la ligne attendue
+            setError(`Déviation lot impossible: ${e.message}`);
+            flashScan("err");
+            return;
+          }
+        }
       }
 
       if (!ml && productId) {
-        ml = currentLines.find((m: any) =>
+        ml = workLines.find((m: any) =>
           m.location_id?.[0] === currentStep!.locId &&
           m.product_id[0] === productId &&
           (m.qty_done || 0) < (m.reserved_uom_qty || 0)
         );
       }
       if (!ml) {
-        ml = currentLines.find((m: any) =>
+        ml = workLines.find((m: any) =>
           m.location_id?.[0] === currentStep!.locId &&
           (m.qty_done || 0) < (m.reserved_uom_qty || 0)
         );
@@ -1372,26 +1416,25 @@ export default function Page() {
         return;
       }
 
-      if (lotName && ml.lot_id && ml.lot_id[1] !== lotName) {
-        showToast(`🟠 Déviation lot: ${lotName} → ligne ${ml.lot_id[1]} mise à jour`);
-      }
-
       const newQty = (ml.qty_done || 0) + 1;
+      const actualLotName = ml.lot_id?.[1] || lotName || null;
+      // Pour les lignes de déviation, la qty réservée est 0 → afficher newQty/newQty
+      const displayTotal = (ml.reserved_uom_qty || 0) > 0 ? (ml.reserved_uom_qty || 0) : newQty;
       const remaining = (ml.reserved_uom_qty || 0) - newQty;
 
       // ── Mise à jour optimiste (instantanée) ──────────────────────────────
-      const optimisticLines = currentLines.map((m: any) =>
+      const optimisticLines = workLines.map((m: any) =>
         m.id === ml.id ? { ...m, qty_done: newQty } : m
       );
       pickingMoveLinesRef.current = optimisticLines;
       setPickingMoveLines(optimisticLines);
 
-      if (newQty >= (ml.reserved_uom_qty || 0)) {
+      if (newQty >= (ml.reserved_uom_qty || 0) && (ml.reserved_uom_qty || 0) > 0) {
         setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(ml.id); return n; });
       }
 
       flashScan("ok");
-      showToast(`✓ ${lotName || ml.product_id[1]} · ${newQty}/${ml.reserved_uom_qty || 0}`);
+      showToast(`✓ ${actualLotName || ml.product_id[1]} · ${newQty}/${displayTotal}`);
 
       const morePending = optimisticLines.filter((m: any) =>
         m.location_id && m.location_id[0] === currentStep!.locId && (m.qty_done || 0) < (m.reserved_uom_qty || 0)
@@ -1404,15 +1447,14 @@ export default function Page() {
         const nextRemaining = (next.reserved_uom_qty || 0) - (next.qty_done || 0);
         updatePrepStep({ locId: currentStep!.locId, locName: currentStep!.locName, lineId: next.id, productName: next.product_id[1], lotName: next.lot_id?.[1] || undefined, remaining: nextRemaining });
       } else {
-        updatePrepStep(prev => prev ? { ...prev, lineId: ml.id, remaining } : null);
+        updatePrepStep(prev => prev ? { ...prev, lineId: ml.id, lotName: actualLotName || prev.lotName, remaining } : null);
       }
 
       // ── Écriture Odoo en arrière-plan (non bloquant) ─────────────────────
-      // Pas de refresh après écriture : l'état optimiste est déjà correct.
-      // Un refresh écraserait les scans récents avec des données potentiellement périmées.
+      // La ligne ml a déjà le bon lot_id (soit la ligne existante, soit la nouvelle ligne de déviation).
+      // On n'envoie que qty_done — plus besoin de forcer lot_id sur une ligne réservée.
       const writeQty = newQty;
-      const writeLotId = lotId || ml.lot_id?.[0] || null;
-      odoo.setMoveLineQtyDone(session, ml.id, writeQty, writeLotId).catch((e: any) => {
+      odoo.setMoveLineQtyDone(session, ml.id, writeQty, null).catch((e: any) => {
         setError(`Erreur sync Odoo: ${e.message}`);
         flashScan("err");
       });

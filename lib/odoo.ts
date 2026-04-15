@@ -518,10 +518,30 @@ export async function getPickingMoveLines(session: OdooSession, pickingId: numbe
   return searchRead(
     session, "stock.move.line",
     [["picking_id", "=", pickingId]],
-    ["id", "product_id", "lot_id", "location_id", "location_dest_id", "qty_done", "reserved_uom_qty", "picking_id"],
+    ["id", "product_id", "lot_id", "location_id", "location_dest_id", "qty_done", "reserved_uom_qty", "picking_id", "move_id", "product_uom_id"],
     200,
     "product_id"
   );
+}
+
+// Crée une nouvelle ligne de mouvement pour un lot scanné différent du lot réservé.
+// C'est l'approche correcte dans Odoo : ne pas changer le lot_id d'une ligne réservée,
+// mais créer une nouvelle ligne pour le lot réellement prélevé.
+export async function createDeviationMoveLine(session: OdooSession, params: {
+  moveId: number; pickingId: number; productId: number; productUomId: number;
+  lotId: number; locationId: number; locationDestId: number;
+}): Promise<number> {
+  return create(session, "stock.move.line", {
+    move_id: params.moveId,
+    picking_id: params.pickingId,
+    product_id: params.productId,
+    product_uom_id: params.productUomId,
+    lot_id: params.lotId,
+    location_id: params.locationId,
+    location_dest_id: params.locationDestId,
+    qty_done: 0,
+    reserved_uom_qty: 0,
+  });
 }
 
 // Get stock.moves for a picking (demand info)
