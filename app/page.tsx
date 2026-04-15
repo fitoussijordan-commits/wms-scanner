@@ -5147,7 +5147,8 @@ function WaitingOrdersScreen({
         setResults(prev => ({ ...prev, [picking.id]: { state, missingLines } }));
         setPickings(prev => prev.map(p => p.id === picking.id ? { ...p, state } : p));
 
-        if (state === "assigned") {
+        if (state === "assigned" && missingLines.length === 0) {
+          // Complètement disponible → imprimer le bon
           readyCount++;
           if (printerId) {
             try {
@@ -5161,7 +5162,8 @@ function WaitingOrdersScreen({
             } catch (e: any) { onToast(`❌ PDF ${picking.name} : ${e.message}`); }
           }
         } else if (missingLines.length > 0) {
-          const names = missingLines.slice(0, 2).map((m: any) => `${m.product} (−${m.missing})`).join(", ");
+          // Manquants détectés → avertir, ne pas imprimer, laisser en attente
+          const names = missingLines.slice(0, 3).map((m: any) => `${m.product} (−${m.missing})`).join(", ");
           onToast(`⚠️ ${picking.name} — manquants : ${names}`);
         }
       } catch (e: any) {
@@ -5228,7 +5230,11 @@ function WaitingOrdersScreen({
             {/* Sous-groupes par client */}
             {isOpen && group.clientGroups.map(cg => {
               const isGroupBusy = processing[cg.groupId];
-              const allAssigned = cg.items.every((p: any) => results[p.id]?.state === "assigned");
+              // "prête" seulement si assigned ET aucun manquant sur aucun picking du groupe
+              const allAssigned = cg.items.every((p: any) =>
+                results[p.id]?.state === "assigned" && (results[p.id]?.missingLines?.length ?? 0) === 0
+              );
+              const hasMissing = cg.items.some((p: any) => (results[p.id]?.missingLines?.length ?? 0) > 0);
               const someResult = cg.items.some((p: any) => results[p.id]);
               const isMulti = cg.items.length > 1;
 
@@ -5268,15 +5274,16 @@ function WaitingOrdersScreen({
                   })}
 
                   {/* Bouton unique pour tout le groupe */}
-                  {!allAssigned && (
+                  {/* Affiché si pas encore tout assigned, OU si manquants (on peut quand même lancer la prépa partielle) */}
+                  {(!allAssigned || hasMissing) && (
                     <button
                       onClick={() => startPrepGroup(cg.groupId, cg.items)}
                       disabled={isGroupBusy}
-                      style={{ width: "100%", marginTop: 6, padding: "10px 0", background: isGroupBusy ? C.border : C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: isGroupBusy ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: isGroupBusy ? 0.7 : 1 }}>
-                      {isGroupBusy ? "Vérification…" : isMulti ? `▶ Commencer prépa (${cg.items.length} BL)` : "▶ Commencer prépa"}
+                      style={{ width: "100%", marginTop: 6, padding: "10px 0", background: isGroupBusy ? C.border : hasMissing ? C.orange : C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: isGroupBusy ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: isGroupBusy ? 0.7 : 1 }}>
+                      {isGroupBusy ? "Vérification…" : hasMissing ? (isMulti ? `⚠️ Préparer quand même (${cg.items.length} BL)` : "⚠️ Préparer quand même") : isMulti ? `▶ Commencer prépa (${cg.items.length} BL)` : "▶ Commencer prépa"}
                     </button>
                   )}
-                  {allAssigned && someResult && (
+                  {allAssigned && !hasMissing && someResult && (
                     <div style={{ marginTop: 6, padding: "8px 10px", background: "#dcfce7", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#166534", textAlign: "center" as const }}>
                       ✅ {isMulti ? `${cg.items.length} BL prêts — bons imprimés` : "Prête — bon imprimé"}
                     </div>

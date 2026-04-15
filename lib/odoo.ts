@@ -318,26 +318,27 @@ export async function checkAvailabilityAndGetResult(
     [["id", "=", pickingId]], ["state"], 1);
   const state = picking?.state || "confirmed";
 
-  let missingLines: any[] = [];
-  if (state !== "assigned") {
-    // Récupérer les lignes avec manquants
-    const mlines = await searchRead(session, "stock.move.line",
-      [["picking_id", "=", pickingId]],
-      ["product_id", "lot_id", "reserved_uom_qty", "qty_done"], 200);
-    const moves = await searchRead(session, "stock.move",
-      [["picking_id", "=", pickingId], ["state", "!=", "cancel"]],
-      ["product_id", "product_uom_qty", "reserved_availability"], 200);
-    missingLines = moves.filter((m: any) =>
-      (m.product_uom_qty || 0) > (m.reserved_availability || 0)
-    ).map((m: any) => ({
-      product: m.product_id[1],
-      needed: m.product_uom_qty,
-      available: m.reserved_availability || 0,
-      missing: (m.product_uom_qty || 0) - (m.reserved_availability || 0),
-    }));
-  }
+  // Toujours vérifier les manquants — même si Odoo retourne "assigned",
+  // il peut y avoir des lignes avec stock insuffisant (stock négatif, erreur Odoo…).
+  // On compare la demande (product_uom_qty) à ce qui est vraiment réservé (reserved_availability).
+  const moves = await searchRead(session, "stock.move",
+    [["picking_id", "=", pickingId], ["state", "!=", "cancel"]],
+    ["product_id", "product_uom_qty", "reserved_availability"], 200);
+  const missingLines = moves.filter((m: any) =>
+    Math.round(((m.product_uom_qty || 0) - (m.reserved_availability || 0)) * 1000) > 0
+  ).map((m: any) => ({
+    product: m.product_id[1],
+    needed: m.product_uom_qty,
+    available: m.reserved_availability || 0,
+    missing: Math.round(((m.product_uom_qty || 0) - (m.reserved_availability || 0)) * 100) / 100,
+  }));
 
-  return { state, missingLines };
+  // Si Odoo dit "assigned" mais qu'on détecte des manquants → corriger le state
+  const effectiveState = (state === "assigned" && missingLines.length > 0)
+    ? "partially_available"
+    : state;
+
+  return { state: effectiveState, missingLines };
 }
 
 /**
