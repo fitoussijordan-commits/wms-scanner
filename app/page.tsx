@@ -24,46 +24,82 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 
 /**
  * Recadre automatiquement les marges blanches d'un PDF.
- * Utilise TrimBox/ArtBox/BleedBox si disponibles (PDFs pro),
- * sinon coupe 20 pt (~7 mm) sur chaque bord.
+ * Rend la page sur un canvas offscreen, détecte les pixels non-blancs,
+ * puis applique le CropBox correspondant avec pdf-lib.
  */
 async function cropPdfWhiteMargins(bytes: Uint8Array): Promise<Uint8Array> {
+  // ── 1. Rendu canvas via pdfjs pour détecter le contenu ──────────────────────
+  const pdfjsLib = await import("pdfjs-dist");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
+  const loadingTask = pdfjsLib.getDocument({ data: bytes.slice() });
+  const pdfDoc = await loadingTask.promise;
+  const numPages = pdfDoc.numPages;
+
+  // ── 2. Modifier chaque page avec pdf-lib ────────────────────────────────────
   const { PDFDocument, PDFName } = await import("pdf-lib");
-  const pdfDoc = await PDFDocument.load(bytes);
-  for (const page of pdfDoc.getPages()) {
-    const media = page.getMediaBox(); // {x, y, width, height}
-    let box: { x: number; y: number; x2: number; y2: number } | null = null;
+  const pdfLibDoc = await PDFDocument.load(bytes);
 
-    // 1) Essayer TrimBox / ArtBox / BleedBox (standard prépresse)
-    for (const name of ["TrimBox", "ArtBox", "BleedBox"]) {
-      try {
-        const node = page.node.lookup(PDFName.of(name));
-        if (node) {
-          const arr = (node as any)
-            .asArray()
-            .map((n: any) => (n as any).numberValue as number);
-          if (arr.length === 4 && arr[2] > arr[0] && arr[3] > arr[1]) {
-            box = { x: arr[0], y: arr[1], x2: arr[2], y2: arr[3] };
-            break;
-          }
+  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+    const page = await pdfDoc.getPage(pageNum);
+    const viewport = page.getViewport({ scale: 1 });
+    const W = Math.floor(viewport.width);
+    const H = Math.floor(viewport.height);
+
+    // Canvas offscreen
+    const canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, W, H);
+    await page.render({ canvasContext: ctx as any, viewport, canvas } as any).promise;
+
+    // Analyser les pixels
+    const { data } = ctx.getImageData(0, 0, W, H);
+    let minX = W, minY = H, maxX = 0, maxY = 0;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        if (data[i] < 248 || data[i + 1] < 248 || data[i + 2] < 248) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
         }
-      } catch {}
+      }
     }
 
-    // 2) Fallback : couper 20 pt sur chaque bord
-    if (!box) {
-      const t = 20;
-      box = { x: media.x + t, y: media.y + t, x2: media.x + media.width - t, y2: media.y + media.height - t };
-    }
+    // Si rien trouvé (page vide), passer
+    if (minX > maxX || minY > maxY) continue;
 
-    const newBox = pdfDoc.context.obj([box.x, box.y, box.x2, box.y2]);
-    page.node.set(PDFName.of("MediaBox"), newBox);
-    page.node.set(PDFName.of("CropBox"), newBox);
-    for (const name of ["TrimBox", "ArtBox", "BleedBox"]) {
-      try { page.node.delete(PDFName.of(name)); } catch {}
+    // Marge de sécurité 6px
+    const pad = 6;
+    minX = Math.max(0, minX - pad);
+    minY = Math.max(0, minY - pad);
+    maxX = Math.min(W - 1, maxX + pad);
+    maxY = Math.min(H - 1, maxY + pad);
+
+    // ── 3. Convertir coords canvas → coords PDF (Y inversé) ──────────────────
+    const pdfPage = pdfLibDoc.getPage(pageNum - 1);
+    const media = pdfPage.getMediaBox();
+    const sx = media.width / W;
+    const sy = media.height / H;
+
+    const pdfMinX = media.x + minX * sx;
+    const pdfMinY = media.y + (H - maxY) * sy;   // canvas Y=0 en haut, PDF Y=0 en bas
+    const pdfMaxX = media.x + maxX * sx;
+    const pdfMaxY = media.y + (H - minY) * sy;
+
+    const newBox = pdfLibDoc.context.obj([pdfMinX, pdfMinY, pdfMaxX, pdfMaxY]);
+    pdfPage.node.set(PDFName.of("MediaBox"), newBox);
+    pdfPage.node.set(PDFName.of("CropBox"), newBox);
+    for (const n of ["TrimBox", "ArtBox", "BleedBox"]) {
+      try { pdfPage.node.delete(PDFName.of(n)); } catch {}
     }
   }
-  return pdfDoc.save();
+
+  return pdfLibDoc.save();
 }
 
 // ── E-shop Packing Slip PDF (reproduit le format SendCloud) ────────────────────
