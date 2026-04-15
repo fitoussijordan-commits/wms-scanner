@@ -4419,24 +4419,34 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const [newWeight, setNewWeight] = useState<Record<number, string>>({});
   const [addingPkg, setAddingPkg] = useState<Record<number, boolean>>({});
   const [printingPdf, setPrintingPdf] = useState(false);
+  const [pdfPreview, setPdfPreview] = useState<{ url: string; file: File } | null>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
   const printLocalPdf = () => pdfInputRef.current?.click();
 
-  const handlePdfFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Sélection du fichier → aperçu avant impression
+  const handlePdfFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const url = URL.createObjectURL(file);
+    setPdfPreview({ url, file });
+    if (pdfInputRef.current) pdfInputRef.current.value = "";
+  };
+
+  // Confirmation depuis la modale d'aperçu → crop + envoi
+  const confirmPrintPdf = async () => {
+    if (!pdfPreview) return;
+    const { file, url } = pdfPreview;
+    URL.revokeObjectURL(url);
+    setPdfPreview(null);
     setPrintingPdf(true);
     try {
       const cfg = pn.getLabelTypeConfig("blank");
       const pid = cfg.printerId || pn.getSavedPrinterId();
       if (!pid) { onToast("⚠️ Aucune imprimante configurée dans les paramètres"); setPrintingPdf(false); return; }
 
-      // Lire le PDF brut
       const rawBuffer = await file.arrayBuffer();
       let pdfBytes: Uint8Array = new Uint8Array(rawBuffer);
-
-      // Recadrer les marges blanches automatiquement
       try {
         pdfBytes = await cropPdfWhiteMargins(pdfBytes) as Uint8Array;
       } catch (cropErr) {
@@ -4449,7 +4459,6 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
       else onToast("❌ " + (result.error || "Erreur impression"));
     } catch (e: any) { onToast("❌ " + e.message); }
     setPrintingPdf(false);
-    if (pdfInputRef.current) pdfInputRef.current.value = "";
   };
 
   const search = async (q = query) => {
@@ -4585,6 +4594,35 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
         style={{ width: "100%", padding: 12, background: printingPdf ? C.bg : "#f0fdf4", border: `1.5px solid ${C.greenBorder}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, color: C.green, fontFamily: "inherit", marginBottom: 12, opacity: printingPdf ? 0.6 : 1 }}>
         {printingPdf ? "Envoi en cours…" : "🖨️ Imprimer un PDF depuis mon Mac"}
       </button>
+
+      {/* Modale aperçu PDF avant impression */}
+      {pdfPreview && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: C.white, borderRadius: 14, overflow: "hidden", width: "100%", maxWidth: 500, display: "flex", flexDirection: "column", maxHeight: "90vh" }}>
+            {/* Header */}
+            <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontWeight: 700, fontSize: 14, color: C.text }}>Aperçu — {pdfPreview.file.name}</span>
+              <button onClick={() => { URL.revokeObjectURL(pdfPreview.url); setPdfPreview(null); }}
+                style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.textMuted, lineHeight: 1 }}>✕</button>
+            </div>
+            {/* PDF iframe */}
+            <div style={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
+              <iframe src={pdfPreview.url} style={{ width: "100%", height: 420, border: "none", display: "block" }} title="Aperçu PDF" />
+            </div>
+            {/* Actions */}
+            <div style={{ padding: 14, borderTop: `1px solid ${C.border}`, display: "flex", gap: 10 }}>
+              <button onClick={() => { URL.revokeObjectURL(pdfPreview.url); setPdfPreview(null); }}
+                style={{ flex: 1, padding: 12, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.textMuted, fontFamily: "inherit" }}>
+                Annuler
+              </button>
+              <button onClick={confirmPrintPdf}
+                style={{ flex: 2, padding: 12, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit" }}>
+                🖨️ Confirmer l'impression
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pickings.length === 0 && !searching && (
         <button onClick={() => search("")}
