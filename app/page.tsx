@@ -22,31 +22,44 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/**
- * Rogne un PDF en coupant des pourcentages de chaque bord.
- * topPct/bottomPct/leftPct/rightPct = % de la dimension de la page.
- */
-async function applyPdfCrop(
-  bytes: Uint8Array,
-  crop: { top: number; bottom: number; left: number; right: number }
-): Promise<Uint8Array> {
-  const { PDFDocument, PDFName } = await import("pdf-lib");
-  const pdfDoc = await PDFDocument.load(bytes);
-  for (let pi = 0; pi < pdfDoc.getPageCount(); pi++) {
-    const page = pdfDoc.getPage(pi);
-    const { x, y, width, height } = page.getMediaBox();
-    const minX = x + width  * crop.left   / 100;
-    const minY = y + height * crop.bottom / 100;
-    const maxX = x + width  * (1 - crop.right  / 100);
-    const maxY = y + height * (1 - crop.top    / 100);
-    const newBox = pdfDoc.context.obj([minX, minY, maxX, maxY]);
-    page.node.set(PDFName.of("MediaBox"), newBox);
-    page.node.set(PDFName.of("CropBox"),  newBox);
-    for (const n of ["TrimBox", "ArtBox", "BleedBox"]) {
-      try { page.node.delete(PDFName.of(n)); } catch {}
-    }
+type PdfCrop = { top: number; bottom: number; left: number; right: number };
+const PDF_CROP_DEFAULT: PdfCrop = { top: 0, bottom: 0, left: 0, right: 0 };
+
+function applyCropToPage(page: any, crop: PdfCrop, context: any, PDFName: any) {
+  const { x, y, width, height } = page.getMediaBox();
+  const minX = x + width  * crop.left   / 100;
+  const minY = y + height * crop.bottom / 100;
+  const maxX = x + width  * (1 - crop.right / 100);
+  const maxY = y + height * (1 - crop.top   / 100);
+  const box  = context.obj([minX, minY, maxX, maxY]);
+  page.node.set(PDFName.of("MediaBox"), box);
+  page.node.set(PDFName.of("CropBox"),  box);
+  for (const n of ["TrimBox", "ArtBox", "BleedBox"]) {
+    try { page.node.delete(PDFName.of(n)); } catch {}
   }
-  return pdfDoc.save();
+}
+
+/** Extrait une seule page du PDF, lui applique son crop, retourne un PDF 1 page pour l'aperçu. */
+async function previewPageWithCrop(bytes: Uint8Array, pageIndex: number, crop: PdfCrop): Promise<Uint8Array> {
+  const { PDFDocument, PDFName } = await import("pdf-lib");
+  const src  = await PDFDocument.load(bytes);
+  const dest = await PDFDocument.create();
+  const [p]  = await dest.copyPages(src, [pageIndex]);
+  dest.addPage(p);
+  applyCropToPage(dest.getPage(0), crop, dest.context, PDFName);
+  return dest.save();
+}
+
+/** Applique un crop par page sur le PDF complet, retourne le PDF final à imprimer. */
+async function buildFinalPdf(bytes: Uint8Array, cropPerPage: Record<number, PdfCrop>): Promise<Uint8Array> {
+  const { PDFDocument, PDFName } = await import("pdf-lib");
+  const doc = await PDFDocument.load(bytes);
+  for (let i = 0; i < doc.getPageCount(); i++) {
+    const crop = cropPerPage[i] ?? PDF_CROP_DEFAULT;
+    if (crop.top || crop.bottom || crop.left || crop.right)
+      applyCropToPage(doc.getPage(i), crop, doc.context, PDFName);
+  }
+  return doc.save();
 }
 
 // ── E-shop Packing Slip PDF (reproduit le format SendCloud) ────────────────────
@@ -4402,22 +4415,26 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const [newWeight, setNewWeight] = useState<Record<number, string>>({});
   const [addingPkg, setAddingPkg] = useState<Record<number, boolean>>({});
   const [printingPdf, setPrintingPdf] = useState(false);
-  const [pdfRawBytes, setPdfRawBytes] = useState<{ bytes: Uint8Array; fileName: string } | null>(null);
+  const [pdfRaw, setPdfRaw] = useState<{ bytes: Uint8Array; fileName: string; numPages: number } | null>(null);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
-  const [pdfCrop, setPdfCrop] = useState<{ top: number; bottom: number; left: number; right: number }>(() => {
-    try { return JSON.parse(localStorage.getItem("pdfCropSettings") || "null") || { top: 0, bottom: 0, left: 0, right: 0 }; }
-    catch { return { top: 0, bottom: 0, left: 0, right: 0 }; }
+  const [pdfPage, setPdfPage] = useState(0);                           // page affichée (0-based)
+  const [pdfCropPerPage, setPdfCropPerPage] = useState<Record<number, PdfCrop>>(() => {
+    try { return JSON.parse(localStorage.getItem("pdfCropPerPage") || "{}"); }
+    catch { return {}; }
   });
   const [applyingCrop, setApplyingCrop] = useState(false);
+  const cropDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
   const printLocalPdf = () => pdfInputRef.current?.click();
 
-  const refreshPdfPreview = async (bytes: Uint8Array, crop: typeof pdfCrop) => {
+  const getCrop = (pageIdx: number) => pdfCropPerPage[pageIdx] ?? PDF_CROP_DEFAULT;
+
+  const showPagePreview = async (bytes: Uint8Array, pageIdx: number, crop: PdfCrop) => {
     setApplyingCrop(true);
     try {
-      const cropped = await applyPdfCrop(bytes, crop) as Uint8Array;
-      const url = URL.createObjectURL(new Blob([cropped.buffer as ArrayBuffer], { type: "application/pdf" }));
+      const out  = await previewPageWithCrop(bytes, pageIdx, crop) as Uint8Array;
+      const url  = URL.createObjectURL(new Blob([out.buffer as ArrayBuffer], { type: "application/pdf" }));
       setPdfPreviewUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
     } catch {}
     setApplyingCrop(false);
@@ -4430,33 +4447,46 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
     setPrintingPdf(true);
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      setPdfRawBytes({ bytes, fileName: file.name });
-      await refreshPdfPreview(bytes, pdfCrop);
+      const { PDFDocument } = await import("pdf-lib");
+      const numPages = (await PDFDocument.load(bytes)).getPageCount();
+      setPdfRaw({ bytes, fileName: file.name, numPages });
+      setPdfPage(0);
+      await showPagePreview(bytes, 0, getCrop(0));
     } catch (e: any) { onToast("❌ " + e.message); }
     setPrintingPdf(false);
   };
 
-  const updateCrop = async (key: keyof typeof pdfCrop, delta: number) => {
-    const newCrop = { ...pdfCrop, [key]: Math.max(0, Math.min(49, pdfCrop[key] + delta)) };
-    setPdfCrop(newCrop);
-    localStorage.setItem("pdfCropSettings", JSON.stringify(newCrop));
-    if (pdfRawBytes) await refreshPdfPreview(pdfRawBytes.bytes, newCrop);
+  const goToPage = async (idx: number) => {
+    if (!pdfRaw) return;
+    setPdfPage(idx);
+    await showPagePreview(pdfRaw.bytes, idx, getCrop(idx));
+  };
+
+  // Slider onChange → mise à jour immédiate du %, rafraîchit l'aperçu après 350ms
+  const handleCropSlider = (side: keyof PdfCrop, value: number) => {
+    const newCrop = { ...getCrop(pdfPage), [side]: value };
+    const newMap  = { ...pdfCropPerPage, [pdfPage]: newCrop };
+    setPdfCropPerPage(newMap);
+    localStorage.setItem("pdfCropPerPage", JSON.stringify(newMap));
+    if (cropDebounce.current) clearTimeout(cropDebounce.current);
+    cropDebounce.current = setTimeout(() => {
+      if (pdfRaw) showPagePreview(pdfRaw.bytes, pdfPage, newCrop);
+    }, 350);
   };
 
   const confirmPrintPdf = async () => {
-    if (!pdfRawBytes || !pdfPreviewUrl) return;
+    if (!pdfRaw || !pdfPreviewUrl) return;
     URL.revokeObjectURL(pdfPreviewUrl);
     setPdfPreviewUrl(null);
-    const { bytes, fileName } = pdfRawBytes;
-    setPdfRawBytes(null);
+    const { bytes, fileName } = pdfRaw;
+    setPdfRaw(null);
     setPrintingPdf(true);
     try {
       const cfg = pn.getLabelTypeConfig("blank");
       const pid = cfg.printerId || pn.getSavedPrinterId();
       if (!pid) { onToast("⚠️ Aucune imprimante configurée dans les paramètres"); setPrintingPdf(false); return; }
-      const cropped = await applyPdfCrop(bytes, pdfCrop) as Uint8Array;
-      const base64 = uint8ArrayToBase64(cropped);
-      const result = await pn.printPdfLabel(pid, base64, fileName);
+      const final  = await buildFinalPdf(bytes, pdfCropPerPage) as Uint8Array;
+      const result = await pn.printPdfLabel(pid, uint8ArrayToBase64(final), fileName);
       if (result.success) onToast(`✅ "${fileName}" envoyé à l'imprimante`);
       else onToast("❌ " + (result.error || "Erreur impression"));
     } catch (e: any) { onToast("❌ " + e.message); }
@@ -4466,7 +4496,7 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const closePdfPreview = () => {
     if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
     setPdfPreviewUrl(null);
-    setPdfRawBytes(null);
+    setPdfRaw(null);
   };
 
   const search = async (q = query) => {
@@ -4603,50 +4633,70 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
         {printingPdf ? "Envoi en cours…" : "🖨️ Imprimer un PDF depuis mon Mac"}
       </button>
 
-      {/* Modale aperçu PDF + rogner les marges */}
-      {pdfPreviewUrl && pdfRawBytes && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 12 }}>
-          <div style={{ background: C.white, borderRadius: 14, overflow: "hidden", width: "100%", maxWidth: 480, display: "flex", flexDirection: "column", maxHeight: "95vh" }}>
-            {/* Header */}
-            <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontWeight: 700, fontSize: 13, color: C.text }}>{pdfRawBytes.fileName}</span>
-              <button onClick={closePdfPreview} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.textMuted, lineHeight: 1 }}>✕</button>
-            </div>
-            {/* Contrôles rognage */}
-            <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}`, background: C.bg }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Rogner les marges {applyingCrop ? "…" : ""}</div>
-              {(["top","bottom","left","right"] as const).map(side => {
-                const labels: Record<string, string> = { top: "Haut", bottom: "Bas", left: "Gauche", right: "Droite" };
-                return (
-                  <div key={side} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span style={{ width: 54, fontSize: 12, color: C.text }}>{labels[side]}</span>
-                    <button onClick={() => updateCrop(side, -1)} disabled={applyingCrop}
-                      style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, cursor: "pointer", fontWeight: 700, fontSize: 15 }}>−</button>
-                    <span style={{ width: 36, textAlign: "center", fontSize: 13, fontWeight: 700, color: C.text }}>{pdfCrop[side]}%</span>
-                    <button onClick={() => updateCrop(side, 1)} disabled={applyingCrop}
-                      style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, cursor: "pointer", fontWeight: 700, fontSize: 15 }}>+</button>
+      {/* Modale aperçu PDF — rognage par page avec curseurs */}
+      {pdfPreviewUrl && pdfRaw && (() => {
+        const crop = getCrop(pdfPage);
+        const sides = [
+          { key: "top"    as const, label: "Haut"   },
+          { key: "bottom" as const, label: "Bas"    },
+          { key: "left"   as const, label: "Gauche" },
+          { key: "right"  as const, label: "Droite" },
+        ];
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 12 }}>
+            <div style={{ background: C.white, borderRadius: 14, overflow: "hidden", width: "100%", maxWidth: 480, display: "flex", flexDirection: "column", maxHeight: "95vh" }}>
+
+              {/* Header + navigation pages */}
+              <div style={{ padding: "11px 14px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontWeight: 700, fontSize: 13, color: C.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pdfRaw.fileName}</span>
+                {pdfRaw.numPages > 1 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
+                    <button onClick={() => goToPage(pdfPage - 1)} disabled={pdfPage === 0 || applyingCrop}
+                      style={{ width: 26, height: 26, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg, cursor: "pointer", fontSize: 14, opacity: pdfPage === 0 ? 0.3 : 1 }}>‹</button>
+                    <span style={{ fontSize: 12, color: C.textMuted, whiteSpace: "nowrap" }}>Page {pdfPage + 1}/{pdfRaw.numPages}</span>
+                    <button onClick={() => goToPage(pdfPage + 1)} disabled={pdfPage === pdfRaw.numPages - 1 || applyingCrop}
+                      style={{ width: 26, height: 26, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg, cursor: "pointer", fontSize: 14, opacity: pdfPage === pdfRaw.numPages - 1 ? 0.3 : 1 }}>›</button>
                   </div>
-                );
-              })}
-            </div>
-            {/* PDF iframe */}
-            <div style={{ flex: 1, overflow: "hidden", minHeight: 0, opacity: applyingCrop ? 0.5 : 1, transition: "opacity 0.2s" }}>
-              <iframe key={pdfPreviewUrl} src={pdfPreviewUrl} style={{ width: "100%", height: 340, border: "none", display: "block" }} title="Aperçu PDF" />
-            </div>
-            {/* Actions */}
-            <div style={{ padding: 12, borderTop: `1px solid ${C.border}`, display: "flex", gap: 10 }}>
-              <button onClick={closePdfPreview}
-                style={{ flex: 1, padding: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.textMuted, fontFamily: "inherit" }}>
-                Annuler
-              </button>
-              <button onClick={confirmPrintPdf} disabled={applyingCrop}
-                style={{ flex: 2, padding: 11, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", opacity: applyingCrop ? 0.6 : 1 }}>
-                🖨️ Imprimer
-              </button>
+                )}
+                <button onClick={closePdfPreview} style={{ marginLeft: 8, background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.textMuted, lineHeight: 1 }}>✕</button>
+              </div>
+
+              {/* Sliders rognage */}
+              <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                  Rogner — page {pdfPage + 1}{applyingCrop ? " …" : ""}
+                </div>
+                {sides.map(({ key, label }) => (
+                  <div key={key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+                    <span style={{ width: 50, fontSize: 12, color: C.text, flexShrink: 0 }}>{label}</span>
+                    <input type="range" min={0} max={49} value={crop[key]}
+                      onChange={e => handleCropSlider(key, parseInt(e.target.value))}
+                      style={{ flex: 1, accentColor: C.green, cursor: "pointer" }} />
+                    <span style={{ width: 32, textAlign: "right", fontSize: 12, fontWeight: 700, color: C.text, flexShrink: 0 }}>{crop[key]}%</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Aperçu iframe */}
+              <div style={{ flex: 1, minHeight: 0, opacity: applyingCrop ? 0.45 : 1, transition: "opacity 0.15s" }}>
+                <iframe key={pdfPreviewUrl} src={pdfPreviewUrl} style={{ width: "100%", height: 300, border: "none", display: "block" }} title="Aperçu PDF" />
+              </div>
+
+              {/* Actions */}
+              <div style={{ padding: 12, borderTop: `1px solid ${C.border}`, display: "flex", gap: 10 }}>
+                <button onClick={closePdfPreview}
+                  style={{ flex: 1, padding: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.textMuted, fontFamily: "inherit" }}>
+                  Annuler
+                </button>
+                <button onClick={confirmPrintPdf} disabled={applyingCrop}
+                  style={{ flex: 2, padding: 11, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", opacity: applyingCrop ? 0.6 : 1 }}>
+                  🖨️ Imprimer les {pdfRaw.numPages} page{pdfRaw.numPages > 1 ? "s" : ""}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {pickings.length === 0 && !searching && (
         <button onClick={() => search("")}
