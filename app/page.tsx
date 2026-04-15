@@ -23,84 +23,95 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 }
 
 /**
+ * Décode un flux de contenu PDF compressé (FlateDecode) en texte brut.
+ * Utilise pako (déjà dépendance de pdf-lib) pour décompresser.
+ */
+async function decodePdfStream(rawBytes: Uint8Array, isFlate: boolean): Promise<string> {
+  if (!isFlate) return new TextDecoder("latin1").decode(rawBytes);
+  const { inflateRaw, inflate } = await import("pako");
+  let decompressed: Uint8Array;
+  try { decompressed = inflate(rawBytes); }
+  catch { decompressed = inflateRaw(rawBytes); }
+  return new TextDecoder("latin1").decode(decompressed);
+}
+
+/**
  * Recadre automatiquement les marges blanches d'un PDF.
- * Rend la page sur un canvas offscreen, détecte les pixels non-blancs,
- * puis applique le CropBox correspondant avec pdf-lib.
+ * Parse les opérateurs de positionnement du flux de contenu (re, m, Tm, cm)
+ * pour trouver la bbox réelle du contenu, sans dépendance externe.
  */
 async function cropPdfWhiteMargins(bytes: Uint8Array): Promise<Uint8Array> {
-  // ── 1. Rendu canvas via pdfjs pour détecter le contenu ──────────────────────
-  // @ts-ignore — pdfjs-dist v5 ESM, types resolus via package root
-  const pdfjsLib = await import("pdfjs-dist");
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+  const { PDFDocument, PDFName, PDFArray, PDFRef, PDFStream } = await import("pdf-lib");
+  const pdfDoc = await PDFDocument.load(bytes);
 
-  const loadingTask = pdfjsLib.getDocument({ data: bytes.slice() });
-  const pdfDoc = await loadingTask.promise;
-  const numPages = pdfDoc.numPages;
+  for (let pi = 0; pi < pdfDoc.getPageCount(); pi++) {
+    const page = pdfDoc.getPage(pi);
+    const media = page.getMediaBox();
 
-  // ── 2. Modifier chaque page avec pdf-lib ────────────────────────────────────
-  const { PDFDocument, PDFName } = await import("pdf-lib");
-  const pdfLibDoc = await PDFDocument.load(bytes);
+    // ── Récupérer le flux de contenu de la page ─────────────────────────────
+    let contentText = "";
+    try {
+      const contentsNode = page.node.get(PDFName.of("Contents"));
+      const refs: any[] = contentsNode instanceof PDFArray
+        ? contentsNode.asArray()
+        : contentsNode ? [contentsNode] : [];
 
-  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-    const page = await pdfDoc.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 1 });
-    const W = Math.floor(viewport.width);
-    const H = Math.floor(viewport.height);
-
-    // Canvas offscreen
-    const canvas = document.createElement("canvas");
-    canvas.width = W;
-    canvas.height = H;
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, W, H);
-    await page.render({ canvasContext: ctx as any, viewport, canvas } as any).promise;
-
-    // Analyser les pixels
-    const { data } = ctx.getImageData(0, 0, W, H);
-    let minX = W, minY = H, maxX = 0, maxY = 0;
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const i = (y * W + x) * 4;
-        if (data[i] < 248 || data[i + 1] < 248 || data[i + 2] < 248) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
+      for (const ref of refs) {
+        const obj = pdfDoc.context.lookup(ref) as any;
+        if (!obj) continue;
+        const rawBytes: Uint8Array = obj.contents ?? obj.getContents?.() ?? new Uint8Array();
+        // Détecter FlateDecode
+        const filterNode = obj.dict?.lookup(PDFName.of("Filter"));
+        const filterName = filterNode?.encodedName ?? filterNode?.toString() ?? "";
+        const isFlate = filterName.includes("FlateDecode") || filterName.includes("Fl");
+        contentText += await decodePdfStream(rawBytes, isFlate);
       }
+    } catch {
+      // Si le parsing échoue, on passe à la page suivante
+      continue;
     }
 
-    // Si rien trouvé (page vide), passer
-    if (minX > maxX || minY > maxY) continue;
+    if (!contentText) continue;
 
-    // Marge de sécurité 6px
-    const pad = 6;
-    minX = Math.max(0, minX - pad);
-    minY = Math.max(0, minY - pad);
-    maxX = Math.min(W - 1, maxX + pad);
-    maxY = Math.min(H - 1, maxY + pad);
+    // ── Parser les coordonnées des opérateurs PDF ────────────────────────────
+    const xs: number[] = [];
+    const ys: number[] = [];
+    const N = "(-?[\\d]+(?:\\.[\\d]*)?)";
+    const SP = "\\s+";
 
-    // ── 3. Convertir coords canvas → coords PDF (Y inversé) ──────────────────
-    const pdfPage = pdfLibDoc.getPage(pageNum - 1);
-    const media = pdfPage.getMediaBox();
-    const sx = media.width / W;
-    const sy = media.height / H;
+    // re (rectangle) : x y w h re
+    let rm: RegExpExecArray | null;
+    const reRe = new RegExp(`${N}${SP}${N}${SP}${N}${SP}${N}${SP}re`, "g");
+    while ((rm = reRe.exec(contentText)) !== null) {
+      const [x, y, w, h] = [+rm[1], +rm[2], +rm[3], +rm[4]];
+      if (Math.abs(w) > 3 && Math.abs(h) > 3) { xs.push(x, x + w); ys.push(y, y + h); }
+    }
+    // m (moveto) : x y m
+    const reM = new RegExp(`${N}${SP}${N}${SP}m(?=\\s|$)`, "gm");
+    while ((rm = reM.exec(contentText)) !== null) { xs.push(+rm[1]); ys.push(+rm[2]); }
+    // Tm (text matrix) : a b c d e f Tm  →  e=x, f=y
+    const reTm = new RegExp(`${N}${SP}${N}${SP}${N}${SP}${N}${SP}${N}${SP}${N}${SP}Tm`, "g");
+    while ((rm = reTm.exec(contentText)) !== null) { xs.push(+rm[5]); ys.push(+rm[6]); }
 
-    const pdfMinX = media.x + minX * sx;
-    const pdfMinY = media.y + (H - maxY) * sy;   // canvas Y=0 en haut, PDF Y=0 en bas
-    const pdfMaxX = media.x + maxX * sx;
-    const pdfMaxY = media.y + (H - minY) * sy;
+    if (xs.length < 2) continue;
 
-    const newBox = pdfLibDoc.context.obj([pdfMinX, pdfMinY, pdfMaxX, pdfMaxY]);
-    pdfPage.node.set(PDFName.of("MediaBox"), newBox);
-    pdfPage.node.set(PDFName.of("CropBox"), newBox);
+    const pad = 4;
+    const minX = Math.max(media.x, Math.min(...xs) - pad);
+    const minY = Math.max(media.y, Math.min(...ys) - pad);
+    const maxX = Math.min(media.x + media.width,  Math.max(...xs) + pad);
+    const maxY = Math.min(media.y + media.height, Math.max(...ys) + pad);
+
+    if (maxX - minX < 10 || maxY - minY < 10) continue;
+
+    const newBox = pdfDoc.context.obj([minX, minY, maxX, maxY]);
+    page.node.set(PDFName.of("MediaBox"), newBox);
+    page.node.set(PDFName.of("CropBox"), newBox);
     for (const n of ["TrimBox", "ArtBox", "BleedBox"]) {
-      try { pdfPage.node.delete(PDFName.of(n)); } catch {}
+      try { page.node.delete(PDFName.of(n)); } catch {}
     }
   }
 
-  return pdfLibDoc.save();
+  return pdfDoc.save();
 }
 
 // ── E-shop Packing Slip PDF (reproduit le format SendCloud) ────────────────────
