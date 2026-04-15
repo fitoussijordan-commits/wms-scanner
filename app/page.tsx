@@ -29,9 +29,8 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
  */
 async function cropPdfWhiteMargins(bytes: Uint8Array): Promise<Uint8Array> {
   // ── 1. Rendu canvas via pdfjs pour détecter le contenu ──────────────────────
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  const pdfjsLib = await import("pdfjs-dist/build/pdf.mjs");
+  // @ts-ignore — pdfjs-dist v5 ESM, types resolus via package root
+  const pdfjsLib = await import("pdfjs-dist");
   pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
   const loadingTask = pdfjsLib.getDocument({ data: bytes.slice() });
