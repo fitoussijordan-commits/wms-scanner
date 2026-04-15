@@ -762,6 +762,10 @@ export default function Page() {
     setPrepStep(newVal);
   };
 
+  // New order notification (desktop only)
+  const [newOrderNotif, setNewOrderNotif] = useState<{ count: number; names: string[] } | null>(null);
+  const knownOrderIdsRef = useRef<Set<number>>(new Set());
+
   // Print modal
   const [printReq, setPrintReq] = useState<PrintRequest | null>(null);
   useEffect(() => { _setPrintReq = setPrintReq; return () => { _setPrintReq = null; }; }, []);
@@ -852,6 +856,70 @@ export default function Page() {
       odoo.getOutgoingPickings(session).then(p => setPickings(p)).catch(() => {});
     }
   }, [screen, session]);
+
+  // Polling nouvelles commandes en attente — desktop uniquement, toutes les 60s
+  useEffect(() => {
+    if (!session) return;
+    // Seulement sur desktop (pas sur les scanners mobiles)
+    const isDesktop = typeof window !== "undefined"
+      && !("ontouchstart" in window)
+      && window.innerWidth >= 1024;
+    if (!isDesktop) return;
+
+    const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+    const storageKey = `knownWaitingIds_${todayStr}`;
+
+    // Charge les IDs déjà connus pour aujourd'hui (évite de re-notifier au rechargement)
+    try {
+      const saved: number[] = JSON.parse(localStorage.getItem(storageKey) || "[]");
+      knownOrderIdsRef.current = new Set(saved);
+    } catch {
+      knownOrderIdsRef.current = new Set();
+    }
+
+    const checkNewOrders = async () => {
+      try {
+        const all = await odoo.getWaitingPickings(session);
+        // Filtre sur la date du jour
+        const todayPickings = all.filter((p: any) => {
+          const d: string = p.scheduled_date || p.date_deadline || "";
+          return d.startsWith(todayStr);
+        });
+
+        const knownIds = knownOrderIdsRef.current;
+        const newPickings = todayPickings.filter((p: any) => !knownIds.has(p.id as number));
+
+        if (newPickings.length > 0) {
+          const names: string[] = newPickings.map((p: any) => p.name || p.origin || `#${p.id}`);
+          setNewOrderNotif({ count: newPickings.length, names });
+
+          // Notification navigateur
+          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            new Notification(
+              `${newPickings.length} nouvelle${newPickings.length > 1 ? "s" : ""} commande${newPickings.length > 1 ? "s" : ""} en attente`,
+              { body: names.join(", "), icon: "/favicon.ico" }
+            );
+          }
+        }
+
+        // Mémorise tous les IDs vus aujourd'hui
+        const allTodayIds = todayPickings.map((p: any) => p.id as number);
+        const merged = new Set([...Array.from(knownIds), ...allTodayIds]);
+        knownOrderIdsRef.current = merged;
+        localStorage.setItem(storageKey, JSON.stringify(Array.from(merged)));
+      } catch {}
+    };
+
+    // Demande la permission si pas encore accordée
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+
+    checkNewOrders();
+    const interval = setInterval(checkNewOrders, 60_000);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
 
   // Lookup
   const clearLookup = () => { setLookupResult(null); setLookupStock([]); setLookupType(""); setError(""); };
@@ -1465,6 +1533,42 @@ export default function Page() {
   return (
     <Shell toast={toast} flash={scanFlash}>
       <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} />
+
+      {/* ── Bannière nouvelles commandes (desktop uniquement) ── */}
+      {newOrderNotif && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999,
+          background: "linear-gradient(90deg, #f59e0b, #d97706)",
+          color: "#fff",
+          padding: "10px 16px",
+          display: "flex", alignItems: "center", gap: 10,
+          boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
+          fontFamily: "inherit",
+        }}>
+          <span style={{ fontSize: 20 }}>🔔</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>
+              {newOrderNotif.count} nouvelle{newOrderNotif.count > 1 ? "s" : ""} commande{newOrderNotif.count > 1 ? "s" : ""} en attente
+            </div>
+            <div style={{ fontSize: 12, opacity: 0.9, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {newOrderNotif.names.join(" · ")}
+            </div>
+          </div>
+          <button
+            onClick={() => { setNewOrderNotif(null); loadPickings(); setScreen("prep"); }}
+            style={{ background: "rgba(255,255,255,0.25)", border: "none", borderRadius: 8, color: "#fff", fontWeight: 700, fontSize: 13, padding: "6px 14px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
+          >
+            Voir
+          </button>
+          <button
+            onClick={() => setNewOrderNotif(null)}
+            style={{ background: "transparent", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", lineHeight: 1, padding: "0 4px", fontFamily: "inherit" }}
+            aria-label="Fermer"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <main style={{ maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px" }}>
 
@@ -4857,6 +4961,8 @@ function WaitingOrdersScreen({
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [processing, setProcessing] = useState<Record<string, boolean>>({});
   const [results, setResults] = useState<Record<number, { state: string; missingLines: any[] }>>({});
+  // Guard synchrone contre les double-clics (le state React est asynchrone et pas fiable pour ça)
+  const processingGuardRef = useRef<Set<string>>(new Set());
 
   const load = async () => {
     setLoading(true);
@@ -4919,6 +5025,9 @@ function WaitingOrdersScreen({
 
   // Traite un ou plusieurs pickings (groupe client même date)
   const startPrepGroup = async (groupId: string, pickingsGroup: any[]) => {
+    // Guard synchrone : bloque immédiatement les double-clics avant que React state se propage
+    if (processingGuardRef.current.has(groupId)) return;
+    processingGuardRef.current.add(groupId);
     setProcessing(prev => ({ ...prev, [groupId]: true }));
     const cfg = pn.getLabelTypeConfig("packingslip");
     const printerId = cfg.printerId || pn.getSavedPrinterId();
@@ -4966,6 +5075,7 @@ function WaitingOrdersScreen({
     } else if (readyCount > 0) {
       onToast(`✅ ${readyCount} commande${readyCount > 1 ? "s" : ""} prête${readyCount > 1 ? "s" : ""} — aucune imprimante configurée`);
     }
+    processingGuardRef.current.delete(groupId);
     setProcessing(prev => ({ ...prev, [groupId]: false }));
   };
 
