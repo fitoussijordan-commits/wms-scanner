@@ -1434,20 +1434,47 @@ export default function Page() {
       }
 
       flashScan("ok");
-      showToast(`✓ ${actualLotName || ml.product_id[1]} · ${newQty}/${displayTotal}`);
 
-      const morePending = optimisticLines.filter((m: any) =>
-        m.location_id && m.location_id[0] === currentStep!.locId && (m.qty_done || 0) < (m.reserved_uom_qty || 0)
-      );
+      // ── Calcul du restant côté produit (multi-lots) ──────────────────────
+      // On agrège reserved/done par (location, produit) pour savoir si l'ensemble
+      // des lots couvre déjà la demande, même si certaines lignes individuelles
+      // ont encore reserved_uom_qty > qty_done.
+      const productTotals = new Map<number, { reserved: number; done: number }>();
+      for (const m of optimisticLines) {
+        if (m.location_id?.[0] !== currentStep!.locId) continue;
+        const pid: number = m.product_id?.[0];
+        if (!pid) continue;
+        const cur = productTotals.get(pid) || { reserved: 0, done: 0 };
+        cur.reserved += (m.reserved_uom_qty || 0);
+        cur.done     += (m.qty_done || 0);
+        productTotals.set(pid, cur);
+      }
+
+      // Total restant pour CE produit à cet emplacement (tous lots confondus)
+      const thisProd = productTotals.get(ml.product_id[0]) || { reserved: displayTotal, done: newQty };
+      const productRemaining = thisProd.reserved - thisProd.done;
+      showToast(`✓ ${actualLotName || ml.product_id[1]} · ${thisProd.done}/${thisProd.reserved}`);
+
+      // morePending : lignes avec réservation non encore couverte par le total produit
+      const morePending = optimisticLines.filter((m: any) => {
+        if (!m.location_id || m.location_id[0] !== currentStep!.locId) return false;
+        if ((m.reserved_uom_qty || 0) === 0) return false; // ligne de déviation
+        const pid: number = m.product_id?.[0];
+        const totals = productTotals.get(pid) || { reserved: 0, done: 0 };
+        return totals.done < totals.reserved;
+      });
+
       if (morePending.length === 0) {
         updatePrepStep(null);
         showToast(`✓ Emplacement ${currentStep!.locName} terminé`);
-      } else if (remaining <= 0) {
+      } else if (productRemaining <= 0) {
+        // Ce produit est couvert, passer au suivant
         const next = morePending[0];
-        const nextRemaining = (next.reserved_uom_qty || 0) - (next.qty_done || 0);
+        const nextProd = productTotals.get(next.product_id[0]) || { reserved: next.reserved_uom_qty || 0, done: next.qty_done || 0 };
+        const nextRemaining = nextProd.reserved - nextProd.done;
         updatePrepStep({ locId: currentStep!.locId, locName: currentStep!.locName, lineId: next.id, productName: next.product_id[1], lotName: next.lot_id?.[1] || undefined, remaining: nextRemaining });
       } else {
-        updatePrepStep(prev => prev ? { ...prev, lineId: ml.id, lotName: actualLotName || prev.lotName, remaining } : null);
+        updatePrepStep(prev => prev ? { ...prev, lineId: ml.id, lotName: actualLotName || prev.lotName, remaining: productRemaining } : null);
       }
 
       // ── Écriture Odoo en arrière-plan (non bloquant) ─────────────────────
