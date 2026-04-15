@@ -1239,6 +1239,19 @@ export default function Page() {
       }
 
       let ml = currentLines.find((m: any) => m.id === currentStep!.lineId);
+
+      // ── Priorité au lot scanné : si un lot a été scanné, chercher d'abord
+      //    la ligne qui correspond à CE lot à cet emplacement.
+      //    Sinon on incrémenterait la mauvaise ligne (celle du lot attendu).
+      if (lotId) {
+        const lotMatch = currentLines.find((m: any) =>
+          m.location_id?.[0] === currentStep!.locId &&
+          m.lot_id?.[0] === lotId &&
+          (m.qty_done || 0) < (m.reserved_uom_qty || 0)
+        );
+        if (lotMatch) ml = lotMatch;
+      }
+
       if (!ml && productId) {
         ml = currentLines.find((m: any) =>
           m.location_id?.[0] === currentStep!.locId &&
@@ -1261,7 +1274,7 @@ export default function Page() {
       }
 
       if (lotName && ml.lot_id && ml.lot_id[1] !== lotName) {
-        showToast(`🟠 Lot différent: ${lotName} (attendu ${ml.lot_id[1]}) — accepté`);
+        showToast(`🟠 Déviation lot: ${lotName} → ligne ${ml.lot_id[1]} mise à jour`);
       }
 
       const newQty = (ml.qty_done || 0) + 1;
