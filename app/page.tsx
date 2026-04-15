@@ -23,104 +23,29 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Décode les bytes d'un flux de contenu PDF.
- * Essaie inflate (zlib) puis inflateRaw ; sinon retourne brut.
+ * Rogne un PDF en coupant des pourcentages de chaque bord.
+ * topPct/bottomPct/leftPct/rightPct = % de la dimension de la page.
  */
-async function decodePdfStreamBytes(raw: Uint8Array): Promise<string> {
-  if (raw.length === 0) return "";
-  try {
-    const { inflate } = await import("pako");
-    return new TextDecoder("latin1").decode(inflate(raw));
-  } catch {}
-  try {
-    const { inflateRaw } = await import("pako");
-    return new TextDecoder("latin1").decode(inflateRaw(raw));
-  } catch {}
-  return new TextDecoder("latin1").decode(raw);
-}
-
-/**
- * Recadre automatiquement les marges blanches d'un PDF.
- * Parse les opérateurs PDF (re, m, l, Tm, cm+Do) pour trouver
- * la bounding box réelle, puis applique MediaBox + CropBox.
- */
-async function cropPdfWhiteMargins(bytes: Uint8Array): Promise<Uint8Array> {
-  const { PDFDocument, PDFName, PDFArray } = await import("pdf-lib");
+async function applyPdfCrop(
+  bytes: Uint8Array,
+  crop: { top: number; bottom: number; left: number; right: number }
+): Promise<Uint8Array> {
+  const { PDFDocument, PDFName } = await import("pdf-lib");
   const pdfDoc = await PDFDocument.load(bytes);
-
   for (let pi = 0; pi < pdfDoc.getPageCount(); pi++) {
     const page = pdfDoc.getPage(pi);
-    const media = page.getMediaBox();
-
-    // ── 1. Extraire et décoder tous les flux de contenu de la page ─────────────
-    let text = "";
-    try {
-      const contentsVal = page.node.get(PDFName.of("Contents")) as any;
-      if (!contentsVal) continue;
-
-      const rawRefs: any[] = (contentsVal instanceof PDFArray)
-        ? contentsVal.asArray()
-        : [contentsVal];
-
-      for (const ref of rawRefs) {
-        const obj: any = pdfDoc.context.lookup(ref);
-        if (!obj?.contents) continue;
-        text += await decodePdfStreamBytes(obj.contents as Uint8Array);
-        text += "\n";
-      }
-    } catch { continue; }
-
-    if (!text.trim()) continue;
-
-    // ── 2. Parser les coordonnées des opérateurs de dessin ─────────────────────
-    const xs: number[] = [];
-    const ys: number[] = [];
-    const F = "(-?\\d+(?:\\.\\d+)?)"; // nombre flottant
-    const S = "[ \\t]+";              // séparateur
-
-    // re  : x y w h re
-    const reRe = new RegExp(`${F}${S}${F}${S}${F}${S}${F}${S}re`, "g");
-    let m: RegExpExecArray | null;
-    while ((m = reRe.exec(text)) !== null) {
-      const x = +m[1], y = +m[2], w = +m[3], h = +m[4];
-      if (Math.abs(w) > 5 && Math.abs(h) > 5) {
-        xs.push(x, x + w); ys.push(y, y + h);
-      }
-    }
-    // m / l  : x y m  ou  x y l
-    const reMl = new RegExp(`${F}${S}${F}${S}[ml](?=\\s|$)`, "gm");
-    while ((m = reMl.exec(text)) !== null) { xs.push(+m[1]); ys.push(+m[2]); }
-    // Tm  : a b c d e f Tm  → position (e, f)
-    const reTm = new RegExp(`${F}${S}${F}${S}${F}${S}${F}${S}${F}${S}${F}${S}Tm`, "g");
-    while ((m = reTm.exec(text)) !== null) { xs.push(+m[5]); ys.push(+m[6]); }
-    // cm avant Do (image) : w 0 0 h tx ty cm → placement image à (tx, ty, tx+w, ty+h)
-    const reCm = new RegExp(`${F}${S}${F}${S}${F}${S}${F}${S}${F}${S}${F}${S}cm`, "g");
-    while ((m = reCm.exec(text)) !== null) {
-      const [a, , , d, e, f] = [+m[1], +m[2], +m[3], +m[4], +m[5], +m[6]];
-      if (Math.abs(a) > 5 && Math.abs(d) > 5) {
-        xs.push(e, e + Math.abs(a)); ys.push(f, f + Math.abs(d));
-      }
-    }
-
-    if (xs.length < 2 || ys.length < 2) continue;
-
-    // ── 3. Calculer et appliquer la nouvelle boîte ─────────────────────────────
-    const pad = 6;
-    const minX = Math.max(media.x,              Math.min(...xs) - pad);
-    const minY = Math.max(media.y,              Math.min(...ys) - pad);
-    const maxX = Math.min(media.x + media.width,  Math.max(...xs) + pad);
-    const maxY = Math.min(media.y + media.height, Math.max(...ys) + pad);
-
-    if (maxX - minX < 20 || maxY - minY < 20) continue;
-
+    const { x, y, width, height } = page.getMediaBox();
+    const minX = x + width  * crop.left   / 100;
+    const minY = y + height * crop.bottom / 100;
+    const maxX = x + width  * (1 - crop.right  / 100);
+    const maxY = y + height * (1 - crop.top    / 100);
     const newBox = pdfDoc.context.obj([minX, minY, maxX, maxY]);
     page.node.set(PDFName.of("MediaBox"), newBox);
-    page.node.set(PDFName.of("CropBox"), newBox);
+    page.node.set(PDFName.of("CropBox"),  newBox);
     for (const n of ["TrimBox", "ArtBox", "BleedBox"]) {
       try { page.node.delete(PDFName.of(n)); } catch {}
     }
   }
-
   return pdfDoc.save();
 }
 
@@ -4477,45 +4402,71 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const [newWeight, setNewWeight] = useState<Record<number, string>>({});
   const [addingPkg, setAddingPkg] = useState<Record<number, boolean>>({});
   const [printingPdf, setPrintingPdf] = useState(false);
-  // bytes = PDF déjà croppé, prêt à imprimer
-  const [pdfPreview, setPdfPreview] = useState<{ url: string; bytes: Uint8Array; fileName: string } | null>(null);
+  const [pdfRawBytes, setPdfRawBytes] = useState<{ bytes: Uint8Array; fileName: string } | null>(null);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const [pdfCrop, setPdfCrop] = useState<{ top: number; bottom: number; left: number; right: number }>(() => {
+    try { return JSON.parse(localStorage.getItem("pdfCropSettings") || "null") || { top: 0, bottom: 0, left: 0, right: 0 }; }
+    catch { return { top: 0, bottom: 0, left: 0, right: 0 }; }
+  });
+  const [applyingCrop, setApplyingCrop] = useState(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
   const printLocalPdf = () => pdfInputRef.current?.click();
 
-  // Sélection du fichier → crop immédiat → aperçu du résultat croppé
+  const refreshPdfPreview = async (bytes: Uint8Array, crop: typeof pdfCrop) => {
+    setApplyingCrop(true);
+    try {
+      const cropped = await applyPdfCrop(bytes, crop) as Uint8Array;
+      const url = URL.createObjectURL(new Blob([cropped.buffer as ArrayBuffer], { type: "application/pdf" }));
+      setPdfPreviewUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
+    } catch {}
+    setApplyingCrop(false);
+  };
+
   const handlePdfFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (pdfInputRef.current) pdfInputRef.current.value = "";
     setPrintingPdf(true);
     try {
-      let pdfBytes: Uint8Array = new Uint8Array(await file.arrayBuffer());
-      try { pdfBytes = await cropPdfWhiteMargins(pdfBytes) as Uint8Array; }
-      catch (err) { console.warn("Crop échoué, aperçu original:", err); }
-      const url = URL.createObjectURL(new Blob([pdfBytes.buffer as ArrayBuffer], { type: "application/pdf" }));
-      setPdfPreview({ url, bytes: pdfBytes, fileName: file.name });
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      setPdfRawBytes({ bytes, fileName: file.name });
+      await refreshPdfPreview(bytes, pdfCrop);
     } catch (e: any) { onToast("❌ " + e.message); }
     setPrintingPdf(false);
   };
 
-  // Confirmation → envoyer les bytes déjà croppés
+  const updateCrop = async (key: keyof typeof pdfCrop, delta: number) => {
+    const newCrop = { ...pdfCrop, [key]: Math.max(0, Math.min(49, pdfCrop[key] + delta)) };
+    setPdfCrop(newCrop);
+    localStorage.setItem("pdfCropSettings", JSON.stringify(newCrop));
+    if (pdfRawBytes) await refreshPdfPreview(pdfRawBytes.bytes, newCrop);
+  };
+
   const confirmPrintPdf = async () => {
-    if (!pdfPreview) return;
-    const { url, bytes, fileName } = pdfPreview;
-    URL.revokeObjectURL(url);
-    setPdfPreview(null);
+    if (!pdfRawBytes || !pdfPreviewUrl) return;
+    URL.revokeObjectURL(pdfPreviewUrl);
+    setPdfPreviewUrl(null);
+    const { bytes, fileName } = pdfRawBytes;
+    setPdfRawBytes(null);
     setPrintingPdf(true);
     try {
       const cfg = pn.getLabelTypeConfig("blank");
       const pid = cfg.printerId || pn.getSavedPrinterId();
       if (!pid) { onToast("⚠️ Aucune imprimante configurée dans les paramètres"); setPrintingPdf(false); return; }
-      const base64 = uint8ArrayToBase64(bytes);
+      const cropped = await applyPdfCrop(bytes, pdfCrop) as Uint8Array;
+      const base64 = uint8ArrayToBase64(cropped);
       const result = await pn.printPdfLabel(pid, base64, fileName);
       if (result.success) onToast(`✅ "${fileName}" envoyé à l'imprimante`);
       else onToast("❌ " + (result.error || "Erreur impression"));
     } catch (e: any) { onToast("❌ " + e.message); }
     setPrintingPdf(false);
+  };
+
+  const closePdfPreview = () => {
+    if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
+    setPdfPreviewUrl(null);
+    setPdfRawBytes(null);
   };
 
   const search = async (q = query) => {
@@ -4652,29 +4603,45 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
         {printingPdf ? "Envoi en cours…" : "🖨️ Imprimer un PDF depuis mon Mac"}
       </button>
 
-      {/* Modale aperçu PDF avant impression */}
-      {pdfPreview && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}>
-          <div style={{ background: C.white, borderRadius: 14, overflow: "hidden", width: "100%", maxWidth: 500, display: "flex", flexDirection: "column", maxHeight: "90vh" }}>
+      {/* Modale aperçu PDF + rogner les marges */}
+      {pdfPreviewUrl && pdfRawBytes && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 12 }}>
+          <div style={{ background: C.white, borderRadius: 14, overflow: "hidden", width: "100%", maxWidth: 480, display: "flex", flexDirection: "column", maxHeight: "95vh" }}>
             {/* Header */}
-            <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontWeight: 700, fontSize: 14, color: C.text }}>Aperçu — {pdfPreview.fileName}</span>
-              <button onClick={() => { URL.revokeObjectURL(pdfPreview.url); setPdfPreview(null); }}
-                style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.textMuted, lineHeight: 1 }}>✕</button>
+            <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontWeight: 700, fontSize: 13, color: C.text }}>{pdfRawBytes.fileName}</span>
+              <button onClick={closePdfPreview} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.textMuted, lineHeight: 1 }}>✕</button>
+            </div>
+            {/* Contrôles rognage */}
+            <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Rogner les marges {applyingCrop ? "…" : ""}</div>
+              {(["top","bottom","left","right"] as const).map(side => {
+                const labels: Record<string, string> = { top: "Haut", bottom: "Bas", left: "Gauche", right: "Droite" };
+                return (
+                  <div key={side} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <span style={{ width: 54, fontSize: 12, color: C.text }}>{labels[side]}</span>
+                    <button onClick={() => updateCrop(side, -1)} disabled={applyingCrop}
+                      style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, cursor: "pointer", fontWeight: 700, fontSize: 15 }}>−</button>
+                    <span style={{ width: 36, textAlign: "center", fontSize: 13, fontWeight: 700, color: C.text }}>{pdfCrop[side]}%</span>
+                    <button onClick={() => updateCrop(side, 1)} disabled={applyingCrop}
+                      style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, cursor: "pointer", fontWeight: 700, fontSize: 15 }}>+</button>
+                  </div>
+                );
+              })}
             </div>
             {/* PDF iframe */}
-            <div style={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
-              <iframe src={pdfPreview.url} style={{ width: "100%", height: 420, border: "none", display: "block" }} title="Aperçu PDF" />
+            <div style={{ flex: 1, overflow: "hidden", minHeight: 0, opacity: applyingCrop ? 0.5 : 1, transition: "opacity 0.2s" }}>
+              <iframe key={pdfPreviewUrl} src={pdfPreviewUrl} style={{ width: "100%", height: 340, border: "none", display: "block" }} title="Aperçu PDF" />
             </div>
             {/* Actions */}
-            <div style={{ padding: 14, borderTop: `1px solid ${C.border}`, display: "flex", gap: 10 }}>
-              <button onClick={() => { URL.revokeObjectURL(pdfPreview.url); setPdfPreview(null); }}
-                style={{ flex: 1, padding: 12, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.textMuted, fontFamily: "inherit" }}>
+            <div style={{ padding: 12, borderTop: `1px solid ${C.border}`, display: "flex", gap: 10 }}>
+              <button onClick={closePdfPreview}
+                style={{ flex: 1, padding: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.textMuted, fontFamily: "inherit" }}>
                 Annuler
               </button>
-              <button onClick={confirmPrintPdf}
-                style={{ flex: 2, padding: 12, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit" }}>
-                🖨️ Confirmer l'impression
+              <button onClick={confirmPrintPdf} disabled={applyingCrop}
+                style={{ flex: 2, padding: 11, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", opacity: applyingCrop ? 0.6 : 1 }}>
+                🖨️ Imprimer
               </button>
             </div>
           </div>
