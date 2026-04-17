@@ -179,8 +179,8 @@ function barcodeZPL(barcode: string, labelW: number, y: number, height: number, 
 // ============================================
 // PRODUCT LABEL
 // ============================================
-export function generateProductZPL(productName: string, barcode: string, ref?: string): string {
-  const sz = getLabelSize();
+export function generateProductZPL(productName: string, barcode: string, ref?: string, sz?: LabelSize): string {
+  if (!sz) { try { sz = getLabelTypeConfig("product").labelSize; } catch { sz = getLabelSize(); } }
   const W = mm(sz.widthMM);
   const H = mm(sz.heightMM);
   const cW = W - 20;
@@ -213,8 +213,8 @@ export function generateProductZPL(productName: string, barcode: string, ref?: s
 // ============================================
 // LOT LABEL
 // ============================================
-export function generateLotZPL(lotName: string, productName: string, lotBarcode: string, expiryDate?: string): string {
-  const sz = getLabelSize();
+export function generateLotZPL(lotName: string, productName: string, lotBarcode: string, expiryDate?: string, sz?: LabelSize): string {
+  if (!sz) { try { sz = getLabelTypeConfig("lot").labelSize; } catch { sz = getLabelSize(); } }
   const W = mm(sz.widthMM);
   const H = mm(sz.heightMM);
   const cW = W - 20;
@@ -254,8 +254,8 @@ export function generateLotZPL(lotName: string, productName: string, lotBarcode:
 // ============================================
 // LOCATION LABEL
 // ============================================
-export function generateLocationZPL(locationName: string, locationBarcode: string): string {
-  const sz = getLabelSize();
+export function generateLocationZPL(locationName: string, locationBarcode: string, sz?: LabelSize): string {
+  if (!sz) { try { sz = getLabelTypeConfig("location").labelSize; } catch { sz = getLabelSize(); } }
   const W = mm(sz.widthMM);
   const H = mm(sz.heightMM);
   const cW = W - 20;
