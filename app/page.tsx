@@ -548,9 +548,11 @@ async function executePrint(req: PrintRequest, copies: number, format: "standard
   const printerId = cfg.printerId || pn.getSavedPrinterId();
   console.log("[executePrint] type:", req.type, "format:", format, "printerId:", printerId, "title:", req.title, "barcode:", req.barcode, "locationName:", req.locationName);
   if (printerId) {
-    // Format palette 100×150mm
+    // Format palette 100×150mm → utilise la config imprimante "palette"
     if (format === "big") {
-      return pn.printBigLabel(printerId, req.type, req.title, req.barcode, {
+      const paletteCfg = pn.getLabelTypeConfig("palette");
+      const palettePrinterId = paletteCfg.printerId || printerId;
+      return pn.printBigLabel(palettePrinterId, req.type, req.title, req.barcode, {
         ref: req.ref, lotName: req.lotName, productName: req.productName,
         expiryDate: req.expiryDate, locationName: req.locationName,
       }, copies);
