@@ -4430,7 +4430,7 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
         type: "product",
       };
       if (form.barcode) vals.barcode = form.barcode;
-      if (form.prixHT) vals.list_price = parseFloat(form.prixHT.replace(",", ".")) || 0;
+      vals.list_price = form.prixHT ? parseFloat(form.prixHT.replace(",", ".")) || 0 : 0;
       if (form.prixAchat) vals.standard_price = parseFloat(form.prixAchat.replace(",", ".")) || 0;
       if (form.poids) vals.weight = parseFloat(form.poids.replace(",", ".")) || 0;
       await odoo.create(session, "product.template", vals);
