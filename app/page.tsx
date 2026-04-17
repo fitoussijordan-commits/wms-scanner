@@ -4306,7 +4306,7 @@ function autoDetectMapping(headers: string[]): ColMapping {
   };
   return {
     ref:            best(["code article", "code art", "référence", "ref ", "réf", "code produit", "article no", "sku"]),
-    name:           best(["libellé", "libelle", "désignation", "nom produit", "description", "article", "nom"]),
+    name:           best(["nom produit", "libellé", "libelle", "désignation", "nom", "description"]),
     barcode:        best(["code ean", "ean", "barcode", "code barre", "gtin"]),
     prixHT:         best(["tarif ht", "prix ht", "prix de vente ht", "pvht", "tarif 2026"]),
     prixTTC:        best(["ttc", "prix public", "pvttc"]),
