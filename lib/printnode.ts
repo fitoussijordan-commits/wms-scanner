@@ -189,7 +189,7 @@ export function generateProductZPL(productName: string, barcode: string, ref?: s
   const bcH = Math.min(Math.round(H * 0.40), 130);
   const hasRef = !!ref;
 
-  const refBlock = hasRef ? 34 : 0;
+  const refBlock = hasRef ? 46 : 0;
   const nameBlock = 30;
   const bcBlock = bcH + 24;
   const total = refBlock + nameBlock + bcBlock;
@@ -199,8 +199,8 @@ export function generateProductZPL(productName: string, barcode: string, ref?: s
   const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
 
   if (hasRef) {
-    lines.push(`^FO10,${y}^A0N,28,28^FB${cW},1,0,C^FD${trunc(ref!, cpl)}^FS`);
-    y += 34;
+    lines.push(`^FO10,${y}^A0N,40,40^FB${cW},1,0,C^FD${trunc(ref!, cpl)}^FS`);
+    y += 46;
   }
   lines.push(`^FO10,${y}^A0N,26,26^FB${cW},1,0,C^FD${trunc(productName, cpl)}^FS`);
   y += nameBlock;
