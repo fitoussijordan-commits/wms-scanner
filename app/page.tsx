@@ -5878,6 +5878,12 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
   const [adjustments, setAdjustments] = useState<Record<number, string>>({}); // quantId -> new qty string
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // New stock form (for product with 0 quants)
+  const [newStockLoc, setNewStockLoc] = useState("");
+  const [newStockLocId, setNewStockLocId] = useState<number | null>(null);
+  const [newStockQty, setNewStockQty] = useState("1");
+  const [newStockLot, setNewStockLot] = useState("");
+  const [newStockSearching, setNewStockSearching] = useState(false);
 
   const searchProducts = async (forceVal?: string) => {
     const val = (forceVal ?? query).trim();
@@ -6051,8 +6057,85 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
 
             {loadingQuants ? (
               <div style={{ textAlign: "center", padding: 20, color: C.textMuted, fontSize: 13 }}>Chargement du stock...</div>
-            ) : quants.length === 0 ? (
-              <div style={{ textAlign: "center", padding: 20, color: C.orange, fontSize: 13 }}>⚠️ Aucun stock trouvé pour ce produit</div>
+            ) : quants.length === 0 && selectedProduct ? (
+              <div>
+                <div style={{ padding: "10px 14px", background: "#fff7ed", border: "1.5px solid #fed7aa", borderRadius: 10, fontSize: 12, color: "#c2410c", marginBottom: 16 }}>
+                  Aucun stock existant — créer une entrée initiale
+                </div>
+                {/* Emplacement */}
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Emplacement</div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input value={newStockLoc} onChange={e => { setNewStockLoc(e.target.value); setNewStockLocId(null); }}
+                      onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") {
+                        setNewStockSearching(true);
+                        odoo.searchRead(session, "stock.location", [["complete_name", "ilike", newStockLoc], ["usage", "=", "internal"]], ["id", "complete_name", "name"], 10)
+                          .then(res => { if (res.length === 1) { setNewStockLocId(res[0].id); setNewStockLoc(res[0].complete_name || res[0].name); } else if (res.length > 1) { const l = res[0]; setNewStockLocId(l.id); setNewStockLoc(l.complete_name || l.name); onToast(`${res.length} emplacements trouvés, 1er sélectionné`); } else { onToast("Emplacement introuvable"); } })
+                          .catch(e => onToast("Erreur: " + e.message))
+                          .finally(() => setNewStockSearching(false));
+                      }}}
+                      placeholder="Taper ou scanner l'emplacement..."
+                      style={{ flex: 1, padding: "10px 12px", border: `1.5px solid ${newStockLocId ? "#22c55e" : C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", background: newStockLocId ? "#f0fdf4" : C.white, color: C.text }} />
+                    <button disabled={newStockSearching || !newStockLoc} onClick={() => {
+                      setNewStockSearching(true);
+                      odoo.searchRead(session, "stock.location", [["complete_name", "ilike", newStockLoc], ["usage", "=", "internal"]], ["id", "complete_name", "name"], 10)
+                        .then(res => { if (res.length >= 1) { setNewStockLocId(res[0].id); setNewStockLoc(res[0].complete_name || res[0].name); } else { onToast("Emplacement introuvable"); } })
+                        .catch(e => onToast("Erreur: " + e.message))
+                        .finally(() => setNewStockSearching(false));
+                    }} style={{ padding: "10px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                      {newStockSearching ? "..." : "🔍"}
+                    </button>
+                  </div>
+                </div>
+                {/* Lot (optionnel) */}
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Lot <span style={{ fontWeight: 400 }}>(optionnel)</span></div>
+                  <input value={newStockLot} onChange={e => setNewStockLot(e.target.value)}
+                    onKeyDown={e => e.stopPropagation()}
+                    placeholder="Numéro de lot..."
+                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, boxSizing: "border-box" as const }} />
+                </div>
+                {/* Quantité */}
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Quantité</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <button onClick={() => setNewStockQty(q => String(Math.max(0, (parseFloat(q) || 0) - 1)))}
+                      style={{ width: 40, height: 40, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, fontSize: 20, cursor: "pointer", fontFamily: "inherit" }}>−</button>
+                    <input type="number" min={0} value={newStockQty} onChange={e => setNewStockQty(e.target.value)}
+                      onKeyDown={e => e.stopPropagation()}
+                      style={{ width: 80, padding: "8px", border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: 18, fontWeight: 700, textAlign: "center" as const, fontFamily: "inherit" }} />
+                    <button onClick={() => setNewStockQty(q => String((parseFloat(q) || 0) + 1))}
+                      style={{ width: 40, height: 40, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, fontSize: 20, cursor: "pointer", fontFamily: "inherit" }}>+</button>
+                  </div>
+                </div>
+                <button disabled={saving || !newStockLocId || !newStockQty || parseFloat(newStockQty) <= 0}
+                  onClick={async () => {
+                    if (!newStockLocId || !selectedProduct) return;
+                    setSaving(true);
+                    try {
+                      let lotId: number | undefined;
+                      if (newStockLot.trim()) {
+                        // Cherche ou crée le lot
+                        const lots = await odoo.searchRead(session, "stock.lot", [["name", "=", newStockLot.trim()], ["product_id", "=", selectedProduct.id]], ["id"], 1);
+                        if (lots.length > 0) { lotId = lots[0].id; }
+                        else { lotId = await odoo.create(session, "stock.lot", { name: newStockLot.trim(), product_id: selectedProduct.id }) as number; }
+                      }
+                      await odoo.createInventoryAdjustment(session, selectedProduct.id, newStockLocId, parseFloat(newStockQty), lotId);
+                      onToast(`✅ Stock créé : ${newStockQty} unités à ${newStockLoc}`);
+                      // Recharger les quants
+                      const data = await odoo.getQuantsForProduct(session, selectedProduct.id);
+                      setQuants(data);
+                      const init: Record<number, string> = {};
+                      for (const q of data) init[q.id] = String(q.quantity);
+                      setAdjustments(init);
+                      setNewStockLoc(""); setNewStockLocId(null); setNewStockQty("1"); setNewStockLot("");
+                    } catch (e: any) { onToast("Erreur: " + e.message); }
+                    setSaving(false);
+                  }}
+                  style={{ width: "100%", padding: 14, background: saving || !newStockLocId ? C.textMuted : C.blue, color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: saving || !newStockLocId ? "default" : "pointer", fontFamily: "inherit", opacity: !newStockLocId || parseFloat(newStockQty) <= 0 ? 0.5 : 1 }}>
+                  {saving ? "Création..." : "✓ Créer le stock"}
+                </button>
+              </div>
             ) : (
               <>
                 <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 10 }}>
