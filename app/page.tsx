@@ -1365,94 +1365,50 @@ export default function Page() {
         }
       }
 
-      // ── Copie de travail des lignes (peut être augmentée si déviation lot) ──
-      let workLines = currentLines;
-
-      let ml = workLines.find((m: any) => m.id === currentStep!.lineId);
+      // ── Trouver la ligne à utiliser ───────────────────────────────────────
+      // 1. Ligne réservée pour ce lot exact à cet emplacement
+      // 2. Ligne non finie pour ce produit à cet emplacement
+      // 3. Fallback sur la ligne du step
+      let ml: any = null;
 
       if (lotId) {
-        // Cherche une ligne existante pour ce lot à cet emplacement
-        // (sans restriction qty : inclut les lignes déjà créées pour déviations)
-        const lotMatch = workLines.find((m: any) =>
+        ml = currentLines.find((m: any) =>
           m.location_id?.[0] === currentStep!.locId &&
-          m.lot_id?.[0] === lotId
+          m.lot_id?.[0] === lotId &&
+          (m.reserved_uom_qty || 0) > 0
         );
-
-        if (lotMatch) {
-          ml = lotMatch;
-        } else if (ml && lotId !== (ml.lot_id?.[0] ?? null)) {
-          // ── Déviation lot : le lot scanné n'a pas de ligne dans le BL ──────
-          // Solution Odoo correcte : créer une nouvelle stock.move.line pour ce lot.
-          // On ne modifie PAS lot_id sur la ligne réservée (Odoo peut le rejeter).
-          try {
-            const moveId = Array.isArray(ml.move_id) ? ml.move_id[0] : (ml.move_id || 0);
-            const productUomId = Array.isArray(ml.product_uom_id) ? ml.product_uom_id[0] : (ml.product_uom_id || 1);
-            const newLineId = await odoo.createDeviationMoveLine(session, {
-              moveId,
-              pickingId: currentPicking.id,
-              productId: ml.product_id[0],
-              productUomId,
-              lotId,
-              locationId: ml.location_id[0],
-              locationDestId: ml.location_dest_id[0],
-            });
-            // Ligne synthétique en état local (id réel retourné par Odoo)
-            const deviationLine: any = {
-              id: newLineId,
-              product_id: ml.product_id,
-              lot_id: [lotId, lotName || ""],
-              location_id: ml.location_id,
-              location_dest_id: ml.location_dest_id,
-              qty_done: 0,
-              reserved_uom_qty: 0,
-              picking_id: ml.picking_id,
-              move_id: ml.move_id,
-              product_uom_id: ml.product_uom_id,
-            };
-            workLines = [...workLines, deviationLine];
-            pickingMoveLinesRef.current = workLines;
-            setPickingMoveLines(workLines);
-            ml = deviationLine;
-            showToast(`🟠 Déviation lot : nouvelle ligne créée pour ${lotName}`);
-          } catch (e: any) {
-            // Fallback si la création Odoo échoue : on reste sur la ligne attendue
-            setError(`Déviation lot impossible: ${e.message}`);
-            flashScan("err");
-            return;
-          }
-        }
       }
 
       if (!ml && productId) {
-        ml = workLines.find((m: any) =>
+        ml = currentLines.find((m: any) =>
           m.location_id?.[0] === currentStep!.locId &&
-          m.product_id[0] === productId &&
+          m.product_id?.[0] === productId &&
           (m.qty_done || 0) < (m.reserved_uom_qty || 0)
         );
       }
+
       if (!ml) {
-        ml = workLines.find((m: any) =>
-          m.location_id?.[0] === currentStep!.locId &&
-          (m.qty_done || 0) < (m.reserved_uom_qty || 0)
-        );
+        ml = currentLines.find((m: any) => m.id === currentStep!.lineId);
       }
+
       if (!ml) { showToast("Ligne introuvable à cet emplacement"); flashScan("err"); return; }
 
-      if (productId && ml.product_id[0] !== productId) {
+      if (productId && ml.product_id?.[0] !== productId) {
         showToast(`⚠ Mauvais produit — attendu: ${ml.product_id[1]}`);
         flashScan("err");
         return;
       }
 
       const newQty = (ml.qty_done || 0) + 1;
-      const actualLotName = ml.lot_id?.[1] || lotName || null;
-      // Pour les lignes de déviation, la qty réservée est 0 → afficher newQty/newQty
-      const displayTotal = (ml.reserved_uom_qty || 0) > 0 ? (ml.reserved_uom_qty || 0) : newQty;
-      const remaining = (ml.reserved_uom_qty || 0) - newQty;
+      const actualLotName = lotName || ml.lot_id?.[1] || null;
+      // Si le lot scanné est différent de celui de la ligne → on le transmet à Odoo
+      const writeLotId = lotId && lotId !== (ml.lot_id?.[0] ?? null) ? lotId : null;
 
       // ── Mise à jour optimiste (instantanée) ──────────────────────────────
-      const optimisticLines = workLines.map((m: any) =>
-        m.id === ml.id ? { ...m, qty_done: newQty } : m
+      const optimisticLines = currentLines.map((m: any) =>
+        m.id === ml.id
+          ? { ...m, qty_done: newQty, ...(writeLotId ? { lot_id: [writeLotId, lotName || ""] } : {}) }
+          : m
       );
       pickingMoveLinesRef.current = optimisticLines;
       setPickingMoveLines(optimisticLines);
@@ -1462,54 +1418,34 @@ export default function Page() {
       }
 
       flashScan("ok");
+      showToast(`✓ ${actualLotName || ml.product_id[1]} · ${newQty}/${ml.reserved_uom_qty || "?"}`);
 
-      // ── Calcul du restant côté produit (multi-lots) ──────────────────────
-      // On agrège reserved/done par (location, produit) pour savoir si l'ensemble
-      // des lots couvre déjà la demande, même si certaines lignes individuelles
-      // ont encore reserved_uom_qty > qty_done.
-      const productTotals = new Map<number, { reserved: number; done: number }>();
-      for (const m of optimisticLines) {
-        if (m.location_id?.[0] !== currentStep!.locId) continue;
-        const pid: number = m.product_id?.[0];
-        if (!pid) continue;
-        const cur = productTotals.get(pid) || { reserved: 0, done: 0 };
-        cur.reserved += (m.reserved_uom_qty || 0);
-        cur.done     += (m.qty_done || 0);
-        productTotals.set(pid, cur);
-      }
-
-      // Total restant pour CE produit à cet emplacement (tous lots confondus)
-      const thisProd = productTotals.get(ml.product_id[0]) || { reserved: displayTotal, done: newQty };
-      const productRemaining = thisProd.reserved - thisProd.done;
-      showToast(`✓ ${actualLotName || ml.product_id[1]} · ${thisProd.done}/${thisProd.reserved}`);
-
-      // morePending : lignes avec réservation non encore couverte par le total produit
-      const morePending = optimisticLines.filter((m: any) => {
-        if (!m.location_id || m.location_id[0] !== currentStep!.locId) return false;
-        if ((m.reserved_uom_qty || 0) === 0) return false; // ligne de déviation
-        const pid: number = m.product_id?.[0];
-        const totals = productTotals.get(pid) || { reserved: 0, done: 0 };
-        return totals.done < totals.reserved;
-      });
+      // ── Lignes restantes à cet emplacement ───────────────────────────────
+      const morePending = optimisticLines.filter((m: any) =>
+        m.location_id?.[0] === currentStep!.locId &&
+        (m.qty_done || 0) < (m.reserved_uom_qty || 0)
+      );
 
       if (morePending.length === 0) {
         updatePrepStep(null);
         showToast(`✓ Emplacement ${currentStep!.locName} terminé`);
-      } else if (productRemaining <= 0) {
-        // Ce produit est couvert, passer au suivant
-        const next = morePending[0];
-        const nextProd = productTotals.get(next.product_id[0]) || { reserved: next.reserved_uom_qty || 0, done: next.qty_done || 0 };
-        const nextRemaining = nextProd.reserved - nextProd.done;
-        updatePrepStep({ locId: currentStep!.locId, locName: currentStep!.locName, lineId: next.id, productName: next.product_id[1], lotName: next.lot_id?.[1] || undefined, remaining: nextRemaining });
       } else {
-        updatePrepStep(prev => prev ? { ...prev, lineId: ml.id, lotName: actualLotName || prev.lotName, remaining: productRemaining } : null);
+        // Rester sur la même ligne si encore en cours, sinon passer à la suivante
+        const stillCurrent = morePending.find((m: any) => m.id === ml.id);
+        const next = stillCurrent || morePending[0];
+        const nextRemaining = (next.reserved_uom_qty || 0) - (next.qty_done || 0);
+        updatePrepStep({
+          locId: currentStep!.locId,
+          locName: currentStep!.locName,
+          lineId: next.id,
+          productName: next.product_id[1],
+          lotName: next.lot_id?.[1] || undefined,
+          remaining: nextRemaining,
+        });
       }
 
-      // ── Écriture Odoo en arrière-plan (non bloquant) ─────────────────────
-      // La ligne ml a déjà le bon lot_id (soit la ligne existante, soit la nouvelle ligne de déviation).
-      // On n'envoie que qty_done — plus besoin de forcer lot_id sur une ligne réservée.
-      const writeQty = newQty;
-      odoo.setMoveLineQtyDone(session, ml.id, writeQty, null).catch((e: any) => {
+      // ── Écriture Odoo en arrière-plan ────────────────────────────────────
+      odoo.setMoveLineQtyDone(session, ml.id, newQty, writeLotId || undefined).catch((e: any) => {
         setError(`Erreur sync Odoo: ${e.message}`);
         flashScan("err");
       });
@@ -6393,47 +6329,17 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
     return { done, total, isMerged: true };
   }, [activeLine, allLines]);
 
-  // ── Lignes de déviation (reserved=0) : distribuer leur done vers les lignes parentes ──
-  // Cela corrige l'affichage "X/0" et la progression pour les lots scannés hors BL.
-  const effectiveDoneById = useMemo(() => {
-    // Grouper par (location, produit) → total done (inclus déviations)
-    const groups = new Map<string, { lines: any[]; totalDone: number }>();
-    for (const ml of allLines) {
-      const key = `${ml.location_id?.[0]}_${ml.product_id?.[0]}`;
-      if (!groups.has(key)) groups.set(key, { lines: [], totalDone: 0 });
-      const g = groups.get(key)!;
-      g.totalDone += getQty(ml);
-      if ((ml.reserved_uom_qty || 0) > 0) g.lines.push(ml);
-    }
-    // Distribuer le done total sur les lignes réservées dans l'ordre
-    const result = new Map<number, number>();
-    for (const [, g] of Array.from(groups.entries())) {
-      let rem = g.totalDone;
-      for (const ml of g.lines) {
-        const assigned = Math.min(rem, ml.reserved_uom_qty || 0);
-        result.set(ml.id, assigned);
-        rem = Math.max(0, rem - (ml.reserved_uom_qty || 0));
-      }
-    }
-    return result;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allLines, qtyOverrides]);
-
-  // Lignes d'affichage = uniquement les lignes réservées (on exclut les déviations reserved=0)
+  // Lignes d'affichage = uniquement les lignes réservées
   const displayLines = useMemo(() =>
     allLines.filter((ml: any) => (ml.reserved_uom_qty || 0) > 0),
   [allLines]);
 
-  // getEffQty : pour les lignes réservées, utilise le done "redistribué" (inclut déviations)
-  const getEffQty = (ml: any) => effectiveDoneById.has(ml.id) ? effectiveDoneById.get(ml.id)! : getQty(ml);
-
-  const doneLines = displayLines.filter((ml: any) => getEffQty(ml) >= (ml.reserved_uom_qty || 0)).length;
+  const doneLines = displayLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).length;
   const totalLines = displayLines.length;
   const allDone = totalLines > 0 && doneLines === totalLines;
 
-  // Progression en unités (quantités réelles scannées, déviations incluses)
   const totalUnits = displayLines.reduce((s: number, ml: any) => s + (ml.reserved_uom_qty || 0), 0);
-  const doneUnits = displayLines.reduce((s: number, ml: any) => s + Math.min(getEffQty(ml), ml.reserved_uom_qty || 0), 0);
+  const doneUnits = displayLines.reduce((s: number, ml: any) => s + Math.min(getQty(ml), ml.reserved_uom_qty || 0), 0);
 
   // Progression par colis (= par picking source) — utile seulement en groupe
   const colisProgress = useMemo(() => {
@@ -6804,19 +6710,19 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
             ✓ Préparés ({doneLines}) — appuyer pour modifier
           </summary>
           <div style={{ marginTop: 8 }}>
-            {displayLines.filter((ml: any) => getEffQty(ml) >= (ml.reserved_uom_qty || 0)).map((ml: any) => (
+            {displayLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).map((ml: any) => (
               <div key={ml.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 6, background: C.greenSoft, border: `1px solid ${C.greenBorder}`, borderRadius: 10 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ml.product_id[1]}</div>
                   <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
                     {shortLoc(ml.location_id?.[1] || "")}
                     {ml.lot_id && ` · ${ml.lot_id[1]}`}
-                    <span style={{ color: C.green, fontWeight: 700, marginLeft: 6 }}>{getEffQty(ml)}/{ml.reserved_uom_qty || 0}</span>
+                    <span style={{ color: C.green, fontWeight: 700, marginLeft: 6 }}>{getQty(ml)}/{ml.reserved_uom_qty || 0}</span>
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                   <button onClick={() => onAdjustQty(ml.id, getQty(ml) - 1)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.red }}>−</button>
-                  <button onClick={() => onAdjustQty(ml.id, getQty(ml) + 1)} disabled={getEffQty(ml) >= (ml.reserved_uom_qty || 0)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.blue, opacity: getEffQty(ml) >= (ml.reserved_uom_qty || 0) ? 0.3 : 1 }}>+</button>
+                  <button onClick={() => onAdjustQty(ml.id, getQty(ml) + 1)} disabled={getQty(ml) >= (ml.reserved_uom_qty || 0)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.blue, opacity: getQty(ml) >= (ml.reserved_uom_qty || 0) ? 0.3 : 1 }}>+</button>
                 </div>
               </div>
             ))}
@@ -6830,13 +6736,13 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
             Restant ({totalLines - doneLines})
           </div>
-          {displayLines.filter((ml: any) => getEffQty(ml) < (ml.reserved_uom_qty || 0)).slice(0, 8).map((ml: any, i: number) => (
+          {displayLines.filter((ml: any) => getQty(ml) < (ml.reserved_uom_qty || 0)).slice(0, 8).map((ml: any, i: number) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${C.border}`, opacity: ml.id === currentLine?.id ? 1 : 0.5 }}>
               <div style={{ width: 6, height: 6, borderRadius: "50%", background: ml.id === currentLine?.id ? C.blue : C.border, flexShrink: 0 }} />
               <div style={{ width: 6, height: 6, borderRadius: "50%", background: ml.id === currentLine?.id ? C.blue : C.border, flexShrink: 0 }} />
               <div style={{ flex: 1, fontSize: 12, color: C.text, fontWeight: ml.id === currentLine?.id ? 700 : 400 }}>{ml.product_id[1]}</div>
               <div style={{ fontSize: 11, color: C.textMuted }}>{shortLoc(ml.location_id?.[1] || "")}</div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: C.textSec }}>{getEffQty(ml)}/{ml.reserved_uom_qty || 0}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.textSec }}>{getQty(ml)}/{ml.reserved_uom_qty || 0}</div>
             </div>
           ))}
         </div>
