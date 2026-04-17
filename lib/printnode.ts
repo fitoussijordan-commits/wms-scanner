@@ -243,8 +243,8 @@ export function generateLotZPL(lotName: string, productName: string, lotBarcode:
     y += expBlock;
   }
 
-  // Code-barres lot: extrait la partie scannable ("a1441135 - 02/28" → "a1441135")
-  const cleanLotBarcode = cleanLotForBarcode(lotBarcode.includes("/") ? lotName : lotBarcode);
+  // Code-barres lot: utilise lotBarcode ou lotName si barcode est un chemin
+  const cleanLotBarcode = lotBarcode.includes("/") ? lotName : lotBarcode;
   lines.push(barcodeZPL(cleanLotBarcode, W, y, bcH, barW));
   lines.push("^XZ");
 
