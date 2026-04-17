@@ -719,7 +719,7 @@ function getProductRemainingAtLoc(lines: any[], locId: number, productId: number
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1685,6 +1685,7 @@ export default function Page() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
               {[
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>, label: "Ajustement", onClick: () => setScreen("inventory"), admin: false },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Import produits", onClick: () => setScreen("productImport"), admin: false },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: true },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels"), admin: false },
@@ -1964,6 +1965,9 @@ export default function Page() {
 
         {screen === "inventory" && session && (
           <InventoryScreen session={session} onBack={goHome} onToast={showToast} initialProduct={inventoryInitProduct} />
+        )}
+        {screen === "productImport" && session && (
+          <ProductImportScreen session={session} onBack={goHome} onToast={showToast} />
         )}
         {screen === "reprintLabel" && session && odoo.isAdmin(session) && (
           <ReprintLabelScreen session={session} onBack={goHome} onToast={showToast} />
@@ -4250,6 +4254,346 @@ function PalletRefSearch({ packingData, matchData }: { packingData: any; matchDa
       )}
       {results.length === 0 && query && (
         <div style={{ marginTop: 8, fontSize: 12, color: C.textMuted, textAlign: "center" as const }}>Aucun résultat pour "{query}"</div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// PRODUCT IMPORT SCREEN — Import Excel marketing → création Odoo
+// ============================================
+interface ImportRow {
+  ref: string;           // Code Article
+  name: string;          // Libellé article
+  barcode: string;       // Code EAN
+  prixHT: string;        // Tarif HT 2026
+  prixTTC: string;       // Prix public TTC
+  prixAchat: string;     // PA
+  poids: string;         // Poids kg
+  hauteur: string;
+  largeur: string;
+  profondeur: string;
+  nbUnitesCarton: string;
+  unite: string;
+  hsCode: string;        // Nomenclature douanière
+  existsInOdoo?: boolean;
+  odooId?: number;
+}
+
+function parseExcelRow(row: any, headers: string[]): ImportRow {
+  const get = (...keys: string[]) => {
+    for (const k of keys) {
+      const idx = headers.findIndex(h => h?.toLowerCase().includes(k.toLowerCase()));
+      if (idx >= 0 && row[idx] !== undefined && row[idx] !== null && row[idx] !== "") return String(row[idx]).trim();
+    }
+    return "";
+  };
+  return {
+    ref:            get("code article", "code art"),
+    name:           get("libellé", "libelle", "article"),
+    barcode:        get("code ean", "ean"),
+    prixHT:         get("tarif ht", "prix ht", "prix de vente ht"),
+    prixTTC:        get("ttc", "prix public"),
+    prixAchat:      get("pa", "prix achat", "prix d'achat"),
+    poids:          get("poids (kg)", "poids,"),
+    hauteur:        get("hauteur (mm)"),
+    largeur:        get("largeur (mm)"),
+    profondeur:     get("profondeur"),
+    nbUnitesCarton: get("nb unité", "nb unite", "unité par carton"),
+    unite:          get("unité/pièce", "unite/piece", "unité/piece"),
+    hsCode:         get("nomenclature", "douanière", "douaniere"),
+  };
+}
+
+function ProductImportScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+  const [rows, setRows] = useState<ImportRow[]>([]);
+  const [checking, setChecking] = useState(false);
+  const [currentIdx, setCurrentIdx] = useState<number | null>(null);
+  const [form, setForm] = useState<ImportRow | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [createdIds, setCreatedIds] = useState<Set<string>>(new Set());
+  const [fileName, setFileName] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // ── Parse Excel ──────────────────────────────────────────────────
+  const handleFile = async (file: File) => {
+    setFileName(file.name);
+    const XLSX = await import("xlsx");
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+    if (data.length < 2) { onToast("Fichier vide ou mal formaté"); return; }
+    const headers = data[0].map((h: any) => String(h || ""));
+    const parsed: ImportRow[] = data.slice(1)
+      .map(row => parseExcelRow(row, headers))
+      .filter(r => r.ref); // skip rows without ref
+    setRows(parsed);
+    setChecking(true);
+    // Batch check Odoo
+    const refs = parsed.map(r => r.ref);
+    try {
+      const existing = await odoo.searchRead(session, "product.template",
+        [["default_code", "in", refs]], ["id", "default_code"], 2000);
+      const existingRefs = new Set(existing.map((p: any) => String(p.default_code)));
+      const updated = parsed.map(r => ({ ...r, existsInOdoo: existingRefs.has(r.ref), odooId: existing.find((p: any) => p.default_code === r.ref)?.id }));
+      setRows(updated);
+    } catch (e: any) { onToast("Erreur Odoo: " + e.message); }
+    setChecking(false);
+  };
+
+  const missing = rows.filter(r => !r.existsInOdoo && !createdIds.has(r.ref));
+  const existing = rows.filter(r => r.existsInOdoo);
+  const created = rows.filter(r => createdIds.has(r.ref));
+
+  // ── Ouvrir fiche produit ─────────────────────────────────────────
+  const openForm = (row: ImportRow, idx: number) => {
+    setCurrentIdx(idx);
+    setForm({ ...row });
+  };
+
+  const nextMissing = () => {
+    const missingRows = rows.map((r, i) => ({ r, i })).filter(({ r }) => !r.existsInOdoo && !createdIds.has(r.ref));
+    if (missingRows.length === 0) { setCurrentIdx(null); setForm(null); return; }
+    const nextIdx = missingRows[0].i;
+    openForm(rows[nextIdx], nextIdx);
+  };
+
+  // ── Créer dans Odoo ──────────────────────────────────────────────
+  const createProduct = async () => {
+    if (!form) return;
+    setSaving(true);
+    try {
+      const vals: any = {
+        name: form.name,
+        default_code: form.ref,
+        type: "product",
+      };
+      if (form.barcode) vals.barcode = form.barcode;
+      if (form.prixHT) vals.list_price = parseFloat(form.prixHT.replace(",", ".")) || 0;
+      if (form.prixAchat) vals.standard_price = parseFloat(form.prixAchat.replace(",", ".")) || 0;
+      if (form.poids) vals.weight = parseFloat(form.poids.replace(",", ".")) || 0;
+      await odoo.create(session, "product.template", vals);
+      setCreatedIds(prev => new Set([...Array.from(prev), form.ref]));
+      onToast(`✓ ${form.ref} créé dans Odoo`);
+      setCurrentIdx(null);
+      setForm(null);
+    } catch (e: any) { onToast("Erreur: " + e.message); }
+    setSaving(false);
+  };
+
+  const inp = (label: string, key: keyof ImportRow, type = "text") => (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>{label}</div>
+      <input
+        type={type} value={(form as any)?.[key] || ""}
+        onChange={e => setForm(prev => prev ? { ...prev, [key]: e.target.value } : null)}
+        onKeyDown={e => e.stopPropagation()}
+        style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, boxSizing: "border-box" as const }}
+      />
+    </div>
+  );
+
+  // ── Vue fiche produit ────────────────────────────────────────────
+  if (form) {
+    return (
+      <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+          <button onClick={() => { setForm(null); setCurrentIdx(null); }} style={{ ...iconBtn, background: C.bg, borderRadius: 10, padding: 8 }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+          </button>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Nouveau produit</div>
+            <div style={{ fontSize: 12, color: C.textMuted }}>{missing.length} manquant(s) restant</div>
+          </div>
+        </div>
+
+        {inp("Référence interne *", "ref")}
+        {inp("Nom du produit *", "name")}
+        {inp("Code EAN / Barcode", "barcode")}
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Prix HT (€)</div>
+            <input type="text" value={form.prixHT} onChange={e => setForm(p => p ? { ...p, prixHT: e.target.value } : null)} onKeyDown={e => e.stopPropagation()} style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, boxSizing: "border-box" as const }} />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Prix achat (€)</div>
+            <input type="text" value={form.prixAchat} onChange={e => setForm(p => p ? { ...p, prixAchat: e.target.value } : null)} onKeyDown={e => e.stopPropagation()} style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, boxSizing: "border-box" as const }} />
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Poids (kg)</div>
+            <input type="text" value={form.poids} onChange={e => setForm(p => p ? { ...p, poids: e.target.value } : null)} onKeyDown={e => e.stopPropagation()} style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, boxSizing: "border-box" as const }} />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Unité/pièce</div>
+            <input type="text" value={form.unite} onChange={e => setForm(p => p ? { ...p, unite: e.target.value } : null)} onKeyDown={e => e.stopPropagation()} style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, boxSizing: "border-box" as const }} />
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 12 }}>
+          {[["Hauteur (mm)", "hauteur"], ["Largeur (mm)", "largeur"], ["Prof. (mm)", "profondeur"]].map(([label, key]) => (
+            <div key={key}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>{label}</div>
+              <input type="text" value={(form as any)[key]} onChange={e => setForm(p => p ? { ...p, [key]: e.target.value } : null)} onKeyDown={e => e.stopPropagation()} style={{ width: "100%", padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: C.white, color: C.text, boxSizing: "border-box" as const }} />
+            </div>
+          ))}
+        </div>
+
+        {form.hsCode && (
+          <div style={{ marginTop: 12, padding: "8px 12px", background: C.bg, borderRadius: 8, fontSize: 12, color: C.textMuted }}>
+            Nomenclature douanière : <strong>{form.hsCode}</strong>
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
+          <button onClick={() => { setForm(null); setCurrentIdx(null); }}
+            style={{ flex: 1, padding: 14, background: C.bg, color: C.textMuted, border: `1.5px solid ${C.border}`, borderRadius: 12, fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            Passer
+          </button>
+          <button onClick={createProduct} disabled={saving || !form.ref || !form.name}
+            style={{ flex: 2, padding: 14, background: saving ? C.textMuted : C.blue, color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: "inherit", opacity: (!form.ref || !form.name) ? 0.5 : 1 }}>
+            {saving ? "Création..." : "✓ Créer dans Odoo"}
+          </button>
+        </div>
+
+        {missing.length > 1 && (
+          <div style={{ marginTop: 16, padding: "10px 14px", background: "#f0f9ff", borderRadius: 10, fontSize: 12, color: "#0369a1" }}>
+            {missing.length - 1} produit(s) manquant(s) suivant(s) à traiter
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Vue liste ────────────────────────────────────────────────────
+  return (
+    <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+        <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 10, padding: 8 }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+        </button>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Import produits</div>
+          {fileName && <div style={{ fontSize: 12, color: C.textMuted }}>{fileName}</div>}
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        // ── Upload zone ──
+        <div>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+          <div onClick={() => fileRef.current?.click()}
+            style={{ border: `2px dashed ${C.border}`, borderRadius: 16, padding: "48px 24px", textAlign: "center" as const, cursor: "pointer", background: C.bg }}>
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="1.5" style={{ marginBottom: 16 }}>
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
+              <line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/>
+            </svg>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 8 }}>Importer le fichier Excel marketing</div>
+            <div style={{ fontSize: 13, color: C.textMuted }}>Colonnes détectées automatiquement</div>
+            <div style={{ marginTop: 16, display: "inline-block", padding: "10px 24px", background: C.blue, color: "#fff", borderRadius: 10, fontSize: 14, fontWeight: 600 }}>
+              Choisir le fichier
+            </div>
+          </div>
+        </div>
+      ) : checking ? (
+        <div style={{ textAlign: "center" as const, padding: 40, color: C.textMuted }}>
+          <div style={{ fontSize: 14 }}>Vérification dans Odoo...</div>
+          <div style={{ marginTop: 8, fontSize: 12 }}>{rows.length} produits analysés</div>
+        </div>
+      ) : (
+        <div>
+          {/* Stats */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
+            {[
+              { label: "Total", value: rows.length, color: C.text },
+              { label: "Déjà dans Odoo", value: existing.length, color: C.green },
+              { label: "À créer", value: missing.length, color: missing.length > 0 ? C.orange : C.green },
+            ].map(s => (
+              <div key={s.label} style={{ background: C.bg, borderRadius: 12, padding: "12px 10px", textAlign: "center" as const }}>
+                <div style={{ fontSize: 24, fontWeight: 800, color: s.color }}>{s.value}</div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* CTA si manquants */}
+          {missing.length > 0 && (
+            <button onClick={() => openForm(missing[0], rows.indexOf(missing[0]))}
+              style={{ width: "100%", padding: 16, background: C.blue, color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginBottom: 20 }}>
+              → Créer les {missing.length} produits manquants
+            </button>
+          )}
+          {missing.length === 0 && created.length > 0 && (
+            <div style={{ padding: 14, background: "#f0fdf4", border: `1px solid ${C.greenBorder}`, borderRadius: 12, fontSize: 14, color: C.green, fontWeight: 600, textAlign: "center" as const, marginBottom: 20 }}>
+              ✓ Tous les produits sont dans Odoo
+            </div>
+          )}
+
+          {/* Liste manquants */}
+          {missing.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.orange, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 10 }}>À créer ({missing.length})</div>
+              {missing.map((row, i) => (
+                <div key={row.ref} onClick={() => openForm(row, rows.indexOf(row))}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", marginBottom: 6, background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 10, cursor: "pointer" }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.orange, flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{row.name || "(sans nom)"}</div>
+                    <div style={{ fontSize: 11, color: C.textMuted }}>{row.ref}{row.barcode ? ` · EAN ${row.barcode}` : ""}</div>
+                  </div>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Créés dans cette session */}
+          {created.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.green, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 10 }}>Créés maintenant ({created.length})</div>
+              {created.map(row => (
+                <div key={row.ref} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 4, background: "#f0fdf4", border: `1px solid ${C.greenBorder}`, borderRadius: 10 }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{row.name}</div>
+                  <div style={{ marginLeft: "auto", fontSize: 11, color: C.textMuted }}>{row.ref}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Déjà dans Odoo — repliable */}
+          {existing.length > 0 && (
+            <details style={{ marginTop: 8 }}>
+              <summary style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, cursor: "pointer", padding: "6px 0", textTransform: "uppercase" as const, letterSpacing: 0.5 }}>
+                Déjà dans Odoo ({existing.length})
+              </summary>
+              <div style={{ marginTop: 8 }}>
+                {existing.map(row => (
+                  <div key={row.ref} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", marginBottom: 4, background: C.bg, borderRadius: 8 }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                    <div style={{ fontSize: 12, color: C.textSec, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{row.name}</div>
+                    <div style={{ fontSize: 11, color: C.textMuted }}>{row.ref}</div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+
+          {/* Nouveau fichier */}
+          <div style={{ marginTop: 20 }}>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) { setRows([]); setCreatedIds(new Set()); handleFile(f); } }} />
+            <button onClick={() => fileRef.current?.click()}
+              style={{ width: "100%", padding: 12, background: C.bg, color: C.textMuted, border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              Importer un autre fichier
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
