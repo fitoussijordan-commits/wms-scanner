@@ -3611,7 +3611,7 @@ function PrintModal({ req, onClose, onToast }: { req: PrintRequest; onClose: () 
                 style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: `1.5px solid ${format === "big" ? "#7c3aed" : C.border}`,
                   background: format === "big" ? "#7c3aed12" : C.white, fontSize: 13, fontWeight: 600,
                   cursor: "pointer", fontFamily: "inherit", color: format === "big" ? "#7c3aed" : C.textMuted, transition: "all .1s" }}>
-                📦 Palette 100×150
+                📦 Palette 150×100
               </button>
             </div>
           </div>

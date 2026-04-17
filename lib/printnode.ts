@@ -628,17 +628,18 @@ export async function printLabel(
 }
 
 // ============================================
-// BIG LABEL — 100×150mm (format palette)
+// BIG LABEL — 150×100mm paysage (format palette)
 // ============================================
-function generateBig100x150ZPL(
+function generateBigLandscapeZPL(
   type: string,
   title: string,
   barcode: string,
   opts: { ref?: string; lotName?: string; productName?: string; expiryDate?: string; locationName?: string } = {}
 ): string {
-  const W = mm(100), H = mm(150);
+  // 150mm × 100mm paysage @203dpi
+  const W = mm(150), H = mm(100);
   const cW = W - 30;
-  const cpl = Math.floor(cW / 10);
+  const cpl = Math.floor(cW / 9);
   const barW = 4;
   const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
 
@@ -646,28 +647,32 @@ function generateBig100x150ZPL(
     const lotName = opts.lotName || title;
     const productName = opts.productName || "";
     const expStr = opts.expiryDate ? formatDate(opts.expiryDate) : "";
-    let y = 20;
-    lines.push(`^FO15,${y}^A0N,60,60^FB${cW},1,0,C^FD${trunc(lotName, cpl)}^FS`); y += 72;
-    lines.push(`^FO15,${y}^A0N,36,36^FB${cW},1,0,C^FD${trunc(productName, cpl)}^FS`); y += 44;
-    if (expStr) { lines.push(`^FO15,${y}^A0N,32,32^FB${cW},1,0,C^FDDLUO: ${expStr}^FS`); y += 40; }
+    // Text block en haut
+    let y = 14;
+    lines.push(`^FO15,${y}^A0N,70,70^FB${cW},1,0,C^FD${trunc(lotName, cpl)}^FS`); y += 80;
+    lines.push(`^FO15,${y}^A0N,38,38^FB${cW},1,0,C^FD${trunc(productName, cpl)}^FS`); y += 46;
+    if (expStr) { lines.push(`^FO15,${y}^A0N,30,30^FB${cW},1,0,C^FDDLUO: ${expStr}^FS`); y += 36; }
+    // Barcode remplit le reste
     const cleanBarcode = barcode.includes("/") ? lotName : barcode;
-    const bcH = Math.min(200, H - y - 40);
+    const bcH = Math.max(60, H - y - 24);
     lines.push(barcodeZPL(cleanBarcode, W, y, bcH, barW));
 
   } else if (type === "location") {
     const locName = (opts.locationName || title || "").split("/").pop()?.split("-")[0] || title;
-    let y = 60;
-    lines.push(`^FO15,${y}^A0N,90,90^FB${cW},1,0,C^FD${trunc(locName, cpl)}^FS`); y += 110;
-    const bcH = Math.min(220, H - y - 40);
+    let y = 20;
+    lines.push(`^FO15,${y}^A0N,100,100^FB${cW},1,0,C^FD${trunc(locName, cpl)}^FS`); y += 118;
+    const bcH = Math.max(60, H - y - 24);
     lines.push(barcodeZPL(barcode, W, y, bcH, barW));
 
   } else {
-    // product (default)
+    // produit (défaut)
     const productName = opts.productName || title;
-    let y = 20;
-    if (opts.ref) { lines.push(`^FO15,${y}^A0N,36,36^FB${cW},1,0,C^FD${trunc(opts.ref, cpl)}^FS`); y += 46; }
-    lines.push(`^FO15,${y}^A0N,50,50^FB${cW},2,0,C^FD${trunc(productName, cpl)}^FS`); y += 64;
-    const bcH = Math.min(220, H - y - 40);
+    let y = 14;
+    if (opts.ref) {
+      lines.push(`^FO15,${y}^A0N,38,38^FB${cW},1,0,C^FD${trunc(opts.ref, cpl)}^FS`); y += 46;
+    }
+    lines.push(`^FO15,${y}^A0N,60,60^FB${cW},2,0,C^FD${trunc(productName, cpl)}^FS`); y += 76;
+    const bcH = Math.max(60, H - y - 24);
     lines.push(barcodeZPL(barcode, W, y, bcH, barW));
   }
 
@@ -684,8 +689,9 @@ export async function printBigLabel(
   qty: number = 1
 ): Promise<{ success: boolean; jobId?: number; error?: string }> {
   try {
-    const zpl = generateBig100x150ZPL(type, title, barcode, opts);
-    const jobId = await submitPaletteJob(printerId, title, zpl, 100, 150);
+    const zpl = generateBigLandscapeZPL(type, title, barcode, opts);
+    // 150×100 paysage
+    const jobId = await submitPaletteJob(printerId, title, zpl, 150, 100);
     return { success: true, jobId };
   } catch (e: any) { return { success: false, error: e.message }; }
 }
