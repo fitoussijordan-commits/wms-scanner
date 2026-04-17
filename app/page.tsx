@@ -4262,6 +4262,22 @@ function PalletRefSearch({ packingData, matchData }: { packingData: any; matchDa
 // ============================================
 // PRODUCT IMPORT SCREEN — Import Excel marketing → création Odoo
 // ============================================
+interface ColMapping {
+  ref: string;
+  name: string;
+  barcode: string;
+  prixHT: string;
+  prixTTC: string;
+  prixAchat: string;
+  poids: string;
+  hauteur: string;
+  largeur: string;
+  profondeur: string;
+  nbUnitesCarton: string;
+  unite: string;
+  hsCode: string;
+}
+
 interface ImportRow {
   ref: string;           // Code Article
   name: string;          // Libellé article
@@ -4280,28 +4296,53 @@ interface ImportRow {
   odooId?: number;
 }
 
-function parseExcelRow(row: any, headers: string[]): ImportRow {
-  const get = (...keys: string[]) => {
-    for (const k of keys) {
-      const idx = headers.findIndex(h => h?.toLowerCase().includes(k.toLowerCase()));
-      if (idx >= 0 && row[idx] !== undefined && row[idx] !== null && row[idx] !== "") return String(row[idx]).trim();
+function autoDetectMapping(headers: string[]): ColMapping {
+  const best = (candidates: string[]): string => {
+    for (const c of candidates) {
+      const found = headers.find(h => h?.toLowerCase().includes(c.toLowerCase()));
+      if (found) return found;
     }
     return "";
   };
   return {
-    ref:            get("code article", "code art"),
-    name:           get("libellé", "libelle", "article"),
-    barcode:        get("code ean", "ean"),
-    prixHT:         get("tarif ht", "prix ht", "prix de vente ht"),
-    prixTTC:        get("ttc", "prix public"),
-    prixAchat:      get("pa", "prix achat", "prix d'achat"),
-    poids:          get("poids (kg)", "poids,"),
-    hauteur:        get("hauteur (mm)"),
-    largeur:        get("largeur (mm)"),
-    profondeur:     get("profondeur"),
-    nbUnitesCarton: get("nb unité", "nb unite", "unité par carton"),
-    unite:          get("unité/pièce", "unite/piece", "unité/piece"),
-    hsCode:         get("nomenclature", "douanière", "douaniere"),
+    ref:            best(["code article", "code art", "référence", "ref ", "réf", "code produit", "article no", "sku"]),
+    name:           best(["libellé", "libelle", "désignation", "nom produit", "description", "article"]),
+    barcode:        best(["code ean", "ean", "barcode", "code barre", "gtin"]),
+    prixHT:         best(["tarif ht", "prix ht", "prix de vente ht", "pvht", "tarif 2026"]),
+    prixTTC:        best(["ttc", "prix public", "pvttc"]),
+    prixAchat:      best(["prix achat", "prix d'achat", "pa net", "pa "]),
+    poids:          best(["poids"]),
+    hauteur:        best(["hauteur"]),
+    largeur:        best(["largeur"]),
+    profondeur:     best(["profondeur", "longueur"]),
+    nbUnitesCarton: best(["nb unité", "nb unite", "unité par carton", "pcb", "qté carton"]),
+    unite:          best(["unité/pièce", "unite/piece", "unité/piece", "conditionnement"]),
+    hsCode:         best(["nomenclature", "douanière", "douaniere", "hs code", "sh "]),
+  };
+}
+
+function applyMapping(row: any[], headers: string[], mapping: ColMapping): ImportRow {
+  const get = (colName: string) => {
+    if (!colName) return "";
+    const idx = headers.indexOf(colName);
+    if (idx < 0) return "";
+    const v = row[idx];
+    return v !== undefined && v !== null && v !== "" ? String(v).trim() : "";
+  };
+  return {
+    ref:            get(mapping.ref),
+    name:           get(mapping.name),
+    barcode:        get(mapping.barcode),
+    prixHT:         get(mapping.prixHT),
+    prixTTC:        get(mapping.prixTTC),
+    prixAchat:      get(mapping.prixAchat),
+    poids:          get(mapping.poids),
+    hauteur:        get(mapping.hauteur),
+    largeur:        get(mapping.largeur),
+    profondeur:     get(mapping.profondeur),
+    nbUnitesCarton: get(mapping.nbUnitesCarton),
+    unite:          get(mapping.unite),
+    hsCode:         get(mapping.hsCode),
   };
 }
 
@@ -4314,6 +4355,11 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   const [createdIds, setCreatedIds] = useState<Set<string>>(new Set());
   const [fileName, setFileName] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  // Column mapping step
+  const [rawHeaders, setRawHeaders] = useState<string[]>([]);
+  const [rawData, setRawData] = useState<any[][]>([]);
+  const [mapping, setMapping] = useState<ColMapping | null>(null);
+  const [showMapping, setShowMapping] = useState(false);
 
   // ── Parse Excel ──────────────────────────────────────────────────
   const handleFile = async (file: File) => {
@@ -4324,13 +4370,27 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
     const ws = wb.Sheets[wb.SheetNames[0]];
     const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
     if (data.length < 2) { onToast("Fichier vide ou mal formaté"); return; }
-    const headers = data[0].map((h: any) => String(h || ""));
-    const parsed: ImportRow[] = data.slice(1)
-      .map(row => parseExcelRow(row, headers))
-      .filter(r => r.ref); // skip rows without ref
+    const headers = data[0].map((h: any) => String(h || "").trim());
+    setRawHeaders(headers);
+    setRawData(data.slice(1));
+    const detectedMapping = autoDetectMapping(headers);
+    setMapping(detectedMapping);
+    // If ref column not found, show mapping step
+    if (!detectedMapping.ref) {
+      setShowMapping(true);
+    } else {
+      applyAndCheck(data.slice(1), headers, detectedMapping);
+    }
+  };
+
+  const applyAndCheck = async (data: any[][], headers: string[], m: ColMapping) => {
+    setShowMapping(false);
+    const parsed: ImportRow[] = data
+      .map(row => applyMapping(row, headers, m))
+      .filter(r => r.ref);
+    if (parsed.length === 0) { onToast("Aucune référence détectée — vérifiez le mapping des colonnes"); setShowMapping(true); return; }
     setRows(parsed);
     setChecking(true);
-    // Batch check Odoo
     const refs = parsed.map(r => r.ref);
     try {
       const existing = await odoo.searchRead(session, "product.template",
@@ -4465,6 +4525,49 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
             {missing.length - 1} produit(s) manquant(s) suivant(s) à traiter
           </div>
         )}
+      </div>
+    );
+  }
+
+  // ── Vue mapping colonnes ──────────────────────────────────────────
+  if (showMapping && mapping && rawHeaders.length > 0) {
+    const colOpts = ["", ...rawHeaders];
+    const fieldLabels: [keyof ColMapping, string][] = [
+      ["ref", "Référence (obligatoire)"], ["name", "Nom produit (obligatoire)"],
+      ["barcode", "Code EAN"], ["prixHT", "Prix HT"], ["prixTTC", "Prix TTC"],
+      ["prixAchat", "Prix achat"], ["poids", "Poids (kg)"], ["hauteur", "Hauteur (mm)"],
+      ["largeur", "Largeur (mm)"], ["profondeur", "Profondeur (mm)"],
+      ["nbUnitesCarton", "Nb unités/carton"], ["unite", "Unité/pièce"], ["hsCode", "Code douanier"],
+    ];
+    return (
+      <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          <button onClick={() => { setShowMapping(false); setRawHeaders([]); setRawData([]); setFileName(""); }} style={{ ...iconBtn, background: C.bg, borderRadius: 10, padding: 8 }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+          </button>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Mapping colonnes</div>
+            <div style={{ fontSize: 12, color: C.textMuted }}>{fileName}</div>
+          </div>
+        </div>
+        <div style={{ padding: "10px 14px", background: "#fff7ed", border: "1.5px solid #fed7aa", borderRadius: 10, fontSize: 12, color: "#c2410c", marginBottom: 16 }}>
+          Colonnes détectées : <strong>{rawHeaders.join(", ")}</strong>
+        </div>
+        <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>Associez chaque champ à la bonne colonne du fichier :</div>
+        {fieldLabels.map(([key, label]) => (
+          <div key={key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <div style={{ flex: 1, fontSize: 12, color: key === "ref" || key === "name" ? C.text : C.textMuted, fontWeight: key === "ref" || key === "name" ? 600 : 400 }}>{label}</div>
+            <select value={(mapping as any)[key]} onChange={e => setMapping(prev => prev ? { ...prev, [key]: e.target.value } : null)}
+              style={{ flex: 1.2, padding: "6px 8px", border: `1.5px solid ${(key === "ref" || key === "name") && !(mapping as any)[key] ? "#ef4444" : C.border}`, borderRadius: 8, fontSize: 12, fontFamily: "inherit", background: C.white, color: C.text }}>
+              {colOpts.map(h => <option key={h} value={h}>{h || "— ignorer —"}</option>)}
+            </select>
+          </div>
+        ))}
+        <button onClick={() => { if (mapping) applyAndCheck(rawData, rawHeaders, mapping); }}
+          disabled={!mapping?.ref || !mapping?.name}
+          style={{ width: "100%", marginTop: 20, padding: 14, background: !mapping?.ref || !mapping?.name ? C.textMuted : C.blue, color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: !mapping?.ref || !mapping?.name ? 0.5 : 1 }}>
+          Valider et vérifier dans Odoo →
+        </button>
       </div>
     );
   }
