@@ -628,6 +628,69 @@ export async function printLabel(
 }
 
 // ============================================
+// BIG LABEL — 100×150mm (format palette)
+// ============================================
+function generateBig100x150ZPL(
+  type: string,
+  title: string,
+  barcode: string,
+  opts: { ref?: string; lotName?: string; productName?: string; expiryDate?: string; locationName?: string } = {}
+): string {
+  const W = mm(100), H = mm(150);
+  const cW = W - 30;
+  const cpl = Math.floor(cW / 10);
+  const barW = 4;
+  const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
+
+  if (type === "lot") {
+    const lotName = opts.lotName || title;
+    const productName = opts.productName || "";
+    const expStr = opts.expiryDate ? formatDate(opts.expiryDate) : "";
+    let y = 20;
+    lines.push(`^FO15,${y}^A0N,60,60^FB${cW},1,0,C^FD${trunc(lotName, cpl)}^FS`); y += 72;
+    lines.push(`^FO15,${y}^A0N,36,36^FB${cW},1,0,C^FD${trunc(productName, cpl)}^FS`); y += 44;
+    if (expStr) { lines.push(`^FO15,${y}^A0N,32,32^FB${cW},1,0,C^FDDLUO: ${expStr}^FS`); y += 40; }
+    const cleanBarcode = barcode.includes("/") ? lotName : barcode;
+    const bcH = Math.min(200, H - y - 40);
+    lines.push(barcodeZPL(cleanBarcode, W, y, bcH, barW));
+
+  } else if (type === "location") {
+    const locName = (opts.locationName || title || "").split("/").pop()?.split("-")[0] || title;
+    let y = 60;
+    lines.push(`^FO15,${y}^A0N,90,90^FB${cW},1,0,C^FD${trunc(locName, cpl)}^FS`); y += 110;
+    const bcH = Math.min(220, H - y - 40);
+    lines.push(barcodeZPL(barcode, W, y, bcH, barW));
+
+  } else {
+    // product (default)
+    const productName = opts.productName || title;
+    let y = 20;
+    if (opts.ref) { lines.push(`^FO15,${y}^A0N,36,36^FB${cW},1,0,C^FD${trunc(opts.ref, cpl)}^FS`); y += 46; }
+    lines.push(`^FO15,${y}^A0N,50,50^FB${cW},2,0,C^FD${trunc(productName, cpl)}^FS`); y += 64;
+    const bcH = Math.min(220, H - y - 40);
+    lines.push(barcodeZPL(barcode, W, y, bcH, barW));
+  }
+
+  lines.push("^XZ");
+  return lines.join("\n");
+}
+
+export async function printBigLabel(
+  printerId: number,
+  type: string,
+  title: string,
+  barcode: string,
+  opts: { ref?: string; lotName?: string; productName?: string; expiryDate?: string; locationName?: string } = {},
+  qty: number = 1
+): Promise<{ success: boolean; jobId?: number; error?: string }> {
+  try {
+    const zpl = generateBig100x150ZPL(type, title, barcode, opts);
+    const jobId = await submitPaletteJob(printerId, title, zpl, 100, 150);
+    return { success: true, jobId };
+  } catch (e: any) { return { success: false, error: e.message }; }
+}
+
+// ============================================
 // CONFIG
 // ============================================
 const PRINTER_KEY = "wms_printer_id";

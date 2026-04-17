@@ -543,11 +543,19 @@ function requestPrint(req: PrintRequest) {
   if (_setPrintReq) _setPrintReq(req);
 }
 
-async function executePrint(req: PrintRequest, copies: number) {
+async function executePrint(req: PrintRequest, copies: number, format: "standard" | "big" = "standard") {
   const cfg = pn.getLabelTypeConfig(req.type as pn.LabelType);
   const printerId = cfg.printerId || pn.getSavedPrinterId();
-  console.log("[executePrint] type:", req.type, "printerId:", printerId, "title:", req.title, "barcode:", req.barcode, "locationName:", req.locationName);
+  console.log("[executePrint] type:", req.type, "format:", format, "printerId:", printerId, "title:", req.title, "barcode:", req.barcode, "locationName:", req.locationName);
   if (printerId) {
+    // Format palette 100×150mm
+    if (format === "big") {
+      return pn.printBigLabel(printerId, req.type, req.title, req.barcode, {
+        ref: req.ref, lotName: req.lotName, productName: req.productName,
+        expiryDate: req.expiryDate, locationName: req.locationName,
+      }, copies);
+    }
+    // Format standard
     if (req.type === "product") return pn.printProductLabel(printerId, req.productName || req.title, req.barcode, req.ref, copies);
     if (req.type === "lot") return pn.printLotLabel(printerId, req.lotName || "", req.productName || "", req.barcode, req.expiryDate, copies);
     if (req.type === "location") return pn.printLocationLabel(printerId, req.locationName || req.title, req.barcode, copies);
@@ -3527,6 +3535,7 @@ function PaletteResult({ data, session }: { data: { palette: WmsPalette; lignes:
 function PrintModal({ req, onClose, onToast }: { req: PrintRequest; onClose: () => void; onToast: (m: string) => void }) {
   const [copies, setCopies] = useState(1);
   const [sending, setSending] = useState(false);
+  const [format, setFormat] = useState<"standard" | "big">("standard");
 
   const typeLabels: Record<string, string> = {
     product: "Produit", lot: "Lot", location: "Emplacement", picking: "Colis" };
@@ -3534,7 +3543,7 @@ function PrintModal({ req, onClose, onToast }: { req: PrintRequest; onClose: () 
 
   const doPrint = async () => {
     setSending(true);
-    const result = await executePrint(req, copies);
+    const result = await executePrint(req, copies, format);
     setSending(false);
     if (result.success) {
       onToast(`✓ ${copies} étiquette(s) envoyée(s)`);
@@ -3584,6 +3593,27 @@ function PrintModal({ req, onClose, onToast }: { req: PrintRequest; onClose: () 
             <div style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace" }}>{req.barcode}</div>
           </>}
         </div>
+
+        {/* Format toggle — masqué pour picking */}
+        {req.type !== "picking" && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Format</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setFormat("standard")}
+                style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: `1.5px solid ${format === "standard" ? C.blue : C.border}`,
+                  background: format === "standard" ? `${C.blue}12` : C.white, fontSize: 13, fontWeight: 600,
+                  cursor: "pointer", fontFamily: "inherit", color: format === "standard" ? C.blue : C.textMuted, transition: "all .1s" }}>
+                🏷 Standard
+              </button>
+              <button onClick={() => setFormat("big")}
+                style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: `1.5px solid ${format === "big" ? "#7c3aed" : C.border}`,
+                  background: format === "big" ? "#7c3aed12" : C.white, fontSize: 13, fontWeight: 600,
+                  cursor: "pointer", fontFamily: "inherit", color: format === "big" ? "#7c3aed" : C.textMuted, transition: "all .1s" }}>
+                📦 Palette 100×150
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Quantity */}
         <div style={{ marginBottom: 20 }}>
