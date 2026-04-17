@@ -145,6 +145,13 @@ function formatDate(d: string): string {
   catch { return d; }
 }
 
+// Extrait la valeur scannable d'un lot : "a1441135 - 02/28" → "a1441135"
+// Supprime la partie après " - " (suffixe date/commentaire) et les "/" restants
+function cleanLotForBarcode(lotName: string): string {
+  const part = lotName.split(/\s+-\s+/)[0].trim();
+  return part.replace(/\//g, "").trim() || lotName;
+}
+
 function barcodeZPL(barcode: string, labelW: number, y: number, height: number, preferredBarW: number = 3): string {
   const isEAN13 = /^\d{13}$/.test(barcode);
   const isEAN8 = /^\d{8}$/.test(barcode);
@@ -236,8 +243,8 @@ export function generateLotZPL(lotName: string, productName: string, lotBarcode:
     y += expBlock;
   }
 
-  // Code-barres lot: utilise lotBarcode ou lotName si barcode est un chemin
-  const cleanLotBarcode = lotBarcode.includes("/") ? lotName : lotBarcode;
+  // Code-barres lot: extrait la partie scannable ("a1441135 - 02/28" → "a1441135")
+  const cleanLotBarcode = cleanLotForBarcode(lotBarcode.includes("/") ? lotName : lotBarcode);
   lines.push(barcodeZPL(cleanLotBarcode, W, y, bcH, barW));
   lines.push("^XZ");
 
@@ -652,16 +659,16 @@ function generateBigLandscapeZPL(
     lines.push(`^FO15,${y}^A0N,70,70^FB${cW},1,0,C^FD${trunc(lotName, cpl)}^FS`); y += 80;
     lines.push(`^FO15,${y}^A0N,38,38^FB${cW},1,0,C^FD${trunc(productName, cpl)}^FS`); y += 46;
     if (expStr) { lines.push(`^FO15,${y}^A0N,30,30^FB${cW},1,0,C^FDDLUO: ${expStr}^FS`); y += 36; }
-    // Barcode remplit le reste
-    const cleanBarcode = barcode.includes("/") ? lotName : barcode;
-    const bcH = Math.max(60, H - y - 24);
+    // Barcode : extrait la partie scannable ("a1441135 - 02/28" → "a1441135")
+    const cleanBarcode = cleanLotForBarcode(barcode.includes("/") ? lotName : barcode);
+    const bcH = Math.max(50, H - y - 60);
     lines.push(barcodeZPL(cleanBarcode, W, y, bcH, barW));
 
   } else if (type === "location") {
     const locName = (opts.locationName || title || "").split("/").pop()?.split("-")[0] || title;
     let y = 20;
     lines.push(`^FO15,${y}^A0N,100,100^FB${cW},1,0,C^FD${trunc(locName, cpl)}^FS`); y += 118;
-    const bcH = Math.max(60, H - y - 24);
+    const bcH = Math.max(50, H - y - 60);
     lines.push(barcodeZPL(barcode, W, y, bcH, barW));
 
   } else {
@@ -672,7 +679,7 @@ function generateBigLandscapeZPL(
       lines.push(`^FO15,${y}^A0N,38,38^FB${cW},1,0,C^FD${trunc(opts.ref, cpl)}^FS`); y += 46;
     }
     lines.push(`^FO15,${y}^A0N,60,60^FB${cW},2,0,C^FD${trunc(productName, cpl)}^FS`); y += 76;
-    const bcH = Math.max(60, H - y - 24);
+    const bcH = Math.max(50, H - y - 60);
     lines.push(barcodeZPL(barcode, W, y, bcH, barW));
   }
 
