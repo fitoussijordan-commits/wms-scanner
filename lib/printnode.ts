@@ -223,7 +223,7 @@ export function generateLotZPL(lotName: string, productName: string, lotBarcode:
   const bcH = Math.min(Math.round(H * 0.33), 110);
   const expStr = expiryDate ? formatDate(expiryDate) : "";
 
-  const lotBlock = 36;
+  const lotBlock = 46;
   const nameBlock = 26;
   const expBlock = expStr ? 24 : 0;
   const bcBlock = bcH + 22;
@@ -233,7 +233,7 @@ export function generateLotZPL(lotName: string, productName: string, lotBarcode:
   let y = startY;
   const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
 
-  lines.push(`^FO10,${y}^A0N,30,30^FB${cW},1,0,C^FD${trunc(lotName, cpl)}^FS`);
+  lines.push(`^FO10,${y}^A0N,40,40^FB${cW},1,0,C^FD${trunc(lotName, cpl)}^FS`);
   y += lotBlock;
   lines.push(`^FO10,${y}^A0N,22,22^FB${cW},1,0,C^FD${trunc(productName, cpl)}^FS`);
   y += nameBlock;
