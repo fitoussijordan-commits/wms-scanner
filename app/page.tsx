@@ -1391,11 +1391,32 @@ export default function Page() {
       let ml: any = null;
 
       if (lotId) {
+        // Cherche une ligne pour ce lot exact qui a encore du travail
         ml = currentLines.find((m: any) =>
           m.location_id?.[0] === currentStep!.locId &&
           m.lot_id?.[0] === lotId &&
-          (m.reserved_uom_qty || 0) > 0
+          (m.reserved_uom_qty || 0) > 0 &&
+          (m.qty_done || 0) < (m.reserved_uom_qty || 0)
         );
+        // Si ce lot est déjà complet → cherche une autre ligne du même produit non finie
+        // (l'opérateur remplace un lot manquant par ce lot)
+        if (!ml && productId) {
+          const lotDoneLine = currentLines.find((m: any) => m.lot_id?.[0] === lotId && m.location_id?.[0] === currentStep!.locId);
+          if (lotDoneLine && (lotDoneLine.qty_done || 0) >= (lotDoneLine.reserved_uom_qty || 0)) {
+            ml = currentLines.find((m: any) =>
+              m.location_id?.[0] === currentStep!.locId &&
+              m.product_id?.[0] === productId &&
+              (m.qty_done || 0) < (m.reserved_uom_qty || 0)
+            );
+            if (ml) {
+              showToast(`ℹ️ Lot ${lotName} substitué à ${ml.lot_id?.[1] || "autre lot"}`);
+            } else {
+              showToast(`✅ Lot ${lotName} déjà complet — rien de plus à prendre`);
+              flashScan("ok");
+              return;
+            }
+          }
+        }
       }
 
       if (!ml && productId) {
@@ -1407,10 +1428,18 @@ export default function Page() {
       }
 
       if (!ml) {
-        ml = currentLines.find((m: any) => m.id === currentStep!.lineId);
+        // Fallback sur la ligne du step — mais vérifie qu'elle n'est pas déjà complète
+        const stepLine = currentLines.find((m: any) => m.id === currentStep!.lineId);
+        if (stepLine && (stepLine.qty_done || 0) < (stepLine.reserved_uom_qty || 0)) {
+          ml = stepLine;
+        }
       }
 
-      if (!ml) { showToast("Ligne introuvable à cet emplacement"); flashScan("err"); return; }
+      if (!ml) {
+        showToast("✅ Toutes les quantités à cet emplacement sont déjà complètes");
+        flashScan("ok");
+        return;
+      }
 
       if (productId && ml.product_id?.[0] !== productId) {
         showToast(`⚠ Mauvais produit — attendu: ${ml.product_id[1]}`);
