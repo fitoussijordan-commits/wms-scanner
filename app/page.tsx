@@ -6914,6 +6914,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   const [colisLines, setColisLines] = useState<Set<number>>(new Set());
   const [showColisSummary, setShowColisSummary] = useState(false);
   const [locOk, setLocOk] = useState(false);
+  const [showBackorderWarning, setShowBackorderWarning] = useState(false);
   const [colisLoading, setColisLoading] = useState(false);
   const [colisError, setColisError] = useState("");
   const [weightInput, setWeightInput] = useState("");
@@ -7130,7 +7131,10 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         label={loading ? "Envoi..." : "Valider la préparation"}
         sub={`${doneLines}/${totalLines} articles préparés`}
         color={allDone ? C.green : C.orange}
-        onClick={onValidate}
+        onClick={() => {
+          if (allDone) { onValidate(); return; }
+          setShowBackorderWarning(true);
+        }}
         disabled={loading || doneLines === 0}
       />
     </>
@@ -7380,9 +7384,63 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         label={loading ? "Envoi..." : "Valider la préparation"}
         sub={allDone ? "Tout préparé — prêt à valider" : `${doneLines}/${totalLines} articles préparés`}
         color={allDone ? C.green : C.orange}
-        onClick={onValidate}
+        onClick={() => {
+          if (allDone) { onValidate(); return; }
+          setShowBackorderWarning(true);
+        }}
         disabled={loading || doneLines === 0}
       />
+
+      {/* ── Modale backorder warning ── */}
+      {showBackorderWarning && (() => {
+        const missingLines = displayLines.filter((ml: any) => getQty(ml) < (ml.reserved_uom_qty || 0));
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.65)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+            <div style={{ background: "#fff", borderRadius: 20, padding: 24, width: "100%", maxWidth: 380 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#fef3c7", border: "2px solid #f59e0b", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                </div>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: "#92400e" }}>Articles non préparés</div>
+                  <div style={{ fontSize: 12, color: "#b45309" }}>{missingLines.length} article(s) manquant(s) vont rester en stock</div>
+                </div>
+              </div>
+
+              <div style={{ background: "#fffbeb", border: "1.5px solid #fde68a", borderRadius: 10, padding: "10px 12px", marginBottom: 16, maxHeight: 200, overflowY: "auto" as const }}>
+                {missingLines.map((ml: any) => {
+                  const done = getQty(ml);
+                  const total = ml.reserved_uom_qty || 0;
+                  return (
+                    <div key={ml.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #fde68a" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#92400e", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{ml.product_id?.[1] || "Produit"}</div>
+                        <div style={{ fontSize: 11, color: "#b45309" }}>{ml.location_id?.[1] || ""}{ml.lot_id ? ` · Lot ${ml.lot_id[1]}` : ""}</div>
+                      </div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: "#dc2626", marginLeft: 8, flexShrink: 0 }}>{done}/{total}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={{ background: "#fef2f2", border: "1.5px solid #fecaca", borderRadius: 10, padding: "10px 12px", marginBottom: 20, fontSize: 12, color: "#991b1b", fontWeight: 600 }}>
+                ⚠️ Ces articles ne seront PAS dans la zone sortie — le emballeur ne pourra pas les expédier.
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column" as const, gap: 8 }}>
+                <button onClick={() => setShowBackorderWarning(false)}
+                  style={{ width: "100%", padding: 14, background: "#2563eb", color: "#fff", border: "none", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                  ← Retourner préparer les articles manquants
+                </button>
+                <button onClick={() => { setShowBackorderWarning(false); onValidate(); }}
+                  style={{ width: "100%", padding: 12, background: "#f3f4f6", color: "#6b7280", border: "1.5px solid #d1d5db", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  Valider quand même (créer un backorder)
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </>
   );
 }
