@@ -5694,9 +5694,14 @@ function WaitingOrdersScreen({
             } catch (e: any) { onToast(`❌ PDF ${picking.name} : ${e.message}`); }
           }
         } else if (missingLines.length > 0) {
-          // Manquants détectés → avertir, ne pas imprimer, laisser en attente
+          // Manquants détectés → annuler la réservation Odoo pour éviter qu'il passe en "prête"
           const names = missingLines.slice(0, 3).map((m: any) => `${m.product} (−${m.missing})`).join(", ");
           onToast(`⚠️ ${picking.name} — manquants : ${names}`);
+          try {
+            await odoo.callMethod(session, "stock.picking", "do_unreserve", [[picking.id]]);
+            setPickings(prev => prev.map(p => p.id === picking.id ? { ...p, state: "confirmed" } : p));
+            setResults(prev => ({ ...prev, [picking.id]: { state: "confirmed", missingLines } }));
+          } catch {}
         }
       } catch (e: any) {
         onToast(`❌ ${picking.name} : ${e.message}`);
@@ -5711,6 +5716,41 @@ function WaitingOrdersScreen({
     }
     processingGuardRef.current.delete(groupId);
     setProcessing(prev => ({ ...prev, [groupId]: false }));
+  };
+
+  // Forcer la prépa malgré les manquants : re-réserver, imprimer BL, ouvrir prépa
+  const forcePrepGroup = async (groupId: string, pickingsGroup: any[]) => {
+    if (processingGuardRef.current.has(groupId)) return;
+    processingGuardRef.current.add(groupId);
+    setProcessing(prev => ({ ...prev, [groupId]: true }));
+    const cfg = pn.getLabelTypeConfig("packingslip");
+    const printerId = cfg.printerId || pn.getSavedPrinterId();
+    const total = pickingsGroup.length;
+
+    for (let i = 0; i < total; i++) {
+      const picking = pickingsGroup[i];
+      try {
+        // 1. Re-réserver ce qui est disponible
+        await odoo.checkAvailability(session, picking.id);
+        // 2. Imprimer le BL
+        if (printerId) {
+          try {
+            const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
+            const b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate, i + 1, total);
+            if (b64) {
+              const r = await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
+              if (!r.success) onToast(`❌ Impression ${picking.name} : ${r.error}`);
+            }
+          } catch (e: any) { onToast(`❌ PDF ${picking.name} : ${e.message}`); }
+        } else {
+          onToast(`⚠️ Aucune imprimante configurée — BL non imprimé`);
+        }
+      } catch (e: any) { onToast(`❌ ${picking.name} : ${e.message}`); }
+    }
+    processingGuardRef.current.delete(groupId);
+    setProcessing(prev => ({ ...prev, [groupId]: false }));
+    // 3. Ouvrir la prépa (1er picking du groupe)
+    onStartPrep(pickingsGroup[0]);
   };
 
   return (
@@ -5809,10 +5849,13 @@ function WaitingOrdersScreen({
                   {/* Affiché si pas encore tout assigned, OU si manquants (on peut quand même lancer la prépa partielle) */}
                   {(!allAssigned || hasMissing) && (
                     <button
-                      onClick={() => startPrepGroup(cg.groupId, cg.items)}
+                      onClick={() => hasMissing
+                        ? forcePrepGroup(cg.groupId, cg.items)
+                        : startPrepGroup(cg.groupId, cg.items)
+                      }
                       disabled={isGroupBusy}
                       style={{ width: "100%", marginTop: 6, padding: "10px 0", background: isGroupBusy ? C.border : hasMissing ? C.orange : C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: isGroupBusy ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: isGroupBusy ? 0.7 : 1 }}>
-                      {isGroupBusy ? "Vérification…" : hasMissing ? (isMulti ? `⚠️ Préparer quand même (${cg.items.length} BL)` : "⚠️ Préparer quand même") : isMulti ? `▶ Commencer prépa (${cg.items.length} BL)` : "▶ Commencer prépa"}
+                      {isGroupBusy ? "En cours…" : hasMissing ? (isMulti ? `⚠️ Préparer quand même (${cg.items.length} BL)` : "⚠️ Préparer quand même") : isMulti ? `▶ Commencer prépa (${cg.items.length} BL)` : "▶ Commencer prépa"}
                     </button>
                   )}
                   {allAssigned && !hasMissing && someResult && (
