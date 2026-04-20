@@ -1911,31 +1911,60 @@ export default function Page() {
         )}
 
         {/* ===== CONFIRMATION PICKING ===== */}
-        {pendingConfirmPicking && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-            <div style={{ background: "#fff", borderRadius: 20, padding: 28, width: "100%", maxWidth: 360, textAlign: "center" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Bon de préparation</div>
-              <div style={{ fontSize: 36, fontWeight: 900, color: "#111827", letterSpacing: "-0.5px", marginBottom: 6 }}>
-                {pendingConfirmPicking.name}
-              </div>
-              {pendingConfirmPicking.partner_id && (
-                <div style={{ fontSize: 18, fontWeight: 700, color: "#2563eb", marginBottom: 20 }}>
-                  {pendingConfirmPicking.partner_id[1]}
+        {pendingConfirmPicking && (() => {
+          // Cherche d'autres pickings du même partenaire dans la liste chargée
+          const partnerId = pendingConfirmPicking.partner_id?.[0];
+          const siblings = partnerId
+            ? pickings.filter((p: any) => p.partner_id?.[0] === partnerId && p.id !== pendingConfirmPicking.id)
+            : [];
+          const group = [pendingConfirmPicking, ...siblings];
+          return (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+              <div style={{ background: "#fff", borderRadius: 20, padding: 28, width: "100%", maxWidth: 360, textAlign: "center" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Bon de préparation</div>
+                <div style={{ fontSize: 36, fontWeight: 900, color: "#111827", letterSpacing: "-0.5px", marginBottom: 6 }}>
+                  {pendingConfirmPicking.name}
                 </div>
-              )}
-              <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-                <button onClick={() => setPendingConfirmPicking(null)}
-                  style={{ flex: 1, padding: "14px 0", background: "#f3f4f6", color: "#374151", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                  ✕ Annuler
-                </button>
-                <button onClick={() => { const p = pendingConfirmPicking; setPendingConfirmPicking(null); openPicking(p); }}
-                  style={{ flex: 2, padding: "14px 0", background: "#2563eb", color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                  ✓ C'est correct
-                </button>
+                {pendingConfirmPicking.partner_id && (
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#2563eb", marginBottom: siblings.length > 0 ? 12 : 20 }}>
+                    {pendingConfirmPicking.partner_id[1]}
+                  </div>
+                )}
+
+                {/* Bandeau groupe si d'autres pickings existent pour ce client */}
+                {siblings.length > 0 && (
+                  <div style={{ background: "#eff6ff", border: "1.5px solid #bfdbfe", borderRadius: 10, padding: "10px 14px", marginBottom: 20, textAlign: "left" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#1d4ed8", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>
+                      Commande groupée · {group.length} bons
+                    </div>
+                    {group.map((p: any) => (
+                      <div key={p.id} style={{ fontSize: 13, color: "#1e40af", fontWeight: p.id === pendingConfirmPicking.id ? 700 : 400 }}>
+                        {p.id === pendingConfirmPicking.id ? "▶ " : "   "}{p.name}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", flexDirection: "column" as const, gap: 8 }}>
+                  {siblings.length > 0 && (
+                    <button onClick={() => { const g = group; setPendingConfirmPicking(null); openGroupPicking(g); }}
+                      style={{ width: "100%", padding: "14px 0", background: "#2563eb", color: "#fff", border: "none", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                      📦 Préparer les {group.length} bons ensemble
+                    </button>
+                  )}
+                  <button onClick={() => { const p = pendingConfirmPicking; setPendingConfirmPicking(null); openPicking(p); }}
+                    style={{ width: "100%", padding: "14px 0", background: siblings.length > 0 ? "#f3f4f6" : "#2563eb", color: siblings.length > 0 ? "#374151" : "#fff", border: siblings.length > 0 ? "1.5px solid #d1d5db" : "none", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                    {siblings.length > 0 ? `Juste ${pendingConfirmPicking.name}` : "✓ C'est correct"}
+                  </button>
+                  <button onClick={() => setPendingConfirmPicking(null)}
+                    style={{ width: "100%", padding: "10px 0", background: "none", color: "#9ca3af", border: "none", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                    ✕ Annuler
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ===== PREPARATION LIST ===== */}
         {screen === "prep" && (
