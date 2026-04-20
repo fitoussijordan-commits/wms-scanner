@@ -1492,11 +1492,20 @@ export default function Page() {
         });
       }
 
-      // ── Écriture Odoo en arrière-plan ────────────────────────────────────
-      odoo.setMoveLineQtyDone(session, ml.id, newQty, writeLotId || undefined).catch((e: any) => {
-        setError(`Erreur sync Odoo: ${e.message}`);
-        flashScan("err");
-      });
+      // ── Écriture Odoo — debounce par ligne pour éviter les race conditions ──
+      // Si l'utilisateur scanne la même ligne plusieurs fois rapidement,
+      // on annule l'écriture précédente et on n'envoie que la valeur finale.
+      const capturedMlId = ml.id;
+      const capturedQty = newQty;
+      const capturedLot = writeLotId || undefined;
+      clearTimeout(debounceTimers.current[capturedMlId]);
+      debounceTimers.current[capturedMlId] = setTimeout(async () => {
+        try {
+          await odoo.setMoveLineQtyDone(session, capturedMlId, capturedQty, capturedLot);
+        } catch (e: any) {
+          setError(`Erreur sync Odoo: ${e.message}`);
+        }
+      }, 350);
 
     } catch (e: any) { setError(e.message); flashScan("err"); }
   };
@@ -1607,21 +1616,33 @@ export default function Page() {
     if (!session || !selectedPicking) return;
     setLoading(true); setError("");
     try {
+      // ── 0. Vider les timers de debounce en attente ──────────────────────
+      // Les debounces des scans récents pourraient se déclencher APRÈS la
+      // validation et écraser les valeurs correctes. On les annule, puis
+      // on fait une resync manuelle pour écrire les valeurs locales.
+      Object.keys(debounceTimers.current).forEach(k => {
+        clearTimeout(debounceTimers.current[Number(k)]);
+        delete debounceTimers.current[Number(k)];
+      });
+
       // ── 1. Resync depuis Odoo avant validation ──────────────────────────
-      // Les écritures fire-and-forget peuvent arriver dans le désordre côté réseau.
+      // Les écritures debounce peuvent ne pas encore être arrivées côté Odoo.
       // On recharge les vraies valeurs Odoo et on réémet les qty manquantes.
       showToast("Synchronisation...");
       const ids: number[] = selectedPicking._groupIds || [selectedPicking.id];
       for (const pickId of ids) {
         const freshLines = await odoo.getPickingMoveLines(session, pickId);
         const localLines = pickingMoveLinesRef.current;
-        // Pour chaque ligne, si local > odoo → réécrire la valeur correcte
+        // Pour chaque ligne, si local ≠ odoo → réécrire la valeur correcte
+        // On utilise le lot LOCAL (pas le lot Odoo) pour gérer les substitutions de lot
         const writes: Promise<void>[] = [];
         for (const freshLine of freshLines) {
           const local = localLines.find((l: any) => l.id === freshLine.id);
           const localQty = local ? (qtyOverridesRef?.current?.[freshLine.id] ?? local.qty_done ?? 0) : (freshLine.qty_done || 0);
+          // Utiliser le lot local si disponible (lot substitué localement), sinon lot Odoo
+          const localLotId = local?.lot_id?.[0] || freshLine.lot_id?.[0] || null;
           if (localQty !== (freshLine.qty_done || 0) && localQty > 0) {
-            writes.push(odoo.setMoveLineQtyDone(session, freshLine.id, localQty, freshLine.lot_id?.[0] || null));
+            writes.push(odoo.setMoveLineQtyDone(session, freshLine.id, localQty, localLotId));
           }
         }
         if (writes.length > 0) {
