@@ -759,6 +759,7 @@ export default function Page() {
   // Preparation state
   const [pickings, setPickings] = useState<any[]>([]);
   const [selectedPicking, setSelectedPicking] = useState<any>(null);
+  const [pendingConfirmPicking, setPendingConfirmPicking] = useState<any>(null); // picking à confirmer avant ouverture
   const [pickingMoves, setPickingMoves] = useState<any[]>([]);
   const [pickingMoveLines, setPickingMoveLines] = useState<any[]>([]);
   const [prepScanned, setPrepScanned] = useState<Set<number>>(new Set());
@@ -1146,30 +1147,38 @@ export default function Page() {
     setLoading(false);
   };
 
+  const openPickingByNameInProgress = useRef(false);
   const openPickingByName = async (name: string) => {
     if (!session) return;
+    // ── Guard anti double-scan / race condition ──
+    if (openPickingByNameInProgress.current) return;
+    openPickingByNameInProgress.current = true;
     const trimmed = name.trim();
-    // 1. Search in already loaded pickings
+    // 1. Search in already loaded pickings (exact match)
     const found = pickings.find((p: any) => (p.name || "").toUpperCase() === trimmed.toUpperCase());
-    if (found) { openPicking(found); return; }
-    // 2. Search Odoo — only basic fields to avoid invalid field errors
+    if (found) {
+      openPickingByNameInProgress.current = false;
+      setPendingConfirmPicking(found);
+      return;
+    }
+    // 2. Search Odoo — exact name match only
     setLoading(true); setError("");
     try {
       const results = await odoo.searchRead(
         session, "stock.picking",
         [["name", "=", trimmed], ["state", "in", ["assigned", "waiting", "confirmed"]]],
-        ["id", "name", "partner_id", "scheduled_date", "state", "priority"],
+        ["id", "name", "partner_id", "scheduled_date", "state", "priority", "picking_type_id"],
         1
       );
       if (results.length) {
-        // Enrich with shipping_date via getOutgoingPickings if possible, else use basic data
         const p = { ...results[0], shipping_date: results[0].scheduled_date };
-        openPicking(p);
+        setPendingConfirmPicking(p);
       } else {
         showToast(`❌ "${trimmed}" introuvable`);
-        setLoading(false);
       }
-    } catch (e: any) { setError(e.message); setLoading(false); }
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+    openPickingByNameInProgress.current = false;
   };
 
   const openPicking = async (picking: any) => {
@@ -1901,14 +1910,41 @@ export default function Page() {
           </div>
         )}
 
+        {/* ===== CONFIRMATION PICKING ===== */}
+        {pendingConfirmPicking && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+            <div style={{ background: "#fff", borderRadius: 20, padding: 28, width: "100%", maxWidth: 360, textAlign: "center" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Bon de préparation</div>
+              <div style={{ fontSize: 36, fontWeight: 900, color: "#111827", letterSpacing: "-0.5px", marginBottom: 6 }}>
+                {pendingConfirmPicking.name}
+              </div>
+              {pendingConfirmPicking.partner_id && (
+                <div style={{ fontSize: 18, fontWeight: 700, color: "#2563eb", marginBottom: 20 }}>
+                  {pendingConfirmPicking.partner_id[1]}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+                <button onClick={() => setPendingConfirmPicking(null)}
+                  style={{ flex: 1, padding: "14px 0", background: "#f3f4f6", color: "#374151", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                  ✕ Annuler
+                </button>
+                <button onClick={() => { const p = pendingConfirmPicking; setPendingConfirmPicking(null); openPicking(p); }}
+                  style={{ flex: 2, padding: "14px 0", background: "#2563eb", color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                  ✓ C'est correct
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ===== PREPARATION LIST ===== */}
         {screen === "prep" && (
           <PrepListScreen
             pickings={pickings}
             loading={loading}
             error={error}
-            onOpen={openPicking}
-            onOpenGroup={openGroupPicking}
+            onOpen={(p: any) => setPendingConfirmPicking(p)}
+            onOpenGroup={(group: any[]) => { if (group.length === 1) setPendingConfirmPicking(group[0]); else openGroupPicking(group); }}
             onScanPicking={openPickingByName}
             onCheckAvail={checkPickingAvailability}
             onRefresh={loadPickings}
