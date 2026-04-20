@@ -1630,8 +1630,10 @@ export default function Page() {
       // On recharge les vraies valeurs Odoo et on réémet les qty manquantes.
       showToast("Synchronisation...");
       const ids: number[] = selectedPicking._groupIds || [selectedPicking.id];
+      let allFreshLines: any[] = [];
       for (const pickId of ids) {
         const freshLines = await odoo.getPickingMoveLines(session, pickId);
+        allFreshLines = allFreshLines.concat(freshLines);
         const localLines = pickingMoveLinesRef.current;
         // Pour chaque ligne, si local ≠ odoo → réécrire la valeur correcte
         // On utilise le lot LOCAL (pas le lot Odoo) pour gérer les substitutions de lot
@@ -1647,8 +1649,38 @@ export default function Page() {
         }
         if (writes.length > 0) {
           await Promise.all(writes);
-          showToast(`${writes.length} ligne(s) resynchronisée(s)`);
         }
+      }
+
+      // ── 1b. Vérifier l'état réel dans Odoo après resync ─────────────────
+      // On recharge une 2ème fois pour avoir les vraies valeurs après écriture.
+      // Si des lignes sont encore incomplètes, on met à jour l'affichage et
+      // on bloque la validation pour que l'utilisateur confirme via la modale.
+      let verifiedLines: any[] = [];
+      for (const pickId of ids) {
+        const verified = await odoo.getPickingMoveLines(session, pickId);
+        verifiedLines = verifiedLines.concat(verified);
+      }
+      // Mettre à jour l'état local avec les vraies valeurs Odoo
+      const mergedVerified = verifiedLines.map((vl: any) => {
+        const override = qtyOverridesRef.current?.[vl.id];
+        return override !== undefined ? { ...vl, qty_done: override } : vl;
+      });
+      pickingMoveLinesRef.current = mergedVerified;
+      setPickingMoveLines(mergedVerified);
+
+      const incompleteLines = verifiedLines.filter((vl: any) =>
+        (vl.reserved_uom_qty || 0) > 0 && (vl.qty_done || 0) < (vl.reserved_uom_qty || 0)
+      );
+      if (incompleteLines.length > 0) {
+        // Des articles manquent côté Odoo — on bloque et on laisse l'utilisateur décider
+        const names = incompleteLines.slice(0, 3).map((l: any) =>
+          `${l.product_id?.[1] || "?"} (${l.qty_done || 0}/${l.reserved_uom_qty})`
+        ).join(", ");
+        showToast(`⚠️ ${incompleteLines.length} article(s) incomplet(s) côté Odoo — confirmez avant de valider`);
+        setError(`Articles incomplets : ${names}`);
+        setLoading(false);
+        return; // La modale backorder apparaîtra car allDone = false maintenant
       }
 
       // ── 2. Valider ────────────────────────────────────────────────────────
