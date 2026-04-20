@@ -1533,6 +1533,8 @@ export default function Page() {
 
   // Optimistic qty override: { [moveLineId]: qty }
   const [qtyOverrides, setQtyOverrides] = useState<Record<number, number>>({});
+  const qtyOverridesRef = useRef<Record<number, number>>({});
+  useEffect(() => { qtyOverridesRef.current = qtyOverrides; }, [qtyOverrides]);
   const debounceTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
   // +1 / -1 / tout mettre — optimistic update + debounced Odoo sync
@@ -1576,8 +1578,30 @@ export default function Page() {
     if (!session || !selectedPicking) return;
     setLoading(true); setError("");
     try {
-      // Groupe de BL → valider chacun individuellement
+      // ── 1. Resync depuis Odoo avant validation ──────────────────────────
+      // Les écritures fire-and-forget peuvent arriver dans le désordre côté réseau.
+      // On recharge les vraies valeurs Odoo et on réémet les qty manquantes.
+      showToast("Synchronisation...");
       const ids: number[] = selectedPicking._groupIds || [selectedPicking.id];
+      for (const pickId of ids) {
+        const freshLines = await odoo.getPickingMoveLines(session, pickId);
+        const localLines = pickingMoveLinesRef.current;
+        // Pour chaque ligne, si local > odoo → réécrire la valeur correcte
+        const writes: Promise<void>[] = [];
+        for (const freshLine of freshLines) {
+          const local = localLines.find((l: any) => l.id === freshLine.id);
+          const localQty = local ? (qtyOverridesRef?.current?.[freshLine.id] ?? local.qty_done ?? 0) : (freshLine.qty_done || 0);
+          if (localQty !== (freshLine.qty_done || 0) && localQty > 0) {
+            writes.push(odoo.setMoveLineQtyDone(session, freshLine.id, localQty, freshLine.lot_id?.[0] || null));
+          }
+        }
+        if (writes.length > 0) {
+          await Promise.all(writes);
+          showToast(`${writes.length} ligne(s) resynchronisée(s)`);
+        }
+      }
+
+      // ── 2. Valider ────────────────────────────────────────────────────────
       for (const id of ids) {
         await odoo.validatePicking(session, id);
       }
