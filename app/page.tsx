@@ -7097,6 +7097,31 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   const [colisError, setColisError] = useState("");
   const [weightInput, setWeightInput] = useState("");
   const [showWeightModal, setShowWeightModal] = useState(false);
+  const [reprintingBL, setReprintingBL] = useState(false);
+
+  const reprintBL = async () => {
+    if (!session || reprintingBL) return;
+    const cfg = pn.getLabelTypeConfig("packingslip");
+    const printerId = cfg.printerId || pn.getSavedPrinterId();
+    if (!printerId) { alert("Aucune imprimante configurée pour les BL"); return; }
+    setReprintingBL(true);
+    try {
+      const ids: number[] = picking._groupIds || [picking.id];
+      const total = ids.length;
+      for (let i = 0; i < ids.length; i++) {
+        const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
+        const r = await odoo.printPickingReportDirect(session, ids[i], printerId, {
+          title: `Bon_${picking.name}.pdf`,
+          overlayDate: pickingDate,
+          overlayIndex: i + 1,
+          overlayTotal: total,
+        });
+        if (!r.success) { alert(`Erreur impression : ${r.error}`); }
+      }
+    } finally {
+      setReprintingBL(false);
+    }
+  };
 
   // ── Compute sorted move lines one per card ──
   const allLines = useMemo(() => {
@@ -7329,8 +7354,11 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{picking.name}</div>
           {picking.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{picking.partner_id[1]}</div>}
         </div>
-        <button onClick={() => onReport(picking.id)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        <button onClick={reprintBL} disabled={reprintingBL} title="Réimprimer le bon de préparation" style={{ ...iconBtn, background: reprintingBL ? C.bg : C.bg, borderRadius: 8, padding: 8, opacity: reprintingBL ? 0.5 : 1 }}>
+          {reprintingBL
+            ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+          }
         </button>
       </div>
 
