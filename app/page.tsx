@@ -5745,38 +5745,45 @@ function WaitingOrdersScreen({
     setProcessing(prev => ({ ...prev, [groupId]: true }));
     const cfg = pn.getLabelTypeConfig("packingslip");
     const printerId = cfg.printerId || pn.getSavedPrinterId();
-    let printedCount = 0;
-    let readyCount = 0;
-
-    const label = pickingsGroup.length > 1 ? `${pickingsGroup.length} commandes` : pickingsGroup[0].name;
-    onToast(`🔍 Vérification de la disponibilité — ${label}…`);
-
     const total = pickingsGroup.length;
-    for (let i = 0; i < total; i++) {
-      const picking = pickingsGroup[i];
-      // Chaque picking a son propre try/catch — une erreur n'arrête pas les suivants
-      try {
-        const { state, missingLines } = await odoo.checkAvailabilityAndGetResult(session, picking.id);
-        try { await odoo.write(session, "stock.picking", [picking.id], { user_id: session.uid }); } catch {}
-        setResults(prev => ({ ...prev, [picking.id]: { state, missingLines } }));
-        setPickings(prev => prev.map(p => p.id === picking.id ? { ...p, state } : p));
 
-        if (state === "assigned" && missingLines.length === 0) {
-          // Complètement disponible → imprimer le bon
-          readyCount++;
-          if (printerId) {
-            try {
-              const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
-              const b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate, i + 1, total);
-              if (b64) {
-                const r = await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
-                if (r.success) printedCount++;
-                else onToast(`❌ Impression ${picking.name} : ${r.error}`);
-              }
-            } catch (e: any) { onToast(`❌ PDF ${picking.name} : ${e.message}`); }
-          }
-        } else if (missingLines.length > 0) {
-          // Manquants détectés → annuler la réservation Odoo pour éviter qu'il passe en "prête"
+    const label = total > 1 ? `${total} commandes` : pickingsGroup[0].name;
+    onToast(`🔍 Vérification — ${label}…`);
+
+    // ── Étape 1 : Vérification dispo en parallèle ────────────────────────
+    const availResults = await Promise.allSettled(
+      pickingsGroup.map(async (picking) => {
+        const { state, missingLines } = await odoo.checkAvailabilityAndGetResult(session, picking.id);
+        // Écriture user_id en parallèle (pas critique si ça échoue)
+        odoo.write(session, "stock.picking", [picking.id], { user_id: session.uid }).catch(() => {});
+        return { picking, state, missingLines };
+      })
+    );
+
+    // Séparer les prêts des manquants
+    const readyPickings: Array<{ picking: any; index: number }> = [];
+    const missingPickings: Array<{ picking: any; missingLines: any[] }> = [];
+
+    availResults.forEach((res, i) => {
+      if (res.status === "rejected") {
+        onToast(`❌ ${pickingsGroup[i].name} : ${res.reason?.message}`);
+        return;
+      }
+      const { picking, state, missingLines } = res.value;
+      setResults(prev => ({ ...prev, [picking.id]: { state, missingLines } }));
+      setPickings(prev => prev.map(p => p.id === picking.id ? { ...p, state } : p));
+
+      if (state === "assigned" && missingLines.length === 0) {
+        readyPickings.push({ picking, index: i });
+      } else if (missingLines.length > 0) {
+        missingPickings.push({ picking, missingLines });
+      }
+    });
+
+    // ── Étape 2 : Unreserve des manquants en parallèle ──────────────────
+    if (missingPickings.length > 0) {
+      await Promise.allSettled(
+        missingPickings.map(async ({ picking, missingLines }) => {
           const names = missingLines.slice(0, 3).map((m: any) => `${m.product} (−${m.missing})`).join(", ");
           onToast(`⚠️ ${picking.name} — manquants : ${names}`);
           try {
@@ -5784,11 +5791,28 @@ function WaitingOrdersScreen({
             setPickings(prev => prev.map(p => p.id === picking.id ? { ...p, state: "confirmed" } : p));
             setResults(prev => ({ ...prev, [picking.id]: { state: "confirmed", missingLines } }));
           } catch {}
-        }
-      } catch (e: any) {
-        onToast(`❌ ${picking.name} : ${e.message}`);
-        // On continue quand même avec les pickings suivants
-      }
+        })
+      );
+    }
+
+    // ── Étape 3 : Génération des PDFs en parallèle ──────────────────────
+    let printedCount = 0;
+    const readyCount = readyPickings.length;
+    if (readyCount > 0 && printerId) {
+      onToast(`🖨️ Impression de ${readyCount} bon${readyCount > 1 ? "s" : ""}…`);
+      await Promise.allSettled(
+        readyPickings.map(async ({ picking, index }) => {
+          try {
+            const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
+            const b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate, index + 1, total);
+            if (b64) {
+              const r = await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
+              if (r.success) printedCount++;
+              else onToast(`❌ Impression ${picking.name} : ${r.error}`);
+            }
+          } catch (e: any) { onToast(`❌ PDF ${picking.name} : ${e.message}`); }
+        })
+      );
     }
 
     if (readyCount > 0 && printerId) {
@@ -5809,13 +5833,17 @@ function WaitingOrdersScreen({
     const printerId = cfg.printerId || pn.getSavedPrinterId();
     const total = pickingsGroup.length;
 
-    for (let i = 0; i < total; i++) {
-      const picking = pickingsGroup[i];
-      try {
-        // 1. Re-réserver ce qui est disponible
-        await odoo.checkAvailability(session, picking.id);
-        // 2. Imprimer le BL
-        if (printerId) {
+    // ── Étape 1 : Re-réserver tous les pickings en parallèle ────────────
+    onToast(`🔄 Re-réservation de ${total} bon${total > 1 ? "s" : ""}…`);
+    await Promise.allSettled(
+      pickingsGroup.map(p => odoo.checkAvailability(session, p.id).catch(() => {}))
+    );
+
+    // ── Étape 2 : Générer + imprimer tous les PDFs en parallèle ─────────
+    if (printerId) {
+      onToast(`🖨️ Impression de ${total} bon${total > 1 ? "s" : ""}…`);
+      await Promise.allSettled(
+        pickingsGroup.map(async (picking, i) => {
           try {
             const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
             const b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate, i + 1, total);
@@ -5824,11 +5852,12 @@ function WaitingOrdersScreen({
               if (!r.success) onToast(`❌ Impression ${picking.name} : ${r.error}`);
             }
           } catch (e: any) { onToast(`❌ PDF ${picking.name} : ${e.message}`); }
-        } else {
-          onToast(`⚠️ Aucune imprimante configurée — BL non imprimé`);
-        }
-      } catch (e: any) { onToast(`❌ ${picking.name} : ${e.message}`); }
+        })
+      );
+    } else {
+      onToast(`⚠️ Aucune imprimante configurée — BL non imprimé`);
     }
+
     processingGuardRef.current.delete(groupId);
     setProcessing(prev => ({ ...prev, [groupId]: false }));
     // 3. Ouvrir la prépa (1er picking du groupe)
