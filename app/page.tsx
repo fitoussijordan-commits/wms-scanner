@@ -762,6 +762,8 @@ export default function Page() {
   const [pendingConfirmPicking, setPendingConfirmPicking] = useState<any>(null); // picking à confirmer avant ouverture
   const [pickingMoves, setPickingMoves] = useState<any[]>([]);
   const [pickingMoveLines, setPickingMoveLines] = useState<any[]>([]);
+  // Cache de progression par picking (mis à jour quand on quitte une prépa)
+  const [pickingProgressCache, setPickingProgressCache] = useState<Record<number, { done: number; total: number; doneLines: number; totalLines: number }>>({});
   const [prepScanned, setPrepScanned] = useState<Set<number>>(new Set());
   // 2-step preparation: step 1 = scan location, step 2 = scan lot/barcode → +1 qty each scan
   const [prepStep, setPrepStep] = useState<{ locId: number; locName: string; lineId: number; productName: string; lotName?: string; remaining: number } | null>(null);
@@ -2083,6 +2085,7 @@ export default function Page() {
             onScanPicking={openPickingByName}
             onCheckAvail={checkPickingAvailability}
             onRefresh={loadPickings}
+            progressCache={pickingProgressCache}
             onPrintBL={async (picking: any) => {
               if (!session) return;
               const cfg = pn.getLabelTypeConfig("packingslip");
@@ -2123,7 +2126,16 @@ export default function Page() {
             onAdjustQty={adjustMoveLineQty}
             qtyOverrides={qtyOverrides}
             onValidate={validatePrepPicking}
-            onBack={() => { setScreen("prep"); setPrepStep(null); loadPickings(); }}
+            onBack={() => {
+              // Sauvegarder la progression dans le cache avant de quitter
+              const lines = pickingMoveLinesRef.current.filter((ml: any) => (ml.reserved_uom_qty || 0) > 0);
+              const doneLines = lines.filter((ml: any) => (qtyOverridesRef.current?.[ml.id] ?? ml.qty_done ?? 0) >= (ml.reserved_uom_qty || 0)).length;
+              const doneUnits = lines.reduce((s: number, ml: any) => s + Math.min(qtyOverridesRef.current?.[ml.id] ?? ml.qty_done ?? 0, ml.reserved_uom_qty || 0), 0);
+              const totalUnits = lines.reduce((s: number, ml: any) => s + (ml.reserved_uom_qty || 0), 0);
+              const ids: number[] = selectedPicking?._groupIds || (selectedPicking ? [selectedPicking.id] : []);
+              ids.forEach(id => setPickingProgressCache(prev => ({ ...prev, [id]: { done: doneUnits, total: totalUnits, doneLines, totalLines: lines.length } })));
+              setScreen("prep"); setPrepStep(null); loadPickings();
+            }}
             session={session}
           />
         )}
@@ -6950,7 +6962,7 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
 // ============================================
 // PREPARATION LIST SCREEN
 // ============================================
-function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanPicking, onCheckAvail, onRefresh, onPrintBL }: any) {
+function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanPicking, onCheckAvail, onRefresh, onPrintBL, progressCache }: any) {
   const [scanCode, setScanCode] = useState("");
   // Group by shipping_date (date d'expédition prévue), fallback date_deadline, then scheduled_date
   const grouped: Record<string, any[]> = {};
@@ -7056,33 +7068,71 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
                         )}
                         {group.map((p: any) => {
                           const moveCount = (p.move_ids_without_package || []).length;
+                          const prog = progressCache?.[p.id];
+                          const progPct = prog && prog.total > 0 ? Math.round((prog.done / prog.total) * 100) : null;
+                          const progDone = prog && prog.total > 0 && prog.done >= prog.total;
                           return (
-                            <div key={p.id} style={isGroup ? { padding: "8px 0", borderBottom: `1px solid ${C.border}` } : { ...cardStyle, marginBottom: 8 }}>
-                              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
-                                <div style={{ flex: 1 }}>
-                                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</div>
-                                  {p.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{p.partner_id[1]}</div>}
-                                  {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine: {p.origin}</div>}
-                                  {p.carrier_id && (
-                                    <div style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", display: "inline-block", padding: "2px 8px", borderRadius: 6, marginTop: 4 }}>
-                                      {p.carrier_id[1]}
-                                    </div>
-                                  )}
-                                </div>
-                                <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6, flexShrink: 0 }}>Prêt</span>
+                            <div key={p.id} style={isGroup
+                              ? { padding: "12px 0", borderBottom: `1px solid ${C.border}` }
+                              : { ...cardStyle, marginBottom: 8, padding: 16 }}>
+
+                              {/* Ligne 1 : nom picking + badge état */}
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                                <div style={{ fontSize: 18, fontWeight: 800, color: C.text, letterSpacing: -0.3 }}>{p.name}</div>
+                                {progDone
+                                  ? <span style={{ fontSize: 10, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "2px 8px", borderRadius: 6 }}>✓ Terminé</span>
+                                  : prog
+                                  ? <span style={{ fontSize: 10, fontWeight: 700, color: "#f59e0b", background: "#fef3c7", padding: "2px 8px", borderRadius: 6 }}>En cours</span>
+                                  : <span style={{ fontSize: 10, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "2px 8px", borderRadius: 6 }}>Prêt</span>
+                                }
                               </div>
-                              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: p.user_id ? 4 : 10 }}>{moveCount} article(s)</div>
-                              {p.user_id && <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600, marginBottom: 10 }}>👤 {p.user_id[1]}</div>}
+
+                              {/* Ligne 2 : client */}
+                              {p.partner_id && <div style={{ fontSize: 13, fontWeight: 600, color: C.textSec, marginBottom: 2 }}>{p.partner_id[1]}</div>}
+
+                              {/* Ligne 3 : origine + transporteur */}
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" as const }}>
+                                {p.origin && <span style={{ fontSize: 11, color: C.textMuted }}>{p.origin}</span>}
+                                {p.carrier_id && (
+                                  <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", padding: "1px 7px", borderRadius: 5 }}>
+                                    {p.carrier_id[1]}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Barre de progression */}
+                              {prog && prog.total > 0 && (
+                                <div style={{ marginBottom: 10 }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                                    <span style={{ fontSize: 11, color: C.textMuted }}>
+                                      {prog.doneLines}/{prog.totalLines} lignes · {prog.done}/{prog.total} unités
+                                    </span>
+                                    <span style={{ fontSize: 11, fontWeight: 700, color: progDone ? C.green : "#f59e0b" }}>{progPct}%</span>
+                                  </div>
+                                  <div style={{ height: 6, borderRadius: 3, background: C.border, overflow: "hidden" }}>
+                                    <div style={{ height: "100%", width: `${progPct}%`, borderRadius: 3, background: progDone ? C.green : "#f59e0b", transition: "width .4s" }} />
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Infos + assigné */}
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                                <span style={{ fontSize: 11, color: C.textMuted }}>{moveCount} article{moveCount > 1 ? "s" : ""}</span>
+                                {p.user_id && <span style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600 }}>👤 {p.user_id[1]}</span>}
+                              </div>
+
+                              {/* Boutons */}
                               <div style={{ display: "flex", gap: 6 }}>
-                                <button onClick={() => onOpen(p)} style={{ flex: 2, padding: "10px 0", background: C.text, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-                                  Préparer
+                                <button onClick={() => onOpen(p)} style={{ flex: 1, padding: "11px 0", background: C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                                  {prog && !progDone ? "Reprendre" : "Préparer"}
                                 </button>
                                 <button onClick={() => requestPrint({ type: "picking", title: p.name, barcode: p.name })}
-                                  style={{ padding: "10px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}
+                                  style={{ padding: "11px 13px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}
                                   title="Imprimer code-barres colis">
                                   {printerSmallIcon}
                                 </button>
-                                <button onClick={() => onPrintBL(p)} title="Imprimer le bon de préparation" style={{ padding: "10px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+                                <button onClick={() => onPrintBL(p)} title="Imprimer le bon de préparation"
+                                  style={{ padding: "11px 13px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}>
                                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                                 </button>
                               </div>
