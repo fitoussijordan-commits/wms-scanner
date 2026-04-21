@@ -5795,22 +5795,22 @@ function WaitingOrdersScreen({
       );
     }
 
-    // ── Étape 3 : Génération des PDFs en parallèle ──────────────────────
+    // ── Étape 3 : Impression directe serveur (Odoo→Next.js→PrintNode) ───
     let printedCount = 0;
     const readyCount = readyPickings.length;
     if (readyCount > 0 && printerId) {
       onToast(`🖨️ Impression de ${readyCount} bon${readyCount > 1 ? "s" : ""}…`);
       await Promise.allSettled(
         readyPickings.map(async ({ picking, index }) => {
-          try {
-            const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
-            const b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate, index + 1, total);
-            if (b64) {
-              const r = await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
-              if (r.success) printedCount++;
-              else onToast(`❌ Impression ${picking.name} : ${r.error}`);
-            }
-          } catch (e: any) { onToast(`❌ PDF ${picking.name} : ${e.message}`); }
+          const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
+          const r = await odoo.printPickingReportDirect(session, picking.id, printerId, {
+            title: `Bon_${picking.name}.pdf`,
+            overlayDate: pickingDate,
+            overlayIndex: index + 1,
+            overlayTotal: total,
+          });
+          if (r.success) printedCount++;
+          else onToast(`❌ Impression ${picking.name} : ${r.error}`);
         })
       );
     }
@@ -5839,19 +5839,19 @@ function WaitingOrdersScreen({
       pickingsGroup.map(p => odoo.checkAvailability(session, p.id).catch(() => {}))
     );
 
-    // ── Étape 2 : Générer + imprimer tous les PDFs en parallèle ─────────
+    // ── Étape 2 : Impression directe serveur (Odoo→Next.js→PrintNode) ───
     if (printerId) {
       onToast(`🖨️ Impression de ${total} bon${total > 1 ? "s" : ""}…`);
       await Promise.allSettled(
         pickingsGroup.map(async (picking, i) => {
-          try {
-            const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
-            const b64 = await odoo.getPickingReportBase64(session, picking.id, undefined, pickingDate, i + 1, total);
-            if (b64) {
-              const r = await pn.printPdfLabel(printerId, b64, `Bon_${picking.name}.pdf`);
-              if (!r.success) onToast(`❌ Impression ${picking.name} : ${r.error}`);
-            }
-          } catch (e: any) { onToast(`❌ PDF ${picking.name} : ${e.message}`); }
+          const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
+          const r = await odoo.printPickingReportDirect(session, picking.id, printerId, {
+            title: `Bon_${picking.name}.pdf`,
+            overlayDate: pickingDate,
+            overlayIndex: i + 1,
+            overlayTotal: total,
+          });
+          if (!r.success) onToast(`❌ Impression ${picking.name} : ${r.error}`);
         })
       );
     } else {

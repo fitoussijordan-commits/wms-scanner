@@ -401,6 +401,43 @@ export async function getPickingReportBase64(
   return data.base64;
 }
 
+// Impression directe serveur : Odoo PDF → overlay → PrintNode (sans passer par le navigateur)
+export async function printPickingReportDirect(
+  session: OdooSession,
+  pickingId: number,
+  printerId: number,
+  options: {
+    reportName?: string;
+    title?: string;
+    overlayDate?: string;
+    overlayIndex?: number;
+    overlayTotal?: number;
+  } = {}
+): Promise<{ success: boolean; jobId?: number; error?: string }> {
+  try {
+    const res = await fetch("/api/odoo/print-bl", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        odooUrl: session.config.url,
+        sessionId: session.sessionId,
+        reportName: options.reportName || getSavedPrepReportName(),
+        recordId: pickingId,
+        printerId,
+        title: options.title,
+        overlayDate: options.overlayDate,
+        overlayIndex: options.overlayIndex,
+        overlayTotal: options.overlayTotal,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) return { success: false, error: data.error || `Erreur ${res.status}` };
+    return { success: true, jobId: data.jobId };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
 // ============================================
 // PREPARATION — Outgoing pickings
 // ============================================
