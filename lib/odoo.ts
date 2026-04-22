@@ -651,18 +651,22 @@ export async function createInternalTransfer(
   await callMethod(session, "stock.picking", "action_confirm", [[pickingId]]);
   await callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
 
-  // Read move lines — Odoo 16: only safe fields (no product_uom_qty on stock.move.line)
+  // Read move lines — include reserved_uom_qty so we set the correct portion per line
+  // (Odoo may split one product across multiple move lines when stock is in different locations)
   const moveLines = await searchRead(session, "stock.move.line",
     [["picking_id", "=", pickingId]],
-    ["id", "product_id", "lot_id", "qty_done"]
+    ["id", "product_id", "lot_id", "qty_done", "reserved_uom_qty"]
   );
 
-  // Write qty_done and lot on each move line
+  // Write qty_done per line using reserved_uom_qty (not the full requested qty)
+  // so that when Odoo splits a product across multiple lines each gets its own portion
   for (const ml of moveLines) {
     const matchingLine = lines.find(l => l.productId === ml.product_id[0]);
     if (matchingLine) {
-      const updates: any = { qty_done: matchingLine.qty };
-      if (matchingLine.lotId) updates.lot_id = matchingLine.lotId;
+      const lineQty = (ml.reserved_uom_qty as number) || 0;
+      const updates: any = { qty_done: lineQty > 0 ? lineQty : matchingLine.qty };
+      // Only set lot if the user specified one and Odoo hasn't already assigned one
+      if (matchingLine.lotId && !ml.lot_id) updates.lot_id = matchingLine.lotId;
       await write(session, "stock.move.line", [ml.id], updates);
     }
   }
