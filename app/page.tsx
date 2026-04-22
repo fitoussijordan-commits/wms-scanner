@@ -1627,31 +1627,28 @@ export default function Page() {
         delete debounceTimers.current[Number(k)];
       });
 
-      // ── 1. Resync depuis Odoo avant validation ──────────────────────────
-      // Les écritures debounce peuvent ne pas encore être arrivées côté Odoo.
-      // On recharge les vraies valeurs Odoo et on réémet les qty manquantes.
+      // ── 1. Resync forcée avant validation ───────────────────────────────
+      // On écrit TOUTES les quantités locales > 0 vers Odoo sans condition de
+      // comparaison — on ne fait pas confiance à l'état Odoo courant car des
+      // scans peuvent ne pas être arrivés à temps.
       showToast("Synchronisation...");
       const ids: number[] = selectedPicking._groupIds || [selectedPicking.id];
-      let allFreshLines: any[] = [];
-      for (const pickId of ids) {
-        const freshLines = await odoo.getPickingMoveLines(session, pickId);
-        allFreshLines = allFreshLines.concat(freshLines);
-        const localLines = pickingMoveLinesRef.current;
-        // Pour chaque ligne, si local ≠ odoo → réécrire la valeur correcte
-        // On utilise le lot LOCAL (pas le lot Odoo) pour gérer les substitutions de lot
-        const writes: Promise<void>[] = [];
-        for (const freshLine of freshLines) {
-          const local = localLines.find((l: any) => l.id === freshLine.id);
-          const localQty = local ? (qtyOverridesRef?.current?.[freshLine.id] ?? local.qty_done ?? 0) : (freshLine.qty_done || 0);
-          // Utiliser le lot local si disponible (lot substitué localement), sinon lot Odoo
-          const localLotId = local?.lot_id?.[0] || freshLine.lot_id?.[0] || null;
-          if (localQty !== (freshLine.qty_done || 0) && localQty > 0) {
-            writes.push(odoo.setMoveLineQtyDone(session, freshLine.id, localQty, localLotId));
-          }
+      const localLines = pickingMoveLinesRef.current;
+
+      // Construire la liste des écritures depuis l'état local
+      const forceWrites: Promise<void>[] = [];
+      for (const local of localLines) {
+        const localQty = qtyOverridesRef.current?.[local.id] ?? local.qty_done ?? 0;
+        if (localQty > 0) {
+          const localLotId = local.lot_id?.[0] || null;
+          forceWrites.push(
+            odoo.setMoveLineQtyDone(session, local.id, localQty, localLotId)
+              .catch(() => {}) // une erreur sur une ligne n'arrête pas les autres
+          );
         }
-        if (writes.length > 0) {
-          await Promise.all(writes);
-        }
+      }
+      if (forceWrites.length > 0) {
+        await Promise.all(forceWrites);
       }
 
       // ── 1b. Vérifier l'état réel dans Odoo après resync ─────────────────
