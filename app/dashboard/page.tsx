@@ -913,16 +913,26 @@ export default function Dashboard() {
   const loadDeliveries = useCallback(async () => {
     if (!session) return; setLoading(true); setError(""); setPrepStats([]);
     try {
-      // Get picking type IDs for OUT and PICK
+      // Get picking type IDs for OUT and PICK (internal)
+      // Note: picking type code "internal" covers PICK, PACK, etc. — we separate by name/sequence_code
       const pickingTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "in", ["outgoing", "internal"]]], ["id", "code", "sequence_code", "name"], 50);
       const outTypeIds = pickingTypes.filter((t: any) => t.code === "outgoing").map((t: any) => t.id);
-      const pickTypeIds = pickingTypes.filter((t: any) => t.sequence_code?.toLowerCase().includes("pick") || t.name?.toLowerCase().includes("pick")).map((t: any) => t.id);
 
-      // Load OUT pickings
-      const outPickings = outTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", outTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "partner_id", "move_ids", "user_id", "write_uid"], 2000, "date_done desc") : [];
+      // PICK types = internal types whose sequence_code or name contains "pick" or "prel" (prélèvement)
+      // Falls back to ALL internal types if none match — avoids missing preps
+      const pickCandidates = pickingTypes.filter((t: any) => {
+        const sc = (t.sequence_code || "").toLowerCase();
+        const nm = (t.name || "").toLowerCase();
+        return sc.includes("pick") || nm.includes("pick") || sc.includes("prel") || nm.includes("prél") || nm.includes("prele");
+      });
+      // If no specific match, take all internal types to avoid losing data
+      const pickTypeIds = (pickCandidates.length ? pickCandidates : pickingTypes.filter((t: any) => t.code === "internal")).map((t: any) => t.id);
+
+      // Load OUT pickings — add write_uid (= user who validated, i.e. the actual preparer)
+      const outPickings = outTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", outTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "partner_id", "move_ids", "write_uid"], 2000, "date_done desc") : [];
 
       // Load PICK pickings
-      const pickPickings = pickTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", pickTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "move_ids", "user_id", "write_uid"], 2000, "date_done desc") : [];
+      const pickPickings = pickTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", pickTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "move_ids", "write_uid"], 2000, "date_done desc") : [];
 
       const allPickings = [...outPickings.map((p: any) => ({ ...p, pickKind: "out" })), ...pickPickings.map((p: any) => ({ ...p, pickKind: "pick" }))];
 
@@ -936,9 +946,11 @@ export default function Dashboard() {
       setDeliveries(Object.entries(byDate).sort(([a], [b]) => b.localeCompare(a)).map(([date, v]) => ({ date, ...v })));
 
       // Stats préparateurs
+      // write_uid = dernier utilisateur à avoir modifié le picking = celui qui a validé (préparé)
+      // user_id = "Responsable" Odoo = souvent le vendeur, PAS le préparateur → on l'ignore
       const prepByUser: Record<string, { picking: number; emballage: number }> = {};
       for (const p of allPickings) {
-        const name = (p.user_id?.[1] || p.write_uid?.[1]) || "Inconnu";
+        const name = p.write_uid?.[1] || "Inconnu";
         if (!prepByUser[name]) prepByUser[name] = { picking: 0, emballage: 0 };
         if (p.pickKind === "pick") prepByUser[name].picking++;
         else prepByUser[name].emballage++;
