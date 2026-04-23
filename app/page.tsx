@@ -1214,6 +1214,26 @@ export default function Page() {
   // === QUICK MODE ===
   const doQuickScan = async (code: string) => {
     if (!code || !session) return;
+
+    // ── Étape 2 : produit + source déjà sélectionnés → scan de destination ──
+    if (curProduct && src && !dst) {
+      setLoading(true); setError("");
+      try {
+        const r = await odoo.smartScan(session, code);
+        if (r.type === "location") {
+          setDst(r.data);
+          vibrateSuccess();
+          setFeedback({ t: "ok", m: `📍 Destination : ${r.data.name}` });
+        } else {
+          setFeedback({ t: "err", m: `"${code}" n'est pas un emplacement — scanne la destination` });
+          vibrateError();
+        }
+      } catch (e: any) { setError(e.message); vibrateError(); }
+      setLoading(false);
+      return;
+    }
+
+    // ── Étape 1 : nouveau scan produit — reset complet ──
     setLoading(true); setError(""); setFeedback(null); setCurProduct(null); setCurLot(null); setCurStock([]); setAllStock([]); setSrc(null); setDst(null);
     try {
       const r = await odoo.smartScan(session, code);
@@ -2021,7 +2041,7 @@ export default function Page() {
 
           {/* QUICK MODE */}
           {transferMode === "quick" && <>
-            <Alert type="info">Scanne un produit → choisis source et destination</Alert>
+            <Alert type="info">Scanne un produit → choisis la source → scanne ou choisis la destination</Alert>
             <Section>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                 <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Scanner un produit</span>
