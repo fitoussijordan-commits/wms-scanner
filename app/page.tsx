@@ -628,11 +628,21 @@ function clearHistory() {
 function useScannerListener(onScan: (code: string) => void, enabled: boolean) {
   const buf = useRef("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTgt = useRef<EventTarget | null>(null);
   const cb = useRef(onScan);
   cb.current = onScan;
 
   useEffect(() => {
     if (!enabled) return;
+
+    // Retourne true si l'élément est un champ texte libre (saisie manuelle, pas scanner)
+    const isTextInput = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLInputElement) && !(el instanceof HTMLTextAreaElement)) return false;
+      if (el instanceof HTMLTextAreaElement) return true;
+      const t = (el as HTMLInputElement).type;
+      return !t || t === "text" || t === "search" || t === "email" || t === "tel" || t === "url" || t === "password";
+    };
+
     const flush = (tgt?: HTMLElement) => {
       // Filtre les caractères de contrôle injectés par certains DataWedge
       const code = buf.current.replace(/[^\x20-\x7E\u00C0-\u024F]/g, "").trim();
@@ -650,7 +660,7 @@ function useScannerListener(onScan: (code: string) => void, enabled: boolean) {
 
     const handle = (e: KeyboardEvent) => {
       const tgt = e.target as HTMLElement;
-      // Enter ou Tab = terminateur DataWedge
+      // Enter ou Tab = terminateur DataWedge — flush toujours (scan réel dans un champ texte)
       if (e.key === "Enter" || e.key === "Tab") {
         if (buf.current.length >= 3) { e.preventDefault(); e.stopPropagation(); }
         flush(tgt instanceof HTMLInputElement ? tgt : undefined);
@@ -659,9 +669,15 @@ function useScannerListener(onScan: (code: string) => void, enabled: boolean) {
       // Ignore les touches non-imprimables (Shift, Ctrl, Alt, F1…)
       if (e.key.length !== 1) return;
       buf.current += e.key;
+      lastTgt.current = e.target;
       // Timeout 80ms — plus sûr sur Zebra en WiFi chargé (était 50ms)
       if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => flush(), 80);
+      timer.current = setTimeout(() => {
+        // Si le dernier événement venait d'un champ texte libre → saisie manuelle, pas un scan
+        // On vide le buffer sans déclencher le handler (le terminateur Enter gère les vrais scans)
+        if (isTextInput(lastTgt.current)) { buf.current = ""; timer.current = null; return; }
+        flush();
+      }, 80);
     };
     window.addEventListener("keydown", handle, true);
     return () => { window.removeEventListener("keydown", handle, true); if (timer.current) clearTimeout(timer.current); };
