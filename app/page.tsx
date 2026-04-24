@@ -6364,7 +6364,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
     // Extrait une ref par ligne (ou séparées par virgule/point-virgule/tab)
     const rawRefs = bulkText.split(/[\n,;|\t]+/).map(r => r.trim()).filter(r => r.length >= 2);
     // Déduplique en gardant l'ordre
-    const refs = [...new Set(rawRefs)];
+    const seen = new Set<string>(); const refs = rawRefs.filter(r => { if (seen.has(r)) return false; seen.add(r); return true; });
     if (!refs.length) { onToast("Aucune référence détectée"); return; }
     setBulkParsing(true); setBulkItems([]);
 
