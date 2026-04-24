@@ -931,6 +931,13 @@ export default function Dashboard() {
       if (thresholdItems.length > 0) {
         await supa.saveThresholdsBulk(thresholdItems);
         setThresholdsByRef(newThreshByRef);
+        // Mettre à jour thresholds[pid] immédiatement sans attendre loadAlerts
+        const newT: Record<number, number> = {};
+        for (const [pidStr, data] of Object.entries(stockMap)) {
+          if (!data.ref) continue;
+          newT[Number(pidStr)] = newThreshByRef[data.ref] ?? defaultThreshold;
+        }
+        setThresholds(newT);
       }
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, [session, consoMonths, stockMap]);
