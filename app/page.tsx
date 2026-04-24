@@ -6362,24 +6362,61 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
 
   const parseBulkRefs = async () => {
     // Extrait une ref par ligne (ou séparées par virgule/point-virgule/tab)
-    const refs = bulkText.split(/[\n,;|\t]+/).map(r => r.trim()).filter(r => r.length >= 2);
+    const rawRefs = bulkText.split(/[\n,;|\t]+/).map(r => r.trim()).filter(r => r.length >= 2);
+    // Déduplique en gardant l'ordre
+    const refs = [...new Set(rawRefs)];
     if (!refs.length) { onToast("Aucune référence détectée"); return; }
     setBulkParsing(true); setBulkItems([]);
-    const results: BulkItem[] = await Promise.all(refs.map(async (rawRef) => {
-      try {
-        const r = await odoo.smartScan(session, rawRef);
-        if (r.type === "product") {
-          const qs = await odoo.getQuantsForProduct(session, r.data.id);
-          return { rawRef, product: r.data, quants: qs, deltas: {}, error: null };
-        } else if (r.type === "lot") {
-          const prod = r.data.product;
-          const qs = prod ? await odoo.getQuantsForProduct(session, prod.id) : [];
-          return { rawRef, product: prod || null, quants: qs, deltas: {}, error: null };
+
+    try {
+      // ── 1. Batch lookup : une seule requête pour toutes les refs ──────────
+      // Cherche par default_code exact (insensible à la casse)
+      const foundByRef = await odoo.searchRead(session, "product.product",
+        ["|", ["default_code", "in", refs], ["default_code", "in", refs.map(r => r.toUpperCase())]],
+        ["id", "name", "default_code", "barcode", "uom_id", "tracking", "active"], 500
+      );
+      // Cherche aussi par barcode (pour refs qui seraient des EAN)
+      const foundByBC = await odoo.searchRead(session, "product.product",
+        [["barcode", "in", refs]], ["id", "name", "default_code", "barcode", "uom_id", "tracking", "active"], 500
+      );
+
+      // Construit un map ref → product (priorité default_code puis barcode)
+      const refToProduct = new Map<string, any>();
+      for (const p of [...foundByRef, ...foundByBC]) {
+        const dc = (p.default_code || "").toUpperCase();
+        const bc = (p.barcode || "").toUpperCase();
+        for (const ref of refs) {
+          const ru = ref.toUpperCase();
+          if ((dc && dc === ru) || (bc && bc === ru)) {
+            if (!refToProduct.has(ref)) refToProduct.set(ref, p);
+          }
         }
-        return { rawRef, product: null, quants: [], deltas: {}, error: "Introuvable" };
-      } catch (e: any) { return { rawRef, product: null, quants: [], deltas: {}, error: e.message }; }
-    }));
-    setBulkItems(results);
+      }
+
+      // ── 2. Charge les quants pour tous les produits trouvés en parallèle ──
+      const productIds = [...new Set([...refToProduct.values()].map(p => p.id))];
+      const allQuants = productIds.length
+        ? await odoo.searchRead(session, "stock.quant",
+            [["product_id", "in", productIds], ["location_id.usage", "=", "internal"]],
+            ["id", "product_id", "location_id", "lot_id", "quantity"], 2000)
+        : [];
+      const quantsByProduct = new Map<number, any[]>();
+      for (const q of allQuants) {
+        const pid = q.product_id[0];
+        if (!quantsByProduct.has(pid)) quantsByProduct.set(pid, []);
+        quantsByProduct.get(pid)!.push(q);
+      }
+
+      // ── 3. Construit les BulkItems dans l'ordre de la liste originale ──
+      const results: BulkItem[] = refs.map(rawRef => {
+        const product = refToProduct.get(rawRef) || null;
+        if (!product) return { rawRef, product: null, quants: [], deltas: {}, error: "Introuvable" };
+        const quants = (quantsByProduct.get(product.id) || []).filter((q: any) => q.quantity !== 0);
+        return { rawRef, product, quants, deltas: {}, error: null };
+      });
+
+      setBulkItems(results);
+    } catch (e: any) { onToast("Erreur: " + (e as any).message); }
     setBulkParsing(false);
   };
 
