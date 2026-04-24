@@ -4690,76 +4690,6 @@ interface ImportRow {
   odooId?: number;
 }
 
-// ── Parse texte libre → fiche produit ────────────────────────────────────
-function parseProductText(text: string): { row: Partial<ImportRow>; detected: Set<string> } {
-  const row: Partial<ImportRow> = {};
-  const detected = new Set<string>();
-
-  const clean = (v: string) => v.trim().replace(/^["']|["']$/g, "").trim();
-  const setField = (key: keyof ImportRow, val: string) => {
-    if (val && !(row as any)[key]) { (row as any)[key] = clean(val); detected.add(key); }
-  };
-
-  const lines = text.split(/\n/).map(l => l.trim()).filter(Boolean);
-
-  // ── Passe 1 : cherche les patterns clé : valeur (|, =, :, tab) ──
-  for (const line of lines) {
-    const m = line.match(/^([^\t:=|]+?)[\t:=|]+(.+)$/);
-    if (!m) continue;
-    const k = m[1].trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    const v = m[2].trim();
-    if (!v) continue;
-
-    if (/ref|code.?art|code.?produit|sku|article.?n|n.?article|code.?int/.test(k)) setField("ref", v);
-    else if (/nom|name|libel|design|produit|descri/.test(k)) setField("name", v);
-    else if (/ean|barcode|code.?barre|gtin|upc/.test(k)) setField("barcode", v.replace(/\s/g, ""));
-    else if (/prix.?ht|p\.?ht|tarif.?ht|ht$/.test(k)) setField("prixHT", v.replace(/[€$\s]/g, "").replace(",", "."));
-    else if (/prix.?ttc|p\.?ttc|ttc/.test(k)) setField("prixTTC", v.replace(/[€$\s]/g, "").replace(",", "."));
-    else if (/achat|pa$|cout|cost|prix.?achat/.test(k)) setField("prixAchat", v.replace(/[€$\s]/g, "").replace(",", "."));
-    else if (/poids|weight|masse/.test(k)) setField("poids", v.toLowerCase().replace(/\s*kg/g, "").replace(",", ".").trim());
-    else if (/haut/.test(k)) setField("hauteur", v.replace(/\s*mm/gi, "").trim());
-    else if (/larg/.test(k)) setField("largeur", v.replace(/\s*mm/gi, "").trim());
-    else if (/prof|longu|depth/.test(k)) setField("profondeur", v.replace(/\s*mm/gi, "").trim());
-    else if (/unit/.test(k)) setField("unite", v);
-    else if (/carton|colis|pcb|uvc/.test(k)) setField("nbUnitesCarton", v.replace(/[^\d.]/g, ""));
-    else if (/douani|nc|hs.?code|tarif.?dou|nomencl/.test(k)) setField("hsCode", v);
-  }
-
-  // ── Passe 2 : fallbacks regex sur le texte complet ──────────────
-  // EAN13 ou EAN8 (séquence de 8 ou 13 chiffres isolée)
-  if (!row.barcode) {
-    const ean = text.match(/(?<![0-9])(\d{13}|\d{8})(?![0-9])/);
-    if (ean) setField("barcode", ean[1]);
-  }
-  // Prix avec symbole €
-  if (!row.prixHT) {
-    const price = text.match(/(\d+[,.]?\d*)\s*€/);
-    if (price) setField("prixHT", price[1].replace(",", "."));
-  }
-  // Poids en kg
-  if (!row.poids) {
-    const w = text.match(/(\d+[,.]\d+|\d+)\s*kg/i);
-    if (w) setField("poids", w[1].replace(",", "."));
-  }
-  // Poids en g → converti en kg
-  if (!row.poids) {
-    const wg = text.match(/(\d+)\s*g(?:r?)\b/i);
-    if (wg) setField("poids", String((parseInt(wg[1]) / 1000).toFixed(3)));
-  }
-  // HS code (6-10 chiffres avec points)
-  if (!row.hsCode) {
-    const hs = text.match(/\b(\d{4}\.\d{2}(?:\.\d{2,4})?)\b/);
-    if (hs) setField("hsCode", hs[1]);
-  }
-  // Si aucune ref détectée, prend le premier token alphanum court isolé (< 20 chars)
-  if (!row.ref) {
-    const firstToken = text.match(/\b([A-Z0-9][A-Z0-9\-_\/]{2,18})\b/);
-    if (firstToken) setField("ref", firstToken[1]);
-  }
-
-  return { row, detected };
-}
-
 function autoDetectMapping(headers: string[]): ColMapping {
   const best = (candidates: string[]): string => {
     for (const c of candidates) {
@@ -4825,21 +4755,6 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   const [mapping, setMapping] = useState<ColMapping | null>(null);
   const [showMapping, setShowMapping] = useState(false);
 
-  // ── Mode coller texte ────────────────────────────────────────────
-  const [pasteOpen, setPasteOpen] = useState(false);
-  const [pasteText, setPasteText] = useState("");
-  const [detectedFields, setDetectedFields] = useState<Set<string>>(new Set());
-
-  const handlePasteDetect = () => {
-    if (!pasteText.trim()) { onToast("Colle un texte d'abord"); return; }
-    const { row, detected } = parseProductText(pasteText);
-    const emptyRow: ImportRow = { ref: "", name: "", barcode: "", prixHT: "", prixTTC: "", prixAchat: "", poids: "", hauteur: "", largeur: "", profondeur: "", nbUnitesCarton: "", unite: "", hsCode: "" };
-    setDetectedFields(detected);
-    setForm({ ...emptyRow, ...row });
-    setCurrentIdx(-1); // -1 = mode paste, pas dans la liste
-    setPasteOpen(false);
-  };
-
   // ── Parse Excel ──────────────────────────────────────────────────
   const handleFile = async (file: File) => {
     setFileName(file.name);
@@ -4889,7 +4804,6 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   const openForm = (row: ImportRow, idx: number) => {
     setCurrentIdx(idx);
     setForm({ ...row });
-    setDetectedFields(new Set()); // reset surlignage (mode fichier Excel)
   };
 
   const nextMissing = () => {
@@ -4923,17 +4837,16 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   };
 
   const inp = (label: string, key: keyof ImportRow, type = "text") => {
-    const isDetected = detectedFields.has(key);
     return (
       <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: isDetected ? C.green : C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
-          {label}{isDetected && <span style={{ fontSize: 10, background: C.greenSoft, color: C.green, borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>détecté</span>}
+        <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>
+          {label}
         </div>
         <input
           type={type} value={(form as any)?.[key] || ""}
           onChange={e => setForm(prev => prev ? { ...prev, [key]: e.target.value } : null)}
           onKeyDown={e => e.stopPropagation()}
-          style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${isDetected ? C.greenBorder : C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", background: isDetected ? "#f0fdf4" : C.white, color: C.text, boxSizing: "border-box" as const }}
+          style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, boxSizing: "border-box" as const }}
         />
       </div>
     );
@@ -5088,48 +5001,6 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
             </div>
           </div>
 
-          {/* ── Séparateur ── */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "20px 0" }}>
-            <div style={{ flex: 1, height: 1, background: C.border }} />
-            <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 600 }}>OU</span>
-            <div style={{ flex: 1, height: 1, background: C.border }} />
-          </div>
-
-          {/* ── Mode coller texte ── */}
-          {!pasteOpen ? (
-            <button onClick={() => setPasteOpen(true)}
-              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 20px", border: `1.5px solid ${C.blueBorder}`, borderRadius: 12, background: C.blueSoft, color: C.blue, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
-              Coller un texte fournisseur
-            </button>
-          ) : (
-            <div style={{ border: `1.5px solid ${C.blueBorder}`, borderRadius: 12, background: C.blueSoft, padding: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, marginBottom: 8 }}>
-                📋 Colle la fiche produit (email, PDF, site fournisseur…)
-              </div>
-              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>
-                L'app détecte automatiquement la référence, le nom, le prix, le poids, l'EAN, etc. Tu pourras corriger avant de créer.
-              </div>
-              <textarea
-                value={pasteText}
-                onChange={e => setPasteText(e.target.value)}
-                onKeyDown={e => e.stopPropagation()}
-                placeholder={"Réf : AV7131439\nNom : Crème hydratante 50ml\nPrix HT : 8,90\nPoids : 0.12 kg\nEAN : 3701234567890\n…"}
-                rows={7}
-                style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.blueBorder}`, borderRadius: 8, fontSize: 13, fontFamily: "monospace", resize: "vertical", outline: "none", background: C.white, boxSizing: "border-box" as const }}
-              />
-              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                <button onClick={() => { setPasteOpen(false); setPasteText(""); }}
-                  style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, color: C.textSec, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-                  Annuler
-                </button>
-                <button onClick={handlePasteDetect} disabled={!pasteText.trim()}
-                  style={{ flex: 2, padding: "9px 0", borderRadius: 8, border: "none", background: pasteText.trim() ? C.blue : C.border, color: "#fff", fontSize: 13, fontWeight: 700, cursor: pasteText.trim() ? "pointer" : "default", fontFamily: "inherit" }}>
-                  → Détecter les champs
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       ) : checking ? (
         <div style={{ textAlign: "center" as const, padding: 40, color: C.textMuted }}>
