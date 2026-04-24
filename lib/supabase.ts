@@ -112,17 +112,21 @@ export async function getConsoCacheAge(): Promise<Date | null> {
 
 export async function saveConsoCache(items: WmsConsoCache[]): Promise<void> {
   if (!items.length) return;
+  // DELETE d'abord les mois concernés pour éviter tout conflit ON CONFLICT
+  const months = Array.from(new Set(items.map(i => i.month)));
+  const { error: delError } = await sb.from("wms_conso_cache").delete().in("month", months);
+  if (delError) throw new Error(delError.message);
+  // INSERT par batch de 500
   for (let i = 0; i < items.length; i += 500) {
     const batch = items.slice(i, i + 500);
-    const { error } = await sb.from("wms_conso_cache").upsert(
-      batch.map((item) => ({ ...item, synced_at: new Date().toISOString() })),
-      { onConflict: "odoo_ref,month" }
+    const { error } = await sb.from("wms_conso_cache").insert(
+      batch.map((item) => ({ ...item, synced_at: new Date().toISOString() }))
     );
     if (error) throw new Error(error.message);
   }
   await sb.from("wms_sync_meta").upsert([
     { key: "conso_synced_at", value: new Date().toISOString(), updated_at: new Date().toISOString() },
-    { key: "conso_months_count", value: String(new Set(items.map(i => i.month)).size), updated_at: new Date().toISOString() },
+    { key: "conso_months_count", value: String(months.length), updated_at: new Date().toISOString() },
   ], { onConflict: "key" });
 }
 
