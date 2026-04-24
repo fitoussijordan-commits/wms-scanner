@@ -76,7 +76,7 @@ function parsePackingList(data: any[]): PackingLine[] {
       qty: parseFloat(String(getCellValue(row, ["Quantity", "Qty", "Quantite"]) || "0").replace(",", ".")) || 0,
       price: parseFloat(String(getCellValue(row, ["PriceNet", "Price", "Prix"]) || "0").replace(",", ".")) || 0,
       lotNo: String(getCellValue(row, ["Batch", "Lot", "BatchNo", "LotNo", "NumeroLot"]) || "").trim(),
-      expiryDate: parseExcelDate(getCellValue(row, ["Expiry", "ExpiryDate", "BestBefore", "Expiration", "DateExpiration", "Date"])),
+      expiryDate: parseExcelDate(getCellValue(row, ["ExpiryDate", "Expiry", "BestBefore", "BBD", "MHD", "DateExpiration", "Expiration"])),
     }))
     .filter(l => l.articleNo && l.qty > 0);
 }
