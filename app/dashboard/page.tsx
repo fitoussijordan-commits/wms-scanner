@@ -546,10 +546,13 @@ export default function Dashboard() {
         consoAvgDaily[ref] = (consoByRef[ref] / months) / 30;
       }
 
-      // 3. Match thresholds + calculate days left
+      // 3. Match thresholds — toujours lire depuis Supabase (évite stale closure)
+      const freshByRef: Record<string, number> = await supa.loadThresholds();
+      setThresholdsByRef(freshByRef);
+
       const t: Record<number, number> = {};
       for (const [pid, data] of Object.entries(stockData)) {
-        if (data.ref && thresholdsByRef[data.ref] !== undefined) t[Number(pid)] = thresholdsByRef[data.ref];
+        if (data.ref && freshByRef[data.ref] !== undefined) t[Number(pid)] = freshByRef[data.ref];
       }
       setThresholds(t);
 
@@ -614,7 +617,7 @@ export default function Dashboard() {
       }));
       supa.saveStockCache(cacheItems).catch(() => {});
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [session, thresholdsByRef, watchlist, defaultThreshold]);
+  }, [session, watchlist, defaultThreshold]);
 
   // ── IMPORT CONSO DEPUIS EXPORT ODOO (Tableau croisé dynamique) ──
   const importConsoFromOdoo = useCallback(async (file: File) => {
