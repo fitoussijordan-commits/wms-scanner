@@ -1358,7 +1358,7 @@ export async function setReceptionLots(
   const moveLines = await searchRead(
     session, "stock.move.line",
     [["picking_id", "=", pickingId]],
-    ["id", "product_id", "reserved_uomqty", "qty_done", "lot_id", "move_id", "product_uom_id"],
+    ["id", "product_id", "qty_done", "lot_id", "move_id", "product_uom_id"],
     0
   );
 
