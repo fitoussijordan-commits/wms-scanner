@@ -404,6 +404,9 @@ export default function Dashboard() {
   const [avgMonthlyByRef, setAvgMonthlyByRef] = useState<Record<string, number>>({});
   const [watchlist, setWatchlist] = useState<Set<string>>(new Set());
   const [watchlistMode, setWatchlistMode] = useState(false);
+  const [defaultThreshold, setDefaultThreshold] = useState<number>(() => {
+    try { const v = localStorage.getItem("wms_default_threshold"); return v ? Number(v) : 1; } catch { return 1; }
+  });
   const [consoSearch, setConsoSearch] = useState("");
 
   // Excel-like column filter states
@@ -592,12 +595,14 @@ export default function Dashboard() {
         // - Sans commande : alerte si qty < seuil OU couverture < 45j
         // - Avec commande : alerte UNIQUEMENT si la couverture effective (stock + réception) reste < 45j
         //   → si la commande compense suffisamment, le produit n'est plus à risque même si qty < seuil
-        const belowThreshold = thresh !== undefined && data.qty <= thresh;
+        // Seuil effectif : seuil défini OU seuil par défaut global (tous les articles ont un seuil)
+        const effectiveThresh = thresh !== undefined ? thresh : defaultThreshold;
+        const belowThreshold = data.qty <= effectiveThresh;
         const lowDays = avgDaily > 0 && daysLeft < 45;
         const coveredByOrder = incomingQty !== undefined && !lowDays; // commande en cours ET couverture ok
 
         if ((belowThreshold || lowDays) && !coveredByOrder) {
-          alertList.push({ productId: pid, ref: data.ref, name: data.name, qty: data.qty, threshold: thresh || 0, consoAvg: Math.round(consoAvg), daysLeft, rawDaysLeft, incomingQty, incomingDate });
+          alertList.push({ productId: pid, ref: data.ref, name: data.name, qty: data.qty, threshold: effectiveThresh, consoAvg: Math.round(consoAvg), daysLeft, rawDaysLeft, incomingQty, incomingDate });
         }
       }
       alertList.sort((a, b) => a.daysLeft - b.daysLeft);
@@ -609,7 +614,7 @@ export default function Dashboard() {
       }));
       supa.saveStockCache(cacheItems).catch(() => {});
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [session, thresholdsByRef, watchlist]);
+  }, [session, thresholdsByRef, watchlist, defaultThreshold]);
 
   // ── IMPORT CONSO DEPUIS EXPORT ODOO (Tableau croisé dynamique) ──
   const importConsoFromOdoo = useCallback(async (file: File) => {
@@ -685,6 +690,16 @@ export default function Dashboard() {
           newThresholdsByRef[ref] = avgMonthly;
         }
       }
+      // Ajouter seuil = 1 pour tous les articles en stock sans historique conso
+      let nbNoConso = 0;
+      for (const data of Object.values(stockMap)) {
+        if (!data.ref) continue;
+        if (!newThresholdsByRef[data.ref]) {
+          thresholdItems.push({ odoo_ref: data.ref, threshold: 1, product_name: data.name });
+          newThresholdsByRef[data.ref] = 1;
+          nbNoConso++;
+        }
+      }
       if (thresholdItems.length > 0) {
         await supa.saveThresholdsBulk(thresholdItems);
         setThresholdsByRef(newThresholdsByRef);
@@ -695,14 +710,14 @@ export default function Dashboard() {
       setConsoSyncedAt(new Date());
       const nbProducts = new Set(items.map(i => i.odoo_ref)).size;
       const nbMonths = new Set(items.map(i => i.month)).size;
-      alert(`✓ Import réussi !\n${nbProducts} produits · ${nbMonths} mois importés.\n${thresholdItems.length} seuils calculés (moy. 12 derniers mois).`);
+      alert(`✓ Import réussi !\n${nbProducts} produits · ${nbMonths} mois importés.\n${thresholdItems.length - nbNoConso} seuils calculés (moy. 12 derniers mois).\n${nbNoConso} articles sans conso → seuil = 1.`);
       loadAlerts();
     } catch (err: any) {
       alert("Erreur import conso : " + err.message);
     } finally {
       setConsoImporting(false);
     }
-  }, [loadAlerts]);
+  }, [loadAlerts, stockMap]);
 
   // ── IMPORT ORDER CONFIRMATION FOURNISSEUR ──
   const importOrderConfirmation = useCallback(async (file: File) => {
@@ -1770,6 +1785,20 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
                     📋 Copier
                   </button>
                 </div>
+              </div>
+              {/* Seuil par défaut global */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, padding: "10px 14px", background: "var(--bg-surface)", borderRadius: 10, border: "1px solid var(--border)" }}>
+                <span style={{ fontSize: 13, color: "var(--text-sec)", flex: 1 }}>
+                  Seuil par défaut (articles sans seuil défini)
+                </span>
+                <input type="number" min={0} value={defaultThreshold}
+                  onChange={e => {
+                    const v = Math.max(0, Number(e.target.value));
+                    setDefaultThreshold(v);
+                    try { localStorage.setItem("wms_default_threshold", String(v)); } catch {}
+                  }}
+                  style={{ width: 70, padding: "6px 10px", borderRadius: 8, border: "1.5px solid var(--border)", fontSize: 14, fontWeight: 700, textAlign: "center", background: "var(--bg)", color: "var(--text)" }}
+                />
               </div>
               <input className="wms-input" value={stockSearch} onChange={(e) => setStockSearch(e.target.value)} placeholder="Filtrer par référence ou nom..." style={{ marginBottom: 16 }} />
               <div className="wms-scrollbar" style={{ maxHeight: 420, overflowY: "auto" }}>
