@@ -524,30 +524,21 @@ export default function Dashboard() {
       setStockMap(stockData);
       setStockSyncedAt(new Date());
 
-      // 2. Conso avg par ref depuis Supabase (tous les mois dispo / nb mois réels)
-      // loadAvgMonthly divise par le nb de mois avec données → cohérent avec l'onglet Consommation
-      const avgMonthly: Record<string, number> = await supa.loadAvgMonthly();
-      setAvgMonthlyByRef(avgMonthly);
+      // 2. Seuils figés depuis Supabase wms_thresholds (mis à jour uniquement via "Màj conso Odoo")
+      const frozenThresh: Record<string, number> = await supa.loadThresholds();
+      setThresholdsByRef(frozenThresh);
 
-      // consoAvgDaily pour calcul jours restants (utilisé plus bas)
+      // consoAvgDaily = seuil / 30 (seuil = moy mensuelle)
       const consoAvgDaily: Record<string, number> = {};
-      for (const [ref, avg] of Object.entries(avgMonthly)) {
+      for (const [ref, avg] of Object.entries(frozenThresh)) {
         consoAvgDaily[ref] = avg / 30;
       }
 
-      // 3. Thresholds : manuels (Supabase wms_thresholds) prioritaires, sinon avg conso
-      const manualThresh: Record<string, number> = await supa.loadThresholds();
-      setThresholdsByRef(manualThresh);
-
+      // t[pid] = seuil pour ce produit (figé ou défaut)
       const t: Record<number, number> = {};
       for (const [pid, data] of Object.entries(stockData)) {
         if (!data.ref) continue;
-        const thresh = manualThresh[data.ref] !== undefined
-          ? manualThresh[data.ref]
-          : avgMonthly[data.ref] !== undefined
-            ? Math.max(1, avgMonthly[data.ref])
-            : defaultThreshold;
-        t[Number(pid)] = thresh;
+        t[Number(pid)] = frozenThresh[data.ref] !== undefined ? frozenThresh[data.ref] : defaultThreshold;
       }
       setThresholds(t);
 
@@ -939,11 +930,9 @@ export default function Dashboard() {
           newThresholdsByRef[data.ref] = 1;
         }
         if (thresholdItems.length > 0) {
-          await supa.saveThresholdsBulk(thresholdItems).catch(() => {});
+          await supa.saveThresholdsBulk(thresholdItems); // erreur visible si ça échoue
           setThresholdsByRef(newThresholdsByRef);
         }
-        const avg = await supa.loadAvgMonthly().catch(() => ({} as Record<string, number>));
-        setAvgMonthlyByRef(avg);
       }
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, [session, consoSearch, stockMap]);
