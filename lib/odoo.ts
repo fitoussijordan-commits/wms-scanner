@@ -1192,3 +1192,212 @@ export async function addPackageAndSendToShipper(
     attachments: newAttachments.length > 0 ? newAttachments : attachmentsAfter,
   };
 }
+
+// ============================================================
+// IMPORT FOURNISSEUR WALA — Commande + Lots + Réception
+// ============================================================
+
+/** Recherche les produits Odoo par code article WALA (x_studio_code_produit_fournisseur) */
+export async function matchWalaArticles(
+  session: OdooSession,
+  articleCodes: string[]
+): Promise<Record<string, { templateId: number; productId: number; name: string; defaultCode: string; uomId: number; uomName: string }>> {
+  if (!articleCodes.length) return {};
+  const templates = await searchRead(
+    session, "product.template",
+    [["x_studio_code_produit_fournisseur", "in", articleCodes]],
+    ["id", "name", "default_code", "x_studio_code_produit_fournisseur", "product_variant_ids", "uom_id"],
+    0
+  );
+  const map: Record<string, any> = {};
+  for (const t of templates) {
+    const code = t.x_studio_code_produit_fournisseur;
+    const productId = Array.isArray(t.product_variant_ids) ? t.product_variant_ids[0] : null;
+    if (code && productId) {
+      map[String(code).trim()] = {
+        templateId: t.id,
+        productId,
+        name: t.name,
+        defaultCode: t.default_code || "",
+        uomId: Array.isArray(t.uom_id) ? t.uom_id[0] : t.uom_id,
+        uomName: Array.isArray(t.uom_id) ? t.uom_id[1] : "",
+      };
+    }
+  }
+  return map;
+}
+
+/** Récupère l'ID Odoo du fournisseur WALA */
+export async function getWalaPartnerId(session: OdooSession): Promise<number> {
+  const partners = await searchRead(
+    session, "res.partner",
+    [["name", "=", "WALA Heilmittel GmbH"]],
+    ["id", "name"], 1
+  );
+  if (!partners.length) throw new Error("Fournisseur 'WALA Heilmittel GmbH' introuvable dans Odoo");
+  return partners[0].id;
+}
+
+export interface WalaPOLine {
+  productId: number;
+  qty: number;
+  price: number;
+  name: string;
+  uomId: number;
+}
+
+export interface WalaPOResult {
+  poId: number;
+  poName: string;
+  pickingId: number;
+  pickingName: string;
+  locationId: number;
+  locationDestId: number;
+}
+
+/** Crée et confirme un bon de commande fournisseur, retourne le BL créé automatiquement */
+export async function createAndConfirmPO(
+  session: OdooSession,
+  partnerId: number,
+  lines: WalaPOLine[]
+): Promise<WalaPOResult> {
+  const today = new Date().toISOString().replace("T", " ").split(".")[0];
+
+  // Grouper les lignes par produit (cumul des qté si même produit)
+  const grouped: Record<number, WalaPOLine> = {};
+  for (const l of lines) {
+    if (grouped[l.productId]) {
+      grouped[l.productId].qty += l.qty;
+    } else {
+      grouped[l.productId] = { ...l };
+    }
+  }
+  const groupedLines = Object.values(grouped);
+
+  const poId = await create(session, "purchase.order", {
+    partner_id: partnerId,
+    order_line: groupedLines.map(l => [0, 0, {
+      product_id: l.productId,
+      product_qty: l.qty,
+      price_unit: l.price || 0,
+      name: l.name,
+      date_planned: today,
+      product_uom: l.uomId,
+    }]),
+  });
+
+  const poRecords = await searchRead(session, "purchase.order", [["id", "=", poId]], ["id", "name"], 1);
+  const poName = poRecords[0]?.name || `PO-${poId}`;
+
+  // Confirmer le bon de commande
+  await callMethod(session, "purchase.order", "button_confirm", [[poId]]);
+
+  // Récupérer la réception générée
+  const pickings = await searchRead(
+    session, "stock.picking",
+    [["purchase_id", "=", poId]],
+    ["id", "name", "location_id", "location_dest_id"],
+    5
+  );
+  if (!pickings.length) throw new Error("Aucune réception trouvée après confirmation du bon de commande");
+
+  const picking = pickings[0];
+  return {
+    poId,
+    poName,
+    pickingId: picking.id,
+    pickingName: picking.name,
+    locationId: Array.isArray(picking.location_id) ? picking.location_id[0] : picking.location_id,
+    locationDestId: Array.isArray(picking.location_dest_id) ? picking.location_dest_id[0] : picking.location_dest_id,
+  };
+}
+
+/** Vérifie si un lot existe, le crée sinon. Retourne {id, existed} */
+export async function getOrCreateLot(
+  session: OdooSession,
+  productId: number,
+  lotName: string,
+  expiryDate: string
+): Promise<{ id: number; existed: boolean }> {
+  const existing = await searchRead(
+    session, "stock.lot",
+    [["name", "=", lotName], ["product_id", "=", productId]],
+    ["id", "name"], 1
+  );
+  if (existing.length) return { id: existing[0].id, existed: true };
+
+  const values: any = { name: lotName, product_id: productId, company_id: 1 };
+  if (expiryDate) values.expiration_date = expiryDate + " 00:00:00";
+
+  const id = await create(session, "stock.lot", values);
+  return { id, existed: false };
+}
+
+export interface ReceptionLotLine {
+  productId: number;
+  lotId: number;
+  qty: number;
+  uomId: number;
+}
+
+/** Affecte lots et quantités aux lignes de mouvement de la réception */
+export async function setReceptionLots(
+  session: OdooSession,
+  pickingId: number,
+  locationId: number,
+  locationDestId: number,
+  lines: ReceptionLotLine[]
+): Promise<void> {
+  // Récupérer les mouvements et lignes de mouvement existants
+  const moves = await searchRead(
+    session, "stock.move",
+    [["picking_id", "=", pickingId]],
+    ["id", "product_id", "product_qty", "product_uom"],
+    0
+  );
+  const moveLines = await searchRead(
+    session, "stock.move.line",
+    [["picking_id", "=", pickingId]],
+    ["id", "product_id", "product_uom_qty", "qty_done", "lot_id", "move_id", "product_uom_id"],
+    0
+  );
+
+  // Pool de move lines disponibles par produit
+  const mlPool: Record<number, any[]> = {};
+  for (const ml of moveLines) {
+    const pid = Array.isArray(ml.product_id) ? ml.product_id[0] : ml.product_id;
+    if (!mlPool[pid]) mlPool[pid] = [];
+    mlPool[pid].push(ml);
+  }
+
+  for (const line of lines) {
+    const pool = mlPool[line.productId];
+    const ml = pool?.shift();
+
+    if (ml) {
+      await write(session, "stock.move.line", [ml.id], {
+        qty_done: line.qty,
+        lot_id: line.lotId,
+      });
+    } else {
+      // Créer une nouvelle ligne de mouvement (produit avec plusieurs lots)
+      const move = moves.find((m: any) => {
+        const pid = Array.isArray(m.product_id) ? m.product_id[0] : m.product_id;
+        return pid === line.productId;
+      });
+      if (!move) continue; // Skip si pas de mouvement trouvé
+      await create(session, "stock.move.line", {
+        picking_id: pickingId,
+        move_id: move.id,
+        product_id: line.productId,
+        product_uom_id: line.uomId,
+        qty_done: line.qty,
+        lot_id: line.lotId,
+        location_id: locationId,
+        location_dest_id: locationDestId,
+      });
+    }
+  }
+}
+
+// validatePicking est déjà défini plus haut dans ce fichier (ligne ~710) — on réutilise l'existant.
