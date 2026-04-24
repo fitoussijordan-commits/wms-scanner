@@ -900,30 +900,34 @@ export default function Dashboard() {
       rows.sort((a, b) => b.total - a.total);
       setConso(rows);
 
-      // Sauvegarde cache Supabase
-      const cacheItems: supa.WmsConsoCache[] = [];
+      // Sauvegarde cache Supabase — dédupliquer par (odoo_ref, month) avant upsert
+      const cacheMap: Record<string, supa.WmsConsoCache> = {};
       for (const row of rows) {
+        if (!row.ref) continue;
         for (const [month, qty] of Object.entries(row.months)) {
-          cacheItems.push({ odoo_ref: row.ref, product_name: row.name, month, qty });
+          const key = `${row.ref}__${month}`;
+          if (!cacheMap[key]) cacheMap[key] = { odoo_ref: row.ref, product_name: row.name, month, qty: 0 };
+          cacheMap[key].qty += qty;
         }
       }
-      await supa.saveConsoCache(cacheItems);
+      await supa.saveConsoCache(Object.values(cacheMap));
       setConsoSyncedAt(new Date());
 
-      // Fige les seuils : total/12 par produit
-      const thresholdItems: supa.WmsThreshold[] = [];
+      // Fige les seuils : total/12 par produit — dédupliquer par odoo_ref
       const newThreshByRef: Record<string, number> = {};
       for (const row of rows) {
-        const avg = Math.max(1, Math.round(row.total / consoMonths));
-        thresholdItems.push({ odoo_ref: row.ref, threshold: avg, product_name: row.name });
-        newThreshByRef[row.ref] = avg;
+        if (!row.ref) continue;
+        const existing = newThreshByRef[row.ref] || 0;
+        newThreshByRef[row.ref] = Math.max(1, Math.round((existing * consoMonths + row.total) / consoMonths));
       }
       // Seuil = 1 pour articles en stock sans historique conso
       for (const data of Object.values(stockMap)) {
         if (!data.ref || newThreshByRef[data.ref]) continue;
-        thresholdItems.push({ odoo_ref: data.ref, threshold: 1, product_name: data.name });
         newThreshByRef[data.ref] = 1;
       }
+      const thresholdItems: supa.WmsThreshold[] = Object.entries(newThreshByRef).map(([ref, thresh]) => ({
+        odoo_ref: ref, threshold: thresh, product_name: rows.find(r => r.ref === ref)?.name || stockMap[Object.keys(stockMap).find(k => stockMap[Number(k)]?.ref === ref) as any]?.name || ref,
+      }));
       if (thresholdItems.length > 0) {
         await supa.saveThresholdsBulk(thresholdItems);
         setThresholdsByRef(newThreshByRef);
