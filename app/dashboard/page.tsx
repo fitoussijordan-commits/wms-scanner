@@ -524,29 +524,18 @@ export default function Dashboard() {
       setStockMap(stockData);
       setStockSyncedAt(new Date());
 
-      // 2. Load stored conso from Supabase (12 mois)
-      const now = new Date();
-      const consoMonthsList: string[] = [];
-      for (let i = 1; i <= 12; i++) {
-        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        consoMonthsList.push(d.toISOString().substring(0, 7));
-      }
-      const consoCache = await supa.loadConsoCache(consoMonthsList);
-      const consoTotalByRef: Record<string, number> = {};
-      const consoAvgDailyRaw: Record<string, number> = {};
-      for (const cc of consoCache) {
-        consoTotalByRef[cc.odoo_ref] = (consoTotalByRef[cc.odoo_ref] || 0) + cc.qty;
-      }
-      // Seuil auto = total 12 mois / 12 (même calcul que onglet Consommation)
-      const autoThreshByRef: Record<string, number> = {};
-      for (const [ref, total] of Object.entries(consoTotalByRef)) {
-        const avg = Math.max(1, Math.round(total / 12));
-        autoThreshByRef[ref] = avg;
-        consoAvgDailyRaw[ref] = avg / 30;
-      }
-      const consoAvgDaily = consoAvgDailyRaw;
+      // 2. Conso avg par ref depuis Supabase (tous les mois dispo / nb mois réels)
+      // loadAvgMonthly divise par le nb de mois avec données → cohérent avec l'onglet Consommation
+      const avgMonthly: Record<string, number> = await supa.loadAvgMonthly();
+      setAvgMonthlyByRef(avgMonthly);
 
-      // 3. Thresholds : manuels (Supabase) prioritaires, sinon seuil auto depuis conso
+      // consoAvgDaily pour calcul jours restants (utilisé plus bas)
+      const consoAvgDaily: Record<string, number> = {};
+      for (const [ref, avg] of Object.entries(avgMonthly)) {
+        consoAvgDaily[ref] = avg / 30;
+      }
+
+      // 3. Thresholds : manuels (Supabase wms_thresholds) prioritaires, sinon avg conso
       const manualThresh: Record<string, number> = await supa.loadThresholds();
       setThresholdsByRef(manualThresh);
 
@@ -555,8 +544,8 @@ export default function Dashboard() {
         if (!data.ref) continue;
         const thresh = manualThresh[data.ref] !== undefined
           ? manualThresh[data.ref]
-          : autoThreshByRef[data.ref] !== undefined
-            ? autoThreshByRef[data.ref]
+          : avgMonthly[data.ref] !== undefined
+            ? Math.max(1, avgMonthly[data.ref])
             : defaultThreshold;
         t[Number(pid)] = thresh;
       }
