@@ -6394,7 +6394,8 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
       }
 
       // ── 2. Charge les quants pour tous les produits trouvés en parallèle ──
-      const productIds = [...new Set([...refToProduct.values()].map(p => p.id))];
+      const allFoundProducts: any[] = []; refToProduct.forEach(p => allFoundProducts.push(p));
+      const seenIds = new Set<number>(); const productIds: number[] = allFoundProducts.map(p => p.id).filter(id => { if (seenIds.has(id)) return false; seenIds.add(id); return true; });
       const allQuants = productIds.length
         ? await odoo.searchRead(session, "stock.quant",
             [["product_id", "in", productIds], ["location_id.usage", "=", "internal"]],
