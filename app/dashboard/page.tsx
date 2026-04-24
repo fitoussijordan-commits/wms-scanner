@@ -829,14 +829,33 @@ export default function Dashboard() {
     }
   }, [session, loadAlerts]);
 
-  const loadConso = useCallback(async (forceFullSync = false) => {
+  // ── Charge conso depuis cache Supabase (instantané, pas d'appel Odoo) ──
+  const loadConsoFromCache = useCallback(async () => {
+    if (!session) return; setLoading(true); setError("");
+    try {
+      const months12 = monthsBack(consoMonths);
+      const cached = await supa.loadConsoCache(months12);
+      if (!cached.length) { setConso([]); setLoading(false); return; }
+
+      const byRef: Record<string, { name: string; months: Record<string, number> }> = {};
+      for (const cc of cached) {
+        if (!byRef[cc.odoo_ref]) byRef[cc.odoo_ref] = { name: cc.product_name, months: {} };
+        byRef[cc.odoo_ref].months[cc.month] = (byRef[cc.odoo_ref].months[cc.month] || 0) + cc.qty;
+      }
+      const rows: ConsoRow[] = Object.entries(byRef).map(([ref, v]) => {
+        const total = Object.values(v.months).reduce((s, n) => s + n, 0);
+        return { ref, name: v.name, months: v.months, total, avg: Math.round(total / consoMonths) };
+      });
+      rows.sort((a, b) => b.total - a.total);
+      setConso(rows);
+    } catch (e: any) { setError(e.message); } finally { setLoading(false); }
+  }, [session, consoMonths]);
+
+  // ── Charge conso depuis Odoo + sauvegarde cache + fige les seuils ──
+  const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
     try {
       const months = monthsBack(consoMonths);
-      const startDate = months[0] + "-01 00:00:00";
-      const endDate = new Date().toISOString().split("T")[0] + " 23:59:59";
-
-      // Get location IDs (fiable vs filtres dotted ignorés par Odoo XML-RPC)
       const [custLocs, intLocs] = await Promise.all([
         odoo.searchRead(session, "stock.location", [["usage", "=", "customer"]], ["id"], 100),
         odoo.searchRead(session, "stock.location", [["usage", "=", "internal"]], ["id"], 500),
@@ -844,40 +863,19 @@ export default function Dashboard() {
       const custLocIds = custLocs.map((l: any) => l.id);
       const intLocIds = intLocs.map((l: any) => l.id);
 
-
-      // forceFullSync (depuis Alertes) → ignorer le filtre de recherche
-      const activeSearch = forceFullSync ? "" : consoSearch.trim();
-
-      let searchedProdIds: number[] = [];
-      if (activeSearch) {
-        const prods = await odoo.searchRead(session, "product.product", [
-          "|",
-          ["default_code", "=ilike", "%" + activeSearch + "%"],
-          ["name", "=ilike", "%" + activeSearch + "%"],
-        ], ["id"], 50);
-        searchedProdIds = prods.map((p: any) => p.id);
-        if (!searchedProdIds.length) { setConso([]); setLoading(false); return; }
-      }
-
-      // Use stock.move.line month by month to avoid 10000 limit
       let allLines: any[] = [];
       for (const m of months) {
         const mStart = m + "-01 00:00:00";
         const [y, mo] = m.split("-").map(Number);
         const lastDay = new Date(y, mo, 0).getDate();
         const mEnd = m + "-" + String(lastDay).padStart(2, "0") + " 23:59:59";
-        const monthDomain: any[] = [
+        const page = await odoo.searchRead(session, "stock.move.line", [
           ["state", "=", "done"],
           ["location_id", "in", intLocIds],
           ["location_dest_id", "in", custLocIds],
           ["date", ">=", mStart],
           ["date", "<=", mEnd],
-        ];
-        if (activeSearch) {
-          monthDomain.push(["product_id", "in", searchedProdIds]);
-        }
-        const page = await odoo.searchRead(session, "stock.move.line", monthDomain,
-          ["product_id", "qty_done", "date"], 10000);
+        ], ["product_id", "qty_done", "date"], 10000);
         allLines = allLines.concat(page);
       }
 
@@ -889,53 +887,49 @@ export default function Dashboard() {
         if (!byProd[pid]) byProd[pid] = { name: ml.product_id[1], ref: "", months: {} };
         byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (ml.qty_done || 0);
       }
-
       const prodIds = Object.keys(byProd).map(Number);
       if (prodIds.length) {
         const prods = await odoo.searchRead(session, "product.product", [["id", "in", prodIds]], ["id", "default_code"], 2000);
         for (const p of prods) if (byProd[p.id]) byProd[p.id].ref = p.default_code || "";
       }
 
-      const rows: ConsoRow[] = Object.entries(byProd).map(([, v]) => ({
-        ref: v.ref, name: v.name, months: v.months,
-        total: Object.values(v.months).reduce((s, n) => s + n, 0), avg: 0,
-      }));
+      const rows: ConsoRow[] = Object.entries(byProd).map(([, v]) => {
+        const total = Object.values(v.months).reduce((s, n) => s + n, 0);
+        return { ref: v.ref, name: v.name, months: v.months, total, avg: Math.round(total / consoMonths) };
+      });
       rows.sort((a, b) => b.total - a.total);
-      rows.forEach(r => { r.avg = consoMonths > 0 ? Math.round(r.total / consoMonths) : 0; });
       setConso(rows);
 
-      // Save to Supabase cache
+      // Sauvegarde cache Supabase
       const cacheItems: supa.WmsConsoCache[] = [];
       for (const row of rows) {
         for (const [month, qty] of Object.entries(row.months)) {
           cacheItems.push({ odoo_ref: row.ref, product_name: row.name, month, qty });
         }
       }
-      await supa.saveConsoCache(cacheItems).catch(() => {});
+      await supa.saveConsoCache(cacheItems);
       setConsoSyncedAt(new Date());
 
-      // Si chargement complet (pas de filtre, ou forcé depuis Alertes) → recalcul automatique des seuils
-      if (!activeSearch) {
-        const thresholdItems: supa.WmsThreshold[] = [];
-        const newThresholdsByRef: Record<string, number> = {};
-        for (const row of rows) {
-          const avgMonthly = Math.max(1, Math.round(row.total / consoMonths));
-          thresholdItems.push({ odoo_ref: row.ref, threshold: avgMonthly, product_name: row.name });
-          newThresholdsByRef[row.ref] = avgMonthly;
-        }
-        // Seuil = 1 pour les articles en stock sans conso
-        for (const data of Object.values(stockMap)) {
-          if (!data.ref || newThresholdsByRef[data.ref]) continue;
-          thresholdItems.push({ odoo_ref: data.ref, threshold: 1, product_name: data.name });
-          newThresholdsByRef[data.ref] = 1;
-        }
-        if (thresholdItems.length > 0) {
-          await supa.saveThresholdsBulk(thresholdItems); // erreur visible si ça échoue
-          setThresholdsByRef(newThresholdsByRef);
-        }
+      // Fige les seuils : total/12 par produit
+      const thresholdItems: supa.WmsThreshold[] = [];
+      const newThreshByRef: Record<string, number> = {};
+      for (const row of rows) {
+        const avg = Math.max(1, Math.round(row.total / consoMonths));
+        thresholdItems.push({ odoo_ref: row.ref, threshold: avg, product_name: row.name });
+        newThreshByRef[row.ref] = avg;
+      }
+      // Seuil = 1 pour articles en stock sans historique conso
+      for (const data of Object.values(stockMap)) {
+        if (!data.ref || newThreshByRef[data.ref]) continue;
+        thresholdItems.push({ odoo_ref: data.ref, threshold: 1, product_name: data.name });
+        newThreshByRef[data.ref] = 1;
+      }
+      if (thresholdItems.length > 0) {
+        await supa.saveThresholdsBulk(thresholdItems);
+        setThresholdsByRef(newThreshByRef);
       }
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [session, consoSearch, stockMap]);
+  }, [session, consoMonths, stockMap]);
 
 
   const loadDeliveries = useCallback(async () => {
@@ -1237,7 +1231,7 @@ export default function Dashboard() {
     a.click(); URL.revokeObjectURL(url);
   }, [libreRows, libreCols]);
 
-  useEffect(() => { if (!session) return; if (tab === "alerts") { loadAlerts(); } if (tab === "conso") loadConso(); if (tab === "deliveries") loadDeliveries(); }, [tab, session]);
+  useEffect(() => { if (!session) return; if (tab === "alerts") { loadAlerts(); } if (tab === "conso") loadConsoFromCache(); if (tab === "deliveries") loadDeliveries(); }, [tab, session]);
   // Re-run loadAlerts quand la watchlist arrive depuis Supabase (évite le flash "tout le catalogue")
   useEffect(() => { if (!session || tab !== "alerts") return; loadAlerts(); }, [watchlist]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1268,10 +1262,13 @@ export default function Dashboard() {
   }, [deliveries, delColFilters, delColSort]);
 
   const sortedConso = useMemo(() => {
-    let r = [...conso];
+    const search = consoSearch.trim().toLowerCase();
+    let r = search
+      ? conso.filter(row => row.ref.toLowerCase().includes(search) || row.name.toLowerCase().includes(search))
+      : [...conso];
     if (consoColSort.dir) { const d = consoColSort.dir === "asc" ? 1 : -1; const c = consoColSort.col; r.sort((a, b) => c === "ref" ? d * (a.ref || "").localeCompare(b.ref || "") : c === "name" ? d * a.name.localeCompare(b.name) : c === "avg" ? d * (a.avg - b.avg) : c === "total" ? d * (a.total - b.total) : d * ((a.months[c] || 0) - (b.months[c] || 0))); }
     return r;
-  }, [conso, consoColSort]);
+  }, [conso, consoColSort, consoSearch]);
 
   // ── Suivi stock : solde cumulatif chronologique ──
   const stockRunningBalance = useMemo(() => {
@@ -1435,7 +1432,7 @@ export default function Dashboard() {
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button className="wms-btn" style={{ background: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-soft)" : "var(--accent-soft)", color: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success)" : "var(--accent)", border: `1px solid ${consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-border)" : "var(--accent-border)"}` }}
-                  onClick={async () => { await loadConso(true); loadAlerts(); }} disabled={loading}>
+                  onClick={async () => { await loadConso(); loadAlerts(); }} disabled={loading}>
                   {loading ? <Spinner /> : I.upload} {consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "Màj conso Odoo" : "Import conso Odoo"}
                 </button>
                 <label className="wms-btn" style={{ background: pendingOrders.length > 0 ? "rgba(37,99,235,.12)" : "var(--bg-surface)", color: pendingOrders.length > 0 ? "var(--accent)" : "var(--text-secondary)", border: `1px solid ${pendingOrders.length > 0 ? "var(--accent-border)" : "var(--border)"}`, cursor: "pointer" }}>
@@ -1883,7 +1880,7 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
                 )}
               </div>
             </div>
-            <input className="wms-input" value={consoSearch} onChange={(e) => setConsoSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && loadConso()} placeholder="Référence ou nom produit (Entrée pour chercher, vide = tout)..." style={{ marginBottom: 16 }} />
+            <input className="wms-input" value={consoSearch} onChange={(e) => setConsoSearch(e.target.value)} placeholder="Filtrer par référence ou nom..." style={{ marginBottom: 16 }} />
             {conso.length > 0 && (
               <div className="wms-card"><div className="wms-scrollbar" style={{ overflowX: "auto" }}>
                 <table className="wms-table">
