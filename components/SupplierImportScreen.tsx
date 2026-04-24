@@ -235,12 +235,7 @@ export default function SupplierImportScreen({
       // 5. Affecter lots + qté à la réception
       addLog("Affectation des lots et quantités à la réception…", "running");
       await odoo.setReceptionLots(session, poResult.pickingId, poResult.locationId, poResult.locationDestId, receptionLines);
-      updateLastLog("Lots et quantités affectés", "ok");
-
-      // 6. Valider la réception
-      addLog("Validation de la réception…", "running");
-      await odoo.validatePicking(session, poResult.pickingId);
-      updateLastLog("Réception validée ✓", "ok");
+      updateLastLog("Lots et quantités affectés — réception prête à valider dans Odoo", "ok");
 
       setImportResult({
         poName: poResult.poName,
@@ -455,7 +450,7 @@ export default function SupplierImportScreen({
             <div style={{ ...S.card, background: "#f0fdf4", border: "1px solid #86efac", textAlign: "center" }}>
               <div style={{ fontSize: 48, marginBottom: 8 }}>🎉</div>
               <div style={{ fontWeight: 700, fontSize: 18, color: "#15803d", marginBottom: 4 }}>Import réussi !</div>
-              <div style={{ fontSize: 13, color: "#16a34a" }}>Tout a été créé dans Odoo automatiquement</div>
+              <div style={{ fontSize: 13, color: "#16a34a" }}>BDC créé · Lots affectés · À toi de valider la réception dans Odoo</div>
             </div>
 
             <div style={S.card}>
