@@ -1344,6 +1344,7 @@ export async function getOrCreateLot(
 export interface ReceptionLotLine {
   productId: number;
   lotId: number;
+  lotName: string;
   qty: number;
   uomId: number;
 }
@@ -1383,9 +1384,10 @@ export async function setReceptionLots(
     const ml = pool?.shift();
 
     if (ml) {
-      // On affecte uniquement le lot — pas qty_done pour éviter la validation automatique
+      // lot_id (many2one) + lot_name (char) pour forcer l'affectation dans Odoo
       await write(session, "stock.move.line", [ml.id], {
         lot_id: line.lotId,
+        lot_name: line.lotName,
       });
     } else {
       // Créer une nouvelle ligne de mouvement (produit avec plusieurs lots)
@@ -1400,6 +1402,7 @@ export async function setReceptionLots(
         product_id: line.productId,
         product_uom_id: line.uomId,
         lot_id: line.lotId,
+        lot_name: line.lotName,
         location_id: locationId,
         location_dest_id: locationDestId,
       });

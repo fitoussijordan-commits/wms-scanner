@@ -226,7 +226,7 @@ export default function SupplierImportScreen({
         } else {
           lotsCreated++;
         }
-        receptionLines.push({ productId: line.productId, lotId, qty: line.qty, uomId: line.uomId });
+        receptionLines.push({ productId: line.productId, lotId, lotName: line.lotNo, qty: line.qty, uomId: line.uomId });
       }
 
       if (lotsDuplicate.length > 0) {
