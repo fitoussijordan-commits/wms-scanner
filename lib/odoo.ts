@@ -1246,6 +1246,10 @@ export interface WalaPOLine {
   uomId: number;
 }
 
+export interface WalaPOOptions {
+  partnerRef?: string; // Référence fournisseur (Invoice No.)
+}
+
 export interface WalaPOResult {
   poId: number;
   poName: string;
@@ -1259,7 +1263,8 @@ export interface WalaPOResult {
 export async function createAndConfirmPO(
   session: OdooSession,
   partnerId: number,
-  lines: WalaPOLine[]
+  lines: WalaPOLine[],
+  options: WalaPOOptions = {}
 ): Promise<WalaPOResult> {
   const today = new Date().toISOString().replace("T", " ").split(".")[0];
 
@@ -1274,7 +1279,7 @@ export async function createAndConfirmPO(
   }
   const groupedLines = Object.values(grouped);
 
-  const poId = await create(session, "purchase.order", {
+  const poValues: any = {
     partner_id: partnerId,
     order_line: groupedLines.map(l => [0, 0, {
       product_id: l.productId,
@@ -1284,7 +1289,10 @@ export async function createAndConfirmPO(
       date_planned: today,
       product_uom: l.uomId,
     }]),
-  });
+  };
+  if (options.partnerRef) poValues.partner_ref = options.partnerRef;
+
+  const poId = await create(session, "purchase.order", poValues);
 
   const poRecords = await searchRead(session, "purchase.order", [["id", "=", poId]], ["id", "name"], 1);
   const poName = poRecords[0]?.name || `PO-${poId}`;

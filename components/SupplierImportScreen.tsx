@@ -12,6 +12,7 @@ interface PackingLine {
   price: number;
   lotNo: string;
   expiryDate: string; // YYYY-MM-DD
+  invoiceNo: string;
 }
 
 interface MatchedLine extends PackingLine {
@@ -77,6 +78,7 @@ function parsePackingList(data: any[]): PackingLine[] {
       price: parseFloat(String(getCellValue(row, ["PriceNet", "Price", "Prix"]) || "0").replace(",", ".")) || 0,
       lotNo: String(getCellValue(row, ["Batch", "Lot", "BatchNo", "LotNo", "NumeroLot"]) || "").trim(),
       expiryDate: parseExcelDate(getCellValue(row, ["ExpiryDate", "Expiry", "BestBefore", "BBD", "MHD", "DateExpiration", "Expiration"])),
+      invoiceNo: String(getCellValue(row, ["InvoiceNo", "Invoice", "FactureNo", "Facture"]) || "").trim(),
     }))
     .filter(l => l.articleNo && l.qty > 0);
 }
@@ -205,7 +207,8 @@ export default function SupplierImportScreen({
         name: `[${l.defaultCode}] ${l.name}`,
         uomId: l.uomId,
       }));
-      const poResult = await odoo.createAndConfirmPO(session, partnerId, poLines);
+      const invoiceNo = matchedLines[0]?.invoiceNo || "";
+      const poResult = await odoo.createAndConfirmPO(session, partnerId, poLines, { partnerRef: invoiceNo });
       updateLastLog(`Bon de commande créé et confirmé : ${poResult.poName}`, "ok");
 
       // 3. Réception
