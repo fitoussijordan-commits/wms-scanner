@@ -840,7 +840,7 @@ export default function Dashboard() {
     }
   }, [session, loadAlerts]);
 
-  const loadConso = useCallback(async () => {
+  const loadConso = useCallback(async (forceFullSync = false) => {
     if (!session) return; setLoading(true); setError("");
     try {
       const months = monthsBack(consoMonths);
@@ -856,12 +856,15 @@ export default function Dashboard() {
       const intLocIds = intLocs.map((l: any) => l.id);
 
 
+      // forceFullSync (depuis Alertes) → ignorer le filtre de recherche
+      const activeSearch = forceFullSync ? "" : consoSearch.trim();
+
       let searchedProdIds: number[] = [];
-      if (consoSearch.trim()) {
+      if (activeSearch) {
         const prods = await odoo.searchRead(session, "product.product", [
           "|",
-          ["default_code", "=ilike", "%" + consoSearch.trim() + "%"],
-          ["name", "=ilike", "%" + consoSearch.trim() + "%"],
+          ["default_code", "=ilike", "%" + activeSearch + "%"],
+          ["name", "=ilike", "%" + activeSearch + "%"],
         ], ["id"], 50);
         searchedProdIds = prods.map((p: any) => p.id);
         if (!searchedProdIds.length) { setConso([]); setLoading(false); return; }
@@ -881,7 +884,7 @@ export default function Dashboard() {
           ["date", ">=", mStart],
           ["date", "<=", mEnd],
         ];
-        if (consoSearch.trim()) {
+        if (activeSearch) {
           monthDomain.push(["product_id", "in", searchedProdIds]);
         }
         const page = await odoo.searchRead(session, "stock.move.line", monthDomain,
@@ -922,8 +925,8 @@ export default function Dashboard() {
       await supa.saveConsoCache(cacheItems).catch(() => {});
       setConsoSyncedAt(new Date());
 
-      // Si chargement complet (pas de filtre) → recalcul automatique des seuils
-      if (!consoSearch.trim()) {
+      // Si chargement complet (pas de filtre, ou forcé depuis Alertes) → recalcul automatique des seuils
+      if (!activeSearch) {
         const thresholdItems: supa.WmsThreshold[] = [];
         const newThresholdsByRef: Record<string, number> = {};
         for (const row of rows) {
@@ -1445,7 +1448,7 @@ export default function Dashboard() {
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button className="wms-btn" style={{ background: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-soft)" : "var(--accent-soft)", color: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success)" : "var(--accent)", border: `1px solid ${consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-border)" : "var(--accent-border)"}` }}
-                  onClick={async () => { await loadConso(); loadAlerts(); }} disabled={loading}>
+                  onClick={async () => { await loadConso(true); loadAlerts(); }} disabled={loading}>
                   {loading ? <Spinner /> : I.upload} {consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "Màj conso Odoo" : "Import conso Odoo"}
                 </button>
                 <label className="wms-btn" style={{ background: pendingOrders.length > 0 ? "rgba(37,99,235,.12)" : "var(--bg-surface)", color: pendingOrders.length > 0 ? "var(--accent)" : "var(--text-secondary)", border: `1px solid ${pendingOrders.length > 0 ? "var(--accent-border)" : "var(--border)"}`, cursor: "pointer" }}>
@@ -1875,7 +1878,7 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
               <div><h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Consommation mensuelle</h2><p style={{ fontSize: 13, color: "var(--text-muted)" }}>Quantités sorties vers clients (hors transferts internes)</p></div>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <button className="wms-btn wms-btn-primary" onClick={loadConso} disabled={loading}>{loading ? <Spinner /> : I.refresh} Charger (12 mois)</button>
+                <button className="wms-btn wms-btn-primary" onClick={() => loadConso()} disabled={loading}>{loading ? <Spinner /> : I.refresh} Charger (12 mois)</button>
                 {conso.length > 0 && (
                   <button className="wms-btn wms-btn-ghost" onClick={async () => {
                     const XLSX = await import("xlsx");
