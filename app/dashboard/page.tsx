@@ -390,7 +390,7 @@ export default function Dashboard() {
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [moves, setMoves] = useState<MoveRow[]>([]);
   const [stockMap, setStockMap] = useState<Record<number, StockProduct>>({});
-  const [consoMonths, setConsoMonths] = useState(6);
+  const consoMonths = 12; // toujours 12 mois
   const [delStart, setDelStart] = useState(() => { const d = new Date(); d.setDate(1); return d.toISOString().split("T")[0]; });
   const [delEnd, setDelEnd] = useState(() => new Date().toISOString().split("T")[0]);
   const [moveRef, setMoveRef] = useState("");
@@ -912,17 +912,40 @@ export default function Dashboard() {
       rows.forEach(r => { r.avg = consoMonths > 0 ? Math.round(r.total / consoMonths) : 0; });
       setConso(rows);
 
-      // Async: save to Supabase cache in background (don't block UI)
+      // Save to Supabase cache
       const cacheItems: supa.WmsConsoCache[] = [];
       for (const row of rows) {
         for (const [month, qty] of Object.entries(row.months)) {
           cacheItems.push({ odoo_ref: row.ref, product_name: row.name, month, qty });
         }
       }
-      supa.saveConsoCache(cacheItems).catch(() => {});
+      await supa.saveConsoCache(cacheItems).catch(() => {});
       setConsoSyncedAt(new Date());
+
+      // Si chargement complet (pas de filtre) → recalcul automatique des seuils
+      if (!consoSearch.trim()) {
+        const thresholdItems: supa.WmsThreshold[] = [];
+        const newThresholdsByRef: Record<string, number> = {};
+        for (const row of rows) {
+          const avgMonthly = Math.max(1, Math.round(row.total / consoMonths));
+          thresholdItems.push({ odoo_ref: row.ref, threshold: avgMonthly, product_name: row.name });
+          newThresholdsByRef[row.ref] = avgMonthly;
+        }
+        // Seuil = 1 pour les articles en stock sans conso
+        for (const data of Object.values(stockMap)) {
+          if (!data.ref || newThresholdsByRef[data.ref]) continue;
+          thresholdItems.push({ odoo_ref: data.ref, threshold: 1, product_name: data.name });
+          newThresholdsByRef[data.ref] = 1;
+        }
+        if (thresholdItems.length > 0) {
+          await supa.saveThresholdsBulk(thresholdItems).catch(() => {});
+          setThresholdsByRef(newThresholdsByRef);
+        }
+        const avg = await supa.loadAvgMonthly().catch(() => ({} as Record<string, number>));
+        setAvgMonthlyByRef(avg);
+      }
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [session, consoMonths, consoSearch]);
+  }, [session, consoSearch, stockMap]);
 
 
   const loadDeliveries = useCallback(async () => {
@@ -1421,10 +1444,10 @@ export default function Dashboard() {
                 </p>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <label className="wms-btn" style={{ background: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-soft)" : "var(--accent-soft)", color: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success)" : "var(--accent)", border: `1px solid ${consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-border)" : "var(--accent-border)"}`, cursor: "pointer" }}>
-                  {consoImporting ? <Spinner /> : I.upload} {consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "Màj conso Odoo" : "Import conso Odoo"}
-                  <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; await importConsoFromOdoo(file); e.target.value = ""; }} disabled={consoImporting} />
-                </label>
+                <button className="wms-btn" style={{ background: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-soft)" : "var(--accent-soft)", color: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success)" : "var(--accent)", border: `1px solid ${consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-border)" : "var(--accent-border)"}` }}
+                  onClick={async () => { await loadConso(); loadAlerts(); }} disabled={loading}>
+                  {loading ? <Spinner /> : I.upload} {consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "Màj conso Odoo" : "Import conso Odoo"}
+                </button>
                 <label className="wms-btn" style={{ background: pendingOrders.length > 0 ? "rgba(37,99,235,.12)" : "var(--bg-surface)", color: pendingOrders.length > 0 ? "var(--accent)" : "var(--text-secondary)", border: `1px solid ${pendingOrders.length > 0 ? "var(--accent-border)" : "var(--border)"}`, cursor: "pointer" }}>
                   {orderImporting ? <Spinner /> : "📦"} {pendingOrders.length > 0 ? (() => { const nb = Array.from(new Set(pendingOrders.map(o => o.batch_id))).length; return `Màj commande (${nb} lot${nb > 1 ? "s" : ""})`; })() : "Import order confirmation"}
                   <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; await importOrderConfirmation(file); e.target.value = ""; }} disabled={orderImporting} />
@@ -1852,8 +1875,7 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
               <div><h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Consommation mensuelle</h2><p style={{ fontSize: 13, color: "var(--text-muted)" }}>Quantités sorties vers clients (hors transferts internes)</p></div>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <select className="wms-select" value={consoMonths} onChange={(e) => setConsoMonths(Number(e.target.value))}>{[3, 6, 9, 12].map((n) => <option key={n} value={n}>{n} mois</option>)}</select>
-                <button className="wms-btn wms-btn-primary" onClick={loadConso} disabled={loading}>{loading ? <Spinner /> : I.refresh} Charger</button>
+                <button className="wms-btn wms-btn-primary" onClick={loadConso} disabled={loading}>{loading ? <Spinner /> : I.refresh} Charger (12 mois)</button>
                 {conso.length > 0 && (
                   <button className="wms-btn wms-btn-ghost" onClick={async () => {
                     const XLSX = await import("xlsx");
@@ -1866,7 +1888,7 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
                     const ws = XLSX.utils.json_to_sheet(rows);
                     const wb = XLSX.utils.book_new();
                     XLSX.utils.book_append_sheet(wb, ws, "Conso");
-                    XLSX.writeFile(wb, `conso_${consoMonths}mois_${new Date().toISOString().split("T")[0]}.xlsx`);
+                    XLSX.writeFile(wb, `conso_12mois_${new Date().toISOString().split("T")[0]}.xlsx`);
                   }} style={{ padding: "10px 14px", fontSize: 13 }}>📥 Export Excel</button>
                 )}
               </div>
