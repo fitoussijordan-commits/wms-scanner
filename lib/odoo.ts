@@ -1375,8 +1375,8 @@ export async function setReceptionLots(
     const ml = pool?.shift();
 
     if (ml) {
+      // On affecte uniquement le lot — pas qty_done pour éviter la validation automatique
       await write(session, "stock.move.line", [ml.id], {
-        qty_done: line.qty,
         lot_id: line.lotId,
       });
     } else {
@@ -1391,7 +1391,6 @@ export async function setReceptionLots(
         move_id: move.id,
         product_id: line.productId,
         product_uom_id: line.uomId,
-        qty_done: line.qty,
         lot_id: line.lotId,
         location_id: locationId,
         location_dest_id: locationDestId,
