@@ -524,35 +524,41 @@ export default function Dashboard() {
       setStockMap(stockData);
       setStockSyncedAt(new Date());
 
-      // 2. Load stored conso from Supabase (last 3 months average)
+      // 2. Load stored conso from Supabase (12 mois)
       const now = new Date();
       const consoMonthsList: string[] = [];
-      for (let i = 1; i <= 3; i++) {
+      for (let i = 1; i <= 12; i++) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
         consoMonthsList.push(d.toISOString().substring(0, 7));
       }
       const consoCache = await supa.loadConsoCache(consoMonthsList);
-      const consoByRef: Record<string, number> = {};
-      const consoCountByRef: Record<string, number> = {};
+      const consoTotalByRef: Record<string, number> = {};
+      const consoAvgDailyRaw: Record<string, number> = {};
       for (const cc of consoCache) {
-        if (!consoByRef[cc.odoo_ref]) { consoByRef[cc.odoo_ref] = 0; consoCountByRef[cc.odoo_ref] = 0; }
-        consoByRef[cc.odoo_ref] += cc.qty;
-        consoCountByRef[cc.odoo_ref]++;
+        consoTotalByRef[cc.odoo_ref] = (consoTotalByRef[cc.odoo_ref] || 0) + cc.qty;
       }
-      // Average monthly then daily
-      const consoAvgDaily: Record<string, number> = {};
-      for (const ref of Object.keys(consoByRef)) {
-        const months = consoCountByRef[ref] || 1;
-        consoAvgDaily[ref] = (consoByRef[ref] / months) / 30;
+      // Seuil auto = total 12 mois / 12 (même calcul que onglet Consommation)
+      const autoThreshByRef: Record<string, number> = {};
+      for (const [ref, total] of Object.entries(consoTotalByRef)) {
+        const avg = Math.max(1, Math.round(total / 12));
+        autoThreshByRef[ref] = avg;
+        consoAvgDailyRaw[ref] = avg / 30;
       }
+      const consoAvgDaily = consoAvgDailyRaw;
 
-      // 3. Match thresholds — toujours lire depuis Supabase (évite stale closure)
-      const freshByRef: Record<string, number> = await supa.loadThresholds();
-      setThresholdsByRef(freshByRef);
+      // 3. Thresholds : manuels (Supabase) prioritaires, sinon seuil auto depuis conso
+      const manualThresh: Record<string, number> = await supa.loadThresholds();
+      setThresholdsByRef(manualThresh);
 
       const t: Record<number, number> = {};
       for (const [pid, data] of Object.entries(stockData)) {
-        if (data.ref && freshByRef[data.ref] !== undefined) t[Number(pid)] = freshByRef[data.ref];
+        if (!data.ref) continue;
+        const thresh = manualThresh[data.ref] !== undefined
+          ? manualThresh[data.ref]
+          : autoThreshByRef[data.ref] !== undefined
+            ? autoThreshByRef[data.ref]
+            : defaultThreshold;
+        t[Number(pid)] = thresh;
       }
       setThresholds(t);
 
