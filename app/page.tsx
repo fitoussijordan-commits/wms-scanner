@@ -4355,13 +4355,27 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       // Step 1 — location scan
       if (!locConfirmed) {
         const loc = getLocation(currentItem.sku);
-        const locShort = shortLoc(loc?.location_name || "").toLowerCase();
-        const locFull = (loc?.location_name || "").toLowerCase();
-        if (trimmed.toLowerCase() === locShort || locFull.includes(trimmed.toLowerCase())) {
+        const locName = loc?.location_name || "";
+        const locShort = shortLoc(locName).toLowerCase();
+        const locFull = locName.toLowerCase();
+        const s = trimmed.toLowerCase();
+
+        // Flexible matching: exact, full path contains, shortLoc starts with,
+        // or any alphanumeric segment of the barcode matches the start of shortLoc
+        // ex: "B-B42" → segments ["b","b42"] → "b42-rke6-e16".startsWith("b42") ✅
+        const segments = s.split(/[^a-z0-9]+/).filter((p: string) => p.length >= 2);
+        const matched =
+          s === locShort ||
+          s === locFull ||
+          locFull.includes(s) ||
+          locShort.startsWith(s) ||
+          segments.some((seg: string) => locShort.startsWith(seg) || locShort === seg);
+
+        if (matched) {
           setLocConfirmed(true);
           return;
         } else {
-          setScanError(`❌ Emplacement "${trimmed}" — attendu: ${shortLoc(loc?.location_name || "") || "?"}`);
+          setScanError(`❌ Emplacement "${trimmed}" — attendu: ${shortLoc(locName) || "?"}`);
           vibrateError();
           return;
         }
