@@ -4285,11 +4285,14 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   // Detail view — scan-based preparation
   const [scannedSkus, setScannedSkus] = useState<Record<string, number>>({});
   const [scanError, setScanError] = useState("");
+  const [locConfirmed, setLocConfirmed] = useState(false);
+  const shortLoc = (fullName: string) => (fullName || "").split("/").pop() || fullName;
 
   // Reset scan state when opening a new parcel
   const openParcel = async (p: any) => {
     setScannedSkus({});
     setScanError("");
+    setLocConfirmed(false);
     // Refresh chariot SKUs from Odoo each time we open a parcel
     if (session) {
       try {
@@ -4299,20 +4302,52 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     setSelectedParcel(p);
   };
 
-  const handleEshopScan = (code: string) => {
-    if (!selectedParcel) return;
-    const p = selectedParcel;
-    const items = (p.parcel_items || p.lines || []).filter((item: any) => {
+  const buildItems = (p: any) => (p.parcel_items || p.lines || [])
+    .filter((item: any) => {
       const val = parseFloat(item.value || "0");
       const sku = (item.sku || "").toLowerCase();
       if (val < 0 || sku.startsWith("offre_") || item.description === "Bon de réduction") return false;
       return true;
-    }).map((item: any) => ({
+    })
+    .map((item: any) => ({
       ...item,
       _isChariot: chariotSkus.some(ex => ex.toLowerCase() === (item.sku || "").toLowerCase()),
-    }));
-    setScanError("");
+    }))
+    .sort((a: any, b: any) => {
+      const locA = getLocation(a.sku)?.location_name || "zzz";
+      const locB = getLocation(b.sku)?.location_name || "zzz";
+      return locA.localeCompare(locB);
+    });
+
+  const handleEshopScan = (code: string) => {
+    if (!selectedParcel) return;
+    const items = buildItems(selectedParcel);
     const trimmed = code.trim();
+    setScanError("");
+
+    // Find current item (first not yet fully scanned)
+    const currentItem = items.find((item: any) => (scannedSkus[item.sku] || 0) < (item.quantity || 1));
+    if (!currentItem) return;
+
+    // Chariot items don't need location scan
+    if (!currentItem._isChariot) {
+      // Step 1 — location scan
+      if (!locConfirmed) {
+        const loc = getLocation(currentItem.sku);
+        const locShort = shortLoc(loc?.location_name || "").toLowerCase();
+        const locFull = (loc?.location_name || "").toLowerCase();
+        if (trimmed.toLowerCase() === locShort || locFull.includes(trimmed.toLowerCase())) {
+          setLocConfirmed(true);
+          return;
+        } else {
+          setScanError(`❌ Emplacement "${trimmed}" — attendu: ${shortLoc(loc?.location_name || "") || "?"}`);
+          vibrateError();
+          return;
+        }
+      }
+    }
+
+    // Step 2 — article scan
     const matched = items.find((item: any) => {
       const match = getMatch(item.sku);
       return item.sku === trimmed || match?.default_code === trimmed || match?.barcode === trimmed;
@@ -4330,197 +4365,240 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     }
     const newCount = current + 1;
     setScannedSkus(prev => ({ ...prev, [matched.sku]: newCount }));
-    if (newCount >= required) { vibrateSuccess(); onToast(`✓ ${matched.description || matched.sku}`); }
+    if (newCount >= required) {
+      vibrateSuccess();
+      onToast(`✓ ${matched.description || matched.sku}`);
+      setLocConfirmed(false); // reset for next item
+    }
   };
 
   useScannerListener(handleEshopScan, !!selectedParcel && !preparedIds.has(selectedParcel?.order_number));
 
   if (selectedParcel) {
     const p = selectedParcel;
-    const items = (p.parcel_items || p.lines || []).filter((item: any) => {
-      const val = parseFloat(item.value || "0");
-      const sku = (item.sku || "").toLowerCase();
-      if (val < 0 || sku.startsWith("offre_") || item.description === "Bon de réduction") return false;
-      return true;
-    }).map((item: any) => ({
-      ...item,
-      _isChariot: chariotSkus.some(ex => ex.toLowerCase() === (item.sku || "").toLowerCase()),
-    }));
+    const items = buildItems(p);
     const isPrepared = preparedIds.has(p.order_number);
 
-    // Sort items by location for optimal picking path
-    items.sort((a: any, b: any) => {
-      const locA = getLocation(a.sku)?.location_name || "zzz";
-      const locB = getLocation(b.sku)?.location_name || "zzz";
-      return locA.localeCompare(locB);
-    });
-
-    // For each item: qty required vs qty scanned (chariot items auto-validated)
-    const getScanned = (item: any) => item._isChariot ? (item.quantity || 1) : (scannedSkus[item.sku] || 0);
+    const getScanned = (item: any) => scannedSkus[item.sku] || 0;
     const allScanned = items.length > 0 && items.every((item: any) => getScanned(item) >= (item.quantity || 1));
-
-    // Scan handler — match by SKU or Odoo default_code or barcode
-    const handleScan = (code: string) => {
-      setScanError("");
-      const trimmed = code.trim();
-      // Find item by SKU or odoo ref
-      const matched = items.find((item: any) => {
-        const match = getMatch(item.sku);
-        return item.sku === trimmed
-          || match?.default_code === trimmed
-          || match?.barcode === trimmed;
-      });
-      if (!matched) {
-        setScanError(`❌ "${trimmed}" — article non trouvé dans cette commande`);
-        vibrateError();
-        return;
-      }
-      const required = matched.quantity || 1;
-      const current = scannedSkus[matched.sku] || 0;
-      if (current >= required) {
-        setScanError(`⚠ "${matched.description || matched.sku}" déjà scanné (${required}/${required})`);
-        return;
-      }
-      const newCount = current + 1;
-      setScannedSkus(prev => ({ ...prev, [matched.sku]: newCount }));
-      if (newCount >= required) {
-        vibrateSuccess();
-        onToast(`✓ ${matched.description || matched.sku}`);
-      }
-    };
+    const currentItem = items.find((item: any) => getScanned(item) < (item.quantity || 1));
+    const currentLoc = currentItem ? getLocation(currentItem.sku) : null;
+    const currentLocName = currentLoc?.location_name || "";
 
     const scannedCount = items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length;
     const progPct = items.length > 0 ? Math.round((scannedCount / items.length) * 100) : 0;
+    const doneItems = items.filter((it: any) => getScanned(it) >= (it.quantity || 1));
+    const remainingItems = items.filter((it: any) => getScanned(it) < (it.quantity || 1));
+
+    const adjustQty = (sku: string, newQty: number) => {
+      const item = items.find((i: any) => i.sku === sku);
+      const maxQty = item?.quantity || 1;
+      const clamped = Math.max(0, Math.min(maxQty, newQty));
+      const wasComplete = (scannedSkus[sku] || 0) >= maxQty;
+      setScannedSkus((prev: any) => ({ ...prev, [sku]: clamped }));
+      if (!wasComplete && clamped >= maxQty) {
+        vibrateSuccess();
+        onToast(`✓ ${item?.description || sku}`);
+        setLocConfirmed(false);
+      }
+    };
 
     return (
       <>
         {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
           <button onClick={() => setSelectedParcel(null)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: C.text, letterSpacing: -0.3 }}>{p.order_number || `#${p.id}`}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{p.order_number || `#${p.id}`}</div>
             <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => printLabel(p)} disabled={printing} title="Imprimer étiquette"
-              style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2"><rect x="6" y="9" width="12" height="8" rx="1"/><path d="M6 9V5a1 1 0 011-1h10a1 1 0 011 1v4"/><circle cx="18" cy="13" r="1" fill={C.blue}/></svg>
-            </button>
-            <button onClick={() => printPackingSlip(p)} disabled={printing} title="Imprimer BL"
-              style={{ ...iconBtn, background: C.greenSoft, borderRadius: 10, padding: "8px 12px" }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-            </button>
-          </div>
+          <button onClick={() => printLabel(p)} disabled={printing} title="Étiquette"
+            style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><rect x="6" y="9" width="12" height="8" rx="1"/><path d="M6 9V5a1 1 0 011-1h10a1 1 0 011 1v4"/></svg>
+          </button>
+          <button onClick={() => printPackingSlip(p)} disabled={printing} title="BL"
+            style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          </button>
         </div>
 
         {/* Progress bar */}
-        {!isPrepared && items.length > 0 && (
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <span style={{ fontSize: 11, color: C.textMuted }}>{scannedCount}/{items.length} articles scannés</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: allScanned ? C.green : C.blue }}>{progPct}%</span>
-            </div>
-            <div style={{ height: 8, borderRadius: 4, background: C.bg, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${progPct}%`, borderRadius: 4, background: allScanned ? C.green : C.blue, transition: "width .3s" }} />
-            </div>
-          </div>
-        )}
-
-        {/* Customer info */}
-        <div style={{ ...cardStyle, marginBottom: 8, padding: 12 }}>
-          <div style={{ fontSize: 12, color: C.textSec }}>
-            <div style={{ fontWeight: 700, color: C.text }}>{p.name}</div>
-            {p.company_name && <div>{p.company_name}</div>}
-            <div>{p.address}</div>
-            <div>{p.postal_code} {p.city}</div>
-            {p.email && <div style={{ color: C.blue, marginTop: 4 }}>{p.email}</div>}
-            {p.telephone && <div>{p.telephone}</div>}
-          </div>
-          {p._raw?.shipping_details?.delivery_indicator && (
-            <span style={{ display: "inline-block", marginTop: 6, fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "2px 8px", borderRadius: 6 }}>
-              🚚 {p._raw.shipping_details.delivery_indicator}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Progression</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: allScanned ? C.green : C.blue }}>
+              {scannedCount}/{items.length} produits
             </span>
-          )}
+          </div>
+          <div style={{ height: 8, borderRadius: 4, background: C.bg, overflow: "hidden", border: `1px solid ${C.border}` }}>
+            <div style={{ height: "100%", width: `${progPct}%`, borderRadius: 4, background: allScanned ? C.green : C.blue, transition: "width .3s" }} />
+          </div>
         </div>
 
-        {/* Articles */}
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>Articles à préparer</div>
-        {items.length === 0 && <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 8 }}>Aucun article détaillé</div>}
-        {items.map((item: any, i: number) => {
-          const match = getMatch(item.sku);
-          const loc = getLocation(item.sku);
-          const required = item.quantity || 1;
-          const scanned = getScanned(item);
-          const done = scanned >= required;
-          return (
-            <div key={i} style={{ ...cardStyle, marginBottom: 8, padding: 12, opacity: done ? 0.65 : 1 }}>
-              <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                {/* Status icon */}
-                <div style={{
-                  width: 36, height: 36, borderRadius: 8, flexShrink: 0,
-                  background: done ? C.greenSoft : C.bg,
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
-                }}>
-                  {done ? "✅" : item._isChariot ? "🛒" : "⬜"}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{match?.product_name || item.description || item.sku}</div>
-                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
-                    SKU: {item.sku || "N/A"}
-                    {match?.default_code && <span> · Réf: {match.default_code}</span>}
-                    {match?.match_method && match.match_method !== "supplier_ref" && (
-                      <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 700, padding: "1px 5px", borderRadius: 4,
-                        background: match.match_method === "barcode" ? "#dbeafe" : "#fef3c7",
-                        color: match.match_method === "barcode" ? "#1d4ed8" : "#92400e" }}>
-                        {match.match_method === "barcode" ? "EAN" : "nom~"}
-                      </span>
-                    )}
-                  </div>
-                  {item._isChariot ? (
-                    <div style={{ marginTop: 4 }}>
-                      <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "2px 8px", borderRadius: 6 }}>🛒 Chariot Eshop</span>
-                    </div>
-                  ) : loc ? (
-                    <div style={{ marginTop: 4 }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: "#059669", background: "#d1fae5", padding: "2px 8px", borderRadius: 6 }}>
-                        📍 {loc.location_name} <span style={{ fontWeight: 400 }}>({loc.quantity} en stock)</span>
-                      </span>
-                    </div>
-                  ) : match ? (
-                    <div style={{ fontSize: 11, color: C.orange, marginTop: 4 }}>⚠ Pas de stock trouvé</div>
-                  ) : null}
-                </div>
-                {/* Qty counter */}
-                <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: done ? C.green : C.text }}>
-                    {scanned}<span style={{ fontSize: 12, color: C.textMuted }}>/{required}</span>
-                  </div>
-                  {!done && !item._isChariot && !isPrepared && (
-                    <button onClick={() => handleEshopScan(item.sku)}
-                      style={{ fontSize: 10, color: C.blue, background: C.blueSoft, border: "none", borderRadius: 4, padding: "2px 6px", cursor: "pointer", marginTop: 2, fontFamily: "inherit" }}>
-                      +1
-                    </button>
-                  )}
-                </div>
-              </div>
+        {/* Current article card */}
+        {allScanned || isPrepared ? (
+          <div style={{ background: C.greenSoft, border: `2px solid ${C.green}`, borderRadius: 20, padding: 32, textAlign: "center", marginBottom: 16 }}>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>✅</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: C.green }}>Tout préparé !</div>
+            <div style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>{items.length} articles scannés</div>
+          </div>
+        ) : currentItem ? (
+          <div style={{
+            background: locConfirmed ? "#f0fdf4" : "#f8fafc",
+            border: `2px solid ${locConfirmed ? C.green : C.blue}`,
+            borderRadius: 20, padding: 20, marginBottom: 16,
+            transition: "background .3s, border-color .3s"
+          }}>
+            {/* Step indicator */}
+            <div style={{ fontSize: 11, fontWeight: 700, color: locConfirmed ? C.green : C.blue, letterSpacing: 0.5, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+              {currentItem._isChariot ? (
+                <><span style={{ background: "#7c3aed", color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>🛒</span> <span style={{ color: "#7c3aed" }}>ARTICLE SUR LE CHARIOT ESHOP</span></>
+              ) : !locConfirmed ? (
+                <><span style={{ background: C.blue, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>1</span> SCANNER L'EMPLACEMENT</>
+              ) : (
+                <><span style={{ background: C.green, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>✓</span> EMPLACEMENT OK — SCANNER L'ARTICLE</>
+              )}
             </div>
-          );
-        })}
 
-        {scanError && (
-          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", marginBottom: 8, fontSize: 12, color: "#dc2626" }}>
-            {scanError}
+            {/* Location (only for non-chariot) */}
+            {!currentItem._isChariot && (
+              <button
+                onClick={() => setLocConfirmed(true)}
+                style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, width: "100%", border: "none", cursor: "pointer", padding: 0, background: "none", fontFamily: "inherit" }}>
+                <div style={{ background: locConfirmed ? C.greenSoft : C.blueSoft, border: `1px solid ${locConfirmed ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 20, fontWeight: 900, color: locConfirmed ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center" }}>
+                  📍 {shortLoc(currentLocName) || "Emplacement inconnu"}
+                </div>
+                {locConfirmed && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>}
+              </button>
+            )}
+
+            {/* Article name */}
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b", marginBottom: 4, lineHeight: 1.3 }}>
+              {getMatch(currentItem.sku)?.product_name || currentItem.description || currentItem.sku}
+            </div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14 }}>
+              SKU: {currentItem.sku}
+              {getMatch(currentItem.sku)?.default_code && <span> · Réf: {getMatch(currentItem.sku).default_code}</span>}
+            </div>
+
+            {/* Chariot confirm OR qty counter */}
+            {currentItem._isChariot ? (
+              <button
+                onClick={() => adjustQty(currentItem.sku, currentItem.quantity || 1)}
+                style={{ width: "100%", padding: "16px 0", borderRadius: 14, border: "none", background: "#7c3aed", color: "#fff", fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(124,58,237,0.35)" }}>
+                ✓ OK — Article sur le chariot ({currentItem.quantity || 1} unité{(currentItem.quantity || 1) > 1 ? "s" : ""})
+              </button>
+            ) : (
+              <div>
+                <div style={{ display: "flex", alignItems: "stretch", border: `1.5px solid ${C.border}`, borderRadius: 14, overflow: "hidden", background: C.white, marginBottom: 10 }}>
+                  <button
+                    onClick={() => adjustQty(currentItem.sku, (scannedSkus[currentItem.sku] || 0) - 1)}
+                    disabled={!locConfirmed || (scannedSkus[currentItem.sku] || 0) <= 0}
+                    style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 28, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}`, opacity: (!locConfirmed || (scannedSkus[currentItem.sku] || 0) <= 0) ? 0.3 : 1 }}>
+                    −
+                  </button>
+                  <div style={{ flex: 1, textAlign: "center", padding: "12px 4px" }}>
+                    <span style={{ fontSize: 36, fontWeight: 900, color: C.text }}>{scannedSkus[currentItem.sku] || 0}</span>
+                    <span style={{ fontSize: 18, color: C.textMuted, margin: "0 4px" }}>/</span>
+                    <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{currentItem.quantity || 1}</span>
+                    <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 4 }}>Units</span>
+                  </div>
+                  <button
+                    onClick={() => adjustQty(currentItem.sku, (scannedSkus[currentItem.sku] || 0) + 1)}
+                    disabled={!locConfirmed || (scannedSkus[currentItem.sku] || 0) >= (currentItem.quantity || 1)}
+                    style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 28, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", opacity: (!locConfirmed || (scannedSkus[currentItem.sku] || 0) >= (currentItem.quantity || 1)) ? 0.3 : 1 }}>
+                    +
+                  </button>
+                </div>
+                {locConfirmed && (scannedSkus[currentItem.sku] || 0) > 0 && (scannedSkus[currentItem.sku] || 0) < (currentItem.quantity || 1) && (
+                  <button
+                    onClick={() => adjustQty(currentItem.sku, currentItem.quantity || 1)}
+                    style={{ width: "100%", padding: "11px 0", borderRadius: 12, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(34,197,94,0.35)" }}>
+                    ✓ Tout mettre — {currentItem.quantity || 1} unité{(currentItem.quantity || 1) > 1 ? "s" : ""}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {/* Scan input */}
+        {!allScanned && !isPrepared && (
+          <div style={{ marginBottom: 12 }}>
+            <InputBar
+              onSubmit={(code: string) => handleEshopScan(code)}
+              placeholder={currentItem?._isChariot ? "Article sur le chariot — appuyer OK" : !locConfirmed ? "Scanner l'emplacement..." : "Scanner l'article..."}
+            />
+            {scanError && (
+              <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", marginTop: 6, fontSize: 12, color: "#dc2626" }}>
+                {scanError}
+              </div>
+            )}
+            {error && <Alert type="error">{error}</Alert>}
           </div>
         )}
-        {error && <Alert type="error">{error}</Alert>}
 
+        {/* Done items (collapsible) */}
+        {doneItems.length > 0 && (
+          <details style={{ marginBottom: 16 }}>
+            <summary style={{ fontSize: 12, fontWeight: 700, color: C.green, cursor: "pointer", letterSpacing: 0.5, textTransform: "uppercase" as const, padding: "8px 0", userSelect: "none" as const }}>
+              ✓ Préparés ({doneItems.length}) — appuyer pour modifier
+            </summary>
+            <div style={{ marginTop: 8 }}>
+              {doneItems.map((item: any) => {
+                const loc = getLocation(item.sku);
+                return (
+                  <div key={item.sku} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 6, background: C.greenSoft, border: `1px solid ${C.greenBorder}`, borderRadius: 10 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{getMatch(item.sku)?.product_name || item.description || item.sku}</div>
+                      <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                        {item._isChariot ? "🛒 Chariot" : loc ? shortLoc(loc.location_name) : "—"}
+                        <span style={{ color: C.green, fontWeight: 700, marginLeft: 6 }}>{scannedSkus[item.sku] || item.quantity}/{item.quantity}</span>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      <button onClick={() => adjustQty(item.sku, (scannedSkus[item.sku] || 0) - 1)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#dc2626" }}>−</button>
+                      <button onClick={() => adjustQty(item.sku, (scannedSkus[item.sku] || 0) + 1)} disabled={(scannedSkus[item.sku] || 0) >= (item.quantity || 1)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.blue, opacity: (scannedSkus[item.sku] || 0) >= (item.quantity || 1) ? 0.3 : 1 }}>+</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        )}
+
+        {/* Remaining items list */}
+        {!allScanned && !isPrepared && remainingItems.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>
+              Restant ({remainingItems.length})
+            </div>
+            {remainingItems.map((item: any, i: number) => {
+              const loc = getLocation(item.sku);
+              const isCurrent = item.sku === currentItem?.sku;
+              return (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${C.border}`, opacity: isCurrent ? 1 : 0.5 }}>
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: isCurrent ? C.blue : C.border, flexShrink: 0 }} />
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: isCurrent ? C.blue : C.border, flexShrink: 0 }} />
+                  <div style={{ flex: 1, fontSize: 12, color: C.text, fontWeight: isCurrent ? 700 : 400 }}>{getMatch(item.sku)?.product_name || item.description || item.sku}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted }}>{item._isChariot ? "🛒" : loc ? shortLoc(loc.location_name) : "—"}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textSec }}>{scannedSkus[item.sku] || 0}/{item.quantity || 1}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Validate BigButton */}
         {!isPrepared ? (
           <BigButton
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
-            label={allScanned ? "Confirmer la préparation" : "Forcer comme préparé"}
-            sub={allScanned ? `${items.length} article(s) tous scannés` : `${scannedCount}/${items.length} scannés`}
+            label={allScanned ? "Valider la préparation" : "Forcer comme préparé"}
+            sub={allScanned ? "Tout préparé — prêt à valider" : `${scannedCount}/${items.length} articles préparés`}
             color={allScanned ? C.green : C.orange}
             onClick={async () => {
               onToast("⏳ Impression étiquette + BL...");
@@ -4530,6 +4608,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
               setSelectedParcel(null);
               onToast("✓ Préparation confirmée");
             }}
+            disabled={scannedCount === 0}
           />
         ) : (
           <BigButton
@@ -7410,9 +7489,7 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
         }}>{msg}</div>
       )}
 
-      {/* HIDDEN: E-shop chariot — pas au point
       <EshopChariotSkus session={session} />
-      */}
     </>
   );
 }
