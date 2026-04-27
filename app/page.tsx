@@ -77,18 +77,36 @@ async function generateEshopPackingSlipPDF(order: {
 }): Promise<string> {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-  const W = 210; const M = 14;
+  const W = 210; const M = 15;
 
-  const BLACK = [0, 0, 0] as [number,number,number];
-  const GRAY  = [100, 100, 100] as [number,number,number];
-  const WHITE = [255, 255, 255] as [number,number,number];
-  const BORDER = [180, 180, 180] as [number,number,number];
-  const DARK = [30, 30, 30] as [number,number,number];
+  const BLACK  = [0, 0, 0]       as [number,number,number];
+  const GRAY   = [110, 110, 110]  as [number,number,number];
+  const LGRAY  = [200, 200, 200]  as [number,number,number];
+  const DARK   = [20, 20, 20]     as [number,number,number];
+  const ACCENT = [40, 40, 40]     as [number,number,number];
 
-  let y = M;
+  // ── Header zone: Logo (left) + Barcode (right) côte à côte ──
+  const headerY = M; // y=15 pour les deux
+  const logoH = 18;  // hauteur logo
 
-  // ── Logo Dr. Hauschka ──
-  // Tente de charger le logo depuis /public/logo-drhauschka.png
+  // Barcode (en haut à droite, aligné avec le logo)
+  const bcW = 62; const bcH = 14;
+  const bcX = W - M - bcW;
+  doc.setDrawColor(...BLACK);
+  const bars = 90;
+  for (let i = 0; i < bars; i++) {
+    const thick = (i % 5 === 0 || i % 7 === 0) ? 1.1 : (i % 3 === 0 ? 0.55 : 0.25);
+    doc.setLineWidth(thick);
+    const bx = bcX + (i / bars) * bcW;
+    if (i % 2 === 0) doc.line(bx, headerY, bx, headerY + bcH);
+  }
+  doc.setLineWidth(0.25);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7);
+  doc.setTextColor(...GRAY);
+  doc.text(`${order.order_number}`, bcX + bcW / 2, headerY + bcH + 3.5, { align: "center" });
+
+  // Logo Dr. Hauschka (en haut à gauche, même Y que barcode)
   let logoLoaded = false;
   try {
     const logoRes = await fetch("/logo-dr-hauschka.png");
@@ -100,185 +118,200 @@ async function generateEshopPackingSlipPDF(order: {
         reader.onerror = reject;
         reader.readAsDataURL(logoBlob);
       });
-      // Logo 55mm large, hauteur auto (~16mm pour ratio paysage)
-      doc.addImage(`data:image/png;base64,${logoBase64}`, "PNG", M, y, 55, 16);
+      doc.addImage(`data:image/png;base64,${logoBase64}`, "PNG", M, headerY, 52, logoH);
       logoLoaded = true;
-      y += 20;
     }
   } catch {}
 
   if (!logoLoaded) {
-    // Fallback texte minimaliste si logo absent
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(16);
+    doc.setFontSize(15);
     doc.setTextColor(...BLACK);
-    doc.text("Dr. Hauschka — WALA France", M, y + 8);
-    y += 14;
+    doc.text("Dr. Hauschka", M, headerY + 12);
   }
 
-  // ── Barcode (right side) ──
-  const bcW = 65; const bcH = 18;
-  const bcX = W - M - bcW; const bcY = y;
-  doc.setDrawColor(...BLACK);
-  // Draw barcode bars
-  const bars = 80;
-  for (let i = 0; i < bars; i++) {
-    const thick = (i % 5 === 0 || i % 7 === 0) ? 1.2 : (i % 3 === 0 ? 0.6 : 0.3);
-    doc.setLineWidth(thick);
-    const x = bcX + (i / bars) * bcW;
-    if (i % 2 === 0) doc.line(x, bcY, x, bcY + bcH);
-  }
-  // Barcode number under
-  doc.setLineWidth(0.3);
+  // Y après la zone header (logo + barcode terminés)
+  let y = headerY + logoH + 8; // 15 + 18 + 8 = 41mm
+
+  // ── Titre "BON DE LIVRAISON" ──
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.setTextColor(...DARK);
+  doc.text("BON DE LIVRAISON", M, y);
+  // Numéro de commande sur la même ligne à droite
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(7.5);
-  doc.setTextColor(...BLACK);
-  doc.text(`PS${order.order_number.padStart(16, "0")}`, bcX + bcW / 2, bcY + bcH + 4.5, { align: "center" });
+  doc.setFontSize(9);
+  doc.setTextColor(...GRAY);
+  doc.text(`N° ${order.order_number}`, W - M, y, { align: "right" });
+  y += 4;
 
-  // y is already positioned after logo; ensure enough space for the barcode section
-  if (y < M + 36) y = M + 36;
+  // Ligne séparatrice épaisse sous le titre
+  doc.setDrawColor(...BLACK);
+  doc.setLineWidth(0.6);
+  doc.line(M, y, W - M, y);
+  y += 7;
 
-  // ── 3-column info table ──
-  // Full-width bordered table
+  // ── Tableau infos (2 colonnes : gauche = infos commande, droite = adresses) ──
   const tW = W - M * 2;
-  const col1W = 50; const col2W = 65; const col3W = tW - col1W - col2W;
-  const col1X = M; const col2X = M + col1W; const col3X = M + col1W + col2W;
-  const tH = 52;
+  const leftW = 68; // colonne commande
+  const midW  = 56; // colonne expéditeur
+  const rightW = tW - leftW - midW; // colonne destinataire
+  const col1X = M;
+  const col2X = M + leftW;
+  const col3X = M + leftW + midW;
+  const tH = 48;
 
-  // Draw table border
-  doc.setDrawColor(...BORDER);
-  doc.setLineWidth(0.5);
+  doc.setDrawColor(...LGRAY);
+  doc.setLineWidth(0.4);
   doc.rect(col1X, y, tW, tH);
-  // Vertical separators
   doc.line(col2X, y, col2X, y + tH);
   doc.line(col3X, y, col3X, y + tH);
 
-  let iy = y + 5;
+  // Fonds de header pour les 3 colonnes
+  doc.setFillColor(245, 245, 245);
+  doc.rect(col1X, y, leftW, 7, "F");
+  doc.rect(col2X, y, midW, 7, "F");
+  doc.rect(col3X, y, rightW, 7, "F");
+  // Redessine les bords sur le fond
+  doc.setDrawColor(...LGRAY);
+  doc.line(M, y + 7, W - M, y + 7);
 
-  // Row 1 headers
+  // Headers colonnes
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
+  doc.setFontSize(8);
+  doc.setTextColor(...ACCENT);
+  doc.text("COMMANDE", col1X + 3, y + 5);
+  doc.text("EXPÉDITEUR", col2X + 3, y + 5);
+  doc.text("DESTINATAIRE", col3X + 3, y + 5);
+
+  let iy = y + 13;
+
+  // Colonne 1 : infos commande
+  const dateStr = order.order_date || new Date().toLocaleDateString("fr-FR", { year: "numeric", month: "short", day: "numeric" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(...GRAY);
+  doc.text("Date", col1X + 3, iy);
   doc.setTextColor(...DARK);
-  doc.text("Date de la\ncommande", col1X + 3, iy, { lineHeightFactor: 1.4 });
-  doc.text("Expéditeur", col2X + 3, iy);
-  doc.text("Destinataire", col3X + 3, iy);
-  iy += 10;
-
-  // Date value
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  const dateStr = order.order_date || new Date().toLocaleDateString("fr-FR", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  doc.text(dateStr, col1X + 3, iy);
-  // Expéditeur value (bold name, normal rest)
   doc.setFont("helvetica", "bold");
-  doc.text("WALA France", col2X + 3, iy);
-  // Destinataire value (bold name)
-  doc.text(order.recipient_name, col3X + 3, iy);
-  iy += 5;
+  doc.text(dateStr, col1X + 3, iy + 4.5);
 
-  // "Numéro de commande" label
+  iy += 12;
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(...GRAY);
+  doc.text("N° commande", col1X + 3, iy);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
-  doc.text("Numéro de\ncommande", col1X + 3, iy, { lineHeightFactor: 1.4 });
-  // Expéditeur continued
-  doc.setFont("helvetica", "normal");
-  doc.text("+33143553242", col2X + 3, iy);
-  // Destinataire address
-  doc.text(order.recipient_address, col3X + 3, iy);
-  iy += 9;
+  doc.setTextColor(...DARK);
+  doc.text(order.order_number, col1X + 3, iy + 4.5);
 
-  // Order number value
-  doc.setFont("helvetica", "normal");
-  doc.text(order.order_number, col1X + 3, iy);
-  doc.text("35 Rue d'Hauteville", col2X + 3, iy);
-  doc.text(order.recipient_postal, col3X + 3, iy);
-  iy += 5;
-
-  // Shipping method label
-  doc.setFont("helvetica", "bold");
-  doc.text("Méthode\nd'expédition", col1X + 3, iy, { lineHeightFactor: 1.4 });
-  doc.setFont("helvetica", "normal");
-  doc.text("75010", col2X + 3, iy);
-  doc.text(order.recipient_city, col3X + 3, iy);
-  iy += 9;
-
-  // Shipping method value
   if (order.shipping_method) {
-    const methodLines = doc.splitTextToSize(order.shipping_method, col1W - 6);
-    methodLines.forEach((l: string, i: number) => doc.text(l, col1X + 3, iy + i * 4.5));
+    iy += 12;
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...GRAY);
+    doc.text("Transport", col1X + 3, iy);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...DARK);
+    const methodLines = doc.splitTextToSize(order.shipping_method, leftW - 6);
+    methodLines.slice(0, 2).forEach((l: string, i: number) => doc.text(l, col1X + 3, iy + 4.5 + i * 4));
   }
-  doc.text("Paris", col2X + 3, iy);
-  doc.text("France", col3X + 3, iy);
-  iy += 5;
-  doc.text("France", col2X + 3, iy);
+
+  // Colonne 2 : expéditeur
+  iy = y + 13;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(...DARK);
+  doc.text("WALA France", col2X + 3, iy);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(...GRAY);
+  doc.setFontSize(8);
+  const senderLines = ["Dr. Hauschka", "35 Rue d'Hauteville", "75010 Paris", "France"];
+  senderLines.forEach((l, i) => doc.text(l, col2X + 3, iy + 5 + i * 4.2));
+
+  // Colonne 3 : destinataire
+  iy = y + 13;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(...DARK);
+  const recipName = doc.splitTextToSize(order.recipient_name, rightW - 6);
+  recipName.forEach((l: string, i: number) => doc.text(l, col3X + 3, iy + i * 5));
+  iy += recipName.length * 5;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(...GRAY);
+  const recipLines = [
+    order.recipient_address,
+    `${order.recipient_postal} ${order.recipient_city}`,
+    order.recipient_country || "France",
+  ].filter(Boolean);
+  recipLines.forEach((l, i) => doc.text(l, col3X + 3, iy + i * 4.2));
 
   y += tH + 10;
 
-  // ── Articles table header ──
-  const artTW = W - M * 2;
-  const qtyW = 20;
-  const artW = artTW - qtyW;
+  // ── Tableau articles ──
+  const qtyW  = 18;
+  const artW  = tW - qtyW;
+
+  // Header bande grise
+  doc.setFillColor(245, 245, 245);
+  doc.rect(M, y, tW, 7, "F");
+  doc.setDrawColor(...LGRAY);
+  doc.setLineWidth(0.4);
+  doc.rect(M, y, tW, 7);
 
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(10);
-  doc.setTextColor(...BLACK);
-  doc.text("Article", M, y);
-  doc.text("QTÉ", W - M - qtyW + 3, y);
-  y += 3;
+  doc.setFontSize(8.5);
+  doc.setTextColor(...ACCENT);
+  doc.text("ARTICLE", M + 3, y + 5);
+  doc.text("QTÉ", W - M - 3, y + 5, { align: "right" });
+  y += 7;
 
-  // Bold separator line under header
-  doc.setDrawColor(...BLACK);
-  doc.setLineWidth(0.8);
-  doc.line(M, y, W - M, y);
-  y += 5;
-
-  // ── Article rows ──
-  doc.setLineWidth(0.4);
-  doc.setDrawColor(...BORDER);
-
+  // Rows
   for (const item of order.items) {
-    const nameLines = doc.splitTextToSize(item.name, artW - 6);
+    const nameLines = doc.splitTextToSize(item.name, artW - 8);
     const subLines: string[] = [];
     if (item.ean) subLines.push(`EAN : ${item.ean}`);
-    if (item.odooRef) subLines.push(`Réf : ${item.odooRef}`);
+    if (item.odooRef) subLines.push(`Réf. Odoo : ${item.odooRef}`);
     if (item.properties) subLines.push(item.properties);
-    const rowH = nameLines.length * 5 + subLines.length * 4.5 + 6;
+    const rowH = nameLines.length * 5.2 + subLines.length * 4 + 8;
 
-    // Article name — bold
+    // Article name — bold noir
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(9.5);
-    doc.setTextColor(...BLACK);
-    nameLines.forEach((l: string, i: number) => doc.text(l, M, y + i * 5));
+    doc.setFontSize(9);
+    doc.setTextColor(...DARK);
+    nameLines.forEach((l: string, i: number) => doc.text(l, M + 3, y + 5 + i * 5.2));
 
-    // Sub-info (EAN, réf, propriétés) — normal gray
+    // Sub-info — gris léger
     if (subLines.length > 0) {
       doc.setFont("helvetica", "normal");
-      doc.setFontSize(8);
+      doc.setFontSize(7.5);
       doc.setTextColor(...GRAY);
-      let sy = y + nameLines.length * 5;
-      subLines.forEach((l: string) => { doc.text(l, M, sy); sy += 4.5; });
+      let sy = y + 5 + nameLines.length * 5.2;
+      subLines.forEach((l: string) => { doc.text(l, M + 3, sy); sy += 4; });
     }
 
-    // Quantity — right aligned
+    // Quantité — alignée droite, grande et bold
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(9.5);
-    doc.setTextColor(...BLACK);
-    doc.text(String(item.quantity), W - M - qtyW + 3, y);
+    doc.setFontSize(11);
+    doc.setTextColor(...DARK);
+    doc.text(String(item.quantity), W - M - 3, y + 7, { align: "right" });
 
     y += rowH;
 
-    // Separator line
-    doc.setDrawColor(...BORDER);
+    // Ligne séparatrice fine
+    doc.setDrawColor(...LGRAY);
+    doc.setLineWidth(0.3);
     doc.line(M, y, W - M, y);
-    y += 4;
   }
 
-  // ── Page footer ──
-  y = 287 - M; // near bottom
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
-  doc.setTextColor(...BLACK);
-  doc.text("Page 1 / 1", M, y);
+  // ── Footer ──
+  const footY = 285;
+  doc.setDrawColor(...LGRAY);
+  doc.setLineWidth(0.3);
+  doc.line(M, footY - 4, W - M, footY - 4);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(...GRAY);
+  doc.text("WALA France — 35 Rue d'Hauteville, 75010 Paris — +33 1 43 55 32 42", W / 2, footY, { align: "center" });
 
   return doc.output("datauristring").split(",")[1];
 }

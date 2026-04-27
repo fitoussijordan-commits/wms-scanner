@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
       if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
 
       // Helper: find a parcel for this order via multiple strategies
-      async function findParcel(): Promise<any | null> {
+      const findParcel = async (): Promise<any | null> => {
         // 1. By order_number
         try {
           const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber!)}`, auth);
