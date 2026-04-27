@@ -224,8 +224,9 @@ export async function GET(req: NextRequest) {
         } else {
           // V3 KO (422 ou autre) → cherche d'abord un colis existant
           parcel = await findParcel();
+          console.warn("[label] V3 KO else block — findParcel result:", parcel ? `id=${parcel.id} hasLabel=${!!(parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0])}` : "null");
           if (parcel && (parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0])) {
-            // Colis existant avec étiquette → on l'utilise directement
+            // Colis existant avec étiquette → on l'utilise directement (URL may be stale, handled below)
           } else {
             // Pas de colis existant (ou sans étiquette) → créer via V2 en bypassant la validation
             const v2Parcel = await createV2Parcel();
@@ -267,8 +268,46 @@ export async function GET(req: NextRequest) {
         }, { status: 202 });
       }
 
-      const labelRes = await scFetch(labelUrl, auth);
-      if (!labelRes.ok) return NextResponse.json({ error: `Erreur étiquette: ${labelRes.status}` }, { status: labelRes.status });
+      let labelRes = await scFetch(labelUrl, auth);
+      if (!labelRes.ok) {
+        console.warn("[label] labelUrl fetch failed:", labelRes.status, "— re-fetching parcel for fresh URL");
+        // Label URL may be stale — re-fetch parcel by ID to get a fresh URL
+        try {
+          const freshPd = await scJson(`${V2}/parcels/${parcel.id}`, auth);
+          const freshParcel = freshPd?.parcel;
+          const freshUrl = freshParcel?.label?.label_printer || freshParcel?.label?.normal_printer?.[0];
+          console.warn("[label] fresh label URL:", freshUrl ? "found" : "missing");
+          if (freshUrl) {
+            labelRes = await scFetch(freshUrl, auth);
+            if (labelRes.ok) {
+              // Update parcel to use fresh data
+              parcel = freshParcel;
+            }
+          }
+          // If still no good URL, try requesting label via V2 update
+          if (!labelRes.ok || !freshUrl) {
+            console.warn("[label] requesting label via V2 PATCH on parcel", parcel.id);
+            try {
+              await scJson(`${V2}/parcels/${parcel.id}`, auth, {
+                method: "PUT",
+                body: JSON.stringify({ parcel: { request_label: true } }),
+              });
+            } catch {}
+            // Poll for label
+            const polledParcel = await pollParcelById(parcel.id);
+            if (polledParcel) {
+              const polledUrl = polledParcel.label?.label_printer || polledParcel.label?.normal_printer?.[0];
+              if (polledUrl) {
+                labelRes = await scFetch(polledUrl, auth);
+                parcel = polledParcel;
+              }
+            }
+          }
+        } catch (refreshErr: any) {
+          console.warn("[label] refresh error:", refreshErr.message);
+        }
+        if (!labelRes.ok) return NextResponse.json({ error: `Erreur téléchargement étiquette: ${labelRes.status}` }, { status: labelRes.status });
+      }
 
       const pdfBuffer = Buffer.from(await labelRes.arrayBuffer());
       return NextResponse.json({
