@@ -87,7 +87,7 @@ async function generateEshopPackingSlipPDF(order: {
 
   // ── Header zone: Logo (left) + Barcode (right) côte à côte ──
   const headerY = M; // y=15 pour les deux
-  const logoH = 18;  // hauteur logo
+  const logoH = 22;  // hauteur logo
 
   // Barcode (en haut à droite, aligné avec le logo)
   const bcW = 62; const bcH = 14;
@@ -118,7 +118,7 @@ async function generateEshopPackingSlipPDF(order: {
         reader.onerror = reject;
         reader.readAsDataURL(logoBlob);
       });
-      doc.addImage(`data:image/png;base64,${logoBase64}`, "PNG", M, headerY, 52, logoH);
+      doc.addImage(`data:image/png;base64,${logoBase64}`, "PNG", M, headerY, 72, logoH);
       logoLoaded = true;
     }
   } catch {}
@@ -131,7 +131,7 @@ async function generateEshopPackingSlipPDF(order: {
   }
 
   // Y après la zone header (logo + barcode terminés)
-  let y = headerY + logoH + 8; // 15 + 18 + 8 = 41mm
+  let y = headerY + logoH + 8; // 15 + 22 + 8 = 45mm
 
   // ── Titre "BON DE LIVRAISON" ──
   doc.setFont("helvetica", "bold");
