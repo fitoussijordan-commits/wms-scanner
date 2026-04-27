@@ -4068,6 +4068,7 @@ const printerIconWhite = <svg width="20" height="20" viewBox="0 0 24 24" fill="n
 
 // ============================================
 // E-SHOP SCREEN — SendCloud order preparation
+// Design identique au module Préparation
 // ============================================
 function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
   const [parcels, setParcels] = useState<any[]>([]);
@@ -4129,18 +4130,31 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         status: { id: 1000, message: o.order_details?.status?.message || "Ouvert" },
         _raw: o,
       }));
-      // Filter: status "Ouvert" (code "0") + exclude Unstamped letter
+      // Filter: status "Ouvert" (code "0") + transporteur Mondial Relay ou Colissimo uniquement + boutique 527093
       const allowedParcels = allParcels.filter((o: any) => {
+        // Statut ouvert
         const statusCode = o._raw?.order_details?.status?.code ?? o._raw?.status?.code;
         if (statusCode !== "0") return false;
-        const delivery = (o._raw?.shipping_details?.delivery_indicator || "").toLowerCase();
-        return !delivery.includes("unstamped") && !delivery.includes("letter") && !delivery.includes("briefmarke");
+        // Boutique : garde uniquement l'intégration 527093 (Dr. Hauschka FR)
+        const integId = o._raw?.integration_id;
+        if (integId && integId !== 527093) return false;
+        // Transporteur : uniquement Mondial Relay et Colissimo
+        const carrierStr = [
+          o._raw?.shipping_details?.delivery_indicator || "",
+          o._raw?.shipping_details?.shipping_method_name || "",
+          o._raw?.order_details?.shipping_method_name || "",
+          o._raw?.carrier?.name || "",
+          o._raw?.carrier?.code || "",
+        ].join(" ").toLowerCase();
+        const isMondialRelay = carrierStr.includes("mondial");
+        const isColissimo = carrierStr.includes("colissimo");
+        return isMondialRelay || isColissimo;
       });
       setParcels(allowedParcels);
 
-      // Match SKUs with Odoo
+      // Match SKUs with Odoo (only for filtered orders)
       const allRefs = Array.from(new Set(
-        allParcels.flatMap((p: any) => (p.parcel_items || []).map((item: any) => item.sku)).filter(Boolean)
+        allowedParcels.flatMap((p: any) => (p.parcel_items || []).map((item: any) => item.sku)).filter(Boolean)
       )) as string[];
       if (allRefs.length > 0 && session) {
         const matches = await odoo.matchEshopSkus(session, allRefs);
@@ -4375,70 +4389,84 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       }
     };
 
+    const scannedCount = items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length;
+    const progPct = items.length > 0 ? Math.round((scannedCount / items.length) * 100) : 0;
+
     return (
       <>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
           <button onClick={() => setSelectedParcel(null)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{p.order_number || `#${p.id}`}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: C.text, letterSpacing: -0.3 }}>{p.order_number || `#${p.id}`}</div>
             <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
           </div>
-          {isPrepared
-            ? <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>✓ Préparé</span>
-            : allScanned
-              ? <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>✓ Prêt</span>
-              : <span style={{ fontSize: 11, fontWeight: 700, color: C.orange, background: C.orangeSoft, padding: "3px 8px", borderRadius: 6 }}>{items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length}/{items.length} scannés</span>
-          }
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => printLabel(p)} disabled={printing} title="Imprimer étiquette"
+              style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2"><rect x="6" y="9" width="12" height="8" rx="1"/><path d="M6 9V5a1 1 0 011-1h10a1 1 0 011 1v4"/><circle cx="18" cy="13" r="1" fill={C.blue}/></svg>
+            </button>
+            <button onClick={() => printPackingSlip(p)} disabled={printing} title="Imprimer BL"
+              style={{ ...iconBtn, background: C.greenSoft, borderRadius: 10, padding: "8px 12px" }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            </button>
+          </div>
         </div>
 
+        {/* Progress bar */}
+        {!isPrepared && items.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: C.textMuted }}>{scannedCount}/{items.length} articles scannés</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: allScanned ? C.green : C.blue }}>{progPct}%</span>
+            </div>
+            <div style={{ height: 8, borderRadius: 4, background: C.bg, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${progPct}%`, borderRadius: 4, background: allScanned ? C.green : C.blue, transition: "width .3s" }} />
+            </div>
+          </div>
+        )}
+
         {/* Customer info */}
-        <Section>
+        <div style={{ ...cardStyle, marginBottom: 8, padding: 12 }}>
           <div style={{ fontSize: 12, color: C.textSec }}>
-            <div style={{ fontWeight: 600 }}>{p.name}</div>
+            <div style={{ fontWeight: 700, color: C.text }}>{p.name}</div>
             {p.company_name && <div>{p.company_name}</div>}
             <div>{p.address}</div>
             <div>{p.postal_code} {p.city}</div>
             {p.email && <div style={{ color: C.blue, marginTop: 4 }}>{p.email}</div>}
             {p.telephone && <div>{p.telephone}</div>}
           </div>
-          <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-            {p._raw?.shipping_details?.delivery_indicator && (
-              <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "2px 8px", borderRadius: 6 }}>
-                🚚 {p._raw.shipping_details.delivery_indicator}
-              </span>
-            )}
-          </div>
-        </Section>
+          {p._raw?.shipping_details?.delivery_indicator && (
+            <span style={{ display: "inline-block", marginTop: 6, fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "2px 8px", borderRadius: 6 }}>
+              🚚 {p._raw.shipping_details.delivery_indicator}
+            </span>
+          )}
+        </div>
 
         {/* Articles */}
-        <Section>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Articles à préparer</div>
-          {items.length === 0 && <div style={{ fontSize: 12, color: C.textMuted }}>Aucun article détaillé</div>}
-          {items.map((item: any, i: number) => {
-            const match = getMatch(item.sku);
-            const loc = getLocation(item.sku);
-            const required = item.quantity || 1;
-            const scanned = getScanned(item);
-            const done = scanned >= required;
-            return (
-              <div key={i} style={{
-                padding: "10px 0",
-                borderBottom: i < items.length - 1 ? `1px solid ${C.border}` : "",
-                display: "flex", gap: 10, alignItems: "flex-start",
-                opacity: done ? 0.6 : 1,
-              }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>Articles à préparer</div>
+        {items.length === 0 && <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 8 }}>Aucun article détaillé</div>}
+        {items.map((item: any, i: number) => {
+          const match = getMatch(item.sku);
+          const loc = getLocation(item.sku);
+          const required = item.quantity || 1;
+          const scanned = getScanned(item);
+          const done = scanned >= required;
+          return (
+            <div key={i} style={{ ...cardStyle, marginBottom: 8, padding: 12, opacity: done ? 0.65 : 1 }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                 {/* Status icon */}
                 <div style={{
                   width: 36, height: 36, borderRadius: 8, flexShrink: 0,
-                  background: done ? C.greenSoft : C.border,
+                  background: done ? C.greenSoft : C.bg,
                   display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
                 }}>
                   {done ? "✅" : item._isChariot ? "🛒" : "⬜"}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{match?.product_name || item.description || item.sku}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{match?.product_name || item.description || item.sku}</div>
                   <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
                     SKU: {item.sku || "N/A"}
                     {match?.default_code && <span> · Réf: {match.default_code}</span>}
@@ -4451,10 +4479,14 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                     )}
                   </div>
                   {item._isChariot ? (
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", marginTop: 4 }}>🛒 Chariot Eshop</div>
+                    <div style={{ marginTop: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "2px 8px", borderRadius: 6 }}>🛒 Chariot Eshop</span>
+                    </div>
                   ) : loc ? (
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#059669", marginTop: 4 }}>
-                      📍 {loc.location_name} <span style={{ fontWeight: 400, color: C.textMuted }}>({loc.quantity} en stock)</span>
+                    <div style={{ marginTop: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#059669", background: "#d1fae5", padding: "2px 8px", borderRadius: 6 }}>
+                        📍 {loc.location_name} <span style={{ fontWeight: 400 }}>({loc.quantity} en stock)</span>
+                      </span>
                     </div>
                   ) : match ? (
                     <div style={{ fontSize: 11, color: C.orange, marginTop: 4 }}>⚠ Pas de stock trouvé</div>
@@ -4473,9 +4505,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                   )}
                 </div>
               </div>
-            );
-          })}
-        </Section>
+            </div>
+          );
+        })}
 
         {scanError && (
           <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", marginBottom: 8, fontSize: 12, color: "#dc2626" }}>
@@ -4484,23 +4516,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         )}
         {error && <Alert type="error">{error}</Alert>}
 
-        {/* Actions */}
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <button onClick={() => printLabel(p)} disabled={printing}
-            style={{ flex: 1, padding: 12, background: C.blueSoft, color: C.blue, border: `1px solid ${C.blueBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-            {printing ? "⏳" : "🚚 Étiquette"}
-          </button>
-          <button onClick={() => printPackingSlip(p)} disabled={printing}
-            style={{ flex: 1, padding: 12, background: C.greenSoft, color: C.green, border: `1px solid ${C.greenBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-            📄 BL
-          </button>
-        </div>
-
         {!isPrepared ? (
           <BigButton
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
             label={allScanned ? "Confirmer la préparation" : "Forcer comme préparé"}
-            sub={allScanned ? `${items.length} article(s) tous scannés` : `${items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length}/${items.length} scannés`}
+            sub={allScanned ? `${items.length} article(s) tous scannés` : `${scannedCount}/${items.length} scannés`}
             color={allScanned ? C.green : C.orange}
             onClick={async () => {
               onToast("⏳ Impression étiquette + BL...");
@@ -4561,26 +4581,28 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         const items = p.parcel_items || p.lines || [];
         const statusMsg = p.status?.message || "";
         return (
-          <div key={p.id} style={{ ...cardStyle, marginBottom: 8, borderLeft: `3px solid ${isPrepared ? C.green : "#f59e0b"}`, cursor: "pointer" }}
-            onClick={() => openParcel(p)}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.order_number || `#${p.id}`}</div>
-                <div style={{ fontSize: 12, color: C.textSec }}>{p.name}</div>
-                <div style={{ fontSize: 11, color: C.textMuted }}>{p.postal_code} {p.city} · {p.country?.name || p.country_iso_2 || ""}</div>
-              </div>
-              <div style={{ textAlign: "right", flexShrink: 0 }}>
-                {isPrepared ? (
-                  <span style={{ fontSize: 10, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "2px 8px", borderRadius: 6 }}>✓ Préparé</span>
-                ) : (
-                  <span style={{ fontSize: 10, fontWeight: 700, color: "#92400e", background: "#fef3c7", padding: "2px 8px", borderRadius: 6 }}>{statusMsg || "En attente"}</span>
-                )}
-              </div>
+          <div key={p.id} style={{ ...cardStyle, marginBottom: 8, padding: 16 }}>
+            {/* Ligne 1 : numéro commande + badge */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: C.text, letterSpacing: -0.3 }}>{p.order_number || `#${p.id}`}</div>
+              {isPrepared
+                ? <span style={{ fontSize: 10, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "2px 8px", borderRadius: 6 }}>✓ Préparé</span>
+                : <span style={{ fontSize: 10, fontWeight: 700, color: "#92400e", background: "#fef3c7", padding: "2px 8px", borderRadius: 6 }}>{statusMsg || "En attente"}</span>
+              }
             </div>
-            <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-              {items.length > 0 && <span style={{ fontSize: 10, color: C.textMuted, background: C.bg, padding: "2px 6px", borderRadius: 4 }}>{items.length} art.</span>}
-              {p.carrier?.code && <span style={{ fontSize: 10, color: "#7c3aed", background: "#f3e8ff", padding: "2px 6px", borderRadius: 4 }}>{p.carrier.code}</span>}
-              {p.tracking_number && <span style={{ fontSize: 10, color: C.textMuted, background: C.bg, padding: "2px 6px", borderRadius: 4 }}>📦 {p.tracking_number}</span>}
+            {/* Ligne 2 : client */}
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.textSec, marginBottom: 2 }}>{p.name}</div>
+            {/* Ligne 3 : ville + badges */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" as const }}>
+              <span style={{ fontSize: 11, color: C.textMuted }}>{p.postal_code} {p.city}</span>
+              {items.length > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: C.blue, background: C.blueSoft, padding: "1px 7px", borderRadius: 5 }}>{items.length} art.</span>}
+              {p.carrier?.code && <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", padding: "1px 7px", borderRadius: 5 }}>{p.carrier.code}</span>}
+            </div>
+            {/* Bouton Préparer */}
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => openParcel(p)} style={{ flex: 1, padding: "11px 0", background: C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                {isPrepared ? "Voir la préparation" : "Préparer"}
+              </button>
             </div>
           </div>
         );
