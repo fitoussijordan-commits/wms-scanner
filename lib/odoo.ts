@@ -801,6 +801,128 @@ export async function matchSupplierRefs(session: OdooSession, supplierRefs: stri
   return refToProduct;
 }
 
+// ─── Matching E-shop SKU → produit Odoo (3 stratégies en cascade) ──────────────
+//
+// 1. Référence fournisseur (product.supplierinfo.product_code)
+// 2. EAN / barcode (product.product.barcode)
+// 3. Nom similaire (ilike sur product.template.name)
+//
+export interface EshopMatchResult {
+  product_id: number;
+  product_name: string;
+  default_code: string;
+  barcode: string;
+  match_method: "supplier_ref" | "barcode" | "name";
+}
+
+export async function matchEshopSkus(
+  session: OdooSession,
+  skus: string[]
+): Promise<Record<string, EshopMatchResult>> {
+  if (!skus.length) return {};
+
+  const result: Record<string, EshopMatchResult> = {};
+  const remaining = new Set(skus);
+
+  // Helper — enrichit un product.product et le met dans result
+  const addMatch = (sku: string, prod: any, method: EshopMatchResult["match_method"]) => {
+    result[sku] = {
+      product_id: prod.id,
+      product_name: prod.name,
+      default_code: prod.default_code || "",
+      barcode: prod.barcode || "",
+      match_method: method,
+    };
+    remaining.delete(sku);
+  };
+
+  // ── Stratégie 1 : référence fournisseur ──────────────────────────────────
+  const supplierInfos = await searchRead(
+    session, "product.supplierinfo",
+    [["product_code", "in", skus]],
+    ["id", "product_code", "product_id", "product_tmpl_id"],
+    skus.length * 3
+  );
+
+  const tmplIds: number[] = [];
+  const tmplToSku: Record<number, string> = {};
+
+  for (const si of supplierInfos) {
+    const sku = si.product_code;
+    if (!remaining.has(sku)) continue;
+    if (si.product_id) {
+      // On a déjà un product.product — on enrichit après
+      result[sku] = { product_id: si.product_id[0], product_name: si.product_id[1], default_code: "", barcode: "", match_method: "supplier_ref" };
+      remaining.delete(sku);
+    } else if (si.product_tmpl_id) {
+      tmplIds.push(si.product_tmpl_id[0]);
+      tmplToSku[si.product_tmpl_id[0]] = sku;
+    }
+  }
+
+  // Résoudre les template → product.product
+  if (tmplIds.length > 0) {
+    const variants = await searchRead(
+      session, "product.product",
+      [["product_tmpl_id", "in", tmplIds]],
+      ["id", "name", "product_tmpl_id", "default_code", "barcode"],
+      tmplIds.length * 3
+    );
+    for (const v of variants) {
+      const tmplId = Array.isArray(v.product_tmpl_id) ? v.product_tmpl_id[0] : v.product_tmpl_id;
+      const sku = tmplToSku[tmplId];
+      if (sku && remaining.has(sku)) addMatch(sku, v, "supplier_ref");
+    }
+  }
+
+  // Enrichir les matchs supplier_ref qui n'ont pas encore default_code/barcode
+  const needsEnrich = Object.entries(result).filter(([_, v]) => v.match_method === "supplier_ref" && !v.default_code && !v.barcode);
+  if (needsEnrich.length > 0) {
+    const ids = needsEnrich.map(([_, v]) => v.product_id);
+    const products = await searchRead(session, "product.product", [["id", "in", ids]], ["id", "name", "default_code", "barcode"], ids.length);
+    const pMap: Record<number, any> = {};
+    for (const p of products) pMap[p.id] = p;
+    for (const [sku, val] of needsEnrich) {
+      const p = pMap[val.product_id];
+      if (p) { result[sku].default_code = p.default_code || ""; result[sku].barcode = p.barcode || ""; result[sku].product_name = p.name; }
+    }
+  }
+
+  if (remaining.size === 0) return result;
+
+  // ── Stratégie 2 : EAN / barcode ──────────────────────────────────────────
+  const remainingArr = Array.from(remaining);
+  const byBarcode = await searchRead(
+    session, "product.product",
+    [["barcode", "in", remainingArr]],
+    ["id", "name", "default_code", "barcode"],
+    remainingArr.length
+  );
+  for (const p of byBarcode) {
+    const sku = remainingArr.find(s => s === p.barcode);
+    if (sku) addMatch(sku, p, "barcode");
+  }
+
+  if (remaining.size === 0) return result;
+
+  // ── Stratégie 3 : nom similaire (ilike) ──────────────────────────────────
+  // On cherche chaque SKU restant comme fragment de nom — on prend le meilleur match
+  for (const sku of Array.from(remaining)) {
+    // Nettoyer le SKU pour en faire un fragment de nom utilisable
+    const fragment = sku.replace(/[-_]/g, " ").replace(/\s+/g, " ").trim();
+    if (fragment.length < 3) continue;
+    const found = await searchRead(
+      session, "product.product",
+      [["name", "ilike", fragment], ["active", "in", [true, false]]],
+      ["id", "name", "default_code", "barcode"],
+      1
+    );
+    if (found.length > 0) addMatch(sku, found[0], "name");
+  }
+
+  return result;
+}
+
 // Get main stock location for product IDs (where most qty is stored)
 export async function getProductLocations(session: OdooSession, productIds: number[]) {
   if (!productIds.length) return {};

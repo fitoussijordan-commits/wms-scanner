@@ -4143,7 +4143,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         allParcels.flatMap((p: any) => (p.parcel_items || []).map((item: any) => item.sku)).filter(Boolean)
       )) as string[];
       if (allRefs.length > 0 && session) {
-        const matches = await odoo.matchSupplierRefs(session, allRefs);
+        const matches = await odoo.matchEshopSkus(session, allRefs);
         setMatchData(matches);
         const productIds = Array.from(new Set(
           Object.values(matches).map((m: any) => m.product_id).filter(Boolean)
@@ -4442,6 +4442,13 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                   <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
                     SKU: {item.sku || "N/A"}
                     {match?.default_code && <span> · Réf: {match.default_code}</span>}
+                    {match?.match_method && match.match_method !== "supplier_ref" && (
+                      <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 700, padding: "1px 5px", borderRadius: 4,
+                        background: match.match_method === "barcode" ? "#dbeafe" : "#fef3c7",
+                        color: match.match_method === "barcode" ? "#1d4ed8" : "#92400e" }}>
+                        {match.match_method === "barcode" ? "EAN" : "nom~"}
+                      </span>
+                    )}
                   </div>
                   {item._isChariot ? (
                     <div style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", marginTop: 4 }}>🛒 Chariot Eshop</div>
