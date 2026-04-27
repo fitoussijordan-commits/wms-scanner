@@ -93,27 +93,25 @@ export async function GET(req: NextRequest) {
       if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
 
       // Helper: find a parcel for this order via multiple strategies
+      // IMPORTANT: always verify exact order_number match to avoid returning a wrong parcel
       const findParcel = async (): Promise<any | null> => {
-        // 1. By order_number
+        // 1. By order_number — verify exact match in response
         try {
           const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber!)}`, auth);
-          const list = d.parcels || [];
-          if (list.length > 0) return list[0];
+          const list: any[] = d.parcels || [];
+          // SendCloud may do partial/fuzzy search — filter strictly
+          const exact = list.find((p: any) => String(p.order_number) === String(orderNumber));
+          if (exact) return exact;
         } catch {}
-        // 2. By order_id (SendCloud sometimes stores it as external reference)
+        // 2. By order_id — verify exact match
         try {
           const d = await scJson(`${V2}/parcels?external_order_id=${encodeURIComponent(orderId!)}`, auth);
-          const list = d.parcels || [];
-          if (list.length > 0) return list[0];
-        } catch {}
-        // 3. Scan recent parcels in the integration and match by order_number
-        try {
-          const d = await scJson(`${V2}/parcels?limit=100&integration_id=527093`, auth);
           const list: any[] = d.parcels || [];
-          const match = list.find((p: any) =>
-            p.order_number === orderNumber || String(p.external_order_id) === String(orderId)
+          const exact = list.find((p: any) =>
+            String(p.order_number) === String(orderNumber) ||
+            String(p.external_order_id) === String(orderId)
           );
-          if (match) return match;
+          if (exact) return exact;
         } catch {}
         return null;
       }
