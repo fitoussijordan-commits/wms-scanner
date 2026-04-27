@@ -123,9 +123,10 @@ export async function GET(req: NextRequest) {
         parcel = null;
       }
 
-      // Step 2: create label if not already found with a label URL
+      // Step 2: create label
       let createErrMsg = "";
       if (!parcel) {
+        let v3Failed = false;
         try {
           await scJson(`${V3}/orders/create-labels-async`, auth, {
             method: "POST",
@@ -136,25 +137,78 @@ export async function GET(req: NextRequest) {
           });
         } catch (createErr: any) {
           createErrMsg = createErr.message || "";
+          v3Failed = true;
           console.warn("[label] create-labels-async error:", createErrMsg);
-          // Si ce n'est pas une erreur "déjà existant", on retourne l'erreur réelle au client
-          const isAlreadyExists = createErrMsg.includes("422") || createErrMsg.toLowerCase().includes("already") || createErrMsg.toLowerCase().includes("exist");
-          if (!isAlreadyExists) {
-            return NextResponse.json({ error: `SendCloud: ${createErrMsg}` }, { status: 422 });
-          }
         }
-        // Poll V2 max 4x with 2s gap
-        for (let i = 0; i < 4; i++) {
-          await new Promise(r => setTimeout(r, 2000));
-          const candidate = await findParcel();
-          if (candidate && (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0])) {
-            parcel = candidate;
-            break;
+
+        // Si V3 échoue avec unit_price (prix nul sur un article) → fallback V2 direct
+        if (v3Failed && createErrMsg.includes("unit_price")) {
+          try {
+            const orderDetail = await scJson(`${V3}/orders/${orderId}`, auth);
+            const od = orderDetail?.data || orderDetail;
+            const addr = od?.shipping_address || {};
+            const shippingDetails = od?.shipping_details || {};
+            const orderItems: any[] = od?.order_details?.order_items || od?.order_items || [];
+
+            const parcelPayload: any = {
+              name: addr.name || addr.company_name || "Client",
+              address: [addr.address_line_1, addr.house_number].filter(Boolean).join(" ") || addr.address_line_1 || "",
+              city: addr.city || "",
+              postal_code: addr.postal_code || "",
+              country: { iso_2: (addr.country_iso_2 || addr.country || "FR").slice(0, 2).toUpperCase() },
+              weight: "1.000",
+              order_number: orderNumber,
+              integration: { id: 527093 },
+              request_label: true,
+              // Items avec unit_price forcé à 0 pour éviter la validation
+              parcel_items: orderItems.map((item: any) => ({
+                description: item.product_name || item.description || item.sku || "Article",
+                quantity: item.quantity || 1,
+                value: "0.00",
+                weight: "0.100",
+                sku: item.sku || "",
+                origin_country: "FR",
+              })),
+            };
+            if (shippingDetails.shipping_method_id) {
+              parcelPayload.shipment = { id: shippingDetails.shipping_method_id };
+            }
+
+            const created = await scJson(`${V2}/parcels`, auth, {
+              method: "POST",
+              body: JSON.stringify({ parcel: parcelPayload }),
+            });
+            const v2Parcel = created?.parcel;
+            if (v2Parcel) {
+              if (v2Parcel.label?.label_printer || v2Parcel.label?.normal_printer?.[0]) {
+                parcel = v2Parcel;
+              } else {
+                // Poll sur ce colis spécifique
+                for (let i = 0; i < 4; i++) {
+                  await new Promise(r => setTimeout(r, 2000));
+                  const pd = await scJson(`${V2}/parcels/${v2Parcel.id}`, auth).catch(() => null);
+                  const p2 = pd?.parcel;
+                  if (p2?.label?.label_printer || p2?.label?.normal_printer?.[0]) { parcel = p2; break; }
+                }
+                if (!parcel) parcel = v2Parcel;
+              }
+              createErrMsg = ""; // succès via V2
+            }
+          } catch (v2Err: any) {
+            createErrMsg = v2Err.message;
+            console.warn("[label] V2 fallback error:", createErrMsg);
           }
-        }
-        // Last resort: return whatever parcel we find even without a label (client can retry)
-        if (!parcel) {
-          parcel = await findParcel();
+        } else if (!v3Failed || createErrMsg.includes("422")) {
+          // V3 OK ou 422 (parcel déjà existant) → poll V2
+          for (let i = 0; i < 4; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            const candidate = await findParcel();
+            if (candidate && (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0])) {
+              parcel = candidate;
+              break;
+            }
+          }
+          if (!parcel) parcel = await findParcel();
         }
       }
 
