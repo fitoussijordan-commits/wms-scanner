@@ -124,6 +124,7 @@ export async function GET(req: NextRequest) {
       }
 
       // Step 2: create label if not already found with a label URL
+      let createErrMsg = "";
       if (!parcel) {
         try {
           await scJson(`${V3}/orders/create-labels-async`, auth, {
@@ -134,8 +135,13 @@ export async function GET(req: NextRequest) {
             }),
           });
         } catch (createErr: any) {
-          // 422 = parcel already exists or validation failed — still poll for existing label
-          console.warn("[label] create-labels-async error:", createErr.message);
+          createErrMsg = createErr.message || "";
+          console.warn("[label] create-labels-async error:", createErrMsg);
+          // Si ce n'est pas une erreur "déjà existant", on retourne l'erreur réelle au client
+          const isAlreadyExists = createErrMsg.includes("422") || createErrMsg.toLowerCase().includes("already") || createErrMsg.toLowerCase().includes("exist");
+          if (!isAlreadyExists) {
+            return NextResponse.json({ error: `SendCloud: ${createErrMsg}` }, { status: 422 });
+          }
         }
         // Poll V2 max 4x with 2s gap
         for (let i = 0; i < 4; i++) {
@@ -152,7 +158,9 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      if (!parcel) return NextResponse.json({ error: "Colis non trouvé après création étiquette" }, { status: 404 });
+      if (!parcel) return NextResponse.json({
+        error: `Colis non trouvé${createErrMsg ? ` — SendCloud: ${createErrMsg}` : ""}`
+      }, { status: 404 });
 
       const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
       if (!labelUrl) {
