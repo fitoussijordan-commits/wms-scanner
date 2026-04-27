@@ -7247,9 +7247,8 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
     { key: "palette_wms", label: "Palettes WMS (70×45)", icon: "📦", hasSize: true },
     { key: "blank", label: "Étiquette vierge", icon: "✏️", hasSize: true },
     { key: "picking", label: "Étiquette colis (picking)", icon: "📦", hasSize: true },
-    // HIDDEN: E-shop — pas au point
-    // { key: "sendcloud", label: "Étiquette SendCloud", icon: "🚚", hasSize: false },
-    { key: "packingslip", label: "Bon de préparation (A4)", icon: "📄", hasSize: false },
+    { key: "sendcloud", label: "Étiquette transport E-shop", icon: "🚚", hasSize: false },
+    { key: "packingslip", label: "BL E-shop (A4)", icon: "📄", hasSize: false },
   ];
 
   const [configs, setConfigs] = useState<Record<LabelType, pn.LabelTypeConfig>>(() => pn.getAllLabelTypeConfigs());
