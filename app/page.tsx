@@ -270,7 +270,7 @@ async function generateEshopPackingSlipPDF(order: {
     const nameLines = doc.splitTextToSize(item.name, artW - 8);
     const subLines: string[] = [];
     if (item.ean) subLines.push(`EAN : ${item.ean}`);
-    if (item.odooRef) subLines.push(`Réf. Odoo : ${item.odooRef}`);
+    if (item.odooRef) subLines.push(`Réf : ${item.odooRef}`);
     if (item.properties) subLines.push(item.properties);
     const rowH = nameLines.length * 5.2 + subLines.length * 4 + 8;
 
