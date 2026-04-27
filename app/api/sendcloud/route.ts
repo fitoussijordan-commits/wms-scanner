@@ -125,43 +125,55 @@ export async function GET(req: NextRequest) {
 
       // Helper V2 direct parcel creation (bypass V3 validation)
       const createV2Parcel = async (): Promise<any | null> => {
+        // 1. Fetch V3 order detail to get recipient + shipping method
+        let od: any = {};
         try {
           const orderDetail = await scJson(`${V3}/orders/${orderId}`, auth);
-          const od = orderDetail?.data || orderDetail;
-          const addr = od?.shipping_address || {};
-          const shippingDetails = od?.shipping_details || {};
-          const orderItems: any[] = od?.order_details?.order_items || od?.order_items || [];
+          od = orderDetail?.data || orderDetail || {};
+          console.log("[label] V3 order fetched, keys:", Object.keys(od).join(","));
+        } catch (fetchErr: any) {
+          console.warn("[label] V3 order fetch error:", fetchErr.message);
+        }
 
-          const parcelPayload: any = {
-            name: addr.name || addr.company_name || "Client",
-            address: [addr.address_line_1, addr.house_number].filter(Boolean).join(" ") || addr.address_line_1 || "",
-            city: addr.city || "",
-            postal_code: addr.postal_code || "",
-            country: { iso_2: (addr.country_iso_2 || addr.country || "FR").slice(0, 2).toUpperCase() },
-            weight: "1.000",
-            order_number: orderNumber,
-            integration: { id: 527093 },
-            request_label: true,
-            parcel_items: orderItems.map((item: any) => ({
-              description: item.product_name || item.description || item.sku || "Article",
-              quantity: item.quantity || 1,
-              value: "0.00",
-              weight: "0.100",
-              sku: item.sku || "",
-              origin_country: "FR",
-            })),
-          };
-          if (shippingDetails.shipping_method_id) {
-            parcelPayload.shipment = { id: shippingDetails.shipping_method_id };
-          }
+        const addr = od?.shipping_address || {};
+        const shippingDetails = od?.shipping_details || od?.shipment || {};
+        console.log("[label] addr keys:", Object.keys(addr).join(","), "| shipping keys:", Object.keys(shippingDetails).join(","));
 
+        // 2. Build V2 parcel payload — NO parcel_items to avoid price validation
+        const parcelPayload: any = {
+          name: addr.name || addr.company_name || "Client",
+          address: [addr.address_line_1, addr.house_number].filter(Boolean).join(" ") || addr.street || "",
+          city: addr.city || "",
+          postal_code: addr.postal_code || "",
+          country: { iso_2: (addr.country_iso_2 || addr.country_code || addr.country || "FR").slice(0, 2).toUpperCase() },
+          weight: "1.000",
+          order_number: orderNumber,
+          request_label: true,
+        };
+
+        // Shipping method — try several possible field names
+        const shipMethodId = shippingDetails.shipping_method_id
+          || shippingDetails.id
+          || od?.carrier?.id
+          || od?.shipping_method?.id;
+        if (shipMethodId) {
+          parcelPayload.shipment = { id: shipMethodId };
+          console.log("[label] Using shipment id:", shipMethodId);
+        } else {
+          console.warn("[label] No shipment id found, sending without");
+        }
+
+        // 3. POST to V2
+        try {
+          console.log("[label] V2 POST payload:", JSON.stringify(parcelPayload));
           const created = await scJson(`${V2}/parcels`, auth, {
             method: "POST",
             body: JSON.stringify({ parcel: parcelPayload }),
           });
+          console.log("[label] V2 POST success, parcel id:", created?.parcel?.id);
           return created?.parcel || null;
         } catch (v2Err: any) {
-          console.warn("[label] V2 parcel creation error:", v2Err.message);
+          console.warn("[label] V2 POST error:", v2Err.message);
           return null;
         }
       };

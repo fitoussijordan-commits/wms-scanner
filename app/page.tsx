@@ -87,7 +87,7 @@ async function generateEshopPackingSlipPDF(order: {
 
   // ── Header zone: Logo (left) + Barcode (right) ──
   const headerY = M;
-  const logoSz = 70; // carré 70×70mm
+  const logoSz = 40; // carré 40×40mm
 
   // Logo Dr. Hauschka PNG — affiché en carré
   let logoLoaded = false;
