@@ -73,7 +73,7 @@ async function generateEshopPackingSlipPDF(order: {
   recipient_postal: string;
   recipient_city: string;
   recipient_country: string;
-  items: Array<{ name: string; sku: string; quantity: number; properties?: string }>;
+  items: Array<{ name: string; sku: string; quantity: number; ean?: string; odooRef?: string; properties?: string }>;
 }): Promise<string> {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
@@ -87,27 +87,34 @@ async function generateEshopPackingSlipPDF(order: {
 
   let y = M;
 
-  // ── Logo zone ──
-  // Dr. Hauschka logo text (bold, large)
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(22);
-  doc.setTextColor(...BLACK);
-  doc.text("Dr. Hauschka", M, y + 10);
+  // ── Logo Dr. Hauschka ──
+  // Tente de charger le logo depuis /public/logo-drhauschka.png
+  let logoLoaded = false;
+  try {
+    const logoRes = await fetch("/logo-dr-hauschka.png");
+    if (logoRes.ok) {
+      const logoBlob = await logoRes.blob();
+      const logoBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(logoBlob);
+      });
+      // Logo 55mm large, hauteur auto (~16mm pour ratio paysage)
+      doc.addImage(`data:image/png;base64,${logoBase64}`, "PNG", M, y, 55, 16);
+      logoLoaded = true;
+      y += 20;
+    }
+  } catch {}
 
-  // WALA logo circle symbol (simulate with ellipse lines)
-  const cx = M + 6; const cy = y + 20;
-  doc.setDrawColor(...BLACK);
-  doc.setLineWidth(0.8);
-  doc.ellipse(cx, cy, 5.5, 5.5);
-  // Inner swirl lines to simulate WALA logo
-  doc.setLineWidth(0.5);
-  doc.ellipse(cx, cy, 3, 5);
-  doc.ellipse(cx, cy, 5.5, 3);
-
-  // WALA France bold under logo
-  doc.setFontSize(13);
-  doc.setFont("helvetica", "bold");
-  doc.text("WALA France", M, y + 30);
+  if (!logoLoaded) {
+    // Fallback texte minimaliste si logo absent
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.setTextColor(...BLACK);
+    doc.text("Dr. Hauschka — WALA France", M, y + 8);
+    y += 14;
+  }
 
   // ── Barcode (right side) ──
   const bcW = 65; const bcH = 18;
@@ -128,7 +135,8 @@ async function generateEshopPackingSlipPDF(order: {
   doc.setTextColor(...BLACK);
   doc.text(`PS${order.order_number.padStart(16, "0")}`, bcX + bcW / 2, bcY + bcH + 4.5, { align: "center" });
 
-  y += 36;
+  // y is already positioned after logo; ensure enough space for the barcode section
+  if (y < M + 36) y = M + 36;
 
   // ── 3-column info table ──
   // Full-width bordered table
@@ -230,8 +238,11 @@ async function generateEshopPackingSlipPDF(order: {
 
   for (const item of order.items) {
     const nameLines = doc.splitTextToSize(item.name, artW - 6);
-    const hasProps = !!item.properties;
-    const rowH = nameLines.length * 5 + (hasProps ? 5 : 0) + 6;
+    const subLines: string[] = [];
+    if (item.ean) subLines.push(`EAN : ${item.ean}`);
+    if (item.odooRef) subLines.push(`Réf : ${item.odooRef}`);
+    if (item.properties) subLines.push(item.properties);
+    const rowH = nameLines.length * 5 + subLines.length * 4.5 + 6;
 
     // Article name — bold
     doc.setFont("helvetica", "bold");
@@ -239,16 +250,17 @@ async function generateEshopPackingSlipPDF(order: {
     doc.setTextColor(...BLACK);
     nameLines.forEach((l: string, i: number) => doc.text(l, M, y + i * 5));
 
-    // Properties — normal gray
-    if (hasProps) {
+    // Sub-info (EAN, réf, propriétés) — normal gray
+    if (subLines.length > 0) {
       doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
+      doc.setFontSize(8);
       doc.setTextColor(...GRAY);
-      doc.text(item.properties!, M, y + nameLines.length * 5);
+      let sy = y + nameLines.length * 5;
+      subLines.forEach((l: string) => { doc.text(l, M, sy); sy += 4.5; });
     }
 
     // Quantity — right aligned
-    doc.setFont("helvetica", "normal");
+    doc.setFont("helvetica", "bold");
     doc.setFontSize(9.5);
     doc.setTextColor(...BLACK);
     doc.text(String(item.quantity), W - M - qtyW + 3, y);
@@ -4193,7 +4205,13 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     const fallbackLocal = async () => {
       const items = (p.parcel_items || []).map((item: any) => {
         const match = matchData[item.sku];
-        return { name: match?.product_name || item.description || item.sku, sku: item.sku, quantity: item.quantity || 1 };
+        return {
+          name: match?.product_name || item.description || item.sku,
+          sku: item.sku,
+          quantity: item.quantity || 1,
+          ean: match?.barcode || undefined,
+          odooRef: match?.default_code || undefined,
+        };
       });
       const raw = p._raw || {};
       const addr = raw.shipping_address || {};
