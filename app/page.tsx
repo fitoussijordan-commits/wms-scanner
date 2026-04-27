@@ -85,28 +85,11 @@ async function generateEshopPackingSlipPDF(order: {
   const DARK   = [20, 20, 20]     as [number,number,number];
   const ACCENT = [40, 40, 40]     as [number,number,number];
 
-  // ── Header zone: Logo (left) + Barcode (right) côte à côte ──
-  const headerY = M; // y=15 pour les deux
-  const logoH = 22;  // hauteur logo
+  // ── Header zone: Logo (left) + Barcode (right) ──
+  const headerY = M;
+  const logoSz = 28; // carré 28×28mm
 
-  // Barcode (en haut à droite, aligné avec le logo)
-  const bcW = 62; const bcH = 14;
-  const bcX = W - M - bcW;
-  doc.setDrawColor(...BLACK);
-  const bars = 90;
-  for (let i = 0; i < bars; i++) {
-    const thick = (i % 5 === 0 || i % 7 === 0) ? 1.1 : (i % 3 === 0 ? 0.55 : 0.25);
-    doc.setLineWidth(thick);
-    const bx = bcX + (i / bars) * bcW;
-    if (i % 2 === 0) doc.line(bx, headerY, bx, headerY + bcH);
-  }
-  doc.setLineWidth(0.25);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(7);
-  doc.setTextColor(...GRAY);
-  doc.text(`${order.order_number}`, bcX + bcW / 2, headerY + bcH + 3.5, { align: "center" });
-
-  // Logo Dr. Hauschka (en haut à gauche, même Y que barcode)
+  // Logo Dr. Hauschka PNG — affiché en carré
   let logoLoaded = false;
   try {
     const logoRes = await fetch("/logo-dr-hauschka.png");
@@ -118,7 +101,7 @@ async function generateEshopPackingSlipPDF(order: {
         reader.onerror = reject;
         reader.readAsDataURL(logoBlob);
       });
-      doc.addImage(`data:image/png;base64,${logoBase64}`, "PNG", M, headerY, 72, logoH);
+      doc.addImage(`data:image/png;base64,${logoBase64}`, "PNG", M, headerY, logoSz, logoSz);
       logoLoaded = true;
     }
   } catch {}
@@ -127,11 +110,28 @@ async function generateEshopPackingSlipPDF(order: {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(15);
     doc.setTextColor(...BLACK);
-    doc.text("Dr. Hauschka", M, headerY + 12);
+    doc.text("Dr. Hauschka", M, headerY + 14);
   }
 
-  // Y après la zone header (logo + barcode terminés)
-  let y = headerY + logoH + 8; // 15 + 22 + 8 = 45mm
+  // Barcode (en haut à droite, aligné avec le logo)
+  const bcW = 62; const bcH = 14;
+  const bcX = W - M - bcW;
+  doc.setDrawColor(...BLACK);
+  const bars = 90;
+  for (let i = 0; i < bars; i++) {
+    const thick = (i % 5 === 0 || i % 7 === 0) ? 1.1 : (i % 3 === 0 ? 0.55 : 0.25);
+    doc.setLineWidth(thick);
+    const bx = bcX + (i / bars) * bcW;
+    if (i % 2 === 0) doc.line(bx, headerY + 4, bx, headerY + 4 + bcH);
+  }
+  doc.setLineWidth(0.25);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7);
+  doc.setTextColor(...GRAY);
+  doc.text(`${order.order_number}`, bcX + bcW / 2, headerY + 4 + bcH + 3.5, { align: "center" });
+
+  // Y après la zone header
+  let y = headerY + logoSz + 8;
 
   // ── Titre "BON DE LIVRAISON" ──
   doc.setFont("helvetica", "bold");
