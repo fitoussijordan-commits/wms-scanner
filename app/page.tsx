@@ -4220,7 +4220,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
   // BL : tente le vrai PDF SendCloud, sinon génère le BL local en fallback
   const printPackingSlip = async (p: any) => {
-    const psCfg = pn.getLabelTypeConfig("packingslip");
+    const psCfg = pn.getLabelTypeConfig("packingslip_eshop");
     const printerId = psCfg.printerId || pn.getSavedPrinterId();
 
     const doPrint = async (pdfBase64: string, label: string) => {
@@ -7319,8 +7319,9 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
     { key: "palette_wms", label: "Palettes WMS (70×45)", icon: "📦", hasSize: true },
     { key: "blank", label: "Étiquette vierge", icon: "✏️", hasSize: true },
     { key: "picking", label: "Étiquette colis (picking)", icon: "📦", hasSize: true },
+    { key: "packingslip", label: "BL préparation (A4)", icon: "📄", hasSize: false },
     { key: "sendcloud", label: "Étiquette transport E-shop", icon: "🚚", hasSize: false },
-    { key: "packingslip", label: "BL E-shop (A4)", icon: "📄", hasSize: false },
+    { key: "packingslip_eshop", label: "BL E-shop (A4)", icon: "🛍️", hasSize: false },
   ];
 
   const [configs, setConfigs] = useState<Record<LabelType, pn.LabelTypeConfig>>(() => pn.getAllLabelTypeConfigs());
