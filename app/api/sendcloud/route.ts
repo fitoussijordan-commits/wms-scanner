@@ -102,13 +102,18 @@ export async function GET(req: NextRequest) {
 
       // Step 2: create label only if not already exists
       if (!parcel) {
-        await scJson(`${V3}/orders/create-labels-async`, auth, {
-          method: "POST",
-          body: JSON.stringify({
-            integration_id: 527093,
-            orders: [{ order_number: orderNumber }],
-          }),
-        });
+        try {
+          await scJson(`${V3}/orders/create-labels-async`, auth, {
+            method: "POST",
+            body: JSON.stringify({
+              integration_id: 527093,
+              orders: [{ order_number: orderNumber }],
+            }),
+          });
+        } catch (createErr: any) {
+          // 422 = colis déjà existant ou validation échouée — on tente quand même de récupérer l'étiquette existante
+          console.warn("[label] create-labels-async error:", createErr.message);
+        }
         // Poll V2 max 3x with 2s gap (stay under Vercel 10s limit)
         for (let i = 0; i < 3; i++) {
           await new Promise(r => setTimeout(r, 2000));
