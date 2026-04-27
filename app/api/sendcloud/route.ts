@@ -92,15 +92,40 @@ export async function GET(req: NextRequest) {
       const orderNumber = searchParams.get("order_number");
       if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
 
-      // Step 1: check if parcel already exists
-      let parcel: any = null;
-      const existingData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
-      const existing = (existingData.parcels || [])[0];
-      if (existing?.label?.label_printer || existing?.label?.normal_printer?.[0]) {
-        parcel = existing;
+      // Helper: find a parcel for this order via multiple strategies
+      async function findParcel(): Promise<any | null> {
+        // 1. By order_number
+        try {
+          const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber!)}`, auth);
+          const list = d.parcels || [];
+          if (list.length > 0) return list[0];
+        } catch {}
+        // 2. By order_id (SendCloud sometimes stores it as external reference)
+        try {
+          const d = await scJson(`${V2}/parcels?external_order_id=${encodeURIComponent(orderId!)}`, auth);
+          const list = d.parcels || [];
+          if (list.length > 0) return list[0];
+        } catch {}
+        // 3. Scan recent parcels in the integration and match by order_number
+        try {
+          const d = await scJson(`${V2}/parcels?limit=100&integration_id=527093`, auth);
+          const list: any[] = d.parcels || [];
+          const match = list.find((p: any) =>
+            p.order_number === orderNumber || String(p.external_order_id) === String(orderId)
+          );
+          if (match) return match;
+        } catch {}
+        return null;
       }
 
-      // Step 2: create label only if not already exists
+      // Step 1: check if parcel already exists with a label
+      let parcel: any = await findParcel();
+      if (parcel && !(parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0])) {
+        // Parcel exists but no label yet — fall through to create
+        parcel = null;
+      }
+
+      // Step 2: create label if not already found with a label URL
       if (!parcel) {
         try {
           await scJson(`${V3}/orders/create-labels-async`, auth, {
@@ -111,29 +136,38 @@ export async function GET(req: NextRequest) {
             }),
           });
         } catch (createErr: any) {
-          // 422 = colis déjà existant ou validation échouée — on tente quand même de récupérer l'étiquette existante
+          // 422 = parcel already exists or validation failed — still poll for existing label
           console.warn("[label] create-labels-async error:", createErr.message);
         }
-        // Poll V2 max 3x with 2s gap (stay under Vercel 10s limit)
-        for (let i = 0; i < 3; i++) {
+        // Poll V2 max 4x with 2s gap
+        for (let i = 0; i < 4; i++) {
           await new Promise(r => setTimeout(r, 2000));
-          const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
-          const list = parcelsData.parcels || [];
-          if (list.length > 0 && (list[0]?.label?.label_printer || list[0]?.label?.normal_printer?.[0])) {
-            parcel = list[0]; break;
+          const candidate = await findParcel();
+          if (candidate && (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0])) {
+            parcel = candidate;
+            break;
           }
         }
-        // If still no label, return parcel id for retry
+        // Last resort: return whatever parcel we find even without a label (client can retry)
         if (!parcel) {
-          const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
-          parcel = (parcelsData.parcels || [])[0] || null;
+          parcel = await findParcel();
         }
       }
 
       if (!parcel) return NextResponse.json({ error: "Colis non trouvé après création étiquette" }, { status: 404 });
 
       const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
-      if (!labelUrl) return NextResponse.json({ error: "Étiquette non disponible" }, { status: 404 });
+      if (!labelUrl) {
+        // Return parcel info so client knows it exists but label isn't ready
+        return NextResponse.json({
+          parcelId: parcel.id,
+          tracking: parcel.tracking_number || "",
+          carrier: parcel.carrier?.code || "",
+          labelBase64: null,
+          labelPending: true,
+          error: "Étiquette en cours de génération — réessaie dans quelques secondes",
+        }, { status: 202 });
+      }
 
       const labelRes = await scFetch(labelUrl, auth);
       if (!labelRes.ok) return NextResponse.json({ error: `Erreur étiquette: ${labelRes.status}` }, { status: labelRes.status });

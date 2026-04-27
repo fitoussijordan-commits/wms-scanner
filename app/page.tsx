@@ -4257,12 +4257,19 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       const orderId = p._raw?.order_id || p.id;
       const orderNumber = p.order_number;
       const res = await fetch(`/api/sendcloud?action=label&order_id=${orderId}&order_number=${orderNumber}`);
-      if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Erreur étiquette"); }
       const data = await res.json();
+
+      // 202 = colis trouvé mais étiquette pas encore prête
+      if (res.status === 202 || data.labelPending) {
+        onToast(`⏳ Étiquette en cours — réessaie dans quelques secondes`);
+        return;
+      }
+      if (!res.ok) { throw new Error(data.error || "Erreur étiquette"); }
+      if (!data.labelBase64) { throw new Error("Pas de PDF reçu"); }
 
       const scCfg = pn.getLabelTypeConfig("sendcloud");
       const printerId = scCfg.printerId || pn.getSavedPrinterId();
-      if (printerId && data.labelBase64) {
+      if (printerId) {
         const result = await pn.printPdfLabel(printerId, data.labelBase64, `SendCloud ${orderNumber}`);
         if (result.success) {
           onToast(`✓ Étiquette ${data.tracking || orderNumber} imprimée`);
