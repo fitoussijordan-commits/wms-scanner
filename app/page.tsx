@@ -4173,27 +4173,64 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
   useEffect(() => { loadParcels(); }, []);
 
-  // BL depuis SendCloud (vrai document PDF SendCloud)
+  // BL : tente le vrai PDF SendCloud, sinon génère le BL local en fallback
   const printPackingSlip = async (p: any) => {
-    try {
-      const orderNumber = p.order_number;
-      if (!orderNumber) throw new Error("Numéro de commande manquant");
-      const res = await fetch(`/api/sendcloud?action=packingslip&order_number=${encodeURIComponent(orderNumber)}`);
-      if (!res.ok) { const err = await res.json(); throw new Error(err.error || `Erreur BL ${res.status}`); }
-      const data = await res.json();
-      if (!data.pdfBase64) throw new Error(data.error || "PDF BL non reçu de SendCloud");
-      const psCfg = pn.getLabelTypeConfig("packingslip");
-      const printerId = psCfg.printerId || pn.getSavedPrinterId();
+    const psCfg = pn.getLabelTypeConfig("packingslip");
+    const printerId = psCfg.printerId || pn.getSavedPrinterId();
+
+    const doPrint = async (pdfBase64: string, label: string) => {
       if (printerId) {
-        await pn.printPdfLabel(printerId, data.pdfBase64, `BL ${orderNumber}`);
-        onToast(`✓ BL ${orderNumber} imprimé`);
+        await pn.printPdfLabel(printerId, pdfBase64, label);
+        onToast(`✓ BL ${p.order_number} imprimé`);
       } else {
-        const byteArray = Uint8Array.from(atob(data.pdfBase64), c => c.charCodeAt(0));
+        const byteArray = Uint8Array.from(atob(pdfBase64), c => c.charCodeAt(0));
         const blob = new Blob([byteArray], { type: "application/pdf" });
         window.open(URL.createObjectURL(blob), "_blank");
         onToast("BL ouvert dans un nouvel onglet");
       }
-    } catch (e: any) { onToast(`⚠ BL: ${e.message}`); }
+    };
+
+    const fallbackLocal = async () => {
+      const items = (p.parcel_items || []).map((item: any) => {
+        const match = matchData[item.sku];
+        return { name: match?.product_name || item.description || item.sku, sku: item.sku, quantity: item.quantity || 1 };
+      });
+      const raw = p._raw || {};
+      const addr = raw.shipping_address || {};
+      const pdfBase64 = await generateEshopPackingSlipPDF({
+        order_number: p.order_number,
+        order_date: raw.order_details?.order_created_at ? new Date(raw.order_details.order_created_at).toLocaleDateString("fr-FR", { year: "numeric", month: "short", day: "numeric" }) : undefined,
+        shipping_method: raw.shipping_details?.delivery_indicator,
+        recipient_name: addr.name || p.name,
+        recipient_address: addr.address_line_1 || p.address,
+        recipient_postal: addr.postal_code || p.postal_code,
+        recipient_city: addr.city || p.city,
+        recipient_country: addr.country_code || "FR",
+        items,
+      });
+      await doPrint(pdfBase64, `BL-local ${p.order_number}`);
+    };
+
+    try {
+      const orderNumber = p.order_number;
+      if (!orderNumber) { await fallbackLocal(); return; }
+      const res = await fetch(`/api/sendcloud?action=packingslip&order_number=${encodeURIComponent(orderNumber)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.pdfBase64) {
+          await doPrint(data.pdfBase64, `BL ${orderNumber}`);
+          return;
+        }
+        // SendCloud retourne du JSON (pas encore de PDF) — fallback
+        console.warn("[BL] SendCloud n'a pas retourné de PDF, fallback local. Debug:", data.debug);
+      } else {
+        console.warn("[BL] Erreur SendCloud packingslip:", res.status);
+      }
+      await fallbackLocal();
+    } catch (e: any) {
+      console.warn("[BL] Exception:", e.message, "→ fallback local");
+      try { await fallbackLocal(); } catch (e2: any) { onToast(`⚠ BL: ${e2.message}`); }
+    }
   };
 
   const printLabel = async (p: any) => {
