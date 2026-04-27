@@ -165,12 +165,15 @@ export async function GET(req: NextRequest) {
 
         // 3. POST to V2
         try {
-          console.log("[label] V2 POST payload:", JSON.stringify(parcelPayload));
+          console.warn("[label] V2 POST payload keys:", Object.keys(parcelPayload).join(","), "| shipment:", parcelPayload.shipment?.id ?? "none");
           const created = await scJson(`${V2}/parcels`, auth, {
             method: "POST",
             body: JSON.stringify({ parcel: parcelPayload }),
           });
-          console.log("[label] V2 POST success, parcel id:", created?.parcel?.id);
+          console.warn("[label] V2 POST response keys:", Object.keys(created || {}).join(","), "| parcel id:", created?.parcel?.id ?? "null");
+          if (!created?.parcel) {
+            console.warn("[label] V2 POST inattendu — réponse complète:", JSON.stringify(created).substring(0, 300));
+          }
           return created?.parcel || null;
         } catch (v2Err: any) {
           console.warn("[label] V2 POST error:", v2Err.message);
