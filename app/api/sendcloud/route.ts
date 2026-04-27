@@ -123,10 +123,64 @@ export async function GET(req: NextRequest) {
         parcel = null;
       }
 
+      // Helper V2 direct parcel creation (bypass V3 validation)
+      const createV2Parcel = async (): Promise<any | null> => {
+        try {
+          const orderDetail = await scJson(`${V3}/orders/${orderId}`, auth);
+          const od = orderDetail?.data || orderDetail;
+          const addr = od?.shipping_address || {};
+          const shippingDetails = od?.shipping_details || {};
+          const orderItems: any[] = od?.order_details?.order_items || od?.order_items || [];
+
+          const parcelPayload: any = {
+            name: addr.name || addr.company_name || "Client",
+            address: [addr.address_line_1, addr.house_number].filter(Boolean).join(" ") || addr.address_line_1 || "",
+            city: addr.city || "",
+            postal_code: addr.postal_code || "",
+            country: { iso_2: (addr.country_iso_2 || addr.country || "FR").slice(0, 2).toUpperCase() },
+            weight: "1.000",
+            order_number: orderNumber,
+            integration: { id: 527093 },
+            request_label: true,
+            parcel_items: orderItems.map((item: any) => ({
+              description: item.product_name || item.description || item.sku || "Article",
+              quantity: item.quantity || 1,
+              value: "0.00",
+              weight: "0.100",
+              sku: item.sku || "",
+              origin_country: "FR",
+            })),
+          };
+          if (shippingDetails.shipping_method_id) {
+            parcelPayload.shipment = { id: shippingDetails.shipping_method_id };
+          }
+
+          const created = await scJson(`${V2}/parcels`, auth, {
+            method: "POST",
+            body: JSON.stringify({ parcel: parcelPayload }),
+          });
+          return created?.parcel || null;
+        } catch (v2Err: any) {
+          console.warn("[label] V2 parcel creation error:", v2Err.message);
+          return null;
+        }
+      };
+
+      // Helper: poll a specific parcel by ID until label is ready
+      const pollParcelById = async (parcelId: number): Promise<any> => {
+        for (let i = 0; i < 4; i++) {
+          await new Promise(r => setTimeout(r, 2000));
+          const pd = await scJson(`${V2}/parcels/${parcelId}`, auth).catch(() => null);
+          const p2 = pd?.parcel;
+          if (p2?.label?.label_printer || p2?.label?.normal_printer?.[0]) return p2;
+        }
+        return null;
+      };
+
       // Step 2: create label
       let createErrMsg = "";
       if (!parcel) {
-        let v3Failed = false;
+        let v3Ok = false;
         try {
           await scJson(`${V3}/orders/create-labels-async`, auth, {
             method: "POST",
@@ -135,71 +189,14 @@ export async function GET(req: NextRequest) {
               orders: [{ order_number: orderNumber }],
             }),
           });
+          v3Ok = true;
         } catch (createErr: any) {
           createErrMsg = createErr.message || "";
-          v3Failed = true;
           console.warn("[label] create-labels-async error:", createErrMsg);
         }
 
-        // Si V3 échoue avec unit_price (prix nul sur un article) → fallback V2 direct
-        if (v3Failed && createErrMsg.includes("unit_price")) {
-          try {
-            const orderDetail = await scJson(`${V3}/orders/${orderId}`, auth);
-            const od = orderDetail?.data || orderDetail;
-            const addr = od?.shipping_address || {};
-            const shippingDetails = od?.shipping_details || {};
-            const orderItems: any[] = od?.order_details?.order_items || od?.order_items || [];
-
-            const parcelPayload: any = {
-              name: addr.name || addr.company_name || "Client",
-              address: [addr.address_line_1, addr.house_number].filter(Boolean).join(" ") || addr.address_line_1 || "",
-              city: addr.city || "",
-              postal_code: addr.postal_code || "",
-              country: { iso_2: (addr.country_iso_2 || addr.country || "FR").slice(0, 2).toUpperCase() },
-              weight: "1.000",
-              order_number: orderNumber,
-              integration: { id: 527093 },
-              request_label: true,
-              // Items avec unit_price forcé à 0 pour éviter la validation
-              parcel_items: orderItems.map((item: any) => ({
-                description: item.product_name || item.description || item.sku || "Article",
-                quantity: item.quantity || 1,
-                value: "0.00",
-                weight: "0.100",
-                sku: item.sku || "",
-                origin_country: "FR",
-              })),
-            };
-            if (shippingDetails.shipping_method_id) {
-              parcelPayload.shipment = { id: shippingDetails.shipping_method_id };
-            }
-
-            const created = await scJson(`${V2}/parcels`, auth, {
-              method: "POST",
-              body: JSON.stringify({ parcel: parcelPayload }),
-            });
-            const v2Parcel = created?.parcel;
-            if (v2Parcel) {
-              if (v2Parcel.label?.label_printer || v2Parcel.label?.normal_printer?.[0]) {
-                parcel = v2Parcel;
-              } else {
-                // Poll sur ce colis spécifique
-                for (let i = 0; i < 4; i++) {
-                  await new Promise(r => setTimeout(r, 2000));
-                  const pd = await scJson(`${V2}/parcels/${v2Parcel.id}`, auth).catch(() => null);
-                  const p2 = pd?.parcel;
-                  if (p2?.label?.label_printer || p2?.label?.normal_printer?.[0]) { parcel = p2; break; }
-                }
-                if (!parcel) parcel = v2Parcel;
-              }
-              createErrMsg = ""; // succès via V2
-            }
-          } catch (v2Err: any) {
-            createErrMsg = v2Err.message;
-            console.warn("[label] V2 fallback error:", createErrMsg);
-          }
-        } else if (!v3Failed || createErrMsg.includes("422")) {
-          // V3 OK ou 422 (parcel déjà existant) → poll V2
+        if (v3Ok) {
+          // V3 OK → poll V2
           for (let i = 0; i < 4; i++) {
             await new Promise(r => setTimeout(r, 2000));
             const candidate = await findParcel();
@@ -209,6 +206,32 @@ export async function GET(req: NextRequest) {
             }
           }
           if (!parcel) parcel = await findParcel();
+        } else {
+          // V3 KO (422 ou autre) → cherche d'abord un colis existant
+          parcel = await findParcel();
+          if (parcel && (parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0])) {
+            // Colis existant avec étiquette → on l'utilise directement
+          } else {
+            // Pas de colis existant (ou sans étiquette) → créer via V2 en bypassant la validation
+            const v2Parcel = await createV2Parcel();
+            if (v2Parcel) {
+              // Tente de récupérer l'étiquette immédiatement ou poll
+              if (v2Parcel.label?.label_printer || v2Parcel.label?.normal_printer?.[0]) {
+                parcel = v2Parcel;
+              } else {
+                const polled = await pollParcelById(v2Parcel.id);
+                parcel = polled || v2Parcel;
+              }
+              createErrMsg = "";
+            } else if (!parcel) {
+              // Dernier recours : poll findParcel au cas où le colis a été créé en arrière-plan
+              for (let i = 0; i < 2; i++) {
+                await new Promise(r => setTimeout(r, 2000));
+                parcel = await findParcel();
+                if (parcel) break;
+              }
+            }
+          }
         }
       }
 
