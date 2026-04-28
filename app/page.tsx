@@ -3759,7 +3759,10 @@ function ProductResult({ product, stock, onRename }: { product: any; stock: any[
               </button>
             )}
           </div>
-          <span style={{ fontWeight: 700, marginLeft: 8, color: (q.quantity - (q.reserved_quantity||0)) > 0 ? C.green : C.orange }}>{q.quantity - (q.reserved_quantity||0)}</span>
+          <div style={{ textAlign: "right" as const, marginLeft: 8, flexShrink: 0 }}>
+            <div style={{ fontWeight: 700, color: (q.quantity - (q.reserved_quantity||0)) > 0 ? C.green : C.orange }}>{q.quantity - (q.reserved_quantity||0)} dispo</div>
+            <div style={{ fontSize: 10, color: C.textMuted }}>{q.quantity} phys{(q.reserved_quantity||0) > 0 ? ` · ${q.reserved_quantity} rés` : ""}</div>
+          </div>
         </div>
       ))}
     </Section>
@@ -3795,7 +3798,10 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
             <span style={{ fontWeight: 600 }}>{q.location_id[1]}</span>
 
           </div>
-          <span style={{ fontWeight: 700, color: C.green }}>{q.quantity - (q.reserved_quantity||0)}</span>
+          <div style={{ textAlign: "right" as const }}>
+            <div style={{ fontWeight: 700, color: (q.quantity - (q.reserved_quantity||0)) > 0 ? C.green : C.orange }}>{q.quantity - (q.reserved_quantity||0)} dispo</div>
+            <div style={{ fontSize: 10, color: C.textMuted }}>{q.quantity} phys{(q.reserved_quantity||0) > 0 ? ` · ${q.reserved_quantity} rés` : ""}</div>
+          </div>
         </div>
       ))}
     </Section>
