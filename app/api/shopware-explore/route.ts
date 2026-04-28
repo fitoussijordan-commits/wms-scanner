@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ dispatches: (r.json.data || []).map((d: any) => ({ id: d.id, name: d.name, type: d.type })) });
     }
 
-    // ── order: détail d'une commande ──
+    // ── order: détail d'une commande par ID ──
     if (action === "order") {
       const id = searchParams.get("id");
       if (!id) return NextResponse.json({ error: "id requis" }, { status: 400 });
@@ -85,6 +85,57 @@ export async function GET(req: NextRequest) {
         order: r.json?.data,
         keys: r.json?.data ? Object.keys(r.json.data) : null,
         raw: r.raw,
+      });
+    }
+
+    // ── findOrder: chercher commande par numéro + récupérer label ──
+    if (action === "findOrder") {
+      const number = searchParams.get("number");
+      if (!number) return NextResponse.json({ error: "number requis" }, { status: 400 });
+      // Filtre Shopware 5 par numéro de commande
+      const searchRes = await swFetch(
+        `/orders?filter[0][property]=number&filter[0][value]=${encodeURIComponent(number)}&limit=1`,
+        creds
+      );
+      const searchR = await safeJson(searchRes);
+      if (!searchR.json?.data?.length) {
+        return NextResponse.json({ error: "Commande non trouvée", status: searchR.status, raw: searchR.raw, json: searchR.json });
+      }
+      const orderId = searchR.json.data[0].id;
+
+      // Récupérer détail complet
+      const detailRes = await swFetch(`/orders/${orderId}`, creds);
+      const detailR = await safeJson(detailRes);
+      const order = detailR.json?.data;
+
+      // Essai récupération label via Pickware shipment GUID
+      const guid = order?.attribute?.pickwareWmsShipmentGuid;
+      let labelInfo: any = null;
+      if (guid) {
+        // Tenter d'accéder au label via endpoint Pickware
+        const labelRes = await swFetch(`/warehouses?filter[0][property]=shipmentGuid&filter[0][value]=${guid}`, creds);
+        const labelR = await safeJson(labelRes);
+        labelInfo = { guid, attempt: { status: labelR.status, json: labelR.json, raw: labelR.raw?.substring(0, 300) } };
+      }
+
+      return NextResponse.json({
+        orderId,
+        number: order?.number,
+        orderStatus: order?.orderStatusId,
+        dispatchMethod: order?.dispatchMethod,
+        shippingProvider: order?.shippingProduct?.provider,
+        trackingCode: order?.trackingCode,
+        pickwareShipmentGuid: guid,
+        shippingDocuments: order?.shippingDocuments,
+        documents: order?.documents,
+        labelInfo,
+        // URLs potentielles pour les documents
+        documentUrls: (order?.documents || []).map((d: any) => ({
+          id: d.id,
+          typeId: d.typeId,
+          hash: d.hash,
+          url: d.hash ? `${creds.url}/backend/pdf?file=${d.hash}` : null,
+        })),
       });
     }
 
