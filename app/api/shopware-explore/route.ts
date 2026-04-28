@@ -12,10 +12,16 @@ function getCreds(req: NextRequest) {
 }
 
 async function swFetch(path: string, creds: { url: string; user: string; key: string }) {
-  // Shopware 5: query param auth
-  const sep = path.includes("?") ? "&" : "?";
-  const url = `${creds.url}/api/v1${path}${sep}username=${encodeURIComponent(creds.user)}&api_key=${encodeURIComponent(creds.key)}`;
-  return fetch(url, { headers: { "Accept": "application/json" } });
+  // Shopware 5: Basic auth (username:api_key)
+  const base64 = Buffer.from(`${creds.user}:${creds.key}`).toString("base64");
+  const url = `${creds.url}/api/v1${path}`;
+  return fetch(url, {
+    headers: {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "Authorization": `Basic ${base64}`,
+    },
+  });
 }
 
 export async function GET(req: NextRequest) {
