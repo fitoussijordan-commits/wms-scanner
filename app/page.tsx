@@ -4332,7 +4332,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         window.open(url, "_blank");
         onToast("PDF ouvert dans un nouvel onglet");
       }
-    } catch (e: any) { setError(e.message); vibrateError(); }
+    } catch (e: any) { onToast(`⚠ Étiquette: ${e.message}`); vibrateError(); }
     setPrinting(false);
   };
 
@@ -4365,6 +4365,10 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [locConfirmed, setLocConfirmed] = useState(false);
 
   const openPrepOrder = async (p: any) => {
+    if (preparedIds.has(p.order_number)) {
+      onToast(`⚠ ${p.order_number} est déjà préparée`);
+      return;
+    }
     setScannedSkus({});
     setScanError("");
     setLocConfirmed(false);
@@ -4478,8 +4482,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   useScannerListener((code) => {
     if (eshopTab === "prep" && !prepOrder) {
       const found = findOrderByNumber(code);
-      if (found) { setPrepInput(""); openPrepOrder(found); }
-      else { setPrepInputErr(`❌ Commande "${code}" non trouvée`); setPrepInput(code); }
+      if (!found) { setPrepInputErr(`❌ Commande "${code}" non trouvée`); setPrepInput(code); return; }
+      if (preparedIds.has(found.order_number)) { setPrepInputErr(`⚠ "${found.order_number}" est déjà préparée`); return; }
+      setPrepInput(""); openPrepOrder(found);
     } else if (eshopTab === "pack" && !packOrder) {
       const found = findOrderByNumber(code);
       if (found) { setPackOrder(found); setPackInput(""); }
@@ -4711,24 +4716,20 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         {!isPrepared ? (
           <BigButton
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
-            label={allScanned ? "Commande prête — imprimer code-barre" : "Forcer comme préparé"}
-            sub={allScanned ? "Colle l'étiquette sur le carton" : `${scannedCount}/${items.length} articles préparés`}
+            label={allScanned ? "Valider la préparation" : "Forcer comme préparé"}
+            sub={allScanned ? `${items.length} article(s) préparé(s)` : `${scannedCount}/${items.length} articles préparés`}
             color={allScanned ? C.green : C.orange}
             onClick={async () => {
               await markPrepared(p.order_number);
-              await doPrintOrderBarcode(p);
               setPrepOrder(null);
-              onToast("✓ Code-barre carton imprimé");
+              onToast("✓ Commande préparée !");
             }}
             disabled={scannedCount === 0}
           />
         ) : (
-          <BigButton
-            icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>}
-            label="Annuler la préparation"
-            color={C.orange}
-            onClick={async () => { await unmarkPrepared(p.order_number); setPrepOrder(null); }}
-          />
+          <div style={{ textAlign: "center" as const, padding: "16px 0", color: C.green, fontSize: 14, fontWeight: 700 }}>
+            ✓ Commande déjà préparée
+          </div>
         )}
       </>
     );
