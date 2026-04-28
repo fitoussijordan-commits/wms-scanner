@@ -1019,6 +1019,15 @@ export default function Page() {
   const [newOrderNotif, setNewOrderNotif] = useState<{ count: number; names: string[] } | null>(null);
   const knownOrderIdsRef = useRef<Set<number>>(new Set());
 
+  // ── Control Center (desktop only) ────────────────────────────────────────
+  const [ccData, setCcData] = useState<{
+    waitingToday: { count: number; names: string[] };
+    inPrep: { count: number; names: string[] };
+    eshopWaiting: { count: number; names: string[] };
+    lastUpdate: string;
+  } | null>(null);
+  const [ccLoading, setCcLoading] = useState(false);
+
   // Print modal
   const [printReq, setPrintReq] = useState<PrintRequest | null>(null);
   useEffect(() => { _setPrintReq = setPrintReq; return () => { _setPrintReq = null; }; }, []);
@@ -1203,6 +1212,45 @@ export default function Page() {
 
     checkNewOrders();
     const interval = setInterval(checkNewOrders, 60_000);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  // ── Control Center polling (desktop only, every 60s) ─────────────────────
+  const ccRefreshRef = useRef<(() => Promise<void>) | null>(null);
+  useEffect(() => {
+    if (!session) return;
+    const isDesktop = typeof window !== "undefined" && !("ontouchstart" in window) && window.innerWidth >= 1024;
+    if (!isDesktop) return;
+
+    const refresh = async () => {
+      setCcLoading(true);
+      try {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const [allWaiting, inPrepList] = await Promise.all([
+          odoo.getWaitingPickings(session).catch(() => []),
+          odoo.getOutgoingPickings(session).catch(() => []),
+        ]);
+        const waitingToday = (allWaiting as any[]).filter((p: any) => {
+          const d: string = p.shipping_date || p.scheduled_date || p.date_deadline || "";
+          return d.startsWith(todayStr);
+        });
+        let eshopOrders: any[] = [];
+        try {
+          const res = await fetch("/api/sendcloud?action=orders");
+          if (res.ok) { const data = await res.json(); eshopOrders = data.orders || []; }
+        } catch {}
+        setCcData({
+          waitingToday: { count: waitingToday.length, names: (waitingToday as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
+          inPrep: { count: (inPrepList as any[]).length, names: (inPrepList as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
+          eshopWaiting: { count: eshopOrders.length, names: eshopOrders.slice(0, 6).map((o: any) => o.order_number || `#${o.order_id || o.id}`) },
+          lastUpdate: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+        });
+      } catch {} finally { setCcLoading(false); }
+    };
+    ccRefreshRef.current = refresh;
+    refresh();
+    const interval = setInterval(refresh, 60_000);
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
@@ -2422,6 +2470,85 @@ export default function Page() {
           <EshopScreen session={session} onBack={goHome} onToast={showToast} />
         )}
       </main>
+
+      {/* ── Control Center — desktop + home only ── */}
+      {screen === "home" && session && (
+        <div style={{
+          position: "fixed", top: 60, right: 20, width: 290,
+          display: "none",
+        }}
+          className="cc-panel"
+        >
+          {/* header */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 8, height: 8, borderRadius: 4, background: ccLoading ? "#f59e0b" : "#10b981", boxShadow: ccLoading ? "0 0 6px #f59e0b" : "0 0 6px #10b981" }} />
+              <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1 }}>Centre de contrôle</span>
+            </div>
+            <button onClick={() => ccRefreshRef.current && ccRefreshRef.current()}
+              style={{ background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 16, lineHeight: 1, padding: 4 }}
+              title="Actualiser">↻</button>
+          </div>
+
+          {/* card helper */}
+          {(() => {
+            const CcCard = ({ color, bg, icon, label, count, names, onClick }: { color: string; bg: string; icon: string; label: string; count: number; names: string[]; onClick: () => void }) => (
+              <button onClick={onClick} style={{
+                width: "100%", textAlign: "left" as const, background: C.white,
+                border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "14px 16px",
+                marginBottom: 10, cursor: "pointer", fontFamily: "inherit",
+                boxShadow: "0 1px 6px rgba(0,0,0,0.06)", transition: "box-shadow .15s",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: count > 0 ? 10 : 0 }}>
+                  <div style={{ width: 38, height: 38, borderRadius: 10, background: bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>{icon}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{label}</div>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: count > 0 ? color : C.textMuted, lineHeight: 1.1 }}>{ccData ? count : "—"}</div>
+                  </div>
+                </div>
+                {count > 0 && names.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column" as const, gap: 3 }}>
+                    {names.map((n, i) => (
+                      <div key={i} style={{ fontSize: 11, color: C.textSec, background: C.bg, borderRadius: 6, padding: "3px 8px", fontWeight: 600 }}>{n}</div>
+                    ))}
+                    {count > names.length && (
+                      <div style={{ fontSize: 11, color: C.textMuted, padding: "2px 8px" }}>+{count - names.length} autre{count - names.length > 1 ? "s" : ""}</div>
+                    )}
+                  </div>
+                )}
+              </button>
+            );
+            return (
+              <>
+                <CcCard color="#f59e0b" bg="#fef3c7" icon="⏳" label="En attente aujourd'hui"
+                  count={ccData?.waitingToday.count ?? 0}
+                  names={ccData?.waitingToday.names ?? []}
+                  onClick={() => setScreen("waitingOrders")} />
+                <CcCard color="#7c3aed" bg="#ede9fe" icon="📦" label="En préparation"
+                  count={ccData?.inPrep.count ?? 0}
+                  names={ccData?.inPrep.names ?? []}
+                  onClick={() => { loadPickings(); setScreen("prep"); }} />
+                <CcCard color="#db2777" bg="#fce7f3" icon="🛒" label="E-shop en attente"
+                  count={ccData?.eshopWaiting.count ?? 0}
+                  names={ccData?.eshopWaiting.names ?? []}
+                  onClick={() => setScreen("eshop")} />
+              </>
+            );
+          })()}
+
+          {ccData && (
+            <div style={{ textAlign: "center" as const, fontSize: 10, color: C.textMuted, marginTop: 4 }}>
+              Mis à jour à {ccData.lastUpdate} · actualise auto toutes les 60s
+            </div>
+          )}
+        </div>
+      )}
+
+      <style>{`
+        @media (min-width: 1024px) {
+          .cc-panel { display: block !important; }
+        }
+      `}</style>
 
       {/* Print Modal — rendered at root level for z-index */}
       {printReq && <PrintModal req={printReq} onClose={() => setPrintReq(null)} onToast={showToast} />}
