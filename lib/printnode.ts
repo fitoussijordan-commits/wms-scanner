@@ -723,7 +723,7 @@ export function isConfigured(): boolean {
 // ============================================
 // PER-TYPE LABEL CONFIG
 // ============================================
-export type LabelType = "product" | "lot" | "location" | "palette" | "palette_wms" | "blank" | "picking" | "sendcloud" | "packingslip" | "packingslip_eshop" | "order_barcode";
+export type LabelType = "product" | "lot" | "location" | "palette" | "palette_wms" | "blank" | "picking" | "sendcloud" | "packingslip" | "packingslip_eshop";
 
 export interface LabelTypeConfig {
   printerId: number | null;
@@ -756,7 +756,7 @@ export function saveLabelTypeConfig(type: LabelType, config: Partial<LabelTypeCo
 }
 
 export function getAllLabelTypeConfigs(): Record<LabelType, LabelTypeConfig> {
-  const types: LabelType[] = ["product", "lot", "location", "palette", "palette_wms", "blank", "picking", "sendcloud", "packingslip", "packingslip_eshop", "order_barcode"];
+  const types: LabelType[] = ["product", "lot", "location", "palette", "palette_wms", "blank", "picking", "sendcloud", "packingslip", "packingslip_eshop"];
   const result = {} as Record<LabelType, LabelTypeConfig>;
   for (const t of types) result[t] = getLabelTypeConfig(t);
   return result;
@@ -776,7 +776,7 @@ export async function syncPrintConfigFromSupabase(): Promise<void> {
     if (!Object.keys(remote).length) {
       // Supabase vide → on pousse toute la config locale existante
       const pushPromises: Promise<void>[] = [];
-      const types: LabelType[] = ["product", "lot", "location", "palette", "palette_wms", "blank", "picking", "sendcloud", "packingslip", "packingslip_eshop", "order_barcode"];
+      const types: LabelType[] = ["product", "lot", "location", "palette", "palette_wms", "blank", "picking", "sendcloud", "packingslip", "packingslip_eshop"];
       for (const type of types) {
         const cfg = local[type];
         if (cfg?.printerId) {
@@ -824,43 +824,5 @@ export async function syncPrintConfigFromSupabase(): Promise<void> {
     }
   } catch (e: any) {
     console.warn("[printnode] syncPrintConfigFromSupabase:", e.message);
-  }
-}
-
-// ============================================
-// ORDER BARCODE — 70x35mm ZPL (Code128)
-// ============================================
-/** Génère un ZPL Code128 pour une étiquette 70x35mm (203dpi) */
-export function generateOrderBarcodeZPL(orderNumber: string, customerName: string = ""): string {
-  const safe = (s: string) => s.replace(/[\^~]/g, "").trim();
-  const W = 560; // 70mm × 8 dots/mm
-  const H = 280; // 35mm × 8 dots/mm
-  const lines = [
-    "^XA",
-    `^PW${W}`,
-    `^LL${H}`,
-    "^CI28",
-    // Code128 barcode, human-readable below
-    `^FO20,12^BY2,3,120^BCN,120,Y,N,N^FD${safe(orderNumber)}^FS`,
-  ];
-  const name = safe(customerName).substring(0, 28);
-  if (name) lines.push(`^FO20,172^A0N,24,22^FD${name}^FS`);
-  lines.push("^XZ");
-  return lines.join("\n");
-}
-
-/** Imprime un code-barre de commande via PrintNode */
-export async function printOrderBarcode(
-  printerId: number,
-  orderNumber: string,
-  customerName: string = "",
-  qty: number = 1
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    const zpl = generateOrderBarcodeZPL(orderNumber, customerName);
-    await submitPrintJob(printerId, `Code-barre ${orderNumber}`, zpl, qty);
-    return { success: true };
-  } catch (e: any) {
-    return { success: false, error: e.message };
   }
 }

@@ -4782,17 +4782,18 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
               onKeyDown={e => {
                 if (e.key === "Enter" || e.key === "Tab") {
                   e.preventDefault();
-                  const found = findOrderByNumber(prepInput);
-                  if (found) openPrepOrder(found);
-                  else setPrepInputErr(`❌ Commande "${prepInput.trim()}" non trouvée`);
+                  // Lire la valeur DOM réelle (pas le state — évite la stale closure avec scanner)
+                  const val = (e.currentTarget as HTMLInputElement).value.trim();
+                  const found = findOrderByNumber(val);
+                  if (found) { setPrepInput(""); openPrepOrder(found); }
+                  else setPrepInputErr(`❌ Commande "${val}" non trouvée`);
                 }
               }}
               placeholder="Ex: 26411772"
-              autoFocus
               style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1.5px solid ${prepInputErr ? C.red : C.border}`, fontSize: 14, fontFamily: "inherit", outline: "none" }}
             />
             <button
-              onClick={() => { const found = findOrderByNumber(prepInput); if (found) openPrepOrder(found); else setPrepInputErr(`❌ "${prepInput.trim()}" non trouvée`); }}
+              onClick={() => { const found = findOrderByNumber(prepInput); if (found) { setPrepInput(""); openPrepOrder(found); } else setPrepInputErr(`❌ "${prepInput.trim()}" non trouvée`); }}
               style={{ padding: "10px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
               OK
             </button>
@@ -4873,13 +4874,13 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
               onKeyDown={e => {
                 if (e.key === "Enter" || e.key === "Tab") {
                   e.preventDefault();
-                  const found = findOrderByNumber(packInput) || parcels.find((p: any) => preparedIds.has(p.order_number) && p.order_number === packInput.trim());
+                  const val = (e.currentTarget as HTMLInputElement).value.trim();
+                  const found = findOrderByNumber(val);
                   if (found) { setPackOrder(found); setPackInput(""); }
-                  else setPackInputErr(`❌ Commande "${packInput.trim()}" non trouvée`);
+                  else setPackInputErr(`❌ Commande "${val}" non trouvée`);
                 }
               }}
               placeholder="N° commande / code-barre..."
-              autoFocus
               style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1.5px solid ${packInputErr ? C.red : C.border}`, fontSize: 14, fontFamily: "inherit", outline: "none" }}
             />
             <button
