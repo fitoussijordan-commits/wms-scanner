@@ -4340,6 +4340,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     const newSet = new Set(Array.from(preparedIds));
     newSet.add(parcelId);
     savePrepared(newSet);
+    try { localStorage.removeItem(`wms_escan_${parcelId}`); } catch {}
     vibrateSuccess();
     onToast("✓ Marqué préparé");
   };
@@ -4364,12 +4365,27 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [scanError, setScanError] = useState("");
   const [locConfirmed, setLocConfirmed] = useState(false);
 
+  // Sauvegarde automatique de la progression dans localStorage
+  useEffect(() => {
+    if (!prepOrder) return;
+    const key = `wms_escan_${prepOrder.order_number}`;
+    if (Object.keys(scannedSkus).length > 0) {
+      try { localStorage.setItem(key, JSON.stringify(scannedSkus)); } catch {}
+    }
+  }, [scannedSkus, prepOrder]);
+
   const openPrepOrder = async (p: any) => {
     if (preparedIds.has(p.order_number)) {
       onToast(`⚠ ${p.order_number} est déjà préparée`);
       return;
     }
-    setScannedSkus({});
+    // Restaurer la progression sauvegardée si elle existe
+    let savedSkus: Record<string, number> = {};
+    try {
+      const saved = localStorage.getItem(`wms_escan_${p.order_number}`);
+      if (saved) { savedSkus = JSON.parse(saved); }
+    } catch {}
+    setScannedSkus(savedSkus);
     setScanError("");
     setLocConfirmed(false);
     setPrepInput("");
