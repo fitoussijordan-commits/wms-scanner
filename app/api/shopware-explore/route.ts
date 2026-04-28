@@ -1,48 +1,41 @@
 // app/api/shopware-explore/route.ts — Exploration API Shopware 5 + Pickware
 import { NextRequest, NextResponse } from "next/server";
 
-const SW_URL = process.env.SHOPWARE_URL || "https://fr.hau.vonaffenfels.de";
-const SW_USER = process.env.SHOPWARE_USER || "jordan";
-const SW_KEY = process.env.SHOPWARE_API_KEY || "";
-
-function getAuth() {
-  return "Basic " + Buffer.from(`${SW_USER}:${SW_KEY}`).toString("base64");
+// Credentials: from env or query params (for testing)
+function getCreds(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  return {
+    url: searchParams.get("sw_url") || process.env.SHOPWARE_URL || "https://fr.hau.vonaffenfels.de",
+    user: searchParams.get("sw_user") || process.env.SHOPWARE_USER || "jordan",
+    key: searchParams.get("sw_key") || process.env.SHOPWARE_API_KEY || "",
+  };
 }
 
-async function swFetch(path: string) {
-  const url = `${SW_URL}/api/v1${path}`;
-  // Try Basic auth first, then Digest via query params
-  const res = await fetch(url, {
-    headers: {
-      "Authorization": getAuth(),
-      "Accept": "application/json",
-    },
-  });
-  if (res.status === 401) {
-    // Fallback: API key as query param (some SW5 setups)
-    const url2 = `${SW_URL}/api/v1${path}${path.includes("?") ? "&" : "?"}username=${SW_USER}&api_key=${SW_KEY}`;
-    return fetch(url2, { headers: { "Accept": "application/json" } });
-  }
-  return res;
+async function swFetch(path: string, creds: { url: string; user: string; key: string }) {
+  // Shopware 5: query param auth
+  const sep = path.includes("?") ? "&" : "?";
+  const url = `${creds.url}/api/v1${path}${sep}username=${encodeURIComponent(creds.user)}&api_key=${encodeURIComponent(creds.key)}`;
+  return fetch(url, { headers: { "Accept": "application/json" } });
 }
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const action = searchParams.get("action") || "ping";
+  const creds = getCreds(req);
 
   try {
     // ── ping: test auth + get one order ──
     if (action === "ping") {
-      const res = await swFetch("/orders?limit=1");
+      const res = await swFetch("/orders?limit=1", creds);
       const text = await res.text();
       let json: any = null;
       try { json = JSON.parse(text); } catch {}
-      return NextResponse.json({ status: res.status, ok: res.ok, sample: json });
+      return NextResponse.json({ status: res.status, ok: res.ok, url: creds.url, user: creds.user, sample: json });
     }
 
     // ── orders: list recent orders with shipping info ──
     if (action === "orders") {
-      const res = await swFetch("/orders?limit=10&sort[0][property]=orderTime&sort[0][direction]=DESC");
+      const res = await swFetch("/orders?limit=10&sort[0][property]=orderTime&sort[0][direction]=DESC", creds);
       const data = await res.json();
       const orders = (data.data || []).map((o: any) => ({
         id: o.id,
@@ -50,7 +43,6 @@ export async function GET(req: NextRequest) {
         status: o.orderStatusId,
         dispatch: o.dispatch?.name,
         dispatchId: o.dispatchId,
-        shipping: o.shipping,
         customer: o.customer?.email,
         orderTime: o.orderTime,
       }));
@@ -59,16 +51,16 @@ export async function GET(req: NextRequest) {
 
     // ── dispatches: list all shipping methods ──
     if (action === "dispatches") {
-      const res = await swFetch("/dispatches?limit=50");
+      const res = await swFetch("/dispatches?limit=50", creds);
       const data = await res.json();
-      return NextResponse.json({ dispatches: data.data });
+      return NextResponse.json({ dispatches: (data.data || []).map((d: any) => ({ id: d.id, name: d.name, type: d.type })) });
     }
 
     // ── order detail: full order with all fields ──
     if (action === "order") {
       const id = searchParams.get("id");
       if (!id) return NextResponse.json({ error: "id requis" }, { status: 400 });
-      const res = await swFetch(`/orders/${id}`);
+      const res = await swFetch(`/orders/${id}`, creds);
       const data = await res.json();
       return NextResponse.json({ order: data.data, keys: Object.keys(data.data || {}) });
     }
@@ -79,20 +71,23 @@ export async function GET(req: NextRequest) {
       const paths = [
         "/pickware-shipping/shipments",
         "/PickwareShipping/shipments",
+        "/PickwareWMS/shipments",
         "/pickware/shipments",
         "/shipments",
-        "/pickware-erp/stock-movements",
         "/pickware-erp/warehouses",
+        "/pickware-erp/stockMovements",
+        "/PickwareERP/warehouses",
       ];
       for (const p of paths) {
         try {
-          const res = await fetch(`${SW_URL}/api/v1${p}?limit=1&username=${SW_USER}&api_key=${SW_KEY}`, {
-            headers: { "Accept": "application/json" },
-          });
+          const res = await swFetch(`${p}?limit=1`, creds);
           results[p] = { status: res.status };
           if (res.ok) {
             const t = await res.text();
-            try { results[p].sample = JSON.parse(t); } catch { results[p].raw = t.substring(0, 200); }
+            try { results[p].sample = JSON.parse(t); } catch { results[p].raw = t.substring(0, 300); }
+          } else {
+            const t = await res.text().catch(() => "");
+            results[p].body = t.substring(0, 200);
           }
         } catch (e: any) {
           results[p] = { error: e.message };
