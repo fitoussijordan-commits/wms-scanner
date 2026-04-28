@@ -289,6 +289,60 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ debug: psJson, parcelId: parcel.id });
     }
 
+    // Debug V3 order + V2 parcel pour une commande donnée
+    if (action === "probe_order") {
+      const orderNumber = searchParams.get("order_number");
+      const orderId = searchParams.get("order_id");
+      if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
+
+      const result: any = { order_number: orderNumber, order_id: orderId };
+
+      // 1. Fetch V3 order
+      if (orderId) {
+        try {
+          const d = await scJson(`${V3}/orders/${orderId}`, auth);
+          const od = d?.data || d || {};
+          result.v3_order_keys = Object.keys(od);
+          result.v3_shipping_address = od.shipping_address || null;
+          result.v3_shipping_details = od.shipping_details || null;
+          result.v3_order_details = od.order_details || null;
+          result.v3_carrier = od.carrier || null;
+          result.v3_shipping_method = od.shipping_method || null;
+        } catch (e: any) { result.v3_error = e.message; }
+      }
+
+      // 2. Search V2 parcel by order_number
+      try {
+        const pd = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber)}`, auth);
+        result.v2_parcels_found = (pd.parcels || []).length;
+        result.v2_parcels = (pd.parcels || []).map((p: any) => ({
+          id: p.id, order_number: p.order_number, status: p.status,
+          shipment: p.shipment, has_label: !!(p.label?.label_printer || p.label?.normal_printer?.[0])
+        }));
+      } catch (e: any) { result.v2_search_error = e.message; }
+
+      // 3. Test V2 POST (dry-run: create without request_label to check validation)
+      if (result.v3_shipping_address) {
+        const addr = result.v3_shipping_address;
+        const sd = result.v3_shipping_details || {};
+        const shipMethodId = sd.shipping_method_id || sd.id || result.v3_carrier?.id;
+        result.detected_ship_method_id = shipMethodId ?? null;
+        result.v2_payload_preview = {
+          name: addr.name || addr.company_name || "Client",
+          address: addr.address_line_1 || addr.street || "",
+          house_number: addr.house_number || "",
+          city: addr.city || "",
+          postal_code: addr.postal_code || "",
+          country: { iso_2: (addr.country_iso_2 || addr.country_code || addr.country || "FR").slice(0, 2).toUpperCase() },
+          weight: "1.000",
+          order_number: orderNumber,
+          shipment: shipMethodId ? { id: shipMethodId } : "MISSING",
+        };
+      }
+
+      return NextResponse.json(result);
+    }
+
     // Debug parcel structure
     if (action === "parcel_debug") {
       const orderNumber = searchParams.get("order_number");
