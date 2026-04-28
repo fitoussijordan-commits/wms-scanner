@@ -2615,11 +2615,8 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: lqty > 0 ? C.blueSoft : C.white, border: `1.5px solid ${lqty > 0 ? C.blue : C.border}`, borderRadius: 8 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{q.lot_id[1]}{q.location_id ? <span style={{ fontWeight: 400, color: C.textMuted }}> · {(q.location_id[1] || "").split("/").pop()}</span> : null}</div>
-                      <div style={{ fontSize: 10, color: C.textMuted, display: "flex", gap: 8, flexWrap: "wrap" as const }}>
-                        <span>📦 Physique: <b style={{ color: C.text }}>{q.quantity}</b></span>
-                        {qReserved > 0 && <span>🔒 Réservé: <b style={{ color: C.orange }}>{qReserved}</b></span>}
-                        <span>✅ Dispo: <b style={{ color: qDispo > 0 ? C.green : C.red }}>{qDispo}</b></span>
-                        {q.expiration_date && <span>⏱ {q.expiration_date.substring(0, 10)}</span>}
+                      <div style={{ fontSize: 10, color: C.textMuted }}>
+                        <b style={{ color: C.text }}>{q.quantity}</b> phys{qReserved > 0 ? <> · <b style={{ color: C.orange }}>{qReserved}</b> rés</> : null} · <b style={{ color: qDispo > 0 ? C.green : C.red }}>{qDispo}</b> dispo{q.expiration_date ? " · " + q.expiration_date.substring(0, 10) : ""}
                       </div>
                     </div>
                     <button onClick={() => setLotQtys(p => ({ ...p, [q.lot_id[0]]: Math.max(0, (p[q.lot_id[0]] || 0) - 1) }))} style={{ width: 30, height: 30, borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
