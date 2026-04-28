@@ -4303,7 +4303,24 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     try {
       const orderId = p._raw?.order_id || p.id;
       const orderNumber = p.order_number;
-      const res = await fetch(`/api/sendcloud?action=label&order_id=${orderId}&order_number=${orderNumber}`);
+      // Passer l'adresse directement depuis le client pour éviter un re-fetch V3 qui peut échouer
+      const addr = p._raw?.shipping_address || {};
+      const sd = p._raw?.shipping_details || {};
+      const addrParams = new URLSearchParams({
+        action: "label",
+        order_id: String(orderId),
+        order_number: String(orderNumber),
+        addr_name: addr.name || addr.company_name || p.name || "",
+        addr_line1: addr.address_line_1 || addr.street || p.address || "",
+        addr_house: addr.house_number || "",
+        addr_city: addr.city || p.city || "",
+        addr_postal: addr.postal_code || p.postal_code || "",
+        addr_country: addr.country_iso_2 || addr.country_code || addr.country || "FR",
+        addr_email: addr.email || p.email || "",
+        addr_phone: addr.phone_number || addr.phone || p.telephone || "",
+        ship_method_id: String(sd.shipping_method_id || sd.id || ""),
+      });
+      const res = await fetch(`/api/sendcloud?${addrParams.toString()}`);
       const data = await res.json();
 
       // 202 = colis trouvé mais étiquette pas encore prête

@@ -92,6 +92,19 @@ export async function GET(req: NextRequest) {
       const orderNumber = searchParams.get("order_number");
       if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
 
+      // Adresse passée directement par le client (évite un re-fetch V3 incertain)
+      const clientAddr = {
+        name: searchParams.get("addr_name") || "",
+        address_line_1: searchParams.get("addr_line1") || "",
+        house_number: searchParams.get("addr_house") || "",
+        city: searchParams.get("addr_city") || "",
+        postal_code: searchParams.get("addr_postal") || "",
+        country: searchParams.get("addr_country") || "FR",
+        email: searchParams.get("addr_email") || "",
+        phone: searchParams.get("addr_phone") || "",
+        ship_method_id: searchParams.get("ship_method_id") || "",
+      };
+
       // Helper: find a parcel for this order via multiple strategies
       // IMPORTANT: always verify exact order_number match to avoid returning a wrong parcel
       const findParcel = async (): Promise<any | null> => {
@@ -137,35 +150,28 @@ export async function GET(req: NextRequest) {
       // Helper: build & POST a V2 parcel directly (bypasses V3 price validation)
       let v2CreateError = "";
       const createV2Parcel = async (): Promise<any | null> => {
-        // Get shipping address from V3 order details
-        let od: any = {};
-        try {
-          const orderDetail = await scJson(`${V3}/orders/${orderId}`, auth);
-          od = orderDetail?.data || orderDetail || {};
-        } catch (e: any) {
-          v2CreateError = `V3 fetch error: ${e.message}`;
-          console.error("[label] createV2: V3 order fetch error:", e.message);
-        }
-        const addr = od?.shipping_address || {};
-        const shippingDetails = od?.shipping_details || od?.shipment || {};
+        // Utilise l'adresse passée par le client — pas de re-fetch V3 incertain
+        const countryCode = (clientAddr.country || "FR").slice(0, 2).toUpperCase();
 
-        // V2 requires address and house_number as separate fields
+        // V2 payload — country doit être une string ISO-2, pas un objet
         const parcelPayload: any = {
-          name: addr.name || addr.company_name || "Client",
-          address: addr.address_line_1 || addr.street || "",
-          house_number: addr.house_number || "",
-          city: addr.city || "",
-          postal_code: addr.postal_code || "",
-          country: { iso_2: (addr.country_iso_2 || addr.country_code || addr.country || "FR").slice(0, 2).toUpperCase() },
-          email: addr.email || "",
-          telephone: addr.phone_number || addr.phone || "",
+          name: clientAddr.name || "Client",
+          address: clientAddr.address_line_1,
+          house_number: clientAddr.house_number,
+          city: clientAddr.city,
+          postal_code: clientAddr.postal_code,
+          country: countryCode,           // string "FR", pas { iso_2: "FR" }
+          email: clientAddr.email,
+          telephone: clientAddr.phone,
           weight: "1.000",
           order_number: orderNumber,
           request_label: true,
         };
-        const shipMethodId = shippingDetails.shipping_method_id || shippingDetails.id || od?.carrier?.id || od?.shipping_method?.id;
-        if (shipMethodId) parcelPayload.shipment = { id: shipMethodId };
-        console.error("[label] createV2: POST payload shipment:", shipMethodId ?? "NONE — label may fail", "addr:", JSON.stringify(addr).substring(0, 200));
+
+        const shipMethodId = clientAddr.ship_method_id;
+        if (shipMethodId) parcelPayload.shipment = { id: Number(shipMethodId) };
+
+        console.error("[label] createV2 payload:", JSON.stringify(parcelPayload).substring(0, 400));
 
         try {
           const created = await scJson(`${V2}/parcels`, auth, {
