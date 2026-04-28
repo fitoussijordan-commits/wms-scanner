@@ -50,15 +50,18 @@ export async function GET(req: NextRequest) {
     // V3 orders — open orders not yet converted to parcels
     if (action === "orders") {
       const data = await scJson(`${V3}/orders?integration_id=527093&page_size=100`, auth);
-      const listOrders = data.data || data.results || data.orders || [];
-      // Toujours récupérer chaque commande individuellement pour avoir shipping_method_id et order_items complets
-      const orders = await Promise.all(
-        listOrders.map((o: any) =>
-          scJson(`${V3}/orders/${o.order_id}`, auth)
-            .then((d: any) => d.data || d)
-            .catch(() => o)
-        )
-      );
+      let orders = data.data || data.results || data.orders || [];
+      // If order_items not in list response, fetch each order individually
+      const sample = orders[0] || {};
+      if (!sample.order_items && !sample.order_details?.order_items) {
+        orders = await Promise.all(
+          orders.map((o: any) =>
+            scJson(`${V3}/orders/${o.order_id}`, auth)
+              .then((d: any) => d.data || d)
+              .catch(() => o)
+          )
+        );
+      }
       return NextResponse.json({ orders });
     }
 
@@ -89,19 +92,6 @@ export async function GET(req: NextRequest) {
       const orderNumber = searchParams.get("order_number");
       if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
 
-      // Adresse passée directement par le client (évite un re-fetch V3 incertain)
-      const clientAddr = {
-        name: searchParams.get("addr_name") || "",
-        address_line_1: searchParams.get("addr_line1") || "",
-        house_number: searchParams.get("addr_house") || "",
-        city: searchParams.get("addr_city") || "",
-        postal_code: searchParams.get("addr_postal") || "",
-        country: searchParams.get("addr_country") || "FR",
-        email: searchParams.get("addr_email") || "",
-        phone: searchParams.get("addr_phone") || "",
-        ship_method_id: searchParams.get("ship_method_id") || "",
-      };
-
       // Helper: find a parcel for this order via multiple strategies
       // IMPORTANT: always verify exact order_number match to avoid returning a wrong parcel
       const findParcel = async (): Promise<any | null> => {
@@ -126,126 +116,47 @@ export async function GET(req: NextRequest) {
         return null;
       }
 
-      // Helper: fetch fresh parcel by ID from V2 (always gets latest label URL)
-      const fetchParcelById = async (id: number): Promise<any | null> => {
-        try {
-          const pd = await scJson(`${V2}/parcels/${id}`, auth);
-          return pd?.parcel || null;
-        } catch { return null; }
-      };
+      // Step 1: check if parcel already exists with a label
+      let parcel: any = await findParcel();
+      if (parcel && !(parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0])) {
+        // Parcel exists but no label yet — fall through to create
+        parcel = null;
+      }
 
-      // Helper: poll parcel by ID until label URL is ready (max ~16s)
-      const pollParcelById = async (parcelId: number): Promise<any | null> => {
+      // Step 2: create label if not already found with a label URL
+      if (!parcel) {
+        try {
+          await scJson(`${V3}/orders/create-labels-async`, auth, {
+            method: "POST",
+            body: JSON.stringify({
+              integration_id: 527093,
+              orders: [{ order_number: orderNumber }],
+            }),
+          });
+        } catch (createErr: any) {
+          // 422 = parcel already exists or validation failed — still poll for existing label
+          console.warn("[label] create-labels-async error:", createErr.message);
+        }
+        // Poll V2 max 4x with 2s gap
         for (let i = 0; i < 4; i++) {
           await new Promise(r => setTimeout(r, 2000));
-          const p = await fetchParcelById(parcelId);
-          if (p?.label?.label_printer || p?.label?.normal_printer?.[0]) return p;
-        }
-        return null;
-      };
-
-      // Helper: build & POST a V2 parcel directly (bypasses V3 price validation)
-      let v2CreateError = "";
-      const createV2Parcel = async (): Promise<any | null> => {
-        const countryCode = (clientAddr.country || "FR").slice(0, 2).toUpperCase();
-
-        // Récupère shipping_method_id depuis V3 si non fourni par le client
-        let shipMethodId: string | number = clientAddr.ship_method_id;
-        if (!shipMethodId) {
-          try {
-            const orderDetail = await scJson(`${V3}/orders/${orderId}`, auth);
-            const od = orderDetail?.data || orderDetail || {};
-            const sd = od?.shipping_details || {};
-            shipMethodId = sd.shipping_method_id || sd.id || "";
-            console.error("[label] createV2: shipping_method_id from V3:", shipMethodId || "NONE");
-          } catch (e: any) {
-            console.error("[label] createV2: V3 fetch for ship_method failed:", e.message);
+          const candidate = await findParcel();
+          if (candidate && (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0])) {
+            parcel = candidate;
+            break;
           }
         }
-
-        // V2 payload — country = string ISO-2, pas un objet
-        const parcelPayload: any = {
-          name: clientAddr.name || "Client",
-          address: clientAddr.address_line_1,
-          house_number: clientAddr.house_number,
-          city: clientAddr.city,
-          postal_code: clientAddr.postal_code,
-          country: countryCode,
-          email: clientAddr.email,
-          telephone: clientAddr.phone,
-          weight: "1.000",
-          order_number: orderNumber,
-          request_label: true,
-        };
-
-        if (shipMethodId) parcelPayload.shipment = { id: Number(shipMethodId) };
-
-        console.error("[label] createV2 payload:", JSON.stringify(parcelPayload).substring(0, 500));
-
-        try {
-          const created = await scJson(`${V2}/parcels`, auth, {
-            method: "POST",
-            body: JSON.stringify({ parcel: parcelPayload }),
-          });
-          const p = created?.parcel;
-          if (!p) {
-            v2CreateError = `V2 unexpected response: ${JSON.stringify(created).substring(0, 200)}`;
-            console.error("[label] createV2:", v2CreateError);
-          }
-          return p || null;
-        } catch (e: any) {
-          v2CreateError = e.message;
-          console.error("[label] createV2: POST error:", e.message);
-          return null;
-        }
-      };
-
-      // ── MAIN FLOW ──────────────────────────────────────────────────────────
-      // Step 1: check if parcel already exists in SendCloud
-      let parcel: any = await findParcel();
-      console.warn("[label] step1 findParcel:", parcel ? `id=${parcel.id} hasLabel=${!!(parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0])}` : "null");
-
-      // If parcel exists, always re-fetch by ID to get the freshest label URL
-      if (parcel) {
-        const fresh = await fetchParcelById(parcel.id);
-        if (fresh) parcel = fresh;
-        console.warn("[label] step1 refreshed parcel label:", !!(parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0]));
-      }
-
-      // Step 2: if no parcel (or no label), create via V2 directly (bypasses V3 price validation)
-      if (!parcel || !(parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0])) {
-        console.warn("[label] step2: no valid parcel/label — trying V2 direct creation");
-        const v2Parcel = await createV2Parcel();
-        if (v2Parcel) {
-          // Poll for label if not immediately available
-          if (v2Parcel.label?.label_printer || v2Parcel.label?.normal_printer?.[0]) {
-            parcel = v2Parcel;
-          } else {
-            const polled = await pollParcelById(v2Parcel.id);
-            parcel = polled || v2Parcel;
-            console.warn("[label] step2 poll result:", polled ? "got label" : "no label yet");
-          }
-        } else {
-          // V2 creation failed (parcel may already exist) — search again
-          console.warn("[label] step2: V2 failed, last findParcel attempt");
-          for (let i = 0; i < 3; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const candidate = await findParcel();
-            if (candidate) {
-              const fresh = await fetchParcelById(candidate.id);
-              parcel = fresh || candidate;
-              if (parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0]) break;
-            }
-          }
+        // Last resort: return whatever parcel we find even without a label (client can retry)
+        if (!parcel) {
+          parcel = await findParcel();
         }
       }
 
-      if (!parcel) return NextResponse.json({ error: `Colis non trouvé — ${v2CreateError || "V2 création échouée sans détail"}` }, { status: 404 });
+      if (!parcel) return NextResponse.json({ error: "Colis non trouvé après création étiquette" }, { status: 404 });
 
       const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
-      console.warn("[label] final labelUrl:", labelUrl ? "present" : "absent", "parcel id:", parcel.id);
-
       if (!labelUrl) {
+        // Return parcel info so client knows it exists but label isn't ready
         return NextResponse.json({
           parcelId: parcel.id,
           tracking: parcel.tracking_number || "",
@@ -256,18 +167,8 @@ export async function GET(req: NextRequest) {
         }, { status: 202 });
       }
 
-      // Download label PDF — re-fetch fresh URL if stale
-      let labelRes = await scFetch(labelUrl, auth);
-      if (!labelRes.ok) {
-        console.warn("[label] labelUrl fetch failed:", labelRes.status, "— fetching fresh parcel");
-        const freshP = await fetchParcelById(parcel.id);
-        const freshUrl = freshP?.label?.label_printer || freshP?.label?.normal_printer?.[0];
-        if (freshUrl && freshUrl !== labelUrl) {
-          labelRes = await scFetch(freshUrl, auth);
-          console.warn("[label] fresh labelUrl fetch:", labelRes.status);
-        }
-        if (!labelRes.ok) return NextResponse.json({ error: `Erreur téléchargement étiquette: ${labelRes.status}` }, { status: labelRes.status });
-      }
+      const labelRes = await scFetch(labelUrl, auth);
+      if (!labelRes.ok) return NextResponse.json({ error: `Erreur étiquette: ${labelRes.status}` }, { status: labelRes.status });
 
       const pdfBuffer = Buffer.from(await labelRes.arrayBuffer());
       return NextResponse.json({
@@ -302,60 +203,6 @@ export async function GET(req: NextRequest) {
       // JSON response — log it to understand structure
       const psJson = await psRes.json().catch(() => null);
       return NextResponse.json({ debug: psJson, parcelId: parcel.id });
-    }
-
-    // Debug V3 order + V2 parcel pour une commande donnée
-    if (action === "probe_order") {
-      const orderNumber = searchParams.get("order_number");
-      const orderId = searchParams.get("order_id");
-      if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
-
-      const result: any = { order_number: orderNumber, order_id: orderId };
-
-      // 1. Fetch V3 order
-      if (orderId) {
-        try {
-          const d = await scJson(`${V3}/orders/${orderId}`, auth);
-          const od = d?.data || d || {};
-          result.v3_order_keys = Object.keys(od);
-          result.v3_shipping_address = od.shipping_address || null;
-          result.v3_shipping_details = od.shipping_details || null;
-          result.v3_order_details = od.order_details || null;
-          result.v3_carrier = od.carrier || null;
-          result.v3_shipping_method = od.shipping_method || null;
-        } catch (e: any) { result.v3_error = e.message; }
-      }
-
-      // 2. Search V2 parcel by order_number
-      try {
-        const pd = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber)}`, auth);
-        result.v2_parcels_found = (pd.parcels || []).length;
-        result.v2_parcels = (pd.parcels || []).map((p: any) => ({
-          id: p.id, order_number: p.order_number, status: p.status,
-          shipment: p.shipment, has_label: !!(p.label?.label_printer || p.label?.normal_printer?.[0])
-        }));
-      } catch (e: any) { result.v2_search_error = e.message; }
-
-      // 3. Test V2 POST (dry-run: create without request_label to check validation)
-      if (result.v3_shipping_address) {
-        const addr = result.v3_shipping_address;
-        const sd = result.v3_shipping_details || {};
-        const shipMethodId = sd.shipping_method_id || sd.id || result.v3_carrier?.id;
-        result.detected_ship_method_id = shipMethodId ?? null;
-        result.v2_payload_preview = {
-          name: addr.name || addr.company_name || "Client",
-          address: addr.address_line_1 || addr.street || "",
-          house_number: addr.house_number || "",
-          city: addr.city || "",
-          postal_code: addr.postal_code || "",
-          country: { iso_2: (addr.country_iso_2 || addr.country_code || addr.country || "FR").slice(0, 2).toUpperCase() },
-          weight: "1.000",
-          order_number: orderNumber,
-          shipment: shipMethodId ? { id: shipMethodId } : "MISSING",
-        };
-      }
-
-      return NextResponse.json(result);
     }
 
     // Debug parcel structure
