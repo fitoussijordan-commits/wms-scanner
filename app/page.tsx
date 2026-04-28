@@ -1052,6 +1052,8 @@ export default function Page() {
   // Global scan
   const handleGlobalScan = useCallback((code: string) => {
     vibrate();
+    // Sur l'écran eshop, les listeners locaux gèrent le scan — pas de toast global ni clear input
+    if (screen === "eshop") return;
     showToast(`⚡ ${code}`);
     if (screen === "home") doLookup(code);
     else if (screen === "transfer") {
@@ -4471,6 +4473,19 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   };
 
   useScannerListener(handleEshopScan, eshopTab === "prep" && !!prepOrder && !preparedIds.has(prepOrder?.order_number));
+
+  // Listener scan pour retrouver une commande (quand aucun order n'est sélectionné)
+  useScannerListener((code) => {
+    if (eshopTab === "prep" && !prepOrder) {
+      const found = findOrderByNumber(code);
+      if (found) { setPrepInput(""); openPrepOrder(found); }
+      else { setPrepInputErr(`❌ Commande "${code}" non trouvée`); setPrepInput(code); }
+    } else if (eshopTab === "pack" && !packOrder) {
+      const found = findOrderByNumber(code);
+      if (found) { setPackOrder(found); setPackInput(""); }
+      else { setPackInputErr(`❌ Commande "${code}" non trouvée`); setPackInput(code); }
+    }
+  }, (eshopTab === "prep" && !prepOrder) || (eshopTab === "pack" && !packOrder));
 
   // ── Prep detail render (reused from previous version) ──────────────────────
   const renderPrepDetail = () => {
