@@ -4112,21 +4112,33 @@ const qtyBtnStyle: React.CSSProperties = {
 const printerIconWhite = <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>;
 
 // ============================================
-// E-SHOP SCREEN — SendCloud order preparation
-// Design identique au module Préparation
+// E-SHOP SCREEN — 3 onglets : Commandes / Préparation / Emballage
 // ============================================
 function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+  // ── Tabs ──
+  const [eshopTab, setEshopTab] = useState<"orders" | "prep" | "pack">("orders");
+
+  // ── Shared data ──
   const [parcels, setParcels] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [selectedParcel, setSelectedParcel] = useState<any>(null);
   const [matchData, setMatchData] = useState<Record<string, any>>({});
   const [locationData, setLocationData] = useState<Record<number, any>>({});
   const [preparedIds, setPreparedIds] = useState<Set<string>>(new Set());
   const [printing, setPrinting] = useState(false);
-  const [filter, setFilter] = useState<"pending" | "prepared" | "all">("pending");
   const [chariotSkus, setChariotSkus] = useState<string[]>([]);
   const [chariotLoaded, setChariotLoaded] = useState(false);
+
+  // ── Tab "Préparation" ──
+  const [prepOrder, setPrepOrder] = useState<any>(null);
+  const [prepInput, setPrepInput] = useState("");
+  const [prepInputErr, setPrepInputErr] = useState("");
+
+  // ── Tab "Emballage" ──
+  const [packOrder, setPackOrder] = useState<any>(null);
+  const [packInput, setPackInput] = useState("");
+  const [packInputErr, setPackInputErr] = useState("");
+  const [packPrinting, setPackPrinting] = useState(false);
 
   const savePrepared = async (ids: Set<string>) => {
     setPreparedIds(ids);
@@ -4343,42 +4355,35 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     return null;
   };
 
-  // Include prepared orders that may no longer appear in SendCloud open list
-  const allVisibleParcels = [
-    ...parcels,
-    // Add prepared orders not already in parcels list (fetched from prepared state)
-    ...Array.from(preparedIds)
-      .filter(on => !parcels.find((p: any) => p.order_number === on))
-      .map(on => ({ order_number: on, _preparedOnly: true, id: on, name: "—", city: "", parcel_items: [] }))
-  ];
-
-  const filteredParcels = allVisibleParcels.filter((p: any) => {
-    if (filter === "pending") return !preparedIds.has(p.order_number);
-    if (filter === "prepared") return preparedIds.has(p.order_number);
-    return true;
-  });
-
-  const pendingCount = allVisibleParcels.filter((p: any) => !preparedIds.has(p.order_number)).length;
-  const preparedCount = preparedIds.size;
+  const shortLoc = (fullName: string) => (fullName || "").split("/").pop() || fullName;
 
   // Detail view — scan-based preparation
   const [scannedSkus, setScannedSkus] = useState<Record<string, number>>({});
   const [scanError, setScanError] = useState("");
   const [locConfirmed, setLocConfirmed] = useState(false);
-  const shortLoc = (fullName: string) => (fullName || "").split("/").pop() || fullName;
 
-  // Reset scan state when opening a new parcel
-  const openParcel = async (p: any) => {
+  const openPrepOrder = async (p: any) => {
     setScannedSkus({});
     setScanError("");
     setLocConfirmed(false);
-    // Refresh chariot SKUs from Odoo each time we open a parcel
+    setPrepInput("");
+    setPrepInputErr("");
     if (session) {
-      try {
-        const parsed = await odoo.loadChariotSkus(session); setChariotSkus(parsed); setChariotSkusLocal(parsed);
-      } catch {}
+      try { const parsed = await odoo.loadChariotSkus(session); setChariotSkus(parsed); setChariotSkusLocal(parsed); } catch {}
     }
-    setSelectedParcel(p);
+    setPrepOrder(p);
+  };
+
+  const findOrderByNumber = (num: string) => parcels.find((p: any) => p.order_number === num.trim());
+
+  // ── Print order barcode (70×35 ZPL) ──
+  const doPrintOrderBarcode = async (p: any) => {
+    const cfg = pn.getLabelTypeConfig("order_barcode");
+    const printerId = cfg.printerId || pn.getSavedPrinterId();
+    if (!printerId) { onToast("⚠ Configure l'imprimante code-barre dans Paramètres"); return; }
+    const result = await pn.printOrderBarcode(printerId, p.order_number, p.name || "");
+    if (result.success) onToast(`✓ Code-barre ${p.order_number}`);
+    else onToast(`⚠ ${result.error}`);
   };
 
   const buildItems = (p: any) => (p.parcel_items || p.lines || [])
@@ -4399,8 +4404,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     });
 
   const handleEshopScan = (code: string) => {
-    if (!selectedParcel) return;
-    const items = buildItems(selectedParcel);
+    if (!prepOrder) return;
+    const items = buildItems(prepOrder);
     const trimmed = code.trim();
     setScanError("");
 
@@ -4465,10 +4470,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     }
   };
 
-  useScannerListener(handleEshopScan, !!selectedParcel && !preparedIds.has(selectedParcel?.order_number));
+  useScannerListener(handleEshopScan, eshopTab === "prep" && !!prepOrder && !preparedIds.has(prepOrder?.order_number));
 
-  if (selectedParcel) {
-    const p = selectedParcel;
+  // ── Prep detail render (reused from previous version) ──────────────────────
+  const renderPrepDetail = () => {
+    const p = prepOrder;
     const items = buildItems(p);
     const isPrepared = preparedIds.has(p.order_number);
 
@@ -4500,7 +4506,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       <>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-          <button onClick={() => setSelectedParcel(null)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+          <button onClick={() => setPrepOrder(null)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
           <div style={{ flex: 1 }}>
@@ -4690,16 +4696,14 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         {!isPrepared ? (
           <BigButton
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
-            label={allScanned ? "Valider la préparation" : "Forcer comme préparé"}
-            sub={allScanned ? "Tout préparé — prêt à valider" : `${scannedCount}/${items.length} articles préparés`}
+            label={allScanned ? "Commande prête — imprimer code-barre" : "Forcer comme préparé"}
+            sub={allScanned ? "Colle l'étiquette sur le carton" : `${scannedCount}/${items.length} articles préparés`}
             color={allScanned ? C.green : C.orange}
             onClick={async () => {
-              onToast("⏳ Impression étiquette + BL...");
-              await printLabel(p);
-              await printPackingSlip(p);
               await markPrepared(p.order_number);
-              setSelectedParcel(null);
-              onToast("✓ Préparation confirmée");
+              await doPrintOrderBarcode(p);
+              setPrepOrder(null);
+              onToast("✓ Code-barre carton imprimé");
             }}
             disabled={scannedCount === 0}
           />
@@ -4708,77 +4712,246 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>}
             label="Annuler la préparation"
             color={C.orange}
-            onClick={async () => { await unmarkPrepared(p.order_number); setSelectedParcel(null); }}
+            onClick={async () => { await unmarkPrepared(p.order_number); setPrepOrder(null); }}
           />
         )}
       </>
     );
-  }
+  };
 
-  // List view
-  return (
+  // ── TAB RENDERS ────────────────────────────────────────────────────────────
+
+  const renderOrdersTab = () => (
     <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{parcels.length} commande{parcels.length > 1 ? "s" : ""} ouvertes</span>
+        <div style={{ display: "flex", gap: 6 }}>
+          {parcels.length > 0 && (
+            <button
+              onClick={async () => { for (const p of parcels) await doPrintOrderBarcode(p); }}
+              style={{ ...iconBtn, background: "#fef3c7", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700, color: "#92400e", border: `1px solid #f59e0b` }}>
+              🖨️ Tout imprimer
+            </button>
+          )}
+          <button onClick={loadParcels} disabled={loading} style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
           </button>
-          <div>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>E-shop</h2>
-            <p style={{ fontSize: 12, color: C.textMuted }}>{parcels.length} commande(s) SendCloud</p>
-          </div>
         </div>
-        <button onClick={loadParcels} disabled={loading} style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
-        </button>
       </div>
-
-      {/* Filter tabs */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
-        {([["pending", `À préparer (${pendingCount})`], ["prepared", `Préparées (${preparedCount})`], ["all", "Tout"]] as [string, string][]).map(([key, label]) => (
-          <button key={key} onClick={() => setFilter(key as any)} style={{
-            flex: 1, padding: "8px 0", border: `1.5px solid ${filter === key ? "#f59e0b" : C.border}`,
-            background: filter === key ? "#fef3c7" : C.white, color: filter === key ? "#92400e" : C.textSec,
-            borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
-          }}>{label}</button>
-        ))}
-      </div>
-
       {error && <Alert type="error">{error}</Alert>}
       {loading && parcels.length === 0 && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement des commandes SendCloud...</div>}
-      {!loading && parcels.length === 0 && <Alert type="info">Aucune commande trouvée. Vérifie les clés API SendCloud dans les variables Vercel.</Alert>}
-
-      {filteredParcels.map((p: any) => {
+      {!loading && parcels.length === 0 && !error && <Alert type="info">Aucune commande ouverte.</Alert>}
+      {parcels.map((p: any) => {
         const isPrepared = preparedIds.has(p.order_number);
-        const items = p.parcel_items || p.lines || [];
-        const statusMsg = p.status?.message || "";
+        const items = p.parcel_items || [];
         return (
-          <div key={p.id} style={{ ...cardStyle, marginBottom: 8, padding: 16 }}>
-            {/* Ligne 1 : numéro commande + badge */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-              <div style={{ fontSize: 18, fontWeight: 800, color: C.text, letterSpacing: -0.3 }}>{p.order_number || `#${p.id}`}</div>
-              {isPrepared
-                ? <span style={{ fontSize: 10, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "2px 8px", borderRadius: 6 }}>✓ Préparé</span>
-                : <span style={{ fontSize: 10, fontWeight: 700, color: "#92400e", background: "#fef3c7", padding: "2px 8px", borderRadius: 6 }}>{statusMsg || "En attente"}</span>
-              }
-            </div>
-            {/* Ligne 2 : client */}
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.textSec, marginBottom: 2 }}>{p.name}</div>
-            {/* Ligne 3 : ville + badges */}
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" as const }}>
-              <span style={{ fontSize: 11, color: C.textMuted }}>{p.postal_code} {p.city}</span>
-              {items.length > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: C.blue, background: C.blueSoft, padding: "1px 7px", borderRadius: 5 }}>{items.length} art.</span>}
-              {p.carrier?.code && <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", padding: "1px 7px", borderRadius: 5 }}>{p.carrier.code}</span>}
-            </div>
-            {/* Bouton Préparer */}
-            <div style={{ display: "flex", gap: 6 }}>
-              <button onClick={() => openParcel(p)} style={{ flex: 1, padding: "11px 0", background: C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                {isPrepared ? "Voir la préparation" : "Préparer"}
+          <div key={p.id} style={{ ...cardStyle, marginBottom: 8, padding: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{p.order_number}</span>
+                  {isPrepared && <span style={{ fontSize: 10, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "1px 7px", borderRadius: 6 }}>✓ Préparé</span>}
+                </div>
+                <div style={{ fontSize: 12, color: C.textSec, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{p.name} — {p.city}</div>
+                <div style={{ fontSize: 11, color: C.textMuted }}>{items.length} article{items.length > 1 ? "s" : ""}</div>
+              </div>
+              <button
+                onClick={() => doPrintOrderBarcode(p)}
+                style={{ flexShrink: 0, padding: "10px 14px", background: "#db2777", color: "#fff", border: "none", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                🏷️ Code-barre
               </button>
             </div>
           </div>
         );
       })}
+    </>
+  );
+
+  const renderPrepTab = () => {
+    if (prepOrder) return renderPrepDetail();
+    const pending = parcels.filter(p => !preparedIds.has(p.order_number));
+    return (
+      <>
+        {/* Scan / saisie n° commande */}
+        <div style={{ ...cardStyle, padding: 16, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Scanne ou saisis le numéro de commande</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              value={prepInput}
+              onChange={e => { setPrepInput(e.target.value); setPrepInputErr(""); }}
+              onKeyDown={e => {
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  const found = findOrderByNumber(prepInput);
+                  if (found) openPrepOrder(found);
+                  else setPrepInputErr(`❌ Commande "${prepInput.trim()}" non trouvée`);
+                }
+              }}
+              placeholder="Ex: 26411772"
+              autoFocus
+              style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1.5px solid ${prepInputErr ? C.red : C.border}`, fontSize: 14, fontFamily: "inherit", outline: "none" }}
+            />
+            <button
+              onClick={() => { const found = findOrderByNumber(prepInput); if (found) openPrepOrder(found); else setPrepInputErr(`❌ "${prepInput.trim()}" non trouvée`); }}
+              style={{ padding: "10px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+              OK
+            </button>
+          </div>
+          {prepInputErr && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{prepInputErr}</div>}
+        </div>
+        {/* Liste commandes à préparer */}
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>
+          À préparer ({pending.length})
+        </div>
+        {pending.map((p: any) => (
+          <div key={p.id} onClick={() => openPrepOrder(p)} style={{ ...cardStyle, marginBottom: 8, padding: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{p.order_number}</div>
+              <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>{(p.parcel_items || []).length} article(s)</div>
+            </div>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        ))}
+        {pending.length === 0 && !loading && <Alert type="info">Toutes les commandes sont préparées !</Alert>}
+      </>
+    );
+  };
+
+  const renderPackTab = () => {
+    if (packOrder) {
+      return (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+            <button onClick={() => { setPackOrder(null); setPackInput(""); }} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{packOrder.order_number}</div>
+              <div style={{ fontSize: 12, color: C.textSec }}>{packOrder.name} — {packOrder.city}</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>{(packOrder.parcel_items || []).filter((it: any) => parseFloat(it.value || "0") >= 0).length} article(s)</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column" as const, gap: 10 }}>
+            <button
+              disabled={packPrinting}
+              onClick={async () => { setPackPrinting(true); await printPackingSlip(packOrder); setPackPrinting(false); }}
+              style={{ padding: "16px 0", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(59,130,246,0.3)" }}>
+              📄 Imprimer le BL
+            </button>
+            <button
+              disabled={packPrinting}
+              onClick={async () => { setPackPrinting(true); await printLabel(packOrder); setPackPrinting(false); }}
+              style={{ padding: "16px 0", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(124,58,237,0.3)" }}>
+              🚚 Imprimer l'étiquette transport
+            </button>
+            <button
+              disabled={packPrinting}
+              onClick={async () => {
+                setPackPrinting(true);
+                await printPackingSlip(packOrder);
+                await printLabel(packOrder);
+                setPackPrinting(false);
+                onToast(`✓ BL + étiquette pour ${packOrder.order_number}`);
+              }}
+              style={{ padding: "16px 0", background: C.green, color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(22,163,74,0.3)" }}>
+              ✅ Imprimer BL + Étiquette
+            </button>
+          </div>
+        </>
+      );
+    }
+    return (
+      <>
+        <div style={{ ...cardStyle, padding: 16, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>Scanne le code-barre du carton</div>
+          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 10 }}>Ou saisis le numéro de commande manuellement</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              value={packInput}
+              onChange={e => { setPackInput(e.target.value); setPackInputErr(""); }}
+              onKeyDown={e => {
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  const found = findOrderByNumber(packInput) || parcels.find((p: any) => preparedIds.has(p.order_number) && p.order_number === packInput.trim());
+                  if (found) { setPackOrder(found); setPackInput(""); }
+                  else setPackInputErr(`❌ Commande "${packInput.trim()}" non trouvée`);
+                }
+              }}
+              placeholder="N° commande / code-barre..."
+              autoFocus
+              style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1.5px solid ${packInputErr ? C.red : C.border}`, fontSize: 14, fontFamily: "inherit", outline: "none" }}
+            />
+            <button
+              onClick={() => {
+                const found = findOrderByNumber(packInput);
+                if (found) { setPackOrder(found); setPackInput(""); }
+                else setPackInputErr(`❌ "${packInput.trim()}" non trouvée`);
+              }}
+              style={{ padding: "10px 14px", background: C.green, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+              OK
+            </button>
+          </div>
+          {packInputErr && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{packInputErr}</div>}
+        </div>
+        {/* Commandes préparées (prêtes à emballer) */}
+        {(() => {
+          const preparedList = parcels.filter(p => preparedIds.has(p.order_number));
+          return preparedList.length > 0 ? (
+            <>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>
+                Prêtes à emballer ({preparedList.length})
+              </div>
+              {preparedList.map((p: any) => (
+                <div key={p.id} onClick={() => setPackOrder(p)} style={{ ...cardStyle, marginBottom: 8, padding: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 18 }}>📦</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{p.order_number}</div>
+                    <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
+                  </div>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+                </div>
+              ))}
+            </>
+          ) : null;
+        })()}
+      </>
+    );
+  };
+
+  // ── MAIN RENDER ────────────────────────────────────────────────────────────
+  const TABS = [
+    { key: "orders", label: "📦 Commandes" },
+    { key: "prep",   label: "🔍 Préparation" },
+    { key: "pack",   label: "📫 Emballage" },
+  ] as const;
+
+  return (
+    <>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+        <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, margin: 0 }}>E-shop</h2>
+      </div>
+
+      {/* 3 tabs — hide when in prep detail or pack detail */}
+      {!(eshopTab === "prep" && prepOrder) && !(eshopTab === "pack" && packOrder) && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
+          {TABS.map(({ key, label }) => (
+            <button key={key} onClick={() => setEshopTab(key)} style={{
+              flex: 1, padding: "9px 0", border: `1.5px solid ${eshopTab === key ? "#db2777" : C.border}`,
+              background: eshopTab === key ? "#fce7f3" : C.white, color: eshopTab === key ? "#9d174d" : C.textSec,
+              borderRadius: 10, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+            }}>{label}</button>
+          ))}
+        </div>
+      )}
+
+      {eshopTab === "orders" && renderOrdersTab()}
+      {eshopTab === "prep"   && renderPrepTab()}
+      {eshopTab === "pack"   && renderPackTab()}
     </>
   );
 }
@@ -7322,6 +7495,7 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
     { key: "packingslip", label: "BL préparation (A4)", icon: "📄", hasSize: false },
     { key: "sendcloud", label: "Étiquette transport E-shop", icon: "🚚", hasSize: false },
     { key: "packingslip_eshop", label: "BL E-shop (A4)", icon: "🛍️", hasSize: false },
+    { key: "order_barcode", label: "Code-barre commande (70×35)", icon: "🏷️", hasSize: false },
   ];
 
   const [configs, setConfigs] = useState<Record<LabelType, pn.LabelTypeConfig>>(() => pn.getAllLabelTypeConfigs());
