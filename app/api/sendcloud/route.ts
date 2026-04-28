@@ -135,33 +135,37 @@ export async function GET(req: NextRequest) {
       };
 
       // Helper: build & POST a V2 parcel directly (bypasses V3 price validation)
+      let v2CreateError = "";
       const createV2Parcel = async (): Promise<any | null> => {
         // Get shipping address from V3 order details
         let od: any = {};
         try {
           const orderDetail = await scJson(`${V3}/orders/${orderId}`, auth);
           od = orderDetail?.data || orderDetail || {};
-          console.warn("[label] createV2: V3 order keys:", Object.keys(od).join(","));
         } catch (e: any) {
-          console.warn("[label] createV2: V3 order fetch error:", e.message);
+          v2CreateError = `V3 fetch error: ${e.message}`;
+          console.error("[label] createV2: V3 order fetch error:", e.message);
         }
         const addr = od?.shipping_address || {};
         const shippingDetails = od?.shipping_details || od?.shipment || {};
-        console.warn("[label] createV2: addr keys:", Object.keys(addr).join(","), "| shipping keys:", Object.keys(shippingDetails).join(","));
 
+        // V2 requires address and house_number as separate fields
         const parcelPayload: any = {
           name: addr.name || addr.company_name || "Client",
-          address: [addr.address_line_1, addr.house_number].filter(Boolean).join(" ") || addr.street || "",
+          address: addr.address_line_1 || addr.street || "",
+          house_number: addr.house_number || "",
           city: addr.city || "",
           postal_code: addr.postal_code || "",
           country: { iso_2: (addr.country_iso_2 || addr.country_code || addr.country || "FR").slice(0, 2).toUpperCase() },
+          email: addr.email || "",
+          telephone: addr.phone_number || addr.phone || "",
           weight: "1.000",
           order_number: orderNumber,
           request_label: true,
         };
         const shipMethodId = shippingDetails.shipping_method_id || shippingDetails.id || od?.carrier?.id || od?.shipping_method?.id;
         if (shipMethodId) parcelPayload.shipment = { id: shipMethodId };
-        console.warn("[label] createV2: POST shipment:", shipMethodId ?? "none");
+        console.error("[label] createV2: POST payload shipment:", shipMethodId ?? "NONE — label may fail", "addr:", JSON.stringify(addr).substring(0, 200));
 
         try {
           const created = await scJson(`${V2}/parcels`, auth, {
@@ -169,11 +173,14 @@ export async function GET(req: NextRequest) {
             body: JSON.stringify({ parcel: parcelPayload }),
           });
           const p = created?.parcel;
-          console.warn("[label] createV2: POST result parcel id:", p?.id ?? "null", "hasLabel:", !!(p?.label?.label_printer || p?.label?.normal_printer?.[0]));
-          if (!p) console.warn("[label] createV2: unexpected response:", JSON.stringify(created).substring(0, 300));
+          if (!p) {
+            v2CreateError = `V2 unexpected response: ${JSON.stringify(created).substring(0, 200)}`;
+            console.error("[label] createV2:", v2CreateError);
+          }
           return p || null;
         } catch (e: any) {
-          console.warn("[label] createV2: POST error:", e.message);
+          v2CreateError = e.message;
+          console.error("[label] createV2: POST error:", e.message);
           return null;
         }
       };
@@ -218,7 +225,7 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      if (!parcel) return NextResponse.json({ error: "Colis non trouvé — impossible de créer l'étiquette" }, { status: 404 });
+      if (!parcel) return NextResponse.json({ error: `Colis non trouvé — ${v2CreateError || "V2 création échouée sans détail"}` }, { status: 404 });
 
       const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
       console.warn("[label] final labelUrl:", labelUrl ? "present" : "absent", "parcel id:", parcel.id);
