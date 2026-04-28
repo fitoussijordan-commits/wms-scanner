@@ -2609,11 +2609,18 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
               {stock.map((q: any, i: number) => {
                 if (!q.lot_id) return null;
                 const lqty = lotQtys[q.lot_id[0]] || 0;
+                const qReserved = q.reserved_quantity || 0;
+                const qDispo = q.quantity - qReserved;
                 return (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: lqty > 0 ? C.blueSoft : C.white, border: `1.5px solid ${lqty > 0 ? C.blue : C.border}`, borderRadius: 8 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{q.lot_id[1]}</div>
-                      <div style={{ fontSize: 10, color: C.textMuted }}>Stock: {q.quantity}{q.expiration_date ? " · " + q.expiration_date.substring(0, 10) : ""}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{q.lot_id[1]}{q.location_id ? <span style={{ fontWeight: 400, color: C.textMuted }}> · {(q.location_id[1] || "").split("/").pop()}</span> : null}</div>
+                      <div style={{ fontSize: 10, color: C.textMuted, display: "flex", gap: 8, flexWrap: "wrap" as const }}>
+                        <span>📦 Physique: <b style={{ color: C.text }}>{q.quantity}</b></span>
+                        {qReserved > 0 && <span>🔒 Réservé: <b style={{ color: C.orange }}>{qReserved}</b></span>}
+                        <span>✅ Dispo: <b style={{ color: qDispo > 0 ? C.green : C.red }}>{qDispo}</b></span>
+                        {q.expiration_date && <span>⏱ {q.expiration_date.substring(0, 10)}</span>}
+                      </div>
                     </div>
                     <button onClick={() => setLotQtys(p => ({ ...p, [q.lot_id[0]]: Math.max(0, (p[q.lot_id[0]] || 0) - 1) }))} style={{ width: 30, height: 30, borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
                     <input type="number" value={lqty || ""} onChange={e => { const v = parseInt(e.target.value) || 0; setLotQtys(p => ({ ...p, [q.lot_id[0]]: Math.max(0, v) })); }} onKeyDown={e => e.stopPropagation()} style={{ width: 50, textAlign: "center" as const, padding: "4px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 14, fontWeight: 700, fontFamily: "inherit" }} />
@@ -2635,7 +2642,7 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
                       background: sel ? C.blue : C.white, color: sel ? "#fff" : C.text,
                       border: `1.5px solid ${sel ? C.blue : C.border}`,
                     }}>
-                    {q.lot_id[1]} <span style={{ fontWeight: 400, opacity: 0.7 }}>({q.quantity})</span>
+                    {q.lot_id[1]} <span style={{ fontWeight: 400, opacity: 0.7 }}>({q.quantity} phys{(q.reserved_quantity || 0) > 0 ? ` · ${q.reserved_quantity} rés` : ""})</span>
                   </button>
                 );
               })}
