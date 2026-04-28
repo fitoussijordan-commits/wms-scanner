@@ -50,18 +50,15 @@ export async function GET(req: NextRequest) {
     // V3 orders — open orders not yet converted to parcels
     if (action === "orders") {
       const data = await scJson(`${V3}/orders?integration_id=527093&page_size=100`, auth);
-      let orders = data.data || data.results || data.orders || [];
-      // If order_items not in list response, fetch each order individually
-      const sample = orders[0] || {};
-      if (!sample.order_items && !sample.order_details?.order_items) {
-        orders = await Promise.all(
-          orders.map((o: any) =>
-            scJson(`${V3}/orders/${o.order_id}`, auth)
-              .then((d: any) => d.data || d)
-              .catch(() => o)
-          )
-        );
-      }
+      const listOrders = data.data || data.results || data.orders || [];
+      // Toujours récupérer chaque commande individuellement pour avoir shipping_method_id et order_items complets
+      const orders = await Promise.all(
+        listOrders.map((o: any) =>
+          scJson(`${V3}/orders/${o.order_id}`, auth)
+            .then((d: any) => d.data || d)
+            .catch(() => o)
+        )
+      );
       return NextResponse.json({ orders });
     }
 
@@ -150,17 +147,30 @@ export async function GET(req: NextRequest) {
       // Helper: build & POST a V2 parcel directly (bypasses V3 price validation)
       let v2CreateError = "";
       const createV2Parcel = async (): Promise<any | null> => {
-        // Utilise l'adresse passée par le client — pas de re-fetch V3 incertain
         const countryCode = (clientAddr.country || "FR").slice(0, 2).toUpperCase();
 
-        // V2 payload — country doit être une string ISO-2, pas un objet
+        // Récupère shipping_method_id depuis V3 si non fourni par le client
+        let shipMethodId: string | number = clientAddr.ship_method_id;
+        if (!shipMethodId) {
+          try {
+            const orderDetail = await scJson(`${V3}/orders/${orderId}`, auth);
+            const od = orderDetail?.data || orderDetail || {};
+            const sd = od?.shipping_details || {};
+            shipMethodId = sd.shipping_method_id || sd.id || "";
+            console.error("[label] createV2: shipping_method_id from V3:", shipMethodId || "NONE");
+          } catch (e: any) {
+            console.error("[label] createV2: V3 fetch for ship_method failed:", e.message);
+          }
+        }
+
+        // V2 payload — country = string ISO-2, pas un objet
         const parcelPayload: any = {
           name: clientAddr.name || "Client",
           address: clientAddr.address_line_1,
           house_number: clientAddr.house_number,
           city: clientAddr.city,
           postal_code: clientAddr.postal_code,
-          country: countryCode,           // string "FR", pas { iso_2: "FR" }
+          country: countryCode,
           email: clientAddr.email,
           telephone: clientAddr.phone,
           weight: "1.000",
@@ -168,10 +178,9 @@ export async function GET(req: NextRequest) {
           request_label: true,
         };
 
-        const shipMethodId = clientAddr.ship_method_id;
         if (shipMethodId) parcelPayload.shipment = { id: Number(shipMethodId) };
 
-        console.error("[label] createV2 payload:", JSON.stringify(parcelPayload).substring(0, 400));
+        console.error("[label] createV2 payload:", JSON.stringify(parcelPayload).substring(0, 500));
 
         try {
           const created = await scJson(`${V2}/parcels`, auth, {
