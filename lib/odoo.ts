@@ -935,11 +935,16 @@ export async function getProductLocations(session: OdooSession, productIds: numb
     "quantity desc"
   );
 
+  // Exclure les zones de sortie/expédition (usage=internal mais nom trompeur)
+  const EXCLUDE_LOC = /sortie|output|expéd|dispatch|transit/i;
+
   const prodLocMap: Record<number, { location_id: number; location_name: string; quantity: number }> = {};
   for (const q of quants) {
+    const locName: string = q.location_id[1] || "";
+    if (EXCLUDE_LOC.test(locName)) continue; // skip sortie-type locations
     const pid = q.product_id[0];
     if (!prodLocMap[pid] || q.quantity > prodLocMap[pid].quantity) {
-      prodLocMap[pid] = { location_id: q.location_id[0], location_name: q.location_id[1], quantity: q.quantity };
+      prodLocMap[pid] = { location_id: q.location_id[0], location_name: locName, quantity: q.quantity };
     }
   }
 

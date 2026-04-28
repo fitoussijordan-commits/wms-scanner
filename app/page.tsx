@@ -1238,7 +1238,22 @@ export default function Page() {
         let eshopOrders: any[] = [];
         try {
           const res = await fetch("/api/sendcloud?action=orders");
-          if (res.ok) { const data = await res.json(); eshopOrders = data.orders || []; }
+          if (res.ok) {
+            const data = await res.json();
+            eshopOrders = (data.orders || []).filter((o: any) => {
+              const statusCode = o?.order_details?.status?.code ?? o?.status?.code;
+              if (statusCode !== "0") return false;
+              const integId = o?.integration_id;
+              if (integId && integId !== 527093) return false;
+              const carrierStr = [
+                o?.shipping_details?.delivery_indicator || "",
+                o?.shipping_details?.shipping_method_name || "",
+                o?.order_details?.shipping_method_name || "",
+                o?.carrier?.name || "", o?.carrier?.code || "",
+              ].join(" ").toLowerCase();
+              return carrierStr.includes("mondial") || carrierStr.includes("colissimo");
+            });
+          }
         } catch {}
         setCcData({
           waitingToday: { count: waitingToday.length, names: (waitingToday as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
