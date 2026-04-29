@@ -1,8 +1,8 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import * as odoo from "@/lib/odoo";
+import { sb, WmsScanEntry, WmsScanSession, loadScanSessions, createScanSession, updateScanSessionEntries, deleteScanSession } from "@/lib/supabase";
 
-// ── Palette de couleurs (identique au reste du WMS) ──────────────────────────
 const C = {
   bg: "#f8fafc", white: "#ffffff", text: "#1a1a2e", textSec: "#374151",
   textMuted: "#6b7280", border: "#e5e7eb", blue: "#3b82f6", blueSoft: "#eff6ff",
@@ -10,179 +10,281 @@ const C = {
   shadow: "0 1px 4px rgba(0,0,0,0.07)",
 };
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-interface ScanEntry {
-  barcode: string;
-  qty: number;
-  odooRef: string;       // default_code
-  productName: string;
-  productId: number | null;
-  matched: boolean;
-  loading: boolean;
-}
-
 interface Props {
   session: odoo.OdooSession;
   onBack: () => void;
   onToast: (msg: string, type?: "success" | "error" | "info") => void;
 }
 
-// ── Composant ─────────────────────────────────────────────────────────────────
-export default function FreeScanScreen({ session, onBack, onToast }: Props) {
-  const [entries, setEntries] = useState<ScanEntry[]>([]);
-  const [scanInput, setScanInput] = useState("");
-  const [exporting, setExporting] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+// ── Vue liste des sessions ────────────────────────────────────────────────────
+function SessionListView({ session, onBack, onToast, onOpen }: Props & { onOpen: (s: WmsScanSession) => void }) {
+  const [sessions, setSessions] = useState<WmsScanSession[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
 
-  // Garder le focus sur l'input après chaque scan
-  useEffect(() => { inputRef.current?.focus(); }, [entries]);
+  const today = new Date();
+  const dateStr = `${String(today.getDate()).padStart(2, "0")}/${String(today.getMonth() + 1).padStart(2, "0")}`;
 
-  // ── Lookup Odoo par code-barres ───────────────────────────────────────────
-  const lookupBarcode = useCallback(async (barcode: string): Promise<{ odooRef: string; productName: string; productId: number | null; matched: boolean }> => {
+  const load = useCallback(async () => {
+    try { setSessions(await loadScanSessions()); }
+    catch (e: any) { onToast("Erreur chargement : " + e.message, "error"); }
+    setLoading(false);
+  }, [onToast]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleCreate = async () => {
+    const name = newName.trim() || `Scan ${dateStr}`;
+    setCreating(true);
     try {
-      const results = await odoo.searchRead(
-        session, "product.product",
-        [["barcode", "=", barcode]],
-        ["id", "default_code", "name", "product_tmpl_id"],
-        1
-      );
-      if (results && results.length > 0) {
-        const p = results[0];
-        return { odooRef: p.default_code || "", productName: p.name || "", productId: p.id ?? null, matched: true };
-      }
-      // Essai sur product.template si pas trouvé dans product.product
-      const tplResults = await odoo.searchRead(
-        session, "product.template",
-        [["barcode", "=", barcode]],
-        ["id", "default_code", "name"],
-        1
-      );
-      if (tplResults && tplResults.length > 0) {
-        const t = tplResults[0];
-        return { odooRef: t.default_code || "", productName: t.name || "", productId: t.id ?? null, matched: true };
-      }
-    } catch {}
-    return { odooRef: "", productName: "", productId: null, matched: false };
-  }, [session]);
-
-  // ── Handler scan ─────────────────────────────────────────────────────────
-  const handleScan = useCallback(async (raw: string) => {
-    const barcode = raw.trim();
-    if (!barcode) return;
-    setScanInput("");
-
-    // Si code-barres déjà dans la liste → incrémenter qty immédiatement
-    const existIdx = entries.findIndex(e => e.barcode === barcode);
-    if (existIdx >= 0) {
-      setEntries(prev => prev.map((e, i) => i === existIdx ? { ...e, qty: e.qty + 1 } : e));
-      return;
-    }
-
-    // Nouveau barcode → ajouter en "loading" puis enrichir depuis Odoo
-    const placeholder: ScanEntry = { barcode, qty: 1, odooRef: "", productName: barcode, productId: null, matched: false, loading: true };
-    setEntries(prev => [placeholder, ...prev]);
-
-    const match = await lookupBarcode(barcode);
-    setEntries(prev => prev.map(e =>
-      e.barcode === barcode && e.loading
-        ? { ...e, ...match, loading: false }
-        : e
-    ));
-  }, [entries, lookupBarcode]);
-
-  // ── Modifier qty manuellement ─────────────────────────────────────────────
-  const updateQty = (barcode: string, delta: number) => {
-    setEntries(prev => prev.map(e => {
-      if (e.barcode !== barcode) return e;
-      const newQty = Math.max(0, e.qty + delta);
-      return { ...e, qty: newQty };
-    }).filter(e => e.qty > 0));
+      const s = await createScanSession(name);
+      setNewName("");
+      onOpen(s);
+    } catch (e: any) { onToast("Erreur création : " + e.message, "error"); }
+    setCreating(false);
   };
 
-  const removeEntry = (barcode: string) => {
-    setEntries(prev => prev.filter(e => e.barcode !== barcode));
-  };
-
-  // ── Export Excel ──────────────────────────────────────────────────────────
-  const exportExcel = async () => {
-    if (entries.length === 0) { onToast("Aucun produit scanné", "error"); return; }
-    setExporting(true);
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm("Supprimer cette session ?")) return;
     try {
-      const XLSX = await import("xlsx");
-      const rows = entries.map(e => ({
-        "Réf interne Odoo": e.odooRef || "(non trouvé)",
-        "Nom produit":      e.productName || e.barcode,
-        "Code-barres":      e.barcode,
-        "Quantité":         e.qty,
-        "Statut":           e.matched ? "✓ Trouvé" : "⚠ Non trouvé",
-      }));
-
-      const ws = XLSX.utils.json_to_sheet(rows);
-
-      // Largeur colonnes
-      ws["!cols"] = [{ wch: 22 }, { wch: 40 }, { wch: 20 }, { wch: 12 }, { wch: 14 }];
-
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Scan libre");
-
-      const date = new Date().toISOString().slice(0, 10);
-      const fileName = `scan_libre_${date}.xlsx`;
-      XLSX.writeFile(wb, fileName);
-      onToast(`Fichier exporté : ${fileName}`, "success");
-    } catch (e: any) {
-      onToast("Erreur export : " + e.message, "error");
-    }
-    setExporting(false);
+      await deleteScanSession(id);
+      setSessions(prev => prev.filter(s => s.id !== id));
+    } catch (e: any) { onToast("Erreur suppression", "error"); }
   };
 
-  // ── Stats ─────────────────────────────────────────────────────────────────
-  const totalQty    = entries.reduce((s, e) => s + e.qty, 0);
-  const totalRefs   = entries.length;
-  const unmatched   = entries.filter(e => !e.matched && !e.loading).length;
+  const totalEntries = (s: WmsScanSession) => s.entries.reduce((n, e) => n + e.qty, 0);
 
-  // ── UI ────────────────────────────────────────────────────────────────────
   return (
     <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto", fontFamily: "'DM Sans', sans-serif" }}>
-
-      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-        <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Scan libre</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>Scannez des codes-barres en chaîne</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>Sessions de scan cross-device</div>
         </div>
       </div>
 
-      {/* Zone de scan */}
-      <div style={{ background: C.white, border: `2px solid ${C.blue}`, borderRadius: 14, padding: "14px 14px", marginBottom: 16, boxShadow: "0 0 0 4px #eff6ff" }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: C.blue, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
-          📷 Zone de scan
-        </div>
+      {/* Créer nouvelle session */}
+      <div style={{ background: C.white, border: `1.5px solid ${C.blue}`, borderRadius: 14, padding: 14, marginBottom: 20, boxShadow: "0 0 0 3px #eff6ff" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Nouvelle session</div>
         <div style={{ display: "flex", gap: 8 }}>
           <input
-            ref={inputRef}
-            value={scanInput}
-            onChange={e => setScanInput(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") handleScan(scanInput); }}
-            placeholder="Pointez le scanner ici…"
-            autoFocus
-            style={{ flex: 1, padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, fontFamily: "inherit", background: C.bg, color: C.text, outline: "none" }}
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") handleCreate(); }}
+            placeholder={`Scan ${dateStr}`}
+            style={{ flex: 1, padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.bg, color: C.text }}
           />
-          <button onClick={() => handleScan(scanInput)}
-            style={{ padding: "12px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 16, fontWeight: 700, cursor: "pointer" }}>
-            →
+          <button onClick={handleCreate} disabled={creating}
+            style={{ padding: "10px 18px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            {creating ? "…" : "+ Créer"}
           </button>
         </div>
+      </div>
+
+      {/* Liste sessions */}
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement…</div>
+      ) : sessions.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "40px 24px", color: C.textMuted }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Aucune session</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>Créez une session pour commencer à scanner</div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {sessions.map(s => (
+            <div key={s.id} onClick={() => onOpen(s)}
+              style={{ background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: 12, boxShadow: C.shadow }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{s.name}</div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                  {s.date} · {s.entries.length} réf(s) · {totalEntries(s)} unités
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, background: C.blueSoft, color: C.blue, padding: "3px 10px", borderRadius: 8 }}>
+                  {totalEntries(s)} u
+                </span>
+                <button onClick={e => handleDelete(s.id, e)}
+                  style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Vue scan d'une session ────────────────────────────────────────────────────
+function SessionScanView({ session, scanSession, onBack, onToast }: Props & { scanSession: WmsScanSession }) {
+  const [entries, setEntries] = useState<WmsScanEntry[]>(scanSession.entries || []);
+  const [buffer, setBuffer] = useState("");
+  const [lastScanned, setLastScanned] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const hiddenInputRef = useRef<HTMLInputElement>(null);
+
+  // Sauvegarder dans Supabase (debounced)
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveToSupabase = useCallback((newEntries: WmsScanEntry[]) => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      setSaving(true);
+      try { await updateScanSessionEntries(scanSession.id, newEntries); }
+      catch { /* silencieux */ }
+      setSaving(false);
+    }, 800);
+  }, [scanSession.id]);
+
+  // Lookup Odoo barcode
+  const lookupBarcode = useCallback(async (barcode: string): Promise<Omit<WmsScanEntry, "barcode" | "qty">> => {
+    try {
+      const r = await odoo.searchRead(session, "product.product", [["barcode", "=", barcode]], ["default_code", "name"], 1);
+      if (r?.length) return { odooRef: r[0].default_code || "", productName: r[0].name || "", matched: true };
+      const t = await odoo.searchRead(session, "product.template", [["barcode", "=", barcode]], ["default_code", "name"], 1);
+      if (t?.length) return { odooRef: t[0].default_code || "", productName: t[0].name || "", matched: true };
+    } catch {}
+    return { odooRef: "", productName: "", matched: false };
+  }, [session]);
+
+  // Traiter un scan
+  const handleScan = useCallback(async (barcode: string) => {
+    const bc = barcode.trim();
+    if (!bc || bc.length < 3) return;
+    setLastScanned(bc);
+
+    // Déjà dans la liste → incrémenter
+    const idx = entries.findIndex(e => e.barcode === bc);
+    if (idx >= 0) {
+      const updated = entries.map((e, i) => i === idx ? { ...e, qty: e.qty + 1 } : e);
+      setEntries(updated);
+      saveToSupabase(updated);
+      return;
+    }
+
+    // Nouveau → ajouter placeholder puis lookup
+    const placeholder: WmsScanEntry = { barcode: bc, qty: 1, odooRef: "…", productName: "Recherche…", matched: false };
+    const withPlaceholder = [placeholder, ...entries];
+    setEntries(withPlaceholder);
+
+    const match = await lookupBarcode(bc);
+    setEntries(prev => {
+      const updated = prev.map(e => e.barcode === bc && e.odooRef === "…" ? { ...e, ...match } : e);
+      saveToSupabase(updated);
+      return updated;
+    });
+  }, [entries, lookupBarcode, saveToSupabase]);
+
+  // Listener global clavier — inputMode="none" sur l'input évite le clavier soft
+  const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      handleScan(buffer);
+      setBuffer("");
+    }
+  }, [buffer, handleScan]);
+
+  // Refocus l'input caché si on clique ailleurs
+  useEffect(() => {
+    const refocus = () => { if (hiddenInputRef.current) hiddenInputRef.current.focus(); };
+    document.addEventListener("click", refocus);
+    return () => document.removeEventListener("click", refocus);
+  }, []);
+
+  const updateQty = (barcode: string, delta: number) => {
+    setEntries(prev => {
+      const updated = prev.map(e => e.barcode === barcode ? { ...e, qty: Math.max(0, e.qty + delta) } : e).filter(e => e.qty > 0);
+      saveToSupabase(updated);
+      return updated;
+    });
+  };
+
+  const removeEntry = (barcode: string) => {
+    setEntries(prev => {
+      const updated = prev.filter(e => e.barcode !== barcode);
+      saveToSupabase(updated);
+      return updated;
+    });
+  };
+
+  const exportExcel = async () => {
+    if (!entries.length) { onToast("Aucun produit scanné", "error"); return; }
+    setExporting(true);
+    try {
+      const XLSX = await import("xlsx");
+      const rows = entries.map(e => ({
+        "Réf interne Odoo": e.odooRef && e.odooRef !== "…" ? e.odooRef : "(non trouvé)",
+        "Nom produit":      e.productName && e.productName !== "Recherche…" ? e.productName : e.barcode,
+        "Code-barres":      e.barcode,
+        "Quantité":         e.qty,
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = [{ wch: 22 }, { wch: 42 }, { wch: 20 }, { wch: 12 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, scanSession.name);
+      XLSX.writeFile(wb, `${scanSession.name.replace(/[^a-zA-Z0-9]/g, "_")}.xlsx`);
+      onToast("Fichier exporté ✓", "success");
+    } catch (e: any) { onToast("Erreur export : " + e.message, "error"); }
+    setExporting(false);
+  };
+
+  const totalQty  = entries.reduce((s, e) => s + e.qty, 0);
+  const unmatched = entries.filter(e => !e.matched && e.odooRef !== "…").length;
+
+  return (
+    <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto", fontFamily: "'DM Sans', sans-serif" }}>
+
+      {/* Input caché pour capter le scanner sans ouvrir le clavier */}
+      <input
+        ref={hiddenInputRef}
+        value={buffer}
+        onChange={e => setBuffer(e.target.value)}
+        onKeyDown={onKeyDown}
+        autoFocus
+        inputMode="none"
+        autoComplete="off"
+        style={{ position: "fixed", top: -100, left: -100, opacity: 0, width: 1, height: 1 }}
+        aria-hidden="true"
+      />
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>{scanSession.name}</div>
+          <div style={{ fontSize: 11, color: C.textMuted }}>{scanSession.date} · {saving ? "Sauvegarde…" : "Synchronisé ✓"}</div>
+        </div>
+        <button onClick={exportExcel} disabled={exporting || entries.length === 0}
+          style={{ padding: "8px 14px", background: C.green, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: entries.length === 0 ? 0.4 : 1 }}>
+          {exporting ? "…" : "⬇ Excel"}
+        </button>
+      </div>
+
+      {/* Indicateur de scan actif */}
+      <div style={{ background: C.white, border: `2px solid ${C.blue}`, borderRadius: 14, padding: "12px 16px", marginBottom: 14, display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ width: 10, height: 10, borderRadius: "50%", background: C.blue, animation: "pulse 1.5s infinite", flexShrink: 0 }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.blue }}>Scanner actif — pointez et scannez</div>
+          {lastScanned && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Dernier scan : <strong>{lastScanned}</strong></div>}
+        </div>
+        {buffer && <div style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace" }}>{buffer}…</div>}
       </div>
 
       {/* Stats */}
       {entries.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
           {[
-            { label: "Références", value: totalRefs, color: C.blue },
-            { label: "Unités total", value: totalQty, color: C.text },
+            { label: "Références", value: entries.length, color: C.blue },
+            { label: "Unités", value: totalQty, color: C.text },
             { label: "Non trouvés", value: unmatched, color: unmatched > 0 ? C.orange : C.green },
           ].map(s => (
             <div key={s.label} style={{ background: C.white, borderRadius: 10, padding: "10px 8px", textAlign: "center", border: `1px solid ${C.border}`, boxShadow: C.shadow }}>
@@ -193,70 +295,63 @@ export default function FreeScanScreen({ session, onBack, onToast }: Props) {
         </div>
       )}
 
-      {/* Actions */}
-      {entries.length > 0 && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-          <button onClick={exportExcel} disabled={exporting}
-            style={{ flex: 2, padding: "12px 0", background: C.green, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: exporting ? 0.7 : 1 }}>
-            {exporting ? "Export en cours…" : "⬇ Exporter Excel"}
-          </button>
-          <button onClick={() => { if (confirm("Effacer tous les scans ?")) setEntries([]); }}
-            style={{ flex: 1, padding: "12px 0", background: C.bg, color: C.red, border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-            🗑 Reset
-          </button>
-        </div>
-      )}
-
-      {/* Liste des scans */}
+      {/* Liste */}
       {entries.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "48px 24px", color: C.textMuted }}>
+        <div style={{ textAlign: "center", padding: "40px 24px", color: C.textMuted }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
           <div style={{ fontSize: 15, fontWeight: 600, color: C.textSec, marginBottom: 6 }}>Prêt à scanner</div>
-          <div style={{ fontSize: 13 }}>Chaque scan ajoute 1 unité.<br/>Rescanner le même code-barres incrémente la quantité.</div>
+          <div style={{ fontSize: 13 }}>Scannez un code-barres pour commencer.<br/>Chaque scan = 1 unité. Répéter = cumul.</div>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {entries.map((entry) => (
+          {entries.map(entry => (
             <div key={entry.barcode} style={{
-              background: C.white, borderRadius: 12, padding: "12px 14px",
-              border: `1.5px solid ${entry.loading ? C.border : entry.matched ? C.green : C.orange}`,
+              background: C.white, borderRadius: 12, padding: "11px 13px",
+              border: `1.5px solid ${entry.odooRef === "…" ? C.border : entry.matched ? "#bbf7d0" : "#fed7aa"}`,
               boxShadow: C.shadow, display: "flex", alignItems: "center", gap: 10,
             }}>
-              {/* Infos produit */}
               <div style={{ flex: 1, minWidth: 0 }}>
-                {entry.loading ? (
-                  <div style={{ fontSize: 13, color: C.textMuted }}>🔍 Recherche Odoo…</div>
+                {entry.odooRef === "…" ? (
+                  <div style={{ fontSize: 12, color: C.textMuted }}>🔍 Recherche…</div>
                 ) : (
                   <>
                     <div style={{ fontSize: 13, fontWeight: 700, color: entry.matched ? C.text : C.orange, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {entry.matched ? entry.productName : <span>{entry.barcode} <span style={{ fontSize: 10, fontWeight: 400 }}>(non trouvé)</span></span>}
                     </div>
-                    <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
-                      {entry.matched && entry.odooRef && <span>Réf: <strong>{entry.odooRef}</strong> · </span>}
+                    <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>
+                      {entry.matched && entry.odooRef && <><strong>{entry.odooRef}</strong> · </>}
                       <span style={{ fontFamily: "monospace" }}>{entry.barcode}</span>
                     </div>
                   </>
                 )}
               </div>
-
-              {/* Contrôle quantité */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                 <button onClick={() => updateQty(entry.barcode, -1)}
-                  style={{ width: 28, height: 28, borderRadius: 8, border: `1.5px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 16, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
-                <div style={{ fontSize: 17, fontWeight: 800, color: C.text, minWidth: 28, textAlign: "center" }}>{entry.qty}</div>
+                  style={{ width: 26, height: 26, borderRadius: 7, border: `1.5px solid ${C.border}`, background: C.bg, fontSize: 15, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
+                <div style={{ fontSize: 16, fontWeight: 800, color: C.text, minWidth: 26, textAlign: "center" }}>{entry.qty}</div>
                 <button onClick={() => updateQty(entry.barcode, +1)}
-                  style={{ width: 28, height: 28, borderRadius: 8, border: `1.5px solid ${C.border}`, background: C.bg, color: C.text, fontSize: 16, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+                  style={{ width: 26, height: 26, borderRadius: 7, border: `1.5px solid ${C.border}`, background: C.bg, fontSize: 15, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
               </div>
-
-              {/* Supprimer */}
               <button onClick={() => removeEntry(entry.barcode)}
-                style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted, display: "flex", alignItems: "center" }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
               </button>
             </div>
           ))}
         </div>
       )}
+
+      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }`}</style>
     </div>
   );
+}
+
+// ── Composant principal ───────────────────────────────────────────────────────
+export default function FreeScanScreen(props: Props) {
+  const [activeSession, setActiveSession] = useState<WmsScanSession | null>(null);
+
+  if (activeSession) {
+    return <SessionScanView {...props} scanSession={activeSession} onBack={() => setActiveSession(null)} />;
+  }
+  return <SessionListView {...props} onOpen={setActiveSession} />;
 }
