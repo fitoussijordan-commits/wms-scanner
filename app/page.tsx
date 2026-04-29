@@ -1180,12 +1180,24 @@ export default function Page() {
           return d.startsWith(todayStr);
         }).length;
       })(),
-      // 2. E-shop — commandes SendCloud non converties
+      // 2. E-shop — commandes SendCloud filtrées (status "0" + intégration 527093 + Mondial Relay / Colissimo)
       (async () => {
         const res = await fetch("/api/sendcloud?action=orders");
         if (!res.ok) return 0;
         const data = await res.json();
-        return (data.orders || []).length;
+        return (data.orders || []).filter((o: any) => {
+          const statusCode = o.order_details?.status?.code ?? o.status?.code;
+          if (statusCode !== "0") return false;
+          if (o.integration_id && o.integration_id !== 527093) return false;
+          const carrierStr = [
+            o.shipping_details?.delivery_indicator || "",
+            o.shipping_details?.shipping_method_name || "",
+            o.order_details?.shipping_method_name || "",
+            o.carrier?.name || "",
+            o.carrier?.code || "",
+          ].join(" ").toLowerCase();
+          return carrierStr.includes("mondial") || carrierStr.includes("colissimo");
+        }).length;
       })(),
       // 3. Retours — WH/RET/ en attente
       (async () => {
