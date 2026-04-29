@@ -78,6 +78,7 @@ async function generateEshopPackingSlipPDF(order: {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const W = 210; const M = 15;
+  const PAGE_H = 297;
 
   const BLACK  = [0, 0, 0]       as [number,number,number];
   const GRAY   = [110, 110, 110]  as [number,number,number];
@@ -85,23 +86,69 @@ async function generateEshopPackingSlipPDF(order: {
   const DARK   = [20, 20, 20]     as [number,number,number];
   const ACCENT = [40, 40, 40]     as [number,number,number];
 
+  const tW   = W - M * 2;
+  const qtyW = 18;
+  const artW = tW - qtyW;
+
+  // ── Helper : footer ──
+  const drawFooter = (pageNum: number, totalPages: number) => {
+    const footY = PAGE_H - M;
+    doc.setDrawColor(...LGRAY);
+    doc.setLineWidth(0.3);
+    doc.line(M, footY - 4, W - M, footY - 4);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(...GRAY);
+    doc.text("WALA France — 35 Rue d'Hauteville, 75010 Paris — +33 1 43 55 32 42", W / 2, footY - 1, { align: "center" });
+    if (totalPages > 1) doc.text(`Page ${pageNum}/${totalPages}`, W - M, footY - 1, { align: "right" });
+  };
+
+  // ── Helper : en-tête tableau articles ──
+  const drawArticlesHeader = (yPos: number) => {
+    doc.setFillColor(245, 245, 245);
+    doc.rect(M, yPos, tW, 7, "F");
+    doc.setDrawColor(...LGRAY);
+    doc.setLineWidth(0.4);
+    doc.rect(M, yPos, tW, 7);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    doc.setTextColor(...ACCENT);
+    doc.text("ARTICLE", M + 3, yPos + 5);
+    doc.text("QTÉ", W - M - 3, yPos + 5, { align: "right" });
+    return yPos + 7;
+  };
+
   // ── Header zone: Logo (left) + Barcode (right) ──
   const headerY = M;
-  const logoSz = 50; // carré 50×50mm
+  let logoH = 18; // hauteur par défaut si image non chargée
 
-  // Logo Dr. Hauschka PNG — affiché en carré
+  // Logo Dr. Hauschka PNG — dimensions naturelles du fichier
   let logoLoaded = false;
+  let logoBase64 = "";
   try {
     const logoRes = await fetch("/logo-dr-hauschka.png");
     if (logoRes.ok) {
       const logoBlob = await logoRes.blob();
-      const logoBase64 = await new Promise<string>((resolve, reject) => {
+      logoBase64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve((reader.result as string).split(",")[1]);
         reader.onerror = reject;
         reader.readAsDataURL(logoBlob);
       });
-      doc.addImage(`data:image/png;base64,${logoBase64}`, "PNG", M, headerY, logoSz, logoSz);
+      // Lire les dimensions naturelles sans déformer
+      const imgEl = new Image();
+      imgEl.src = `data:image/png;base64,${logoBase64}`;
+      await new Promise<void>((res) => { imgEl.onload = () => res(); imgEl.onerror = () => res(); });
+      const aspect = imgEl.naturalWidth > 0 ? imgEl.naturalWidth / imgEl.naturalHeight : 3;
+      // Conversion px → mm à 96dpi : 1px = 0.2646mm — on plafonne à 55mm de large et 30mm de haut
+      const nativeW_mm = imgEl.naturalWidth * 0.2646;
+      const nativeH_mm = imgEl.naturalHeight * 0.2646;
+      const maxW = 55; const maxH = 30;
+      let lw = Math.min(nativeW_mm, maxW);
+      let lh = lw / aspect;
+      if (lh > maxH) { lh = maxH; lw = lh * aspect; }
+      logoH = lh;
+      doc.addImage(`data:image/png;base64,${logoBase64}`, "PNG", M, headerY, lw, lh);
       logoLoaded = true;
     }
   } catch {}
@@ -130,8 +177,8 @@ async function generateEshopPackingSlipPDF(order: {
   doc.setTextColor(...GRAY);
   doc.text(`${order.order_number}`, bcX + bcW / 2, headerY + 4 + bcH + 3.5, { align: "center" });
 
-  // Y après la zone header
-  let y = headerY + logoSz + 8;
+  // Y après la zone header (basé sur la vraie hauteur du logo)
+  let y = headerY + Math.max(logoH, bcH + 8) + 6;
 
   // ── Titre "BON DE LIVRAISON" ──
   doc.setFont("helvetica", "bold");
@@ -247,25 +294,11 @@ async function generateEshopPackingSlipPDF(order: {
 
   y += tH + 10;
 
-  // ── Tableau articles ──
-  const qtyW  = 18;
-  const artW  = tW - qtyW;
+  // ── Tableau articles avec pagination ──
+  const CONTENT_MAX_Y = PAGE_H - M - 14; // espace footer réservé
 
-  // Header bande grise
-  doc.setFillColor(245, 245, 245);
-  doc.rect(M, y, tW, 7, "F");
-  doc.setDrawColor(...LGRAY);
-  doc.setLineWidth(0.4);
-  doc.rect(M, y, tW, 7);
+  y = drawArticlesHeader(y);
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8.5);
-  doc.setTextColor(...ACCENT);
-  doc.text("ARTICLE", M + 3, y + 5);
-  doc.text("QTÉ", W - M - 3, y + 5, { align: "right" });
-  y += 7;
-
-  // Rows
   for (const item of order.items) {
     const nameLines = doc.splitTextToSize(item.name, artW - 8);
     const subLines: string[] = [];
@@ -273,6 +306,13 @@ async function generateEshopPackingSlipPDF(order: {
     if (item.odooRef) subLines.push(`Réf : ${item.odooRef}`);
     if (item.properties) subLines.push(item.properties);
     const rowH = nameLines.length * 5.2 + subLines.length * 4 + 8;
+
+    // ── Saut de page si débordement ──
+    if (y + rowH > CONTENT_MAX_Y) {
+      doc.addPage();
+      y = M;
+      y = drawArticlesHeader(y);
+    }
 
     // Article name — bold noir
     doc.setFont("helvetica", "bold");
@@ -303,15 +343,12 @@ async function generateEshopPackingSlipPDF(order: {
     doc.line(M, y, W - M, y);
   }
 
-  // ── Footer ──
-  const footY = 285;
-  doc.setDrawColor(...LGRAY);
-  doc.setLineWidth(0.3);
-  doc.line(M, footY - 4, W - M, footY - 4);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(7.5);
-  doc.setTextColor(...GRAY);
-  doc.text("WALA France — 35 Rue d'Hauteville, 75010 Paris — +33 1 43 55 32 42", W / 2, footY, { align: "center" });
+  // ── Footer sur toutes les pages ──
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    drawFooter(p, totalPages);
+  }
 
   return doc.output("datauristring").split(",")[1];
 }
