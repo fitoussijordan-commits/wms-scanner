@@ -259,8 +259,10 @@ function SessionScanView({ session, scanSession, onBack, onToast }: Props & { sc
       const ws = XLSX.utils.json_to_sheet(rows);
       ws["!cols"] = [{ wch: 22 }, { wch: 42 }, { wch: 20 }, { wch: 12 }];
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, scanSession.name);
-      XLSX.writeFile(wb, `${scanSession.name.replace(/[^a-zA-Z0-9]/g, "_")}.xlsx`);
+      const safeSheet = scanSession.name.replace(/[:\\\/\?\*\[\]]/g, "-").substring(0, 31);
+      const safeFile  = scanSession.name.replace(/[^a-zA-Z0-9À-ÿ\s\-_]/g, "_");
+      XLSX.utils.book_append_sheet(wb, ws, safeSheet);
+      XLSX.writeFile(wb, `${safeFile}.xlsx`);
       onToast("Fichier exporté ✓", "success");
     } catch (e: any) { onToast("Erreur export : " + e.message, "error"); }
     setExporting(false);
