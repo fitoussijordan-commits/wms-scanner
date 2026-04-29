@@ -965,7 +965,7 @@ function getProductRemainingAtLoc(lines: any[], locId: number, productId: number
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "articleCreator">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -2131,8 +2131,7 @@ export default function Page() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
               {[
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>, label: "Ajustement", onClick: () => setScreen("inventory"), admin: false },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Import produits", onClick: () => setScreen("productImport"), admin: false },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>, label: "Créer article", onClick: () => setScreen("articleCreator"), admin: false },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Gestion articles", onClick: () => setScreen("productImport"), admin: false },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>, label: "Import WALA", onClick: () => setScreen("supplierImport"), admin: true },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: true },
@@ -2503,9 +2502,6 @@ export default function Page() {
         )}
         {screen === "supplierImport" && session && odoo.isAdmin(session) && (
           <SupplierImportScreen session={session} onBack={goHome} onToast={showToast} />
-        )}
-        {screen === "articleCreator" && session && (
-          <ArticleCreatorScreen session={session} onBack={goHome} onToast={showToast} />
         )}
         {screen === "reprintLabel" && session && odoo.isAdmin(session) && (
           <ReprintLabelScreen session={session} onBack={goHome} onToast={showToast} />
@@ -5345,6 +5341,7 @@ function applyMapping(row: any[], headers: string[], mapping: ColMapping): Impor
 }
 
 function ProductImportScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+  const [tab, setTab] = useState<"import" | "create">("import");
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [checking, setChecking] = useState(false);
   const [currentIdx, setCurrentIdx] = useState<number | null>(null);
@@ -5358,6 +5355,11 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   const [rawData, setRawData] = useState<any[][]>([]);
   const [mapping, setMapping] = useState<ColMapping | null>(null);
   const [showMapping, setShowMapping] = useState(false);
+
+  // ── Onglet Créer article ─────────────────────────────────────────
+  if (tab === "create") {
+    return <ArticleCreatorScreen session={session} onBack={() => setTab("import")} onToast={onToast} />;
+  }
 
   // ── Parse Excel ──────────────────────────────────────────────────
   const handleFile = async (file: File) => {
@@ -5577,14 +5579,26 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   // ── Vue liste ────────────────────────────────────────────────────
   return (
     <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
         <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 10, padding: 8 }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Import produits</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Gestion articles</div>
           {fileName && <div style={{ fontSize: 12, color: C.textMuted }}>{fileName}</div>}
         </div>
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 20, background: C.bg, borderRadius: 12, padding: 4 }}>
+        {([["import", "Import Excel"], ["create", "Créer article"]] as const).map(([t, label]) => (
+          <button key={t} onClick={() => setTab(t)}
+            style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600,
+              background: tab === t ? C.white : "transparent", color: tab === t ? C.text : C.textMuted,
+              boxShadow: tab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none", transition: "all 0.15s" }}>
+            {label}
+          </button>
+        ))}
       </div>
 
       {rows.length === 0 ? (
