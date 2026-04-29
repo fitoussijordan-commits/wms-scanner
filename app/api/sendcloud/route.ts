@@ -125,6 +125,8 @@ export async function GET(req: NextRequest) {
 
       // Step 2: create label if not already found with a label URL
       if (!parcel) {
+        let createFailed = false;
+        let createErrMsg = "";
         try {
           await scJson(`${V3}/orders/create-labels-async`, auth, {
             method: "POST",
@@ -134,18 +136,98 @@ export async function GET(req: NextRequest) {
             }),
           });
         } catch (createErr: any) {
-          // 422 = parcel already exists or validation failed — still poll for existing label
+          createFailed = true;
+          createErrMsg = createErr.message;
           console.warn("[label] create-labels-async error:", createErr.message);
         }
-        // Poll V2 max 4x with 2s gap
-        for (let i = 0; i < 4; i++) {
-          await new Promise(r => setTimeout(r, 2000));
-          const candidate = await findParcel();
-          if (candidate && (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0])) {
-            parcel = candidate;
-            break;
+
+        // Poll V2 max 4x with 2s gap (seulement si pas d'erreur)
+        if (!createFailed) {
+          for (let i = 0; i < 4; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            const candidate = await findParcel();
+            if (candidate && (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0])) {
+              parcel = candidate;
+              break;
+            }
           }
         }
+
+        // Si create-labels-async a échoué (ex: prix négatifs = remises),
+        // fallback : créer le colis directement en V2 avec les prix négatifs mis à 0
+        if (!parcel && createFailed) {
+          console.log("[label] fallback V2 direct parcel creation pour:", orderNumber);
+          try {
+            // Récupérer le détail de la commande V3
+            const orderDetail = await scJson(`${V3}/orders/${orderId}`, auth);
+            const order = orderDetail.data || orderDetail;
+            const details = order.order_details || order;
+            const rawItems: any[] = details.order_items || order.order_items || [];
+            const addr = order.shipping_address || order.address || details;
+
+            // Sanitiser les prix négatifs (= remises/coupons) → 0
+            const parcelItems = rawItems
+              .filter((item: any) => item && (item.description || item.title || item.sku))
+              .map((item: any) => ({
+                description: (item.description || item.title || item.sku || "Article").substring(0, 100),
+                quantity: Math.max(1, parseInt(String(item.quantity || 1))),
+                weight: String(Math.max(0.001, parseFloat(item.weight || "0.1")).toFixed(3)),
+                value: String(Math.max(0, parseFloat(item.product_value || item.price || item.value || "0")).toFixed(2)),
+                hs_code: item.harmonized_system_code || item.hs_code || "",
+                origin_country: item.origin_country || "DE",
+                sku: item.sku || "",
+              }));
+
+            // Valeur totale ≥ 0
+            const totalValue = parcelItems.reduce(
+              (sum: number, i: any) => sum + parseFloat(i.value) * i.quantity, 0
+            );
+
+            const name = [addr.first_name, addr.last_name].filter(Boolean).join(" ") ||
+                          addr.company_name || addr.name || order.billing_address?.company || "Client";
+            const street = [addr.street, addr.house_number].filter(Boolean).join(" ") ||
+                           addr.address_1 || addr.address || "";
+
+            const v2Payload = {
+              parcel: {
+                name,
+                company_name: addr.company_name || "",
+                address: street,
+                address_2: addr.address_2 || addr.address_divided?.house_number_addition || "",
+                city: addr.city || "",
+                postal_code: addr.postal_code || "",
+                country: { iso_2: addr.country || addr.country_code || addr.country_iso_2 || "FR" },
+                email: order.email || addr.email || "",
+                telephone: order.telephone || addr.phone || addr.telephone || "",
+                weight: "1.000",
+                order_number: orderNumber,
+                total_order_value: totalValue.toFixed(2),
+                total_order_value_currency: order.currency || "EUR",
+                shipment: { id: order.shipping_method_checkout_name ? undefined : (order.shipment?.id || order.shipping_method?.id || order.sendcloud_shipping_method_id) },
+                request_label: true,
+                ...(parcelItems.length > 0 && { parcel_items: parcelItems }),
+              }
+            };
+
+            // Supprimer les clés undefined
+            if (!v2Payload.parcel.shipment?.id) delete (v2Payload.parcel as any).shipment;
+
+            const v2Result = await scJson(`${V2}/parcels`, auth, {
+              method: "POST",
+              body: JSON.stringify(v2Payload),
+            });
+            parcel = v2Result.parcel || null;
+            if (parcel) console.log("[label] fallback V2 parcel créé:", parcel.id);
+          } catch (fallbackErr: any) {
+            console.warn("[label] fallback V2 échoué:", fallbackErr.message);
+            // Retourner l'erreur originale avec contexte
+            return NextResponse.json({
+              error: `SendCloud a refusé la commande : ${createErrMsg}`,
+              hint: "Prix négatifs détectés (remises). La création directe a aussi échoué : " + fallbackErr.message,
+            }, { status: 422 });
+          }
+        }
+
         // Last resort: return whatever parcel we find even without a label (client can retry)
         if (!parcel) {
           parcel = await findParcel();
