@@ -199,7 +199,6 @@ async function generateEshopPackingSlipPDF(order: {
   y += 7;
 
   // ── Tableau infos (2 colonnes : gauche = infos commande, droite = adresses) ──
-  const tW = W - M * 2;
   const leftW = 68; // colonne commande
   const midW  = 56; // colonne expéditeur
   const rightW = tW - leftW - midW; // colonne destinataire
