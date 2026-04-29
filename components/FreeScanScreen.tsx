@@ -126,11 +126,16 @@ function SessionListView({ session, onBack, onToast, onOpen }: Props & { onOpen:
 // ── Vue scan d'une session ────────────────────────────────────────────────────
 function SessionScanView({ session, scanSession, onBack, onToast }: Props & { scanSession: WmsScanSession }) {
   const [entries, setEntries] = useState<WmsScanEntry[]>(scanSession.entries || []);
-  const [buffer, setBuffer] = useState("");
+  const [bufDisplay, setBufDisplay] = useState("");   // affichage seulement
   const [lastScanned, setLastScanned] = useState("");
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const hiddenInputRef = useRef<HTMLInputElement>(null);
+
+  // Refs pour éviter les stale closures dans le listener window
+  const bufRef       = useRef("");
+  const entriesRef   = useRef<WmsScanEntry[]>(entries);
+  const flushTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
 
   // Sauvegarder dans Supabase (debounced)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -155,48 +160,74 @@ function SessionScanView({ session, scanSession, onBack, onToast }: Props & { sc
     return { odooRef: "", productName: "", matched: false };
   }, [session]);
 
-  // Traiter un scan
+  // Traiter un scan (utilise entriesRef pour éviter les stale closures)
   const handleScan = useCallback(async (barcode: string) => {
     const bc = barcode.trim();
     if (!bc || bc.length < 3) return;
     setLastScanned(bc);
+    setBufDisplay("");
 
-    // Déjà dans la liste → incrémenter
-    const idx = entries.findIndex(e => e.barcode === bc);
+    const current = entriesRef.current;
+    const idx = current.findIndex(e => e.barcode === bc);
+
     if (idx >= 0) {
-      const updated = entries.map((e, i) => i === idx ? { ...e, qty: e.qty + 1 } : e);
+      // Déjà dans la liste → incrémenter
+      const updated = current.map((e, i) => i === idx ? { ...e, qty: e.qty + 1 } : e);
+      entriesRef.current = updated;
       setEntries(updated);
       saveToSupabase(updated);
       return;
     }
 
-    // Nouveau → ajouter placeholder puis lookup
+    // Nouveau barcode → placeholder immédiat
     const placeholder: WmsScanEntry = { barcode: bc, qty: 1, odooRef: "…", productName: "Recherche…", matched: false };
-    const withPlaceholder = [placeholder, ...entries];
+    const withPlaceholder = [placeholder, ...current];
+    entriesRef.current = withPlaceholder;
     setEntries(withPlaceholder);
 
+    // Lookup Odoo async
     const match = await lookupBarcode(bc);
     setEntries(prev => {
       const updated = prev.map(e => e.barcode === bc && e.odooRef === "…" ? { ...e, ...match } : e);
+      entriesRef.current = updated;
       saveToSupabase(updated);
       return updated;
     });
-  }, [entries, lookupBarcode, saveToSupabase]);
+  }, [lookupBarcode, saveToSupabase]);
 
-  // Listener global clavier — inputMode="none" sur l'input évite le clavier soft
-  const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      handleScan(buffer);
-      setBuffer("");
-    }
-  }, [buffer, handleScan]);
-
-  // Refocus l'input caché si on clique ailleurs
+  // ── Listener window keydown — fonctionne sur Zebra DataWedge + PC ──────────
   useEffect(() => {
-    const refocus = () => { if (hiddenInputRef.current) hiddenInputRef.current.focus(); };
-    document.addEventListener("click", refocus);
-    return () => document.removeEventListener("click", refocus);
-  }, []);
+    const onKey = (e: KeyboardEvent) => {
+      // Ignorer si l'utilisateur tape dans un vrai champ texte (ex: nom de session)
+      const tag = (document.activeElement?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea") return;
+
+      if (e.key === "Enter" || e.key === "Tab") {
+        const bc = bufRef.current.trim();
+        bufRef.current = "";
+        setBufDisplay("");
+        if (flushTimer.current) { clearTimeout(flushTimer.current); flushTimer.current = null; }
+        if (bc.length >= 3) handleScan(bc);
+        return;
+      }
+
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        bufRef.current += e.key;
+        setBufDisplay(bufRef.current);
+        // Auto-flush 200ms après le dernier caractère (scanners sans Enter)
+        if (flushTimer.current) clearTimeout(flushTimer.current);
+        flushTimer.current = setTimeout(() => {
+          const bc = bufRef.current.trim();
+          bufRef.current = "";
+          setBufDisplay("");
+          if (bc.length >= 3) handleScan(bc);
+        }, 200);
+      }
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [handleScan]);
 
   const updateQty = (barcode: string, delta: number) => {
     setEntries(prev => {
@@ -241,18 +272,7 @@ function SessionScanView({ session, scanSession, onBack, onToast }: Props & { sc
   return (
     <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto", fontFamily: "'DM Sans', sans-serif" }}>
 
-      {/* Input caché pour capter le scanner sans ouvrir le clavier */}
-      <input
-        ref={hiddenInputRef}
-        value={buffer}
-        onChange={e => setBuffer(e.target.value)}
-        onKeyDown={onKeyDown}
-        autoFocus
-        inputMode="none"
-        autoComplete="off"
-        style={{ position: "fixed", top: -100, left: -100, opacity: 0, width: 1, height: 1 }}
-        aria-hidden="true"
-      />
+      {/* Pas d'input : listener window.keydown capte tout le scanner directement */}
 
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
@@ -276,7 +296,7 @@ function SessionScanView({ session, scanSession, onBack, onToast }: Props & { sc
           <div style={{ fontSize: 13, fontWeight: 700, color: C.blue }}>Scanner actif — pointez et scannez</div>
           {lastScanned && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Dernier scan : <strong>{lastScanned}</strong></div>}
         </div>
-        {buffer && <div style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace" }}>{buffer}…</div>}
+        {bufDisplay && <div style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace" }}>{bufDisplay}…</div>}
       </div>
 
       {/* Stats */}
