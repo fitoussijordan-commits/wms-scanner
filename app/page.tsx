@@ -1004,6 +1004,12 @@ export default function Page() {
   const [allStock, setAllStock] = useState<any[]>([]);
   const [feedback, setFeedback] = useState<{ t: string; m: string } | null>(null);
 
+  // Badge counts (home screen)
+  const [badgeWaiting,  setBadgeWaiting]  = useState<number | null>(null);
+  const [badgeEshop,    setBadgeEshop]    = useState<number | null>(null);
+  const [badgeReturns,  setBadgeReturns]  = useState<number | null>(null);
+  const [badgeNegStock, setBadgeNegStock] = useState<number | null>(null);
+
   // Preparation state
   const [pickings, setPickings] = useState<any[]>([]);
   const [selectedPicking, setSelectedPicking] = useState<any>(null);
@@ -1159,6 +1165,61 @@ export default function Page() {
       odoo.getOutgoingPickings(session).then(p => setPickings(p)).catch(() => {});
     }
   }, [screen, session]);
+
+  // ── Badges compteurs home ────────────────────────────────────────────────────
+  const loadBadges = useCallback(async () => {
+    if (!session) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    const [waiting, eshop, returns, negStock] = await Promise.allSettled([
+      // 1. En attente — commandes du jour
+      (async () => {
+        const all = await odoo.getWaitingPickings(session);
+        return all.filter((p: any) => {
+          const d: string = p.shipping_date || p.scheduled_date || p.date_deadline || "";
+          return d.startsWith(todayStr);
+        }).length;
+      })(),
+      // 2. E-shop — commandes SendCloud non converties
+      (async () => {
+        const res = await fetch("/api/sendcloud?action=orders");
+        if (!res.ok) return 0;
+        const data = await res.json();
+        return (data.orders || []).length;
+      })(),
+      // 3. Retours — WH/RET/ en attente
+      (async () => {
+        const types = await odoo.searchRead(session, "stock.picking.type", [["sequence_code", "ilike", "RET"]], ["id", "sequence_code"], 20);
+        const typeIds = types.filter((t: any) => t.sequence_code?.toUpperCase().includes("RET")).map((t: any) => t.id);
+        if (!typeIds.length) return 0;
+        const picks = await odoo.searchRead(session, "stock.picking", [
+          ["picking_type_id", "in", typeIds],
+          ["state", "in", ["confirmed", "assigned", "waiting", "partially_available"]],
+        ], ["id"], 200);
+        return picks.length;
+      })(),
+      // 4. Stock négatif — produits distincts avec qty < 0
+      (async () => {
+        const quants = await odoo.searchRead(session, "stock.quant", [
+          ["quantity", "<", 0],
+          ["location_id.usage", "=", "internal"],
+        ], ["product_id"], 500);
+        return new Set(quants.map((q: any) => q.product_id[0])).size;
+      })(),
+    ]);
+
+    if (waiting.status  === "fulfilled") setBadgeWaiting(waiting.value   > 0 ? waiting.value   : null);
+    if (eshop.status    === "fulfilled") setBadgeEshop(eshop.value       > 0 ? eshop.value       : null);
+    if (returns.status  === "fulfilled") setBadgeReturns(returns.value   > 0 ? returns.value   : null);
+    if (negStock.status === "fulfilled") setBadgeNegStock(negStock.value > 0 ? negStock.value : null);
+  }, [session]);
+
+  useEffect(() => {
+    if (screen !== "home" || !session) return;
+    loadBadges();
+    const id = setInterval(loadBadges, 2 * 60 * 1000); // toutes les 2 min
+    return () => clearInterval(id);
+  }, [screen, session, loadBadges]);
 
   // Polling nouvelles commandes en attente — desktop uniquement, toutes les 60s
   useEffect(() => {
@@ -2112,10 +2173,10 @@ export default function Page() {
               {[
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Transfert", color: "#2563eb", onClick: () => { resetTransfer(); setScreen("transfer"); }, badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>, label: "Préparation", color: "#7c3aed", onClick: () => { loadPickings(); setScreen("prep"); }, badge: pickings.length > 0 ? pickings.length : null },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>, label: "En attente", color: "#f59e0b", onClick: () => setScreen("waitingOrders"), badge: null },
+                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>, label: "En attente", color: "#f59e0b", onClick: () => setScreen("waitingOrders"), badge: badgeWaiting },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Arrivage", color: "#059669", onClick: () => setScreen("arrival"), badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>, label: "Palettes WMS", color: "#0f766e", onClick: () => setScreen("palettes"), badge: null },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>, label: "E-shop", color: "#db2777", onClick: () => setScreen("eshop"), badge: null },
+                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>, label: "E-shop", color: "#db2777", onClick: () => setScreen("eshop"), badge: badgeEshop },
               ].map((btn, i) => (
                 <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 8, padding: "18px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, cursor: "pointer", fontFamily: "inherit", boxShadow: C.shadow, position: "relative" as const }}>
                   <div style={{ width: 40, height: 40, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>{btn.icon}</div>
@@ -2134,17 +2195,22 @@ export default function Page() {
               {[
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>, label: "Ajustement", onClick: () => setScreen("inventory"), admin: false },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="3" y="17" width="5" height="5" rx="1"/><line x1="12" y1="5" x2="21" y2="5"/><line x1="12" y1="12" x2="21" y2="12"/><line x1="12" y1="19" x2="21" y2="19"/></svg>, label: "Scan libre", onClick: () => setScreen("freeScan"), admin: false },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Retours", onClick: () => setScreen("returns"), admin: false },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Gestion articles", onClick: () => setScreen("productImport"), admin: false },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>, label: "Import WALA", onClick: () => setScreen("supplierImport"), admin: true },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Retours", onClick: () => setScreen("returns"), admin: false, badge: badgeReturns, badgeColor: "#ea580c" },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Gestion articles", onClick: () => setScreen("productImport"), admin: false, badge: null, badgeColor: "" },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>, label: "Import WALA", onClick: () => setScreen("supplierImport"), admin: true, badge: null, badgeColor: "" },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true, badge: badgeNegStock, badgeColor: "#ef4444" },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: true },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels"), admin: false },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; }, admin: true },
               ].filter(btn => !btn.admin || (session && odoo.isAdmin(session))).map((btn, i) => (
-                <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 6, padding: "14px 6px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}>
+                <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 6, padding: "14px 6px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", position: "relative" as const }}>
                   {btn.icon}
                   <span style={{ fontSize: 11, fontWeight: 600, color: C.textSec }}>{btn.label}</span>
+                  {(btn as any).badge != null && (
+                    <div style={{ position: "absolute" as const, top: 5, right: 5, minWidth: 17, height: 17, borderRadius: 9, background: (btn as any).badgeColor || "#6b7280", color: "#fff", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>
+                      {(btn as any).badge}
+                    </div>
+                  )}
                 </button>
               ))}
             </div>
