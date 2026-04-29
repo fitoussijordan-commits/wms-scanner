@@ -5745,7 +5745,13 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
   // Enrich packing data with Odoo matches
   const enrichWithOdoo = async (data: any) => {
     const allRefs = Array.from(new Set(
-      data.pallets.flatMap((p: any) => p.cartons.map((c: any) => c.supplierRef)).filter(Boolean)
+      data.pallets.flatMap((p: any) =>
+        p.cartons.flatMap((c: any) =>
+          c.articles?.length > 0
+            ? c.articles.map((a: any) => a.supplierRef)
+            : [c.supplierRef]
+        )
+      ).filter(Boolean)
     )) as string[];
     if (allRefs.length > 0 && session) {
       const matches = await odoo.matchSupplierRefs(session, allRefs);

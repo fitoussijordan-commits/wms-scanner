@@ -84,7 +84,10 @@ function parsePackingList(text: string): PackingListData {
   const boxCountRe = /contains\s+(\d+)\s+box/i;
   const cartonRe  = /(\d{10})\s+(\d{7,})\s+(\d+)\s*x\s*CARTON/i;
   const artRe     = /Art[\.\s]*:?\s*(\d{6,})\s+LOT[\-\s]*No[\.\s]*:?\s*([A-Z0-9]+)\s+Expiry\s*Date\s*:?\s*(\d{2}[\.\/-]\d{4})/i;
-  const qtyDescRe = /^(\d+)\s+(.{3,})$/;
+  // desc doit commencer par une lettre (pas un chiffre ni une ponctuation)
+  const qtyDescRe = /^(\d{1,5})\s+([A-Za-zÀ-ÿ].{2,})$/;
+  // Mots-clés de bruit dans les packing lists WALA (lignes récap poids/colis)
+  const noiseDescRe = /^(Colli|Karton|Total|Summe|Net|Gross|Poids|Page|Seite)\b/i;
   const dimRe     = /\(([^)]*cm)\)/;
   const kgRe      = /([\d,.]+)\s+([\d,.]+)\s*$/;
 
@@ -164,7 +167,7 @@ function parsePackingList(text: string): PackingListData {
 
     // ── Qty + description (sans Art. sur la même ligne) ───────────────────────
     const qm = qtyDescRe.exec(line);
-    if (qm) {
+    if (qm && !noiseDescRe.test(qm[2])) {
       currentArticle = { qtyProduct: parseInt(qm[1]), productDesc: qm[2].trim(), supplierRef: "", lot: "", expiry: "" };
       currentCarton.articles.push(currentArticle);
       continue;
