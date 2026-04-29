@@ -1538,3 +1538,50 @@ export async function setReceptionLots(
 }
 
 // validatePicking est déjà défini plus haut dans ce fichier (ligne ~710) — on réutilise l'existant.
+
+// ============================================
+// ARTICLE CREATOR — codification + création Odoo
+// ============================================
+
+/** Tous les default_code qui commencent par le préfixe donné (pour anti-doublon + prochain seq) */
+export async function getProductsByCodePrefix(session: OdooSession, prefix: string): Promise<string[]> {
+  const products = await searchRead(
+    session, "product.template",
+    [["default_code", "=like", `${prefix}%`]],
+    ["default_code"],
+    200
+  );
+  return (products || []).map((p: any) => p.default_code as string).filter(Boolean);
+}
+
+/** Unités de mesure disponibles dans Odoo */
+export async function getUoMs(session: OdooSession): Promise<{ id: number; name: string }[]> {
+  const uoms = await searchRead(session, "uom.uom", [["active", "=", true]], ["id", "name"], 100);
+  return (uoms || []).map((u: any) => ({ id: u.id, name: u.name }));
+}
+
+/** Crée un product.template dans Odoo et retourne l'ID créé */
+export async function createProductTemplate(session: OdooSession, data: {
+  name: string;
+  default_code: string;
+  barcode?: string;
+  uom_id: number;
+  tracking: "none" | "lot" | "serial";
+  weight?: number;
+  sale_ok?: boolean;
+  purchase_ok?: boolean;
+}): Promise<number> {
+  const vals: any = {
+    name: data.name,
+    default_code: data.default_code,
+    type: "product",          // storable
+    uom_id: data.uom_id,
+    uom_po_id: data.uom_id,
+    tracking: data.tracking,
+    sale_ok: data.sale_ok ?? true,
+    purchase_ok: data.purchase_ok ?? true,
+  };
+  if (data.barcode) vals.barcode = data.barcode;
+  if (data.weight) vals.weight = data.weight;
+  return create(session, "product.template", vals);
+}
