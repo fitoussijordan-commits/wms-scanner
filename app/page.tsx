@@ -5195,10 +5195,13 @@ function PalletRefSearch({ packingData, matchData }: { packingData: any; matchDa
     for (const pallet of packingData.pallets) {
       const summary: Record<string, any> = {};
       for (const c of pallet.cartons) {
-        const key = `${c.supplierRef}_${c.lot}`;
-        if (!summary[key]) summary[key] = { palletNo: pallet.palletNo, supplierRef: c.supplierRef, lot: c.lot, expiry: c.expiry, qty: 0, cartonCount: 0 };
-        summary[key].qty += c.qtyProduct;
-        summary[key].cartonCount += 1;
+        const arts: any[] = c.articles?.length > 0 ? c.articles : [{ supplierRef: c.supplierRef, lot: c.lot, expiry: c.expiry, qtyProduct: c.qtyProduct }];
+        arts.forEach((art: any, artIdx: number) => {
+          const key = `${art.supplierRef}_${art.lot}`;
+          if (!summary[key]) summary[key] = { palletNo: pallet.palletNo, supplierRef: art.supplierRef, lot: art.lot, expiry: art.expiry, qty: 0, cartonCount: 0 };
+          summary[key].qty += art.qtyProduct;
+          if (!c.isVrac || artIdx === 0) summary[key].cartonCount += 1;
+        });
       }
       for (const v of Object.values(summary) as any[]) {
         const match = matchData[v.supplierRef];
@@ -5951,15 +5954,20 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
           {/* Palettes */}
           {packingData.pallets.map((pallet: any, pi: number) => {
             const isOpen = !!openPallets[pallet.palletNo];
-            // Aggregate products on this pallet
-            const prodSummary: Record<string, { supplierRef: string; desc: string; lot: string; expiry: string; totalQty: number; cartonCount: number }> = {};
+            // Aggregate products on this pallet — supporte les cartons vrac (multi-articles)
+            const prodSummary: Record<string, { supplierRef: string; desc: string; lot: string; expiry: string; totalQty: number; cartonCount: number; hasVrac: boolean }> = {};
             for (const c of pallet.cartons) {
-              const key = `${c.supplierRef}_${c.lot}`;
-              if (!prodSummary[key]) {
-                prodSummary[key] = { supplierRef: c.supplierRef, desc: c.productDesc, lot: c.lot, expiry: c.expiry, totalQty: 0, cartonCount: 0 };
-              }
-              prodSummary[key].totalQty += c.qtyProduct;
-              prodSummary[key].cartonCount += 1;
+              const arts: any[] = c.articles?.length > 0 ? c.articles : [{ supplierRef: c.supplierRef, productDesc: c.productDesc, lot: c.lot, expiry: c.expiry, qtyProduct: c.qtyProduct }];
+              arts.forEach((art: any, artIdx: number) => {
+                const key = `${art.supplierRef}_${art.lot}`;
+                if (!prodSummary[key]) {
+                  prodSummary[key] = { supplierRef: art.supplierRef, desc: art.productDesc, lot: art.lot, expiry: art.expiry, totalQty: 0, cartonCount: 0, hasVrac: false };
+                }
+                prodSummary[key].totalQty += art.qtyProduct;
+                // Pour le vrac : 1 carton partagé → on l'attribue uniquement au 1er article pour éviter le doublon
+                if (!c.isVrac || artIdx === 0) prodSummary[key].cartonCount += 1;
+                if (c.isVrac) prodSummary[key].hasVrac = true;
+              });
             }
             const products = Object.values(prodSummary);
 
@@ -5993,11 +6001,16 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                         <div key={j} style={{ ...cardStyle, marginBottom: 6, borderLeft: `3px solid ${isMatched ? C.green : C.orange}` }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                             <div style={{ flex: 1 }}>
-                              {isMatched ? (
-                                <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{match.product_name}</div>
-                              ) : (
-                                <div style={{ fontSize: 13, fontWeight: 700, color: C.orange }}>{prod.desc} <span style={{ fontSize: 10, fontWeight: 400 }}>(non trouvé)</span></div>
-                              )}
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" as const }}>
+                                {isMatched ? (
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{match.product_name}</div>
+                                ) : (
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: C.orange }}>{prod.desc} <span style={{ fontSize: 10, fontWeight: 400 }}>(non trouvé)</span></div>
+                                )}
+                                {prod.hasVrac && (
+                                  <span style={{ fontSize: 9, fontWeight: 700, color: "#7c3aed", background: "#ede9fe", padding: "1px 6px", borderRadius: 5, letterSpacing: "0.04em" }}>VRAC</span>
+                                )}
+                              </div>
                               <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
                                 Réf fourn: {prod.supplierRef}
                                 {match?.default_code && <span> · Réf interne: {match.default_code}</span>}
