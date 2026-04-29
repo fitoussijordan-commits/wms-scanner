@@ -141,15 +141,30 @@ export async function GET(req: NextRequest) {
           console.warn("[label] create-labels-async error:", createErr.message);
         }
 
-        // Poll V2 max 4x with 2s gap (seulement si pas d'erreur)
+        // Poll V2 max 6x with 2.5s gap = 15s (seulement si pas d'erreur)
         if (!createFailed) {
-          for (let i = 0; i < 4; i++) {
-            await new Promise(r => setTimeout(r, 2000));
+          for (let i = 0; i < 6; i++) {
+            await new Promise(r => setTimeout(r, 2500));
             const candidate = await findParcel();
-            if (candidate && (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0])) {
+            if (candidate) {
+              if (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0]) {
+                parcel = candidate;
+                break;
+              }
+              // Colis trouvé mais étiquette pas encore prête — garder pour 202
               parcel = candidate;
-              break;
             }
+          }
+          // Si create-labels-async a réussi mais colis pas encore dispo → 202 pending
+          if (!parcel) {
+            return NextResponse.json({
+              parcelId: null,
+              tracking: "",
+              carrier: "",
+              labelBase64: null,
+              labelPending: true,
+              error: "Étiquette en cours de génération — réessaie dans 10 secondes",
+            }, { status: 202 });
           }
         }
 

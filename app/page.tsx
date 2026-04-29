@@ -4583,9 +4583,35 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       const res = await fetch(`/api/sendcloud?action=label&order_id=${encodeURIComponent(orderId)}&order_number=${encodeURIComponent(orderNumber)}`);
       const data = await res.json();
 
-      // 202 = colis trouvé mais étiquette pas encore prête
+      // 202 = colis trouvé mais étiquette pas encore prête — retry auto après 10s
       if (res.status === 202 || data.labelPending) {
-        onToast(`⏳ Étiquette en cours — réessaie dans quelques secondes`);
+        onToast(`⏳ Étiquette en cours — nouvelle tentative dans 10s…`);
+        await new Promise(r => setTimeout(r, 10000));
+        // Retry une fois automatiquement
+        const res2 = await fetch(`/api/sendcloud?action=label&order_id=${encodeURIComponent(orderId)}&order_number=${encodeURIComponent(orderNumber)}`);
+        const data2 = await res2.json();
+        if (res2.status === 202 || data2.labelPending) {
+          onToast(`⏳ Toujours en cours — réessaie manuellement dans quelques secondes`);
+          return;
+        }
+        if (!res2.ok) throw new Error(data2.error || "Erreur étiquette (retry)");
+        if (!data2.labelBase64) throw new Error("Pas de PDF reçu (retry)");
+        // Substituer pour la suite
+        Object.assign(data, data2);
+        Object.assign(res, { ok: true });
+        // fallthrough au code d'impression ci-dessous
+        const scCfg2 = pn.getLabelTypeConfig("sendcloud");
+        const printerId2 = scCfg2.printerId || pn.getSavedPrinterId();
+        if (printerId2) {
+          const result2 = await pn.printPdfLabel(printerId2, data2.labelBase64, `SendCloud ${orderNumber}`);
+          if (result2.success) { onToast(`✓ Étiquette ${data2.tracking || orderNumber} imprimée`); vibrateSuccess(); }
+          else throw new Error(result2.error || "Erreur impression (retry)");
+        } else {
+          const byteArray2 = Uint8Array.from(atob(data2.labelBase64), c => c.charCodeAt(0));
+          const blob2 = new Blob([byteArray2], { type: "application/pdf" });
+          window.open(URL.createObjectURL(blob2), "_blank");
+          onToast("PDF ouvert dans un nouvel onglet");
+        }
         return;
       }
       if (!res.ok) { throw new Error(data.error || "Erreur étiquette"); }
