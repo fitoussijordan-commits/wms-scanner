@@ -21,12 +21,12 @@ const CATEGORIES = [
 ];
 
 const FAMILLES = [
-  { code: 1,  label: "Visage + pré série" },
-  { code: 2,  label: "Régénérant + pré série" },
-  { code: 3,  label: "Corps + pré série" },
-  { code: 4,  label: "Hygiène + pré série" },
-  { code: 5,  label: "Med + pré série" },
-  { code: 6,  label: "Maquillage + pré série" },
+  { code: 1,  label: "Visage" },
+  { code: 2,  label: "Régénérant" },
+  { code: 3,  label: "Corps" },
+  { code: 4,  label: "Hygiène" },
+  { code: 5,  label: "Med" },
+  { code: 6,  label: "Maquillage" },
   { code: 7,  label: "Produits WALA" },
   { code: 8,  label: "Accessoire - utilitaire" },
   { code: 9,  label: "Prestation Maison Dr. Hauschka" },
