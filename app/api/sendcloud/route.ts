@@ -482,51 +482,40 @@ export async function POST(req: NextRequest) {
       const hasLabel = (p: any) => p?.label?.label_printer || p?.label?.normal_printer?.[0];
       if (parcel && !hasLabel(parcel)) parcel = null;
 
-      // ── Étape 2 : corriger les prix négatifs dans l'ordre V3 si besoin, puis create-labels-async ──
+      // ── Étape 2 : create-labels-async → SendCloud gère tout de son côté ──
       let asyncParcelId: number | null = null;
 
       if (!parcel) {
-        // Détecter si l'ordre a des prix négatifs (depuis le _raw client)
+        // SendCloud dit "update the order and try again" quand il y a des prix négatifs (remises/coupons)
+        // → on met à jour l'ordre V3 pour corriger ça, PUIS on demande la création de l'étiquette
         const rawItems: any[] = raw?.order_details?.order_items || raw?.order_items || [];
         const hasNegative = rawItems.some((item: any) =>
           parseFloat(String(item.unit_price?.value ?? item.price ?? "0")) < 0
         );
 
-        // Si prix négatifs : PATCH l'ordre V3 pour corriger avant create-labels-async
         if (hasNegative) {
-          console.log("[label-post] Prix négatifs détectés — PATCH ordre V3 avant création étiquette");
+          console.log("[label-post] Prix négatifs → update ordre V3 avant create-labels-async");
           try {
-            // Trouver le vrai order_id V3 via recherche par order_number
+            // Recherche du vrai order_id V3 par order_number
             const srch = await scJson(`${V3}/orders?order_number=${encodeURIComponent(orderNumber)}&integration_id=527093&page_size=5`, auth);
             const foundOrder = (srch.data || srch.results || srch.orders || [])[0];
             const v3OrderId = foundOrder?.order_id || orderId;
 
-            // Préparer les items corrigés (prix négatifs → 0)
-            const fixedItems = rawItems
-              .filter((item: any) => parseFloat(String(item.unit_price?.value ?? item.price ?? "0")) >= 0)
-              .map((item: any) => {
-                const val = parseFloat(String(item.unit_price?.value ?? item.price ?? "0"));
-                return {
-                  ...item,
-                  unit_price: { ...item.unit_price, value: String(Math.max(0, val)) },
-                };
-              });
+            // Items sans prix négatifs (lignes remise supprimées)
+            const fixedItems = rawItems.filter((item: any) =>
+              parseFloat(String(item.unit_price?.value ?? item.price ?? "0")) >= 0
+            );
 
-            // PATCH l'ordre V3
             await scJson(`${V3}/orders/${v3OrderId}`, auth, {
               method: "PUT",
-              body: JSON.stringify({
-                order_details: { order_items: fixedItems },
-              }),
+              body: JSON.stringify({ order_details: { order_items: fixedItems } }),
             });
-            console.log("[label-post] PATCH V3 OK, order_id:", v3OrderId, "items:", fixedItems.length);
+            console.log("[label-post] PUT V3 OK →", v3OrderId, "items:", fixedItems.length);
           } catch (patchErr: any) {
-            // Le PATCH a échoué — on tente quand même create-labels-async
-            console.warn("[label-post] PATCH V3 échoué (on tente quand même):", patchErr.message);
+            console.warn("[label-post] PUT V3 échoué:", patchErr.message, "— on tente quand même");
           }
         }
 
-        // create-labels-async — SendCloud crée l'étiquette depuis son propre ordre
         try {
           const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
             method: "POST",
@@ -536,10 +525,10 @@ export async function POST(req: NextRequest) {
           console.log("[label-post] create-labels-async OK, parcel_id:", asyncParcelId);
         } catch (e: any) {
           console.error("[label-post] create-labels-async échoué:", e.message);
-          return NextResponse.json({ error: `SendCloud ne peut pas créer l'étiquette : ${e.message}` }, { status: 422 });
+          return NextResponse.json({ error: `SendCloud erreur : ${e.message}` }, { status: 422 });
         }
 
-        // Poll jusqu'à 60s (comme le module Odoo) — par parcel_id si dispo, sinon par order_number
+        // Poll jusqu'à 60s — par parcel_id si dispo, sinon par order_number
         for (let i = 0; i < 20; i++) {
           await new Promise(r => setTimeout(r, 3000));
           try {
