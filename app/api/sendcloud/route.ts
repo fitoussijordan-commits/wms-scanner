@@ -473,48 +473,97 @@ export async function POST(req: NextRequest) {
         return null;
       };
 
+      const hasLabel = (p: any) => p?.label?.label_printer || p?.label?.normal_printer?.[0];
+
       // ── Étape 1 : colis déjà existant avec étiquette ? ───────────────────
       let parcel: any = await findParcel();
-      const hasLabel = (p: any) => p?.label?.label_printer || p?.label?.normal_printer?.[0];
       if (parcel && !hasLabel(parcel)) parcel = null;
 
-      // ── Étape 2 : SendCloud crée l'étiquette — on ne touche à rien ──
+      // ── Étape 2 : SendCloud crée l'étiquette ─────────────────────────────
       if (!parcel) {
         let asyncParcelId: number | null = null;
+        let createFailed = false;
+
+        // Tentative principale : create-labels-async
         try {
-          // Essayer d'abord create-labels (sync), puis create-labels-async en fallback
-          let createRes: any;
-          try {
-            createRes = await scJson(`${V3}/orders/create-labels`, auth, {
-              method: "POST",
-              body: JSON.stringify({ integration_id: 527093, orders: [{ order_number: orderNumber }] }),
-            });
-          } catch {
-            createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
-              method: "POST",
-              body: JSON.stringify({ integration_id: 527093, orders: [{ order_number: orderNumber }] }),
-            });
-          }
+          const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
+            method: "POST",
+            body: JSON.stringify({ integration_id: 527093, orders: [{ order_number: orderNumber }] }),
+          });
           asyncParcelId = createRes?.data?.[0]?.parcel_id || null;
+          console.log("[label POST] create-labels-async OK, parcel_id:", asyncParcelId);
         } catch (e: any) {
-          return NextResponse.json({ error: e.message }, { status: 422 });
-        }
+          console.warn("[label POST] create-labels-async échoué:", e.message);
+          createFailed = true;
 
-        for (let i = 0; i < 20; i++) {
-          await new Promise(r => setTimeout(r, 3000));
-          try {
-            if (asyncParcelId) {
-              const d = await scJson(`${V2}/parcels/${asyncParcelId}`, auth);
-              const c = d?.parcel || d;
-              if (c && hasLabel(c)) { parcel = c; break; }
-            } else {
-              const c = await findParcel();
-              if (c && hasLabel(c)) { parcel = c; break; }
+          // ── Fallback 422 : prix négatifs → corriger l'order V3 puis réessayer ──
+          if (e.message.includes("422") && raw) {
+            const rawItems: any[] = raw.order_details?.order_items || raw.order_items || [];
+            const hasNegative = rawItems.some((i: any) => parseFloat(String(i.unit_price?.value ?? "0")) < 0);
+
+            if (hasNegative) {
+              console.log("[label POST] prix négatifs détectés, tentative de correction V3...");
+              // Reconstruire les items sans prix négatifs
+              const fixedItems = rawItems.map((i: any) => ({
+                ...i,
+                unit_price: {
+                  ...(i.unit_price || {}),
+                  value: String(Math.max(0, parseFloat(String(i.unit_price?.value ?? "0")))),
+                },
+              }));
+
+              // Mettre à jour la commande V3 avec prix corrigés
+              try {
+                await scJson(`${V3}/orders`, auth, {
+                  method: "PUT",
+                  body: JSON.stringify({
+                    integration_id: 527093,
+                    orders: [{ order_number: orderNumber, order_items: fixedItems }],
+                  }),
+                });
+                console.log("[label POST] commande V3 mise à jour (prix nettoyés)");
+              } catch (updateErr: any) {
+                console.warn("[label POST] PUT V3 order échoué:", updateErr.message);
+              }
+
+              // Réessayer create-labels-async avec les prix corrigés
+              try {
+                const retryRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
+                  method: "POST",
+                  body: JSON.stringify({ integration_id: 527093, orders: [{ order_number: orderNumber }] }),
+                });
+                asyncParcelId = retryRes?.data?.[0]?.parcel_id || null;
+                createFailed = false;
+                console.log("[label POST] retry après correction OK, parcel_id:", asyncParcelId);
+              } catch (retryErr: any) {
+                console.warn("[label POST] retry après correction échoué:", retryErr.message);
+              }
             }
-          } catch {}
+          }
         }
 
-        if (!parcel) return NextResponse.json({ parcelId: asyncParcelId, labelPending: true, error: "Étiquette en cours — réessaie dans 10s" }, { status: 202 });
+        // Poll si la création a réussi
+        if (!createFailed) {
+          for (let i = 0; i < 20; i++) {
+            await new Promise(r => setTimeout(r, 3000));
+            try {
+              if (asyncParcelId) {
+                const d = await scJson(`${V2}/parcels/${asyncParcelId}`, auth);
+                const c = d?.parcel || d;
+                if (c && hasLabel(c)) { parcel = c; break; }
+              } else {
+                const c = await findParcel();
+                if (c && hasLabel(c)) { parcel = c; break; }
+              }
+            } catch {}
+          }
+          if (!parcel) return NextResponse.json({ parcelId: asyncParcelId, labelPending: true, error: "Étiquette en cours — réessaie dans 10s" }, { status: 202 });
+        }
+
+        // Si toujours rien → erreur finale
+        if (!parcel) {
+          return NextResponse.json({ error: "Impossible de créer l'étiquette. Crée-la manuellement sur SendCloud puis réessaie." }, { status: 422 });
+        }
       }
 
       if (!parcel) return NextResponse.json({ error: "Colis introuvable" }, { status: 404 });
