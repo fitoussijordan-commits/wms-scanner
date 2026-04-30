@@ -1289,9 +1289,9 @@ export default function Dashboard() {
     setSmLoading(true); setSmMsg("Chargement références...");
     try {
       const [{data:refData},{data:thrData},{data:supData}] = await Promise.all([
-        sb.from("dashboard_refs").select("ref,product_name").order("ref"),
-        sb.from("dashboard_thresholds").select("ref,threshold"),
-        sb.from("dashboard_supplier_dates").select("ref,supplier_date"),
+        supa.sb.from("dashboard_refs").select("ref,product_name").order("ref"),
+        supa.sb.from("dashboard_thresholds").select("ref,threshold"),
+        supa.sb.from("dashboard_supplier_dates").select("ref,supplier_date"),
       ]);
       const refs=(refData||[]).map((r:any)=>({ref:r.ref,name:r.product_name}));
       const thrMap:Record<string,number>=Object.fromEntries((thrData||[]).map((r:any)=>[r.ref,r.threshold]));
@@ -1337,8 +1337,8 @@ export default function Dashboard() {
       const newRefs:{ref:string;name:string}[]=[];
       for(let i=1;i<data.length;i++){const row=data[i];const ref=String(row[rc]??"").trim();if(!ref)continue;newRefs.push({ref,product_name:nc>=0?String(row[nc]??"").trim():""}as any);}
       if(!newRefs.length){setError("Aucune référence trouvée");return;}
-      await sb.from("dashboard_refs").delete().neq("ref","___x___");
-      await sb.from("dashboard_refs").upsert(newRefs.map(r=>({ref:r.ref,product_name:(r as any).product_name})),{onConflict:"ref"});
+      await supa.sb.from("dashboard_refs").delete().neq("ref","___x___");
+      await supa.sb.from("dashboard_refs").upsert(newRefs.map(r=>({ref:r.ref,product_name:(r as any).product_name})),{onConflict:"ref"});
       setSmRefs(newRefs.map(r=>({ref:r.ref,name:(r as any).product_name})));
       setSmMsg(`${newRefs.length} refs importées — sync Odoo...`);
       await smLoad();
@@ -1350,15 +1350,15 @@ export default function Dashboard() {
     const n=parseFloat(val); if(isNaN(n)||n<0){setSmEditThr(null);return;}
     setSmRows(r=>r.map(row=>{if(row.ref!==ref)return row;const u={...row,threshold:n};u.status=smStatus(u.stock,u.conso,n,u.daysLeft,u.daysUntilDeliv);return u;}));
     setSmEditThr(null);
-    await sb.from("dashboard_thresholds").upsert({ref,threshold:n,product_name:name,updated_at:new Date().toISOString()},{onConflict:"ref"});
+    await supa.sb.from("dashboard_thresholds").upsert({ref,threshold:n,product_name:name,updated_at:new Date().toISOString()},{onConflict:"ref"});
   };
 
   const smSaveSupDate = async () => {
     if(!smSupModal)return;
     const {ref}=smSupModal; const d=smSupInput||null;
     setSmRows(r=>r.map(row=>{if(row.ref!==ref)return row;const {date:dd,label:dl}=smNextDelivery(d);const dtu=Math.max(0,smDaysUntil(dd));const u={...row,supplierDate:d,daysUntilDeliv:dtu,delivLabel:dl};u.status=smStatus(u.stock,u.conso,u.threshold,u.daysLeft,dtu);return u;}));
-    if(d) await sb.from("dashboard_supplier_dates").upsert({ref,supplier_date:d,updated_at:new Date().toISOString()},{onConflict:"ref"});
-    else await sb.from("dashboard_supplier_dates").delete().eq("ref",ref);
+    if(d) await supa.sb.from("dashboard_supplier_dates").upsert({ref,supplier_date:d,updated_at:new Date().toISOString()},{onConflict:"ref"});
+    else await supa.sb.from("dashboard_supplier_dates").delete().eq("ref",ref);
     setSmSupModal(null);setSmSupInput("");
   };
 
