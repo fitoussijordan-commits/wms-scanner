@@ -478,97 +478,43 @@ export async function POST(req: NextRequest) {
       const hasLabel = (p: any) => p?.label?.label_printer || p?.label?.normal_printer?.[0];
       if (parcel && !hasLabel(parcel)) parcel = null;
 
-      // ── Étape 2 : créer le colis V2 directement — sans logique articles ──
-      // On évite create-labels-async qui valide les prix de l'ordre stocké dans SendCloud
+      // ── Étape 2 : SendCloud crée l'étiquette — on ne touche à rien ──
       if (!parcel) {
-        // Récupérer le détail complet V3 par order_number (pour service point + shipment)
-        let fullOrder: any = raw || {};
+        let asyncParcelId: number | null = null;
         try {
-          const allOrders = await scJson(`${V3}/orders?integration_id=527093&page_size=100`, auth);
-          const found = (allOrders.data || allOrders.results || allOrders.orders || [])
-            .find((o: any) => String(o.order_number) === String(orderNumber));
-          if (found?.order_id) {
-            const detail = await scJson(`${V3}/orders/${found.order_id}`, auth);
-            fullOrder = detail.data || detail;
-            console.log("[label-post] V3 detail keys:", Object.keys(fullOrder).join(","));
+          // Essayer d'abord create-labels (sync), puis create-labels-async en fallback
+          let createRes: any;
+          try {
+            createRes = await scJson(`${V3}/orders/create-labels`, auth, {
+              method: "POST",
+              body: JSON.stringify({ integration_id: 527093, orders: [{ order_number: orderNumber }] }),
+            });
+          } catch {
+            createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
+              method: "POST",
+              body: JSON.stringify({ integration_id: 527093, orders: [{ order_number: orderNumber }] }),
+            });
           }
+          asyncParcelId = createRes?.data?.[0]?.parcel_id || null;
         } catch (e: any) {
-          console.warn("[label-post] fetch V3 detail échoué, utilise raw:", e.message);
+          return NextResponse.json({ error: e.message }, { status: 422 });
         }
 
-        const addr = fullOrder.shipping_address || raw?.shipping_address || {};
-        const details = fullOrder.order_details || raw?.order_details || {};
-
-        // Shipment method — chercher dans tous les champs connus du V3
-        let shipmentId: number | null =
-          details.shipping_method_id
-          || fullOrder.shipping_details?.shipping_method_id
-          || fullOrder.sendcloud_shipping_method_id
-          || fullOrder.shipment?.id
-          || raw?.shipping_details?.shipping_method_id
-          || raw?.sendcloud_shipping_method_id
-          || null;
-
-        // Si toujours pas trouvé → emprunter depuis un colis récent de la même intégration
-        if (!shipmentId) {
+        for (let i = 0; i < 20; i++) {
+          await new Promise(r => setTimeout(r, 3000));
           try {
-            const recent = await scJson(`${V2}/parcels?integration_id=527093&limit=10`, auth);
-            const rp = (recent.parcels || []).find((p: any) => p.shipment?.id);
-            if (rp?.shipment?.id) {
-              shipmentId = rp.shipment.id;
-              console.log("[label-post] shipmentId emprunté depuis colis récent:", shipmentId, "(", rp.shipment.name, ")");
+            if (asyncParcelId) {
+              const d = await scJson(`${V2}/parcels/${asyncParcelId}`, auth);
+              const c = d?.parcel || d;
+              if (c && hasLabel(c)) { parcel = c; break; }
+            } else {
+              const c = await findParcel();
+              if (c && hasLabel(c)) { parcel = c; break; }
             }
           } catch {}
         }
 
-        // Service point (Mondial Relay)
-        const spRaw =
-          fullOrder.to_service_point
-          || fullOrder.service_point_id
-          || details.to_service_point
-          || raw?.to_service_point
-          || null;
-        const servicePointId = typeof spRaw === "object" && spRaw !== null ? spRaw.id : spRaw;
-
-        console.log("[label-post] shipmentId:", shipmentId, "| servicePointId:", servicePointId, "| to_service_point raw:", fullOrder.to_service_point);
-
-        const name = [addr.first_name, addr.last_name].filter(Boolean).join(" ")
-          || addr.company_name || addr.name || "Client";
-        const street = [addr.street, addr.house_number].filter(Boolean).join(" ")
-          || addr.address_line_1 || addr.address || "";
-
-        const v2Payload: any = {
-          parcel: {
-            name,
-            company_name: addr.company_name || "",
-            address: street,
-            address_2: addr.address_2 || "",
-            city: addr.city || "",
-            postal_code: addr.postal_code || "",
-            country: addr.country || addr.country_code || "FR",
-            email: fullOrder.email || raw?.email || addr.email || "",
-            telephone: fullOrder.telephone || raw?.telephone || addr.phone || "",
-            weight: "0.100",
-            order_number: orderNumber,
-            request_label: true,
-            ...(shipmentId ? { shipment: { id: shipmentId } } : {}),
-            ...(servicePointId ? { to_service_point: servicePointId } : {}),
-          }
-        };
-
-        console.log("[label-post] V2 POST payload (sans articles):", JSON.stringify(v2Payload).substring(0, 400));
-
-        try {
-          const v2Result = await scJson(`${V2}/parcels`, auth, {
-            method: "POST",
-            body: JSON.stringify(v2Payload),
-          });
-          parcel = v2Result.parcel || null;
-          console.log("[label-post] V2 créé:", parcel?.id, "label:", !!parcel?.label?.label_printer);
-        } catch (e: any) {
-          console.error("[label-post] V2 échoué:", e.message);
-          return NextResponse.json({ error: e.message }, { status: 422 });
-        }
+        if (!parcel) return NextResponse.json({ parcelId: asyncParcelId, labelPending: true, error: "Étiquette en cours — réessaie dans 10s" }, { status: 202 });
       }
 
       if (!parcel) return NextResponse.json({ error: "Colis introuvable" }, { status: 404 });
