@@ -482,69 +482,82 @@ export async function POST(req: NextRequest) {
       const hasLabel = (p: any) => p?.label?.label_printer || p?.label?.normal_printer?.[0];
       if (parcel && !hasLabel(parcel)) parcel = null;
 
-      // ── Étape 2 : create-labels-async → SendCloud gère tout de son côté ──
-      let asyncParcelId: number | null = null;
-
+      // ── Étape 2 : créer le colis V2 directement — sans logique articles ──
+      // On évite create-labels-async qui valide les prix de l'ordre stocké dans SendCloud
       if (!parcel) {
-        // SendCloud dit "update the order and try again" quand il y a des prix négatifs (remises/coupons)
-        // → on met à jour l'ordre V3 pour corriger ça, PUIS on demande la création de l'étiquette
-        const rawItems: any[] = raw?.order_details?.order_items || raw?.order_items || [];
-        const hasNegative = rawItems.some((item: any) =>
-          parseFloat(String(item.unit_price?.value ?? item.price ?? "0")) < 0
-        );
-
-        if (hasNegative) {
-          console.log("[label-post] Prix négatifs → update ordre V3 avant create-labels-async");
-          try {
-            // Recherche du vrai order_id V3 par order_number
-            const srch = await scJson(`${V3}/orders?order_number=${encodeURIComponent(orderNumber)}&integration_id=527093&page_size=5`, auth);
-            const foundOrder = (srch.data || srch.results || srch.orders || [])[0];
-            const v3OrderId = foundOrder?.order_id || orderId;
-
-            // Items sans prix négatifs (lignes remise supprimées)
-            const fixedItems = rawItems.filter((item: any) =>
-              parseFloat(String(item.unit_price?.value ?? item.price ?? "0")) >= 0
-            );
-
-            await scJson(`${V3}/orders/${v3OrderId}`, auth, {
-              method: "PUT",
-              body: JSON.stringify({ order_details: { order_items: fixedItems } }),
-            });
-            console.log("[label-post] PUT V3 OK →", v3OrderId, "items:", fixedItems.length);
-          } catch (patchErr: any) {
-            console.warn("[label-post] PUT V3 échoué:", patchErr.message, "— on tente quand même");
+        // Récupérer le détail complet V3 par order_number (pour service point + shipment)
+        let fullOrder: any = raw || {};
+        try {
+          const allOrders = await scJson(`${V3}/orders?integration_id=527093&page_size=100`, auth);
+          const found = (allOrders.data || allOrders.results || allOrders.orders || [])
+            .find((o: any) => String(o.order_number) === String(orderNumber));
+          if (found?.order_id) {
+            const detail = await scJson(`${V3}/orders/${found.order_id}`, auth);
+            fullOrder = detail.data || detail;
+            console.log("[label-post] V3 detail keys:", Object.keys(fullOrder).join(","));
           }
+        } catch (e: any) {
+          console.warn("[label-post] fetch V3 detail échoué, utilise raw:", e.message);
         }
+
+        const addr = fullOrder.shipping_address || raw?.shipping_address || {};
+        const details = fullOrder.order_details || raw?.order_details || {};
+
+        // Shipment method
+        const shipmentId: number | null =
+          details.shipping_method_id
+          || fullOrder.shipping_details?.shipping_method_id
+          || fullOrder.sendcloud_shipping_method_id
+          || raw?.shipping_details?.shipping_method_id
+          || null;
+
+        // Service point (Mondial Relay)
+        const spRaw =
+          fullOrder.to_service_point
+          || fullOrder.service_point_id
+          || details.to_service_point
+          || raw?.to_service_point
+          || null;
+        const servicePointId = typeof spRaw === "object" && spRaw !== null ? spRaw.id : spRaw;
+
+        console.log("[label-post] shipmentId:", shipmentId, "| servicePointId:", servicePointId, "| to_service_point raw:", fullOrder.to_service_point);
+
+        const name = [addr.first_name, addr.last_name].filter(Boolean).join(" ")
+          || addr.company_name || addr.name || "Client";
+        const street = [addr.street, addr.house_number].filter(Boolean).join(" ")
+          || addr.address_line_1 || addr.address || "";
+
+        const v2Payload: any = {
+          parcel: {
+            name,
+            company_name: addr.company_name || "",
+            address: street,
+            address_2: addr.address_2 || "",
+            city: addr.city || "",
+            postal_code: addr.postal_code || "",
+            country: addr.country || addr.country_code || "FR",
+            email: fullOrder.email || raw?.email || addr.email || "",
+            telephone: fullOrder.telephone || raw?.telephone || addr.phone || "",
+            weight: "0.500",
+            order_number: orderNumber,
+            request_label: true,
+            ...(shipmentId ? { shipment: { id: shipmentId } } : {}),
+            ...(servicePointId ? { to_service_point: servicePointId } : {}),
+          }
+        };
+
+        console.log("[label-post] V2 POST payload (sans articles):", JSON.stringify(v2Payload).substring(0, 400));
 
         try {
-          const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
+          const v2Result = await scJson(`${V2}/parcels`, auth, {
             method: "POST",
-            body: JSON.stringify({ integration_id: 527093, orders: [{ order_number: orderNumber }] }),
+            body: JSON.stringify(v2Payload),
           });
-          asyncParcelId = createRes?.data?.[0]?.parcel_id || null;
-          console.log("[label-post] create-labels-async OK, parcel_id:", asyncParcelId);
+          parcel = v2Result.parcel || null;
+          console.log("[label-post] V2 créé:", parcel?.id, "label:", !!parcel?.label?.label_printer);
         } catch (e: any) {
-          console.error("[label-post] create-labels-async échoué:", e.message);
-          return NextResponse.json({ error: `SendCloud erreur : ${e.message}` }, { status: 422 });
-        }
-
-        // Poll jusqu'à 60s — par parcel_id si dispo, sinon par order_number
-        for (let i = 0; i < 20; i++) {
-          await new Promise(r => setTimeout(r, 3000));
-          try {
-            if (asyncParcelId) {
-              const d = await scJson(`${V2}/parcels/${asyncParcelId}`, auth);
-              const candidate = d?.parcel || d;
-              if (candidate && hasLabel(candidate)) { parcel = candidate; break; }
-            } else {
-              const candidate = await findParcel();
-              if (candidate && hasLabel(candidate)) { parcel = candidate; break; }
-            }
-          } catch {}
-        }
-
-        if (!parcel) {
-          return NextResponse.json({ parcelId: asyncParcelId, labelPending: true, error: "Étiquette en cours — réessaie dans 10s" }, { status: 202 });
+          console.error("[label-post] V2 échoué:", e.message);
+          return NextResponse.json({ error: e.message }, { status: 422 });
         }
       }
 
