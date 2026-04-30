@@ -543,12 +543,32 @@ export async function POST(req: NextRequest) {
           || null;
 
         // Service point (Mondial Relay / Point Relais) — requis si la méthode le demande
-        const servicePointId: number | null =
+        let servicePointId: number | null =
           raw?.to_service_point
           || raw?.shipping_details?.to_service_point
           || details.to_service_point
           || raw?.service_point_id
           || null;
+
+        // Si absent du _raw (liste V3 tronquée), on refetch le détail complet par order_number
+        if (!servicePointId) {
+          try {
+            const srch = await scJson(`${V3}/orders?order_number=${encodeURIComponent(orderNumber)}&integration_id=527093`, auth);
+            const found = (srch.data || srch.results || srch.orders || [])[0];
+            if (found?.order_id) {
+              const fullDetail = await scJson(`${V3}/orders/${found.order_id}`, auth);
+              const fo = fullDetail.data || fullDetail;
+              servicePointId = fo.to_service_point || fo.service_point_id || null;
+              // Profiter pour compléter le shipmentId si manquant
+              if (!shipmentId) {
+                shipmentId = fo.shipping_details?.shipping_method_id || fo.sendcloud_shipping_method_id || null;
+              }
+              console.log("[label-post] refetch V3 order_id:", found.order_id, "→ servicePointId:", servicePointId, "shipmentId:", shipmentId);
+            }
+          } catch (e: any) {
+            console.warn("[label-post] refetch V3 service_point échoué:", e.message);
+          }
+        }
 
         // Fallback shipmentId depuis un colis récent
         if (!shipmentId) {
