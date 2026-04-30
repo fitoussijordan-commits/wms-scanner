@@ -503,13 +503,27 @@ export async function POST(req: NextRequest) {
         const addr = fullOrder.shipping_address || raw?.shipping_address || {};
         const details = fullOrder.order_details || raw?.order_details || {};
 
-        // Shipment method
-        const shipmentId: number | null =
+        // Shipment method — chercher dans tous les champs connus du V3
+        let shipmentId: number | null =
           details.shipping_method_id
           || fullOrder.shipping_details?.shipping_method_id
           || fullOrder.sendcloud_shipping_method_id
+          || fullOrder.shipment?.id
           || raw?.shipping_details?.shipping_method_id
+          || raw?.sendcloud_shipping_method_id
           || null;
+
+        // Si toujours pas trouvé → emprunter depuis un colis récent de la même intégration
+        if (!shipmentId) {
+          try {
+            const recent = await scJson(`${V2}/parcels?integration_id=527093&limit=10`, auth);
+            const rp = (recent.parcels || []).find((p: any) => p.shipment?.id);
+            if (rp?.shipment?.id) {
+              shipmentId = rp.shipment.id;
+              console.log("[label-post] shipmentId emprunté depuis colis récent:", shipmentId, "(", rp.shipment.name, ")");
+            }
+          } catch {}
+        }
 
         // Service point (Mondial Relay)
         const spRaw =
