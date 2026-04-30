@@ -86,6 +86,45 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Debug complet d'une commande V3 par order_number
+    if (action === "label_debug") {
+      const on = searchParams.get("order_number");
+      const oid = searchParams.get("order_id");
+      if (!on && !oid) return NextResponse.json({ error: "order_number ou order_id requis" }, { status: 400 });
+      const results: any = {};
+      // V3 order by ID
+      if (oid) {
+        try {
+          const d = await scJson(`${V3}/orders/${oid}`, auth);
+          const o = d.data || d;
+          results.v3_order_keys = Object.keys(o);
+          results.v3_order_details_keys = Object.keys(o.order_details || {});
+          results.v3_shipping_keys = Object.keys(o.shipping_address || {});
+          results.sendcloud_shipping_method_id = o.sendcloud_shipping_method_id;
+          results.order_details_shipping_method_id = o.order_details?.shipping_method_id;
+          results.shipment = o.shipment;
+          results.shipping_method = o.shipping_method;
+          results.carrier = o.carrier;
+          results.order_details_carrier = o.order_details?.carrier;
+          results.order_items_count = (o.order_details?.order_items || o.order_items || []).length;
+          results.order_items_sample = (o.order_details?.order_items || o.order_items || []).slice(0, 2);
+          results.has_negative_prices = (o.order_details?.order_items || o.order_items || []).some(
+            (i: any) => parseFloat(i.unit_price?.value ?? i.price ?? 0) < 0
+          );
+          results.full_order = o; // full raw structure
+        } catch (e: any) { results.v3_order_error = e.message; }
+      }
+      // V2 parcel search
+      if (on) {
+        try {
+          const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(on)}`, auth);
+          results.v2_parcels_found = (d.parcels || []).length;
+          results.v2_parcel_sample = (d.parcels || []).slice(0, 1);
+        } catch (e: any) { results.v2_error = e.message; }
+      }
+      return NextResponse.json(results);
+    }
+
     // Get label PDF for a parcel
     if (action === "label") {
       const orderId = searchParams.get("order_id");
@@ -127,38 +166,59 @@ export async function GET(req: NextRequest) {
       if (!parcel) {
         let createFailed = false;
         let createErrMsg = "";
+        let asyncParcelId: number | null = null;
+
         try {
-          await scJson(`${V3}/orders/create-labels-async`, auth, {
+          const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
             method: "POST",
             body: JSON.stringify({
               integration_id: 527093,
               orders: [{ order_number: orderNumber }],
             }),
           });
+          // La réponse contient le parcel_id → on l'utilise pour poll direct (plus fiable)
+          const dataArr = createRes?.data || [];
+          if (dataArr.length > 0 && dataArr[0].parcel_id) {
+            asyncParcelId = dataArr[0].parcel_id;
+            console.log("[label] create-labels-async parcel_id:", asyncParcelId);
+          }
         } catch (createErr: any) {
           createFailed = true;
           createErrMsg = createErr.message;
           console.warn("[label] create-labels-async error:", createErr.message);
         }
 
-        // Poll V2 max 6x with 2.5s gap = 15s (seulement si pas d'erreur)
+        // Poll si pas d'erreur — stratégie : poll direct par parcel_id si dispo, sinon par order_number
         if (!createFailed) {
-          for (let i = 0; i < 6; i++) {
-            await new Promise(r => setTimeout(r, 2500));
-            const candidate = await findParcel();
-            if (candidate) {
+          // Poll spécifique par parcel_id (beaucoup plus fiable)
+          if (asyncParcelId) {
+            for (let i = 0; i < 10; i++) {
+              await new Promise(r => setTimeout(r, 2500));
+              try {
+                const d = await scJson(`${V2}/parcels/${asyncParcelId}`, auth);
+                const candidate = d.parcel || d;
+                if (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0]) {
+                  parcel = candidate;
+                  console.log("[label] label prête via parcel_id direct:", asyncParcelId);
+                  break;
+                }
+              } catch {}
+            }
+          } else {
+            // Fallback : poll par order_number
+            for (let i = 0; i < 6; i++) {
+              await new Promise(r => setTimeout(r, 2500));
+              const candidate = await findParcel();
               if (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0]) {
                 parcel = candidate;
                 break;
               }
-              // Colis trouvé mais étiquette pas encore prête — garder pour 202
-              parcel = candidate;
             }
           }
-          // Si create-labels-async a réussi mais colis pas encore dispo → 202 pending
+          // create-labels-async a réussi mais colis pas encore prêt → 202 pending
           if (!parcel) {
             return NextResponse.json({
-              parcelId: null,
+              parcelId: asyncParcelId,
               tracking: "",
               carrier: "",
               labelBase64: null,
@@ -168,66 +228,58 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        // ── Fallback quand create-labels-async échoue (prix négatifs, etc.) ─────
+        // ── Fallback quand create-labels-async échoue (prix négatifs / 422) ──────
         if (!parcel && createFailed) {
-          console.log("[label] fallback : récupération commande V3 pour:", orderNumber);
-
-          // Récupérer le détail de la commande V3 (une seule fois, réutilisé partout)
+          // 1. Récupérer le détail de la commande V3 (nécessaire pour PATCH et V2)
           let order: any = null;
           try {
             const orderDetail = await scJson(`${V3}/orders/${orderId}`, auth);
             order = orderDetail.data || orderDetail;
-            console.log("[label] V3 order keys:", Object.keys(order));
-            console.log("[label] V3 order_details keys:", Object.keys(order.order_details || {}));
-          } catch (fetchErr: any) {
-            console.warn("[label] impossible de récupérer la commande V3:", fetchErr.message);
-          }
+          } catch (e: any) { console.warn("[label] fetch order V3:", e.message); }
 
-          // ── Niveau 2 : PATCH V3 pour corriger les prix négatifs → retry ──────
-          let patchRetryOk = false;
+          // 2. PATCH V3 pour corriger les prix négatifs → retry create-labels-async
           if (order) {
             try {
-              const details = order.order_details || {};
-              const rawItems: any[] = details.order_items || order.order_items || [];
-
-              // Corriger tous les prix négatifs → 0
+              const rawItems: any[] = order.order_details?.order_items || order.order_items || [];
               const fixedItems = rawItems.map((item: any) => {
-                const fixPrice = (p: any) => {
+                const fixP = (p: any) => {
                   if (p == null) return p;
-                  if (typeof p === "object" && "value" in p) {
+                  if (typeof p === "object" && "value" in p)
                     return { ...p, value: String(Math.max(0, parseFloat(p.value || "0")).toFixed(2)) };
-                  }
                   return String(Math.max(0, parseFloat(String(p || "0"))).toFixed(2));
                 };
-                return {
-                  ...item,
-                  unit_price:  fixPrice(item.unit_price),
-                  total_price: fixPrice(item.total_price),
-                  price:       item.price != null ? String(Math.max(0, parseFloat(String(item.price || "0"))).toFixed(2)) : undefined,
-                };
+                return { ...item, unit_price: fixP(item.unit_price), total_price: fixP(item.total_price) };
               });
-
               await scJson(`${V3}/orders/${orderId}`, auth, {
                 method: "PATCH",
                 body: JSON.stringify({ order_items: fixedItems }),
               });
-              console.log("[label] PATCH V3 OK — retry create-labels-async");
-
-              // Retry create-labels-async après correction des prix
-              await scJson(`${V3}/orders/create-labels-async`, auth, {
+              console.log("[label] PATCH prix OK → retry create-labels-async");
+              const retryRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
                 method: "POST",
                 body: JSON.stringify({ integration_id: 527093, orders: [{ order_number: orderNumber }] }),
               });
+              const retryParcelId: number | null = retryRes?.data?.[0]?.parcel_id || null;
+              console.log("[label] retry parcel_id:", retryParcelId);
 
-              // Poll V2 pour retrouver le colis créé
-              for (let i = 0; i < 5; i++) {
-                await new Promise(r => setTimeout(r, 2000));
-                const candidate = await findParcel();
-                if (candidate && (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0])) {
-                  parcel = candidate;
-                  patchRetryOk = true;
-                  console.log("[label] parcel trouvé après PATCH+retry:", parcel.id);
-                  break;
+              // Poll par parcel_id direct
+              for (let i = 0; i < 8; i++) {
+                await new Promise(r => setTimeout(r, 2500));
+                try {
+                  const endpoint = retryParcelId ? `${V2}/parcels/${retryParcelId}` : null;
+                  const d = endpoint ? await scJson(endpoint, auth) : null;
+                  const candidate = d?.parcel || d;
+                  if (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0]) {
+                    parcel = candidate;
+                    console.log("[label] label OK après PATCH+retry");
+                    break;
+                  }
+                } catch {}
+                if (!retryParcelId) {
+                  const candidate = await findParcel();
+                  if (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0]) {
+                    parcel = candidate; break;
+                  }
                 }
               }
             } catch (patchErr: any) {
@@ -235,89 +287,90 @@ export async function GET(req: NextRequest) {
             }
           }
 
-          // ── Niveau 3 : V2 direct avec extraction robuste du shipment ID ──────
-          if (!parcel && !patchRetryOk && order) {
-            console.log("[label] niveau 3 : création V2 directe");
-            try {
-              const details = order.order_details || {};
-              const rawItems: any[] = details.order_items || order.order_items || [];
-              const addr = order.shipping_address || order.address || details;
+          // 3. Dernier recours — V2 direct si PATCH n'a pas suffi
+          if (!parcel) {
+          try {
+            // Récupérer le détail de la commande V3
+            const details = order?.order_details || {};
+            const rawItems: any[] = details.order_items || order?.order_items || [];
+            const addr = order?.shipping_address || order?.address || {};
 
-              // Sanitiser les prix négatifs → 0 (compat V2 parcel_items)
-              const parcelItems = rawItems
-                .filter((item: any) => item && (item.description || item.title || item.name || item.sku))
-                .map((item: any) => {
-                  const rawVal = item.unit_price?.value ?? item.product_value ?? item.price ?? item.value ?? "0";
-                  return {
-                    description: (item.description || item.name || item.title || item.sku || "Article").substring(0, 100),
-                    quantity: Math.max(1, parseInt(String(item.quantity || 1))),
-                    weight: String(Math.max(0.001, parseFloat(String(item.weight || "0.1"))).toFixed(3)),
-                    value: String(Math.max(0, parseFloat(String(rawVal))).toFixed(2)),
-                    hs_code: item.harmonized_system_code || item.hs_code || "",
-                    origin_country: item.origin_country || "DE",
-                    sku: item.sku || "",
-                  };
-                });
+            // 2. Chercher le shipment ID dans tous les champs possibles
+            let shipmentId: number | null =
+              details.shipping_method_id ||
+              order.sendcloud_shipping_method_id ||
+              order.shipment?.id ||
+              order.shipping_method?.id ||
+              null;
 
-              const totalValue = parcelItems.reduce(
-                (sum: number, i: any) => sum + parseFloat(i.value) * i.quantity, 0
-              );
-
-              const name = [addr.first_name, addr.last_name].filter(Boolean).join(" ") ||
-                           addr.company_name || addr.name || order.billing_address?.company || "Client";
-              const street = [addr.street, addr.house_number].filter(Boolean).join(" ") ||
-                             addr.address_line_1 || addr.address_1 || addr.address || "";
-
-              // Extraction robuste du shipment ID — essai de tous les chemins connus
-              const shipmentId =
-                details.shipping_method_id ||          // V3 principal
-                order.sendcloud_shipping_method_id ||  // alias courant
-                order.shipment?.id ||
-                order.shipping_method?.id ||
-                order.carrier?.id ||
-                details.carrier?.id ||
-                null;
-
-              console.log("[label] shipmentId trouvé:", shipmentId, "| order keys:", Object.keys(order));
-
-              const v2Payload: any = {
-                parcel: {
-                  name,
-                  company_name: addr.company_name || "",
-                  address: street,
-                  address_2: addr.address_2 || addr.address_divided?.house_number_addition || "",
-                  city: addr.city || "",
-                  postal_code: addr.postal_code || "",
-                  country: { iso_2: addr.country || addr.country_code || addr.country_iso_2 || "FR" },
-                  email: order.email || addr.email || "",
-                  telephone: order.telephone || addr.phone || addr.telephone || "",
-                  weight: "1.000",
-                  order_number: orderNumber,
-                  total_order_value: String(Math.max(0, totalValue).toFixed(2)),
-                  total_order_value_currency: order.currency || "EUR",
-                  request_label: true,
-                  ...(parcelItems.length > 0 && { parcel_items: parcelItems }),
-                  ...(shipmentId ? { shipment: { id: shipmentId } } : {}),
-                }
-              };
-
-              const v2Result = await scJson(`${V2}/parcels`, auth, {
-                method: "POST",
-                body: JSON.stringify(v2Payload),
-              });
-              parcel = v2Result.parcel || null;
-              if (parcel) console.log("[label] V2 direct parcel créé:", parcel.id);
-            } catch (fallbackErr: any) {
-              console.warn("[label] V2 direct échoué:", fallbackErr.message);
-              return NextResponse.json({
-                error: `Impossible de créer l'étiquette : ${createErrMsg}`,
-                hint: `PATCH V3 et création V2 directe ont aussi échoué. Détail V2 : ${fallbackErr.message}`,
-                order_keys: order ? Object.keys(order) : [],
-                details_keys: order?.order_details ? Object.keys(order.order_details) : [],
-              }, { status: 422 });
+            // 3. Si toujours pas d'ID → prendre celui d'un colis récent de la même intégration
+            if (!shipmentId) {
+              try {
+                const recent = await scJson(`${V2}/parcels?integration_id=527093&limit=5`, auth);
+                const recentParcel = (recent.parcels || []).find((p: any) => p.shipment?.id);
+                if (recentParcel?.shipment?.id) shipmentId = recentParcel.shipment.id;
+              } catch {}
             }
+
+            // 4. Items avec prix ≥ 0
+            const parcelItems = rawItems
+              .filter((item: any) => item && (item.description || item.name || item.title || item.sku))
+              .map((item: any) => {
+                const rawVal = item.unit_price?.value ?? item.product_value ?? item.price ?? item.value ?? "0";
+                return {
+                  description: (item.description || item.name || item.title || item.sku || "Article").substring(0, 100),
+                  quantity: Math.max(1, parseInt(String(item.quantity || 1))),
+                  weight: String(Math.max(0.001, parseFloat(String(item.weight || "0.1"))).toFixed(3)),
+                  value: String(Math.max(0, parseFloat(String(rawVal))).toFixed(2)),
+                  hs_code: item.harmonized_system_code || item.hs_code || "",
+                  origin_country: item.origin_country || "DE",
+                  sku: item.sku || "",
+                };
+              });
+
+            const totalValue = Math.max(0, parcelItems.reduce(
+              (s: number, i: any) => s + parseFloat(i.value) * i.quantity, 0
+            ));
+
+            const name = [addr.first_name, addr.last_name].filter(Boolean).join(" ") ||
+                         addr.company_name || addr.name || "Client";
+            const street = [addr.street, addr.house_number].filter(Boolean).join(" ") ||
+                           addr.address_line_1 || addr.address_1 || addr.address || "";
+
+            const v2Payload: any = {
+              parcel: {
+                name,
+                company_name: addr.company_name || "",
+                address: street,
+                address_2: addr.address_2 || addr.address_divided?.house_number_addition || "",
+                city: addr.city || "",
+                postal_code: addr.postal_code || "",
+                country: { iso_2: addr.country || addr.country_code || addr.country_iso_2 || "FR" },
+                email: order.email || addr.email || "",
+                telephone: order.telephone || addr.phone || addr.telephone || "",
+                weight: "1.000",
+                order_number: orderNumber,
+                total_order_value: totalValue.toFixed(2),
+                total_order_value_currency: order.currency || "EUR",
+                request_label: true,
+                ...(parcelItems.length > 0 && { parcel_items: parcelItems }),
+                ...(shipmentId ? { shipment: { id: shipmentId } } : {}),
+              }
+            };
+
+            const v2Result = await scJson(`${V2}/parcels`, auth, {
+              method: "POST",
+              body: JSON.stringify(v2Payload),
+            });
+            parcel = v2Result.parcel || null;
+          } catch (fallbackErr: any) {
+            return NextResponse.json({
+              error: `Impossible de créer l'étiquette (remise/prix négatif) : ${createErrMsg}`,
+              hint: fallbackErr.message,
+            }, { status: 422 });
           }
-        }
+          } // fin if (!parcel) niveau 3
+        } // fin if (!parcel && createFailed)
 
         // Last resort: return whatever parcel we find even without a label (client can retry)
         if (!parcel) {
