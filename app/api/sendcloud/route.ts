@@ -79,19 +79,7 @@ export async function GET(req: NextRequest) {
       const data = await scJson(`${V3}/orders?integration_id=527093&page_size=100`, auth);
       const orders = data.data || data.results || data.orders || [];
       const target = on ? orders.find((o: any) => String(o.order_number) === String(on)) : orders[0];
-      return NextResponse.json({
-        keys: Object.keys(data),
-        count: data.count ?? data.total ?? "?",
-        first_order_keys: Object.keys(target || {}),
-        order_details_keys: Object.keys(target?.order_details || {}),
-        to_service_point: target?.to_service_point,
-        service_point_id: target?.service_point_id,
-        sendcloud_shipping_method_id: target?.sendcloud_shipping_method_id,
-        shipping_details: target?.shipping_details,
-        shipment: target?.shipment,
-        order_number: target?.order_number,
-        order_id: target?.order_id,
-      });
+      return NextResponse.json({ full_raw: target });
     }
 
     // Debug complet d'une commande V3 par order_number
