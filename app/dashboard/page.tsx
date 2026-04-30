@@ -245,6 +245,7 @@ const I = {
 };
 
 const TABS = [
+  { key: "stock-monitor", label: "Suivi Stock", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> },
   { key: "deliveries", label: "Livraisons & Prépa.", icon: I.truck },
   { key: "moves", label: "Historique", icon: I.history },
   { key: "stock-tracking", label: "Suivi stock", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
@@ -379,7 +380,7 @@ export default function Dashboard() {
   const [db, setDb] = useState("");
   const [user, setUser] = useState("");
   const [pw, setPw] = useState("");
-  const [tab, setTab] = useState<string>("deliveries");
+  const [tab, setTab] = useState<string>("stock-monitor");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [alerts, setAlerts] = useState<StockAlert[]>([]);
@@ -1240,9 +1241,139 @@ export default function Dashboard() {
     a.click(); URL.revokeObjectURL(url);
   }, [libreRows, libreCols]);
 
-  useEffect(() => { if (!session) return; if (tab === "deliveries") loadDeliveries(); }, [tab, session]);
-  // Re-run loadAlerts quand la watchlist arrive depuis Supabase (évite le flash "tout le catalogue")
-  useEffect(() => { if (!session || tab !== "alerts") return; loadAlerts(); }, [watchlist]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!session) return; if (tab === "deliveries") loadDeliveries(); if (tab === "stock-monitor") smLoad(); }, [tab, session]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ══════════════════════════════════════════════════════
+  // SUIVI STOCK — nouveau tab (remplace Alertes + Conso)
+  // ══════════════════════════════════════════════════════
+  interface SmRow { ref: string; name: string; stock: number; conso: number; threshold: number; daysLeft: number; daysUntilDeliv: number; delivLabel: string; supplierDate: string | null; status: "ok"|"alert"|"critical"|"no_data"|"not_found"; }
+
+  const [smRefs, setSmRefs] = useState<{ref:string;name:string}[]>([]);
+  const [smRows, setSmRows] = useState<SmRow[]>([]);
+  const [smLoading, setSmLoading] = useState(false);
+  const [smMsg, setSmMsg] = useState("");
+  const [smSearch, setSmSearch] = useState("");
+  const [smFilter, setSmFilter] = useState<"all"|"critical"|"alert"|"ok">("all");
+  const [smEditThr, setSmEditThr] = useState<{ref:string;val:string}|null>(null);
+  const [smSupModal, setSmSupModal] = useState<{ref:string;name:string;cur:string}|null>(null);
+  const [smSupInput, setSmSupInput] = useState("");
+  const smFileRef = useRef<HTMLInputElement>(null);
+
+  const smNextDelivery = (supDate?: string|null): {date:Date;label:string} => {
+    if (supDate) { const d=new Date(supDate+"T00:00:00"); return {date:d,label:`Fourn. ${d.toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})}`}; }
+    const d=new Date(new Date().getFullYear(),new Date().getMonth()+1,15);
+    return {date:d,label:`15 ${d.toLocaleDateString("fr-FR",{month:"short",year:"numeric"})}`};
+  };
+  const smDaysUntil = (d:Date) => Math.ceil((d.getTime()-new Date().setHours(0,0,0,0))/86400000);
+  const smStatus = (stock:number,conso:number,thr:number,daysLeft:number,daysDeliv:number): SmRow["status"] => {
+    if (conso===0&&stock===0) return "no_data";
+    if (daysLeft<daysDeliv) return "critical";
+    if (daysLeft<daysDeliv+14||stock<thr) return "alert";
+    return "ok";
+  };
+
+  const smBuildRows = useCallback((refs:{ref:string;name:string}[], stockByRef:Record<string,{id:number;name:string;qty:number}>, consoByRef:Record<string,number>, thrMap:Record<string,number>, supMap:Record<string,string|null>): SmRow[] => {
+    return refs.map(({ref,name:rname}) => {
+      const od=stockByRef[ref];
+      if (!od) return {ref,name:rname||ref,stock:0,conso:0,threshold:thrMap[ref]??0,daysLeft:0,daysUntilDeliv:0,delivLabel:"-",supplierDate:supMap[ref]??null,status:"not_found"};
+      const stock=od.qty, conso=consoByRef[ref]??0, threshold=thrMap[ref]??Math.round(conso);
+      const {date:dd,label:dl}=smNextDelivery(supMap[ref]);
+      const daysUntilDeliv=Math.max(0,smDaysUntil(dd));
+      const daysLeft=conso>0?Math.round(stock*30/conso):(stock>0?999:0);
+      return {ref,name:od.name,stock,conso:Math.round(conso*10)/10,threshold,daysLeft,daysUntilDeliv,delivLabel:dl,supplierDate:supMap[ref]??null,status:smStatus(stock,conso,threshold,daysLeft,daysUntilDeliv)};
+    });
+  },[]);
+
+  const smLoad = useCallback(async () => {
+    if (!session) return;
+    setSmLoading(true); setSmMsg("Chargement références...");
+    try {
+      const [{data:refData},{data:thrData},{data:supData}] = await Promise.all([
+        sb.from("dashboard_refs").select("ref,product_name").order("ref"),
+        sb.from("dashboard_thresholds").select("ref,threshold"),
+        sb.from("dashboard_supplier_dates").select("ref,supplier_date"),
+      ]);
+      const refs=(refData||[]).map((r:any)=>({ref:r.ref,name:r.product_name}));
+      const thrMap:Record<string,number>=Object.fromEntries((thrData||[]).map((r:any)=>[r.ref,r.threshold]));
+      const supMap:Record<string,string|null>=Object.fromEntries((supData||[]).map((r:any)=>[r.ref,r.supplier_date]));
+      setSmRefs(refs);
+      if (!refs.length){setSmLoading(false);setSmMsg("");return;}
+      setSmMsg("Stock Odoo...");
+      const prods:any[]=await odoo.searchRead(session,"product.product",[["default_code","in",refs.map(r=>r.ref)],["active","in",[true,false]]],["id","name","default_code","qty_available"],0);
+      const stockByRef:Record<string,{id:number;name:string;qty:number}>={};
+      for(const p of prods) if(p.default_code) stockByRef[p.default_code]={id:p.id,name:p.name,qty:p.qty_available??0};
+      setSmMsg("Consommation (3 mois)...");
+      const today=new Date();
+      const from=new Date(today.getFullYear(),today.getMonth()-3,1).toISOString().slice(0,10)+" 00:00:00";
+      const curMonthStart=new Date(today.getFullYear(),today.getMonth(),1).toISOString().slice(0,10)+" 00:00:00";
+      const pids=Object.values(stockByRef).map(p=>p.id);
+      const consoByRef:Record<string,number>={};
+      if(pids.length){
+        const moves:any[]=await odoo.searchRead(session,"stock.move",[["state","=","done"],["product_id","in",pids],["date",">=",from],["date","<",curMonthStart],["location_id.usage","=","internal"],["location_dest_id.usage","=","customer"]],["product_id","product_uom_qty","date"],0);
+        const byPidMonth:Record<number,Record<string,number>>={};
+        for(const m of moves){const pid=Array.isArray(m.product_id)?m.product_id[0]:m.product_id;const mo=String(m.date||"").slice(0,7);if(!byPidMonth[pid])byPidMonth[pid]={};byPidMonth[pid][mo]=(byPidMonth[pid][mo]||0)+(m.product_uom_qty||0);}
+        const months3:string[]=[];for(let i=3;i>=1;i--){const d=new Date(today.getFullYear(),today.getMonth()-i,1);months3.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);}
+        for(const [ref,info] of Object.entries(stockByRef)){const pid=info.id;const qtys=months3.map(m=>byPidMonth[pid]?.[m]??0);const nz=qtys.filter(q=>q>0).length;consoByRef[ref]=nz>0?qtys.reduce((a,b)=>a+b,0)/nz:0;}
+      }
+      const rows=smBuildRows(refs,stockByRef,consoByRef,thrMap,supMap);
+      setSmRows(rows);
+    } catch(e:any){setError(e.message);}
+    finally{setSmLoading(false);setSmMsg("");}
+  },[session,smBuildRows]);
+
+  const smImportExcel = async (e:React.ChangeEvent<HTMLInputElement>) => {
+    const file=e.target.files?.[0]; if(!file)return;
+    const XLSX=(await import("xlsx"));
+    setSmLoading(true);setSmMsg("Lecture Excel...");
+    try{
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(buf,{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const data:any[][]=XLSX.utils.sheet_to_json(ws,{header:1});
+      const headers=(data[0]||[]).map((h:any)=>String(h||"").toLowerCase().trim());
+      const ri=headers.findIndex((h:string)=>h.includes("ref")||h.includes("code")||h.includes("sku")||h.includes("article"));
+      const ni=headers.findIndex((h:string)=>h.includes("nom")||h.includes("name")||h.includes("désig")||h.includes("produit"));
+      const rc=ri>=0?ri:0, nc=ni>=0?ni:-1;
+      const newRefs:{ref:string;name:string}[]=[];
+      for(let i=1;i<data.length;i++){const row=data[i];const ref=String(row[rc]??"").trim();if(!ref)continue;newRefs.push({ref,product_name:nc>=0?String(row[nc]??"").trim():""}as any);}
+      if(!newRefs.length){setError("Aucune référence trouvée");return;}
+      await sb.from("dashboard_refs").delete().neq("ref","___x___");
+      await sb.from("dashboard_refs").upsert(newRefs.map(r=>({ref:r.ref,product_name:(r as any).product_name})),{onConflict:"ref"});
+      setSmRefs(newRefs.map(r=>({ref:r.ref,name:(r as any).product_name})));
+      setSmMsg(`${newRefs.length} refs importées — sync Odoo...`);
+      await smLoad();
+    }catch(e:any){setError("Import: "+e.message);}
+    finally{setSmLoading(false);setSmMsg("");if(smFileRef.current)smFileRef.current.value="";}
+  };
+
+  const smSaveThr = async (ref:string,val:string,name:string) => {
+    const n=parseFloat(val); if(isNaN(n)||n<0){setSmEditThr(null);return;}
+    setSmRows(r=>r.map(row=>{if(row.ref!==ref)return row;const u={...row,threshold:n};u.status=smStatus(u.stock,u.conso,n,u.daysLeft,u.daysUntilDeliv);return u;}));
+    setSmEditThr(null);
+    await sb.from("dashboard_thresholds").upsert({ref,threshold:n,product_name:name,updated_at:new Date().toISOString()},{onConflict:"ref"});
+  };
+
+  const smSaveSupDate = async () => {
+    if(!smSupModal)return;
+    const {ref}=smSupModal; const d=smSupInput||null;
+    setSmRows(r=>r.map(row=>{if(row.ref!==ref)return row;const {date:dd,label:dl}=smNextDelivery(d);const dtu=Math.max(0,smDaysUntil(dd));const u={...row,supplierDate:d,daysUntilDeliv:dtu,delivLabel:dl};u.status=smStatus(u.stock,u.conso,u.threshold,u.daysLeft,dtu);return u;}));
+    if(d) await sb.from("dashboard_supplier_dates").upsert({ref,supplier_date:d,updated_at:new Date().toISOString()},{onConflict:"ref"});
+    else await sb.from("dashboard_supplier_dates").delete().eq("ref",ref);
+    setSmSupModal(null);setSmSupInput("");
+  };
+
+  const smFiltered = useMemo(()=>{
+    const ord:Record<string,number>={critical:0,alert:1,no_data:2,ok:3,not_found:4};
+    return smRows.filter(r=>{
+      if(smFilter==="critical"&&r.status!=="critical")return false;
+      if(smFilter==="alert"&&r.status!=="alert")return false;
+      if(smFilter==="ok"&&r.status!=="ok"&&r.status!=="no_data")return false;
+      if(smSearch){const q=smSearch.toLowerCase();if(!r.ref.toLowerCase().includes(q)&&!r.name.toLowerCase().includes(q))return false;}
+      return true;
+    }).sort((a,b)=>ord[a.status]-ord[b.status]||(a.daysLeft-b.daysLeft));
+  },[smRows,smFilter,smSearch]);
+
+  const smCounts=useMemo(()=>({critical:smRows.filter(r=>r.status==="critical").length,alert:smRows.filter(r=>r.status==="alert").length,ok:smRows.filter(r=>r.status==="ok").length}),[smRows]);
 
   // ── Computed ──
   const months = useMemo(() => monthsBack(consoMonths), [consoMonths]);
@@ -1407,6 +1538,159 @@ export default function Dashboard() {
       <main style={{ maxWidth: 1260, margin: "0 auto", padding: "28px 28px 60px" }}>
         {supaError && <div style={{ background: "var(--warning-soft)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 16px", fontSize: 13, color: "var(--warning)", marginBottom: 12 }}>⚠ {supaError} — mode dégradé localStorage</div>}
         {error && <div style={{ background: "var(--danger-soft)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "14px 18px", fontSize: 14, color: "var(--danger)", marginBottom: 24, display: "flex", alignItems: "center", gap: 10, animation: "fadeIn .3s ease both" }}>{I.alert}<span style={{ flex: 1 }}>{error}</span><button onClick={() => setError("")} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer", fontSize: 18, padding: 4 }}>×</button></div>}
+
+        {/* ══════════ SUIVI STOCK ══════════ */}
+        {tab === "stock-monitor" && (
+          <div style={{animation:"fadeIn .3s ease both"}}>
+            {/* Supplier date modal */}
+            {smSupModal&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000}}>
+              <div style={{background:"#fff",borderRadius:14,padding:28,width:340,boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}}>
+                <div style={{fontSize:15,fontWeight:800,marginBottom:4}}>📅 Rupture fournisseur</div>
+                <div style={{fontSize:12,color:"var(--text-muted)",marginBottom:16}}>{smSupModal.ref} — {smSupModal.name}</div>
+                <label style={{fontSize:12,fontWeight:600,display:"flex",flexDirection:"column",gap:6}}>
+                  Date de prochaine dispo fournisseur
+                  <input type="date" value={smSupInput} onChange={e=>setSmSupInput(e.target.value)} style={{padding:"10px 12px",border:"1px solid var(--border)",borderRadius:8,fontSize:13,fontFamily:"inherit"}}/>
+                </label>
+                <div style={{fontSize:11,color:"var(--text-muted)",marginTop:8}}>Laisse vide → livraison standard (15 du mois prochain).</div>
+                <div style={{display:"flex",gap:8,marginTop:18}}>
+                  <button onClick={()=>{setSmSupModal(null);setSmSupInput("");}} className="wms-btn" style={{flex:1}}>Annuler</button>
+                  <button onClick={smSaveSupDate} className="wms-btn wms-btn-primary" style={{flex:2}}>Enregistrer</button>
+                </div>
+                {smSupModal.cur&&<button onClick={()=>{setSmSupInput("");smSaveSupDate();}} style={{width:"100%",marginTop:8,padding:"8px 0",background:"#fef2f2",color:"var(--danger)",border:"1px solid #fecaca",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>Effacer la rupture</button>}
+              </div>
+            </div>}
+
+            {/* Header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
+              <div>
+                <h2 style={{fontSize:22,fontWeight:800,letterSpacing:"-.3px",marginBottom:4}}>Suivi Stock</h2>
+                <p style={{fontSize:13,color:"var(--text-muted)"}}>Stock en temps réel · Conso moyenne 3 mois (OUT) · Livraison le 15 du mois suivant</p>
+              </div>
+              <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                <button className="wms-btn" onClick={()=>smLoad()} disabled={smLoading}>{smLoading?<Spinner/>:I.refresh} Actualiser</button>
+                <input ref={smFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={smImportExcel} style={{display:"none"}}/>
+                <button className="wms-btn wms-btn-primary" onClick={()=>smFileRef.current?.click()} disabled={smLoading}>📤 Importer Excel refs</button>
+              </div>
+            </div>
+
+            {smMsg&&<div style={{fontSize:13,color:"var(--accent)",marginBottom:12}}>⏳ {smMsg}</div>}
+
+            {/* No refs */}
+            {smRefs.length===0&&!smLoading&&(
+              <div style={{background:"var(--bg)",border:"1px solid var(--border)",borderRadius:14,padding:48,textAlign:"center"}}>
+                <div style={{fontSize:36,marginBottom:12}}>📋</div>
+                <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>Aucune référence chargée</div>
+                <p style={{fontSize:13,color:"var(--text-muted)",marginBottom:20}}>Importe ton fichier Excel avec tes ~350 références à surveiller.</p>
+                <p style={{fontSize:12,color:"var(--text-muted)",background:"#f8fafc",padding:"12px 16px",borderRadius:8,display:"inline-block",textAlign:"left"}}>
+                  <strong>Format :</strong> colonne "Ref" (ou "Code", "SKU"…) avec les références Odoo. Colonne "Nom" optionnelle.
+                </p>
+              </div>
+            )}
+
+            {smRefs.length>0&&(
+              <>
+                {/* KPIs */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:18}}>
+                  {([
+                    {label:"Références",val:smRefs.length,color:"#3b82f6",bg:"#eff6ff",f:null},
+                    {label:"🔴 Critiques",val:smCounts.critical,color:"#ef4444",bg:"#fef2f2",f:"critical"},
+                    {label:"🟡 Alertes",val:smCounts.alert,color:"#f59e0b",bg:"#fffbeb",f:"alert"},
+                    {label:"🟢 OK",val:smCounts.ok,color:"#22c55e",bg:"#f0fdf4",f:"ok"},
+                  ] as any[]).map(({label,val,color,bg,f})=>(
+                    <div key={label} onClick={()=>f&&setSmFilter((p:any)=>p===f?"all":f)} style={{background:bg,border:`1px solid ${color}22`,borderRadius:12,padding:"14px 18px",cursor:f?"pointer":"default",outline:smFilter===f?`2px solid ${color}`:"none"}}>
+                      <div style={{fontSize:11,fontWeight:700,color,textTransform:"uppercase",letterSpacing:.5}}>{label}</div>
+                      <div style={{fontSize:30,fontWeight:900,color,lineHeight:1.2}}>{val}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Filters */}
+                <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
+                  {(["all","critical","alert","ok"] as const).map(f=>(
+                    <button key={f} onClick={()=>setSmFilter(f)} className="wms-btn" style={{borderRadius:20,background:smFilter===f?"var(--accent)":"#fff",color:smFilter===f?"#fff":"var(--text-muted)",border:`1px solid ${smFilter===f?"var(--accent)":"var(--border)"}`}}>
+                      {{all:"Tout",critical:"Critiques",alert:"Alertes",ok:"OK"}[f]}
+                    </button>
+                  ))}
+                  <input placeholder="🔍 Ref ou nom..." value={smSearch} onChange={e=>setSmSearch(e.target.value)}
+                    style={{marginLeft:"auto",padding:"7px 12px",border:"1px solid var(--border)",borderRadius:8,fontSize:13,fontFamily:"inherit",width:220,outline:"none"}}/>
+                  <span style={{fontSize:12,color:"var(--text-muted)"}}>{smFiltered.length} ligne{smFiltered.length!==1?"s":""}</span>
+                </div>
+
+                {/* Table */}
+                <div style={{background:"#fff",border:"1px solid var(--border)",borderRadius:14,overflow:"hidden"}}>
+                  <div style={{overflowX:"auto",maxHeight:"calc(100vh - 360px)",overflowY:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                      <thead style={{position:"sticky",top:0,zIndex:5}}>
+                        <tr style={{background:"var(--bg)",borderBottom:"1px solid var(--border)"}}>
+                          {["Référence","Nom produit","Stock","Conso/mois","Seuil min ✏","Jours restants","Prochaine livraison","Statut","Rupture"].map(h=>(
+                            <th key={h} style={{padding:"10px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:"var(--text-muted)",whiteSpace:"nowrap"}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {smFiltered.map((row,i)=>{
+                          const sc={critical:"#ef4444",alert:"#f59e0b",ok:"#22c55e",no_data:"#9ca3af",not_found:"#d1d5db"};
+                          const sb2={critical:"#fff5f5",alert:"#fffdf0",ok:"#fff",no_data:"#fafafa",not_found:"#f9fafb"};
+                          const rowBg=i%2===0?sb2[row.status]:"#fafafa";
+                          return(
+                            <tr key={row.ref} style={{background:rowBg,borderBottom:"1px solid var(--border)"}}>
+                              <td style={{padding:"10px 12px",fontWeight:700,fontFamily:"monospace",fontSize:12}}>{row.ref}</td>
+                              <td style={{padding:"10px 12px",maxWidth:240,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.name}</td>
+                              <td style={{padding:"10px 12px",textAlign:"right",fontWeight:600}}>{row.status==="not_found"?"—":row.stock}</td>
+                              <td style={{padding:"10px 12px",textAlign:"right",color:"var(--text-muted)"}}>{row.status==="not_found"?"—":row.conso===0?<span style={{fontSize:11}}>n/a</span>:row.conso}</td>
+                              <td style={{padding:"6px 12px",textAlign:"right"}}>
+                                {row.status==="not_found"?"—":smEditThr?.ref===row.ref?(
+                                  <input autoFocus type="number" value={smEditThr.val}
+                                    onChange={e=>setSmEditThr(t=>t?{...t,val:e.target.value}:t)}
+                                    onBlur={()=>smSaveThr(row.ref,smEditThr.val,row.name)}
+                                    onKeyDown={e=>{if(e.key==="Enter")smSaveThr(row.ref,smEditThr.val,row.name);if(e.key==="Escape")setSmEditThr(null);}}
+                                    style={{width:64,padding:"4px 8px",border:"1px solid var(--accent)",borderRadius:6,fontSize:13,fontFamily:"inherit",textAlign:"right",outline:"none"}}/>
+                                ):(
+                                  <button onClick={()=>setSmEditThr({ref:row.ref,val:String(row.threshold)})}
+                                    style={{background:"transparent",border:"1px dashed var(--border)",borderRadius:6,padding:"3px 10px",cursor:"pointer",fontSize:13,fontFamily:"inherit",minWidth:44}}>
+                                    {row.threshold}
+                                  </button>
+                                )}
+                              </td>
+                              <td style={{padding:"10px 12px",textAlign:"right",fontWeight:700,color:sc[row.status]}}>
+                                {row.status==="not_found"?"—":row.daysLeft>=999?"∞":`${row.daysLeft}j`}
+                              </td>
+                              <td style={{padding:"10px 12px",fontSize:12,color:row.supplierDate?"var(--danger)":"var(--text-muted)",fontWeight:row.supplierDate?700:400}}>
+                                {row.supplierDate&&"⚠️ "}{row.status!=="not_found"?`${row.delivLabel} (${row.daysUntilDeliv}j)`:"-"}
+                              </td>
+                              <td style={{padding:"10px 12px"}}>
+                                <span style={{display:"inline-block",padding:"3px 10px",borderRadius:20,background:`${sc[row.status]}18`,color:sc[row.status],fontSize:11,fontWeight:700,border:`1px solid ${sc[row.status]}44`}}>
+                                  {{ok:"OK",alert:"Alerte",critical:"Critique",no_data:"Pas de données",not_found:"Introuvable"}[row.status]}
+                                </span>
+                              </td>
+                              <td style={{padding:"8px 12px"}}>
+                                {row.status!=="not_found"&&(
+                                  <button onClick={()=>{setSmSupModal({ref:row.ref,name:row.name,cur:row.supplierDate||""});setSmSupInput(row.supplierDate||"");}}
+                                    style={{padding:"4px 10px",border:`1px solid ${row.supplierDate?"#ef4444":"var(--border)"}`,borderRadius:6,background:row.supplierDate?"#fef2f2":"#fff",color:row.supplierDate?"#ef4444":"var(--text-muted)",cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>
+                                    {row.supplierDate?"📅 Modif.":"📅 Rupture"}
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {smFiltered.length===0&&<tr><td colSpan={9} style={{padding:40,textAlign:"center",color:"var(--text-muted)"}}>
+                          {smLoading?"Chargement...":"Aucun résultat"}
+                        </td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:20,marginTop:10,fontSize:11,color:"var(--text-muted)",flexWrap:"wrap"}}>
+                  <span>🔴 <strong>Critique</strong> : rupture avant la livraison</span>
+                  <span>🟡 <strong>Alerte</strong> : moins de 14j de marge ou sous le seuil</span>
+                  <span>🟢 <strong>OK</strong> : stock suffisant</span>
+                  <span style={{marginLeft:"auto"}}>Seuils cliquables · Livraison standard = 15 du mois suivant</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {/* ══════════ LIVRAISONS ══════════ */}
         {tab === "deliveries" && (
