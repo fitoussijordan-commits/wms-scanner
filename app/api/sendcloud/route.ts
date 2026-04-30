@@ -455,5 +455,182 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  return NextResponse.json({ error: "POST non supporté" }, { status: 405 });
+  const auth = getAuth();
+  if (!auth) return NextResponse.json({ error: "Clés SendCloud manquantes" }, { status: 500 });
+
+  const { searchParams } = new URL(req.url);
+  const action = searchParams.get("action");
+
+  if (action === "label") {
+    try {
+      const body = await req.json();
+      const { order_id: orderId, order_number: orderNumber, order_raw: raw } = body;
+      if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
+
+      // ── Helper: chercher un colis existant par order_number ──────────────
+      const findParcel = async (): Promise<any | null> => {
+        try {
+          const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber)}`, auth);
+          const exact = (d.parcels || []).find((p: any) => String(p.order_number) === String(orderNumber));
+          if (exact) return exact;
+        } catch {}
+        return null;
+      };
+
+      // ── Étape 1 : colis déjà existant avec étiquette ? ───────────────────
+      let parcel: any = await findParcel();
+      const hasLabel = (p: any) => p?.label?.label_printer || p?.label?.normal_printer?.[0];
+      if (parcel && !hasLabel(parcel)) parcel = null;
+
+      // ── Étape 2 : create-labels-async ───────────────────────────────────
+      let createFailed = false;
+      let createErrMsg = "";
+      let asyncParcelId: number | null = null;
+
+      if (!parcel) {
+        try {
+          const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
+            method: "POST",
+            body: JSON.stringify({ integration_id: 527093, orders: [{ order_number: orderNumber }] }),
+          });
+          asyncParcelId = createRes?.data?.[0]?.parcel_id || null;
+          console.log("[label-post] create-labels-async OK, parcel_id:", asyncParcelId);
+        } catch (e: any) {
+          createFailed = true;
+          createErrMsg = e.message;
+          console.warn("[label-post] create-labels-async 422:", e.message);
+        }
+
+        // Poll par parcel_id direct si on l'a
+        if (!createFailed) {
+          for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 2500));
+            try {
+              const d = asyncParcelId
+                ? await scJson(`${V2}/parcels/${asyncParcelId}`, auth)
+                : null;
+              const candidate = d?.parcel || d;
+              if (candidate && hasLabel(candidate)) { parcel = candidate; break; }
+            } catch {}
+            if (!asyncParcelId) {
+              const candidate = await findParcel();
+              if (candidate && hasLabel(candidate)) { parcel = candidate; break; }
+            }
+          }
+          if (!parcel) {
+            return NextResponse.json({ parcelId: asyncParcelId, labelPending: true, error: "Étiquette en cours — réessaie dans 10s" }, { status: 202 });
+          }
+        }
+      }
+
+      // ── Étape 3 : V2 direct avec données du client (pas de refetch V3) ──
+      if (!parcel && createFailed) {
+        console.log("[label-post] fallback V2 direct depuis données client");
+
+        // Extraire adresse depuis _raw
+        const addr = raw?.shipping_address || {};
+        const details = raw?.order_details || {};
+
+        // Items — les données client sont déjà normalisées dans parcel_items du mapping EshopScreen
+        // On reconstruit depuis raw.order_items ou order_details.order_items
+        const rawItems: any[] = details.order_items || raw?.order_items || [];
+
+        // Shipment ID — depuis les champs connus du _raw V3
+        let shipmentId: number | null =
+          raw?.shipping_details?.shipping_method_id
+          || details.shipping_method_id
+          || raw?.sendcloud_shipping_method_id
+          || null;
+
+        // Fallback shipmentId depuis un colis récent
+        if (!shipmentId) {
+          try {
+            const recent = await scJson(`${V2}/parcels?integration_id=527093&limit=5`, auth);
+            const rp = (recent.parcels || []).find((p: any) => p.shipment?.id);
+            if (rp?.shipment?.id) shipmentId = rp.shipment.id;
+          } catch {}
+        }
+
+        console.log("[label-post] shipmentId:", shipmentId, "| addr:", addr?.city, "| items:", rawItems.length);
+
+        // Items avec prix ≥ 0 — on exclut entièrement les lignes de remise (prix négatif)
+        const parcelItems = rawItems
+          .filter((item: any) => item && (item.description || item.name || item.sku))
+          .filter((item: any) => parseFloat(String(item.unit_price?.value ?? item.price ?? "0")) >= 0)
+          .map((item: any) => {
+            const rawVal = item.unit_price?.value ?? item.product_value ?? item.price ?? item.value ?? "0";
+            return {
+              description: (item.description || item.name || item.sku || "Article").substring(0, 100),
+              quantity: Math.max(1, parseInt(String(item.quantity || 1))),
+              weight: String(Math.max(0.001, parseFloat(String(item.weight || "0.1"))).toFixed(3)),
+              value: String(Math.max(0, parseFloat(String(rawVal))).toFixed(2)),
+              hs_code: item.harmonized_system_code || item.hs_code || "",
+              origin_country: item.origin_country || "DE",
+              sku: item.sku || "",
+            };
+          });
+
+        const totalValue = Math.max(0, parcelItems.reduce((s: number, i: any) => s + parseFloat(i.value) * i.quantity, 0));
+        const name = [addr.first_name, addr.last_name].filter(Boolean).join(" ") || addr.company_name || addr.name || "Client";
+        const street = [addr.street, addr.house_number].filter(Boolean).join(" ") || addr.address_line_1 || addr.address_1 || addr.address || "";
+
+        try {
+          const v2Payload: any = {
+            parcel: {
+              name,
+              company_name: addr.company_name || "",
+              address: street,
+              address_2: addr.address_2 || addr.address_divided?.house_number_addition || "",
+              city: addr.city || "",
+              postal_code: addr.postal_code || "",
+              country: { iso_2: addr.country || addr.country_code || addr.country_iso_2 || "FR" },
+              email: raw?.email || addr.email || "",
+              telephone: raw?.phone || addr.phone || addr.telephone || "",
+              weight: "1.000",
+              order_number: orderNumber,
+              total_order_value: totalValue.toFixed(2),
+              total_order_value_currency: raw?.currency || "EUR",
+              request_label: true,
+              ...(parcelItems.length > 0 && { parcel_items: parcelItems }),
+              ...(shipmentId ? { shipment: { id: shipmentId } } : {}),
+            }
+          };
+
+          console.log("[label-post] V2 POST:", JSON.stringify(v2Payload).substring(0, 300));
+
+          const v2Result = await scJson(`${V2}/parcels`, auth, {
+            method: "POST",
+            body: JSON.stringify(v2Payload),
+          });
+          parcel = v2Result.parcel || null;
+          console.log("[label-post] V2 créé:", parcel?.id, "label:", !!parcel?.label?.label_printer);
+        } catch (e: any) {
+          console.error("[label-post] V2 échoué:", e.message);
+          return NextResponse.json({ error: `Erreur création étiquette : ${createErrMsg}`, hint: e.message }, { status: 422 });
+        }
+      }
+
+      if (!parcel) return NextResponse.json({ error: "Colis introuvable" }, { status: 404 });
+
+      const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
+      if (!labelUrl) {
+        return NextResponse.json({ parcelId: parcel.id, labelPending: true, error: "Étiquette en cours — réessaie dans quelques secondes" }, { status: 202 });
+      }
+
+      const labelRes = await scFetch(labelUrl, auth);
+      if (!labelRes.ok) return NextResponse.json({ error: `Erreur PDF: ${labelRes.status}` }, { status: labelRes.status });
+
+      const pdfBuffer = Buffer.from(await labelRes.arrayBuffer());
+      return NextResponse.json({
+        parcelId: parcel.id,
+        tracking: parcel.tracking_number || "",
+        carrier: parcel.carrier?.code || "",
+        labelBase64: pdfBuffer.toString("base64"),
+      });
+    } catch (e: any) {
+      return NextResponse.json({ error: e.message }, { status: 500 });
+    }
+  }
+
+  return NextResponse.json({ error: "POST: action non supportée" }, { status: 405 });
 }

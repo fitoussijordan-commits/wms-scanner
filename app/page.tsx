@@ -4580,13 +4580,12 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     try {
       const orderId = p._raw?.order_id || p.id;
       const orderNumber = p.order_number;
-      // Passer le shipment_id depuis _raw pour le fallback V2
-      const shipmentId = p._raw?.shipping_details?.shipping_method_id
-        || p._raw?.order_details?.shipping_method_id
-        || p._raw?.sendcloud_shipping_method_id
-        || "";
-      const labelUrl = `/api/sendcloud?action=label&order_id=${encodeURIComponent(orderId)}&order_number=${encodeURIComponent(orderNumber)}${shipmentId ? `&shipment_id=${shipmentId}` : ""}`;
-      const res = await fetch(labelUrl);
+      // POST pour passer tout le _raw au serveur → pas besoin de refetch V3
+      const res = await fetch("/api/sendcloud?action=label", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: orderId, order_number: orderNumber, order_raw: p._raw }),
+      });
       const data = await res.json();
 
       // 202 = colis trouvé mais étiquette pas encore prête — retry auto après 10s
@@ -4594,7 +4593,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         onToast(`⏳ Étiquette en cours — nouvelle tentative dans 10s…`);
         await new Promise(r => setTimeout(r, 10000));
         // Retry une fois automatiquement
-        const res2 = await fetch(labelUrl);
+        const res2 = await fetch("/api/sendcloud?action=label", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ order_id: orderId, order_number: orderNumber, order_raw: p._raw }),
+        });
         const data2 = await res2.json();
         if (res2.status === 202 || data2.labelPending) {
           onToast(`⏳ Toujours en cours — réessaie manuellement dans quelques secondes`);
