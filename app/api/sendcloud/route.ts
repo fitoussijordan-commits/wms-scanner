@@ -482,12 +482,51 @@ export async function POST(req: NextRequest) {
       const hasLabel = (p: any) => p?.label?.label_printer || p?.label?.normal_printer?.[0];
       if (parcel && !hasLabel(parcel)) parcel = null;
 
-      // ── Étape 2 : create-labels-async ───────────────────────────────────
-      let createFailed = false;
-      let createErrMsg = "";
+      // ── Étape 2 : corriger les prix négatifs dans l'ordre V3 si besoin, puis create-labels-async ──
       let asyncParcelId: number | null = null;
 
       if (!parcel) {
+        // Détecter si l'ordre a des prix négatifs (depuis le _raw client)
+        const rawItems: any[] = raw?.order_details?.order_items || raw?.order_items || [];
+        const hasNegative = rawItems.some((item: any) =>
+          parseFloat(String(item.unit_price?.value ?? item.price ?? "0")) < 0
+        );
+
+        // Si prix négatifs : PATCH l'ordre V3 pour corriger avant create-labels-async
+        if (hasNegative) {
+          console.log("[label-post] Prix négatifs détectés — PATCH ordre V3 avant création étiquette");
+          try {
+            // Trouver le vrai order_id V3 via recherche par order_number
+            const srch = await scJson(`${V3}/orders?order_number=${encodeURIComponent(orderNumber)}&integration_id=527093&page_size=5`, auth);
+            const foundOrder = (srch.data || srch.results || srch.orders || [])[0];
+            const v3OrderId = foundOrder?.order_id || orderId;
+
+            // Préparer les items corrigés (prix négatifs → 0)
+            const fixedItems = rawItems
+              .filter((item: any) => parseFloat(String(item.unit_price?.value ?? item.price ?? "0")) >= 0)
+              .map((item: any) => {
+                const val = parseFloat(String(item.unit_price?.value ?? item.price ?? "0"));
+                return {
+                  ...item,
+                  unit_price: { ...item.unit_price, value: String(Math.max(0, val)) },
+                };
+              });
+
+            // PATCH l'ordre V3
+            await scJson(`${V3}/orders/${v3OrderId}`, auth, {
+              method: "PUT",
+              body: JSON.stringify({
+                order_details: { order_items: fixedItems },
+              }),
+            });
+            console.log("[label-post] PATCH V3 OK, order_id:", v3OrderId, "items:", fixedItems.length);
+          } catch (patchErr: any) {
+            // Le PATCH a échoué — on tente quand même create-labels-async
+            console.warn("[label-post] PATCH V3 échoué (on tente quand même):", patchErr.message);
+          }
+        }
+
+        // create-labels-async — SendCloud crée l'étiquette depuis son propre ordre
         try {
           const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
             method: "POST",
@@ -496,156 +535,27 @@ export async function POST(req: NextRequest) {
           asyncParcelId = createRes?.data?.[0]?.parcel_id || null;
           console.log("[label-post] create-labels-async OK, parcel_id:", asyncParcelId);
         } catch (e: any) {
-          createFailed = true;
-          createErrMsg = e.message;
-          console.warn("[label-post] create-labels-async 422:", e.message);
+          console.error("[label-post] create-labels-async échoué:", e.message);
+          return NextResponse.json({ error: `SendCloud ne peut pas créer l'étiquette : ${e.message}` }, { status: 422 });
         }
 
-        // Poll par parcel_id direct si on l'a
-        if (!createFailed) {
-          for (let i = 0; i < 10; i++) {
-            await new Promise(r => setTimeout(r, 2500));
-            try {
-              const d = asyncParcelId
-                ? await scJson(`${V2}/parcels/${asyncParcelId}`, auth)
-                : null;
+        // Poll jusqu'à 60s (comme le module Odoo) — par parcel_id si dispo, sinon par order_number
+        for (let i = 0; i < 20; i++) {
+          await new Promise(r => setTimeout(r, 3000));
+          try {
+            if (asyncParcelId) {
+              const d = await scJson(`${V2}/parcels/${asyncParcelId}`, auth);
               const candidate = d?.parcel || d;
               if (candidate && hasLabel(candidate)) { parcel = candidate; break; }
-            } catch {}
-            if (!asyncParcelId) {
+            } else {
               const candidate = await findParcel();
               if (candidate && hasLabel(candidate)) { parcel = candidate; break; }
             }
-          }
-          if (!parcel) {
-            return NextResponse.json({ parcelId: asyncParcelId, labelPending: true, error: "Étiquette en cours — réessaie dans 10s" }, { status: 202 });
-          }
-        }
-      }
-
-      // ── Étape 3 : V2 direct avec données du client (pas de refetch V3) ──
-      if (!parcel && createFailed) {
-        console.log("[label-post] fallback V2 direct depuis données client");
-
-        // Extraire adresse depuis _raw
-        const addr = raw?.shipping_address || {};
-        const details = raw?.order_details || {};
-
-        // Items — les données client sont déjà normalisées dans parcel_items du mapping EshopScreen
-        // On reconstruit depuis raw.order_items ou order_details.order_items
-        const rawItems: any[] = details.order_items || raw?.order_items || [];
-
-        // Shipment ID — depuis les champs connus du _raw V3
-        let shipmentId: number | null =
-          raw?.shipping_details?.shipping_method_id
-          || details.shipping_method_id
-          || raw?.sendcloud_shipping_method_id
-          || null;
-
-        // Service point (Mondial Relay / Point Relais) — requis si la méthode le demande
-        let servicePointId: number | null =
-          raw?.to_service_point
-          || raw?.shipping_details?.to_service_point
-          || details.to_service_point
-          || raw?.service_point_id
-          || null;
-
-        // Si absent du _raw (liste V3 tronquée), on refetch le détail complet par order_number
-        if (!servicePointId) {
-          try {
-            const srch = await scJson(`${V3}/orders?order_number=${encodeURIComponent(orderNumber)}&integration_id=527093`, auth);
-            const found = (srch.data || srch.results || srch.orders || [])[0];
-            if (found?.order_id) {
-              const fullDetail = await scJson(`${V3}/orders/${found.order_id}`, auth);
-              const fo = fullDetail.data || fullDetail;
-              servicePointId = fo.to_service_point || fo.service_point_id || null;
-              // Profiter pour compléter le shipmentId si manquant
-              if (!shipmentId) {
-                shipmentId = fo.shipping_details?.shipping_method_id || fo.sendcloud_shipping_method_id || null;
-              }
-              console.log("[label-post] refetch V3 order_id:", found.order_id, "→ servicePointId:", servicePointId, "shipmentId:", shipmentId);
-            }
-          } catch (e: any) {
-            console.warn("[label-post] refetch V3 service_point échoué:", e.message);
-          }
-        }
-
-        // Fallback shipmentId depuis un colis récent
-        if (!shipmentId) {
-          try {
-            const recent = await scJson(`${V2}/parcels?integration_id=527093&limit=5`, auth);
-            const rp = (recent.parcels || []).find((p: any) => p.shipment?.id);
-            if (rp?.shipment?.id) shipmentId = rp.shipment.id;
           } catch {}
         }
 
-        // Poids total depuis les items, sinon 0.200 kg (safe pour la plupart des méthodes)
-        const totalWeightKg = rawItems.reduce((s: number, item: any) => {
-          const w = parseFloat(String(item.weight || item.product_weight || "0"));
-          const q = parseInt(String(item.quantity || 1));
-          return s + w * q;
-        }, 0);
-        const weightStr = totalWeightKg > 0
-          ? String(Math.min(totalWeightKg, 30).toFixed(3))
-          : "0.200";
-
-        console.log("[label-post] shipmentId:", shipmentId, "| servicePointId:", servicePointId, "| weight:", weightStr, "| addr:", addr?.city, "| items:", rawItems.length);
-
-        // Items avec prix ≥ 0 — on exclut entièrement les lignes de remise (prix négatif)
-        const parcelItems = rawItems
-          .filter((item: any) => item && (item.description || item.name || item.sku))
-          .filter((item: any) => parseFloat(String(item.unit_price?.value ?? item.price ?? "0")) >= 0)
-          .map((item: any) => {
-            const rawVal = item.unit_price?.value ?? item.product_value ?? item.price ?? item.value ?? "0";
-            return {
-              description: (item.description || item.name || item.sku || "Article").substring(0, 100),
-              quantity: Math.max(1, parseInt(String(item.quantity || 1))),
-              weight: String(Math.max(0.001, parseFloat(String(item.weight || "0.05"))).toFixed(3)),
-              value: String(Math.max(0, parseFloat(String(rawVal))).toFixed(2)),
-              hs_code: item.harmonized_system_code || item.hs_code || "",
-              origin_country: item.origin_country || "DE",
-              sku: item.sku || "",
-            };
-          });
-
-        const totalValue = Math.max(0, parcelItems.reduce((s: number, i: any) => s + parseFloat(i.value) * i.quantity, 0));
-        const name = [addr.first_name, addr.last_name].filter(Boolean).join(" ") || addr.company_name || addr.name || "Client";
-        const street = [addr.street, addr.house_number].filter(Boolean).join(" ") || addr.address_line_1 || addr.address_1 || addr.address || "";
-
-        try {
-          const v2Payload: any = {
-            parcel: {
-              name,
-              company_name: addr.company_name || "",
-              address: street,
-              address_2: addr.address_2 || addr.address_divided?.house_number_addition || "",
-              city: addr.city || "",
-              postal_code: addr.postal_code || "",
-              country: addr.country || addr.country_code || addr.country_iso_2 || "FR",
-              email: raw?.email || addr.email || "",
-              telephone: raw?.phone || addr.phone || addr.telephone || "",
-              weight: weightStr,
-              order_number: orderNumber,
-              total_order_value: totalValue.toFixed(2),
-              total_order_value_currency: raw?.currency || "EUR",
-              request_label: true,
-              ...(parcelItems.length > 0 && { parcel_items: parcelItems }),
-              ...(shipmentId ? { shipment: { id: shipmentId } } : {}),
-              ...(servicePointId ? { to_service_point: servicePointId } : {}),
-            }
-          };
-
-          console.log("[label-post] V2 POST:", JSON.stringify(v2Payload).substring(0, 300));
-
-          const v2Result = await scJson(`${V2}/parcels`, auth, {
-            method: "POST",
-            body: JSON.stringify(v2Payload),
-          });
-          parcel = v2Result.parcel || null;
-          console.log("[label-post] V2 créé:", parcel?.id, "label:", !!parcel?.label?.label_printer);
-        } catch (e: any) {
-          console.error("[label-post] V2 échoué:", e.message);
-          return NextResponse.json({ error: `Erreur création étiquette : ${createErrMsg}`, hint: e.message }, { status: 422 });
+        if (!parcel) {
+          return NextResponse.json({ parcelId: asyncParcelId, labelPending: true, error: "Étiquette en cours — réessaie dans 10s" }, { status: 202 });
         }
       }
 
