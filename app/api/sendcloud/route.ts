@@ -542,6 +542,14 @@ export async function POST(req: NextRequest) {
           || raw?.sendcloud_shipping_method_id
           || null;
 
+        // Service point (Mondial Relay / Point Relais) — requis si la méthode le demande
+        const servicePointId: number | null =
+          raw?.to_service_point
+          || raw?.shipping_details?.to_service_point
+          || details.to_service_point
+          || raw?.service_point_id
+          || null;
+
         // Fallback shipmentId depuis un colis récent
         if (!shipmentId) {
           try {
@@ -551,7 +559,17 @@ export async function POST(req: NextRequest) {
           } catch {}
         }
 
-        console.log("[label-post] shipmentId:", shipmentId, "| addr:", addr?.city, "| items:", rawItems.length);
+        // Poids total depuis les items, sinon 0.200 kg (safe pour la plupart des méthodes)
+        const totalWeightKg = rawItems.reduce((s: number, item: any) => {
+          const w = parseFloat(String(item.weight || item.product_weight || "0"));
+          const q = parseInt(String(item.quantity || 1));
+          return s + w * q;
+        }, 0);
+        const weightStr = totalWeightKg > 0
+          ? String(Math.min(totalWeightKg, 30).toFixed(3))
+          : "0.200";
+
+        console.log("[label-post] shipmentId:", shipmentId, "| servicePointId:", servicePointId, "| weight:", weightStr, "| addr:", addr?.city, "| items:", rawItems.length);
 
         // Items avec prix ≥ 0 — on exclut entièrement les lignes de remise (prix négatif)
         const parcelItems = rawItems
@@ -562,7 +580,7 @@ export async function POST(req: NextRequest) {
             return {
               description: (item.description || item.name || item.sku || "Article").substring(0, 100),
               quantity: Math.max(1, parseInt(String(item.quantity || 1))),
-              weight: String(Math.max(0.001, parseFloat(String(item.weight || "0.1"))).toFixed(3)),
+              weight: String(Math.max(0.001, parseFloat(String(item.weight || "0.05"))).toFixed(3)),
               value: String(Math.max(0, parseFloat(String(rawVal))).toFixed(2)),
               hs_code: item.harmonized_system_code || item.hs_code || "",
               origin_country: item.origin_country || "DE",
@@ -586,13 +604,14 @@ export async function POST(req: NextRequest) {
               country: addr.country || addr.country_code || addr.country_iso_2 || "FR",
               email: raw?.email || addr.email || "",
               telephone: raw?.phone || addr.phone || addr.telephone || "",
-              weight: "1.000",
+              weight: weightStr,
               order_number: orderNumber,
               total_order_value: totalValue.toFixed(2),
               total_order_value_currency: raw?.currency || "EUR",
               request_label: true,
               ...(parcelItems.length > 0 && { parcel_items: parcelItems }),
               ...(shipmentId ? { shipment: { id: shipmentId } } : {}),
+              ...(servicePointId ? { to_service_point: servicePointId } : {}),
             }
           };
 
