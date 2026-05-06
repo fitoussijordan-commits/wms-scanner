@@ -245,13 +245,50 @@ const I = {
 };
 
 const TABS = [
-  { key: "alerts", label: "Alertes stock", icon: I.alert },
-  { key: "conso", label: "Consommation", icon: I.chart },
+  { key: "stock-monitor", label: "Suivi Stock", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> },
   { key: "deliveries", label: "Livraisons & Prépa.", icon: I.truck },
   { key: "moves", label: "Historique", icon: I.history },
   { key: "stock-tracking", label: "Suivi stock", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
+  { key: "catalogue", label: "Catalogue", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> },
   { key: "libre", label: "Mode Libre", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> },
 ] as const;
+
+// ─── CATALOGUE — définition des colonnes disponibles ────────────────────────
+const CAT_COL_DEFS = [
+  // Identité
+  { key: "default_code",      label: "Réf. interne",        group: "Identité",          w: 120 },
+  { key: "barcode",           label: "EAN / Code-barres",   group: "Identité",          w: 140 },
+  { key: "sup_ref",           label: "Réf. fournisseur",    group: "Identité",          w: 140 },
+  { key: "sup_name",          label: "Fournisseur",         group: "Identité",          w: 160 },
+  { key: "sup_product_name",  label: "Nom art. fournisseur",group: "Identité",          w: 170 },
+  { key: "sup_code",          label: "Code abrégé fourn.",  group: "Identité",          w: 130 },
+  // Caractéristiques
+  { key: "categ",             label: "Famille / Catégorie", group: "Caractéristiques",  w: 150 },
+  { key: "weight",            label: "Poids (kg)",          group: "Caractéristiques",  w: 90  },
+  { key: "volume",            label: "Volume (L)",          group: "Caractéristiques",  w: 90  },
+  { key: "length",            label: "Longueur (cm)",       group: "Caractéristiques",  w: 100 },
+  { key: "width",             label: "Largeur (cm)",        group: "Caractéristiques",  w: 90  },
+  { key: "height",            label: "Hauteur (cm)",        group: "Caractéristiques",  w: 90  },
+  { key: "uom",               label: "Unité de mesure",     group: "Caractéristiques",  w: 100 },
+  { key: "packaging_qty",     label: "Colisage",            group: "Caractéristiques",  w: 80  },
+  { key: "tracking",          label: "Suivi (lot/série)",   group: "Caractéristiques",  w: 110 },
+  // Stock
+  { key: "qty_available",     label: "Stock disponible",    group: "Stock",             w: 110 },
+  { key: "qty_virtual",       label: "Stock prévisionnel",  group: "Stock",             w: 120 },
+  { key: "locations",         label: "Emplacements",        group: "Stock",             w: 220 },
+  { key: "lots",              label: "Lots",                group: "Stock",             w: 160 },
+  { key: "dluo",              label: "DLUO / Expiration",   group: "Stock",             w: 130 },
+  // Achat
+  { key: "standard_price",    label: "Prix achat (€)",      group: "Achat",             w: 110 },
+  { key: "sup_price",         label: "Prix fournisseur (€)","group": "Achat",           w: 110 },
+  { key: "sup_delay",         label: "Délai fourn. (j)",    group: "Achat",             w: 110 },
+  { key: "sup_min_qty",       label: "Qté min commande",    group: "Achat",             w: 120 },
+  { key: "sup_currency",      label: "Devise fourn.",       group: "Achat",             w: 90  },
+  // Vente
+  { key: "list_price",        label: "Prix vente HT (€)",   group: "Vente",             w: 120 },
+] as const;
+type CatColKey = typeof CAT_COL_DEFS[number]["key"];
+const CAT_DEFAULT_COLS: CatColKey[] = ["default_code","sup_ref","sup_name","categ","weight","qty_available"];
 
 // ─────────────────────────────────────────────
 // COLUMN FILTER DROPDOWN (Excel-like)
@@ -381,7 +418,7 @@ export default function Dashboard() {
   const [db, setDb] = useState("");
   const [user, setUser] = useState("");
   const [pw, setPw] = useState("");
-  const [tab, setTab] = useState<string>("alerts");
+  const [tab, setTab] = useState<string>("stock-monitor");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [alerts, setAlerts] = useState<StockAlert[]>([]);
@@ -450,6 +487,19 @@ export default function Dashboard() {
   const [libreRows, setLibreRows] = useState<Record<string, any>[]>([]);
   const [libreLoading, setLibreLoading] = useState(false);
   const [libreAnalyzed, setLibreAnalyzed] = useState(false);
+
+  // ── Catalogue ──────────────────────────────────────────────────────────────
+  const [catQuery, setCatQuery]           = useState("");
+  const [catRows, setCatRows]             = useState<Record<string,any>[]>([]);
+  const [catLoading, setCatLoading]       = useState(false);
+  const [catMsg, setCatMsg]               = useState("");
+  const [catCols, setCatCols]             = useState<Set<CatColKey>>(new Set(CAT_DEFAULT_COLS));
+  const [catColsOpen, setCatColsOpen]     = useState(false);
+  const [catSelected, setCatSelected]     = useState<Set<number>>(new Set());
+  const catSearchRef                      = useRef<ReturnType<typeof setTimeout>|null>(null);
+  // Inline editing catalogue
+  const [catEdit, setCatEdit]             = useState<{rowId:number; field:string; value:string} | null>(null);
+  const [catSaving, setCatSaving]         = useState<string>(""); // "rowId:field" en cours de save
 
   useEffect(() => {
     const s = loadSession(); if (s) setSession(s);
@@ -1242,9 +1292,597 @@ export default function Dashboard() {
     a.click(); URL.revokeObjectURL(url);
   }, [libreRows, libreCols]);
 
-  useEffect(() => { if (!session) return; if (tab === "alerts") { loadAlerts(); } if (tab === "conso") loadConsoFromCache(); if (tab === "deliveries") loadDeliveries(); }, [tab, session]);
-  // Re-run loadAlerts quand la watchlist arrive depuis Supabase (évite le flash "tout le catalogue")
-  useEffect(() => { if (!session || tab !== "alerts") return; loadAlerts(); }, [watchlist]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!session) return; if (tab === "deliveries") loadDeliveries(); if (tab === "stock-monitor") smLoad(smDeliveryMonth); }, [tab, session]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ══════════════════════════════════════════════════════
+  // SUIVI STOCK — nouveau tab (remplace Alertes + Conso)
+  // ══════════════════════════════════════════════════════
+  interface SmRow { ref: string; name: string; stock: number; conso: number; threshold: number; daysLeft: number; daysUntilDeliv: number; delivLabel: string; supplierDate: string | null; expected_qty: number; status: "ok"|"alert"|"critical"|"no_data"|"not_found"; }
+
+  const [smRefs, setSmRefs] = useState<{ref:string;name:string}[]>([]);
+  const [smRows, setSmRows] = useState<SmRow[]>([]);
+  const [smLoading, setSmLoading] = useState(false);
+  const [smMsg, setSmMsg] = useState("");
+  const [smSearch, setSmSearch] = useState("");
+  const [smFilter, setSmFilter] = useState<"all"|"critical"|"alert"|"ok">("all");
+  const [smEditThr, setSmEditThr] = useState<{ref:string;val:string}|null>(null);
+  const [smSupModal, setSmSupModal] = useState<{ref:string;name:string;cur:string}|null>(null);
+  const [smSupInput, setSmSupInput] = useState("");
+  const smFileRef = useRef<HTMLInputElement>(null);
+  const smOrderFileRef = useRef<HTMLInputElement>(null);
+  const [smSelected, setSmSelected] = useState<Set<string>>(new Set());
+  const [smExpected, setSmExpected] = useState<Record<string,number>>({});
+  // Date de prochaine livraison globale (15 du mois choisi) — mémorisée en localStorage
+  const smDefaultDelivery = (): string => {
+    const d = new Date(); d.setDate(1); d.setMonth(d.getMonth()+1);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+  };
+  const [smDeliveryMonth, setSmDeliveryMonth] = useState<string>(()=>{
+    try{return localStorage.getItem("wms_delivery_month")||smDefaultDelivery();}catch{return smDefaultDelivery();}
+  });
+  const smSetDeliveryMonth = (v:string)=>{
+    setSmDeliveryMonth(v);
+    try{localStorage.setItem("wms_delivery_month",v);}catch{}
+  };
+
+  const smNextDelivery = (supDate?: string|null, delivMonth?: string): {date:Date;label:string} => {
+    if (supDate) { const d=new Date(supDate+"T00:00:00"); return {date:d,label:`Fourn. ${d.toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})}`}; }
+    const m = delivMonth || smDefaultDelivery();
+    const [y,mo] = m.split("-").map(Number);
+    const d = new Date(y, mo-1, 15);
+    return {date:d,label:`15 ${d.toLocaleDateString("fr-FR",{month:"short",year:"numeric"})}`};
+  };
+  const smDaysUntil = (d:Date) => Math.ceil((d.getTime()-new Date().setHours(0,0,0,0))/86400000);
+  const smStatus = (stock:number,conso:number,thr:number,daysLeft:number,daysDeliv:number,expected:number=0,hasOrderConf:boolean=false): SmRow["status"] => {
+    if (conso===0&&stock===0) return "no_data";
+    // Si order conf chargé mais produit absent → vraie livraison = mois suivant (+30j)
+    const effectiveDaysDeliv = (hasOrderConf && expected===0) ? daysDeliv+30 : daysDeliv;
+    const effStock = stock + expected;
+    const effDaysLeft = conso>0 ? Math.round(effStock*30/conso) : (effStock>0?999:0);
+    if (effDaysLeft < effectiveDaysDeliv) return "critical";
+    return "ok";
+  };
+
+  const smBuildRows = useCallback((refs:{ref:string;name:string}[], stockByRef:Record<string,{id:number;name:string;qty:number}>, consoByRef:Record<string,number>, thrMap:Record<string,number>, supMap:Record<string,string|null>, delivMonth?:string, expectedMap?:Record<string,number>, hasOrderConf?:boolean): SmRow[] => {
+    const orderConf = hasOrderConf ?? false;
+    return refs.map(({ref,name:rname}) => {
+      const od=stockByRef[ref];
+      const expected=expectedMap?.[ref]??0;
+      if (!od) return {ref,name:rname||ref,stock:0,conso:0,threshold:thrMap[ref]??0,daysLeft:0,daysUntilDeliv:0,delivLabel:"-",supplierDate:supMap[ref]??null,expected_qty:expected,status:"not_found"};
+      const stock=od.qty, conso=consoByRef[ref]??0, threshold=thrMap[ref]??Math.round(conso);
+      const {date:dd,label:dl}=smNextDelivery(supMap[ref], delivMonth);
+      const daysUntilDeliv=Math.max(0,smDaysUntil(dd));
+      const daysLeft=conso>0?Math.round(stock*30/conso):(stock>0?999:0);
+      // Si order conf chargé et produit absent, indiquer que la livraison réelle = mois suivant
+      const delivLabel = (orderConf && expected===0 && !supMap[ref]) ? dl+" →+1m" : dl;
+      return {ref,name:od.name,stock,conso:Math.round(conso*10)/10,threshold,daysLeft,daysUntilDeliv,delivLabel,supplierDate:supMap[ref]??null,expected_qty:expected,status:smStatus(stock,conso,threshold,daysLeft,daysUntilDeliv,expected,orderConf)};
+    });
+  },[]);
+
+  // ── Sync Odoo (stock + conso) pour une liste de refs donnée ──────────────
+  const smSyncOdoo = useCallback(async (
+    refs:{ref:string;name:string}[],
+    thrMap:Record<string,number>,
+    supMap:Record<string,string|null>,
+    delivMonth?:string,
+    expectedMap?:Record<string,number>
+  ) => {
+    if (!session || !refs.length) return;
+    setSmMsg("Stock Odoo...");
+    const prods:any[]=await odoo.searchRead(session,"product.product",[["default_code","in",refs.map(r=>r.ref)],["active","in",[true,false]]],["id","name","default_code","qty_available"],0);
+    const stockByRef:Record<string,{id:number;name:string;qty:number}>={};
+    for(const p of prods) if(p.default_code) stockByRef[p.default_code]={id:p.id,name:p.name,qty:p.qty_available??0};
+    setSmMsg("Consommation (3 mois)...");
+    const today=new Date();
+    const from=new Date(today.getFullYear(),today.getMonth()-3,1).toISOString().slice(0,10)+" 00:00:00";
+    const curMonthStart=new Date(today.getFullYear(),today.getMonth(),1).toISOString().slice(0,10)+" 00:00:00";
+    const pids=Object.values(stockByRef).map(p=>p.id);
+    const consoByRef:Record<string,number>={};
+    if(pids.length){
+      const moves:any[]=await odoo.searchRead(session,"stock.move",[["state","=","done"],["product_id","in",pids],["date",">=",from],["date","<",curMonthStart],["location_id.usage","=","internal"],["location_dest_id.usage","=","customer"]],["product_id","product_uom_qty","date"],0);
+      const byPidMonth:Record<number,Record<string,number>>={};
+      for(const m of moves){const pid=Array.isArray(m.product_id)?m.product_id[0]:m.product_id;const mo=String(m.date||"").slice(0,7);if(!byPidMonth[pid])byPidMonth[pid]={};byPidMonth[pid][mo]=(byPidMonth[pid][mo]||0)+(m.product_uom_qty||0);}
+      const months3:string[]=[];for(let i=3;i>=1;i--){const d=new Date(today.getFullYear(),today.getMonth()-i,1);months3.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);}
+      for(const [ref,info] of Object.entries(stockByRef)){const pid=info.id;const qtys=months3.map(m=>byPidMonth[pid]?.[m]??0);const nz=qtys.filter(q=>q>0).length;consoByRef[ref]=nz>0?qtys.reduce((a,b)=>a+b,0)/nz:0;}
+    }
+    const hasOrderConf=Object.keys(expectedMap||{}).length>0;
+    const rows=smBuildRows(refs,stockByRef,consoByRef,thrMap,supMap,delivMonth,expectedMap,hasOrderConf);
+    setSmRows(rows);
+  },[session,smBuildRows]);
+
+  // ── Chargement complet depuis Supabase puis Odoo ──────────────────────────
+
+  // ── Catalogue inline edit save ────────────────────────────────────────────
+  const catSaveField = useCallback(async (row: Record<string,any>, field: string, value: string) => {
+    if (!session) return;
+    const key = `${row._id}:${field}`;
+    setCatSaving(key);
+    try {
+      if (field === "name" || field === "weight") {
+        // Écriture sur product.template
+        const writeVal = field === "weight" ? (parseFloat(value.replace(",",".")) || 0) : value.trim();
+        await odoo.write(session, "product.template", [row._tmpl], { [field]: writeVal });
+        setCatRows(prev => prev.map(r => r._id === row._id ? { ...r, [field]: writeVal } : r));
+      } else if (field === "barcode") {
+        // Écriture sur product.product (variant)
+        await odoo.write(session, "product.product", [row._id], { barcode: value.trim() || false });
+        setCatRows(prev => prev.map(r => r._id === row._id ? { ...r, barcode: value.trim() } : r));
+      }
+    } catch (e: any) {
+      alert(`Erreur sauvegarde : ${e?.message || e}`);
+    } finally {
+      setCatSaving("");
+      setCatEdit(null);
+    }
+  }, [session]);
+
+  // ── Catalogue search ──────────────────────────────────────────────────────
+  const catSearch = useCallback(async (q: string, cols: Set<CatColKey>) => {
+    if (!session || q.trim().length < 2) { setCatRows([]); setCatMsg(""); return; }
+    setCatLoading(true); setCatMsg("Recherche...");
+    try {
+      // 1. Recherche produits de base
+      const needDims = cols.has("length") || cols.has("width") || cols.has("height");
+      const baseFields = ["id","name","default_code","barcode","weight","volume","categ_id","uom_id",
+        "qty_available","virtual_available","tracking","list_price","standard_price","product_tmpl_id"];
+      const query: any[] = ["|", ["name","ilike",q], "|", ["default_code","ilike",q], ["barcode","ilike",q]];
+      let prods: any[];
+      let hasDims = false;
+      try {
+        prods = await odoo.searchRead(session, "product.product", query,
+          needDims ? [...baseFields,"x_length","x_width","x_height"] : baseFields, 300);
+        hasDims = needDims;
+      } catch(e1: any) {
+        if (needDims && String(e1?.message).includes("x_length")) {
+          prods = await odoo.searchRead(session, "product.product", query, baseFields, 300);
+        } else throw e1;
+      }
+
+      // Packaging (colisage)
+      let pkgByTmpl: Record<number,number> = {};
+      if (prods.length) {
+        const tmplIds = Array.from(new Set(prods.map((p:any) => Array.isArray(p.product_tmpl_id)?p.product_tmpl_id[0]:p.product_tmpl_id).filter(Boolean)));
+        try {
+          const pkgs = await odoo.searchRead(session,"product.packaging",[["product_id","in",tmplIds]],["product_id","qty"],200);
+          for (const pk of pkgs) { const tid=Array.isArray(pk.product_id)?pk.product_id[0]:pk.product_id; if(!pkgByTmpl[tid]) pkgByTmpl[tid]=pk.qty; }
+        } catch {}
+      }
+
+      const rows: Record<string,any>[] = prods.map((p:any) => {
+        const tmplId = Array.isArray(p.product_tmpl_id)?p.product_tmpl_id[0]:p.product_tmpl_id;
+        return {
+          _id: p.id, _tmpl: tmplId,
+          name: p.name,
+          default_code: p.default_code||"",
+          barcode: p.barcode||"",
+          categ: Array.isArray(p.categ_id)?p.categ_id[1]:"",
+          uom: Array.isArray(p.uom_id)?p.uom_id[1]:"",
+          weight: p.weight||"",
+          volume: p.volume?(p.volume*1000).toFixed(3):"",
+          length: hasDims?(p.x_length||""):"", width: hasDims?(p.x_width||""):"", height: hasDims?(p.x_height||""):"",
+          qty_available: p.qty_available??0,
+          qty_virtual: p.virtual_available??0,
+          tracking: p.tracking==="lot"?"Lot":p.tracking==="serial"?"Série":"Aucun",
+          list_price: p.list_price||"",
+          standard_price: p.standard_price||"",
+          packaging_qty: pkgByTmpl[tmplId]||"",
+          // enriched later:
+          sup_ref:"", sup_name:"", sup_product_name:"", sup_code:"",
+          sup_price:"", sup_delay:"", sup_min_qty:"", sup_currency:"",
+          locations:"", lots:"", dluo:"",
+        };
+      });
+
+      setCatRows(rows);
+      setCatSelected(new Set());
+      setCatMsg(`${rows.length} produit${rows.length>1?"s":""} trouvé${rows.length>1?"s":""}`);
+
+      const ids = prods.map((p:any)=>p.id);
+      if (!ids.length) return;
+
+      // 2. Enrichissement fournisseur (si colonnes visibles)
+      const needSup = (["sup_ref","sup_name","sup_product_name","sup_code","sup_price","sup_delay","sup_min_qty","sup_currency"] as CatColKey[]).some(k=>cols.has(k));
+      if (needSup) {
+        setCatMsg("Infos fournisseurs...");
+        try {
+          const tmplIdsArr = Array.from(new Set(prods.map((p:any)=>Array.isArray(p.product_tmpl_id)?p.product_tmpl_id[0]:p.product_tmpl_id).filter(Boolean)));
+          const sis = await odoo.searchRead(session,"product.supplierinfo",
+            [["product_tmpl_id","in",tmplIdsArr]],
+            ["product_tmpl_id","product_code","product_name","partner_id","price","delay","min_qty","currency_id"],
+            tmplIdsArr.length*3
+          );
+          // Prendre le premier fournisseur par template
+          const supByTmpl: Record<number,any> = {};
+          for (const si of sis) {
+            const tid = Array.isArray(si.product_tmpl_id)?si.product_tmpl_id[0]:si.product_tmpl_id;
+            if (!supByTmpl[tid]) supByTmpl[tid] = si;
+          }
+          setCatRows(r => r.map(row => {
+            const si = supByTmpl[row._tmpl];
+            if (!si) return row;
+            return { ...row,
+              sup_ref: si.product_code||"",
+              sup_name: Array.isArray(si.partner_id)?si.partner_id[1]:"",
+              sup_product_name: si.product_name||"",
+              sup_code: si.product_code||"",
+              sup_price: si.price||"",
+              sup_delay: si.delay||"",
+              sup_min_qty: si.min_qty||"",
+              sup_currency: Array.isArray(si.currency_id)?si.currency_id[1]:"",
+            };
+          }));
+        } catch {}
+      }
+
+      // 3. Emplacements (stock.quant)
+      if (cols.has("locations")) {
+        setCatMsg("Emplacements...");
+        try {
+          const quants = await odoo.searchRead(session,"stock.quant",
+            [["product_id","in",ids],["location_id.usage","=","internal"],["quantity",">",0]],
+            ["product_id","location_id","quantity"],ids.length*5
+          );
+          const locByProd: Record<number,string[]> = {};
+          for (const q of quants) {
+            const pid = Array.isArray(q.product_id)?q.product_id[0]:q.product_id;
+            const loc = Array.isArray(q.location_id)?q.location_id[1]:String(q.location_id);
+            // Exclure emplacements virtuels / sortie / entrée inutiles
+            if (/sortie|virtual|output|input|scrap|rebut/i.test(loc)) continue;
+            const qty = Math.round(q.quantity*100)/100;
+            if (!locByProd[pid]) locByProd[pid]=[];
+            locByProd[pid].push(`${loc} (${qty})`);
+          }
+          setCatRows(r => r.map(row => ({ ...row, locations: (locByProd[row._id]||[]).join(" | ")||"—" })));
+        } catch {}
+      }
+
+      // 4. Lots + DLUO
+      const needLots = cols.has("lots")||cols.has("dluo");
+      if (needLots) {
+        setCatMsg("Lots / DLUO...");
+        try {
+          const lots = await odoo.searchRead(session,"stock.lot",
+            [["product_id","in",ids]],
+            ["product_id","name","expiration_date","use_expiration_date"],
+            ids.length*10
+          );
+          const lotsByProd: Record<number,{name:string;exp:string}[]> = {};
+          for (const l of lots) {
+            const pid = Array.isArray(l.product_id)?l.product_id[0]:l.product_id;
+            if (!lotsByProd[pid]) lotsByProd[pid]=[];
+            const exp = l.expiration_date||l.use_expiration_date||"";
+            lotsByProd[pid].push({name:l.name, exp: exp?new Date(exp).toLocaleDateString("fr-FR"):""});
+          }
+          setCatRows(r => r.map(row => {
+            const ls = lotsByProd[row._id]||[];
+            return { ...row,
+              lots: ls.map(l=>l.name).join(", ")||"—",
+              dluo: ls.filter(l=>l.exp).map(l=>`${l.name}: ${l.exp}`).join(" | ")||"—",
+            };
+          }));
+        } catch {}
+      }
+
+      setCatMsg(`${rows.length} produit${rows.length>1?"s":""} trouvé${rows.length>1?"s":""}`);
+    } catch(e:any) { setCatMsg("Erreur: "+e.message); }
+    finally { setCatLoading(false); }
+  }, [session]);
+
+  const catTrigger = useCallback((q: string, cols: Set<CatColKey>) => {
+    if (catSearchRef.current) clearTimeout(catSearchRef.current);
+    catSearchRef.current = setTimeout(()=>catSearch(q, cols), 380);
+  }, [catSearch]);
+
+  const catToggleCol = (key: CatColKey) => {
+    setCatCols(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      catTrigger(catQuery, next);
+      return next;
+    });
+  };
+
+  const catExportXlsx = async () => {
+    if (!catRows.length) return;
+    const XLSX = await import("xlsx");
+    const visibleCols = CAT_COL_DEFS.filter(c => catCols.has(c.key));
+    const header = ["Nom produit", ...visibleCols.map(c=>c.label)];
+    const exportRows = catSelected.size > 0 ? catRows.filter(r=>catSelected.has(r._id)) : catRows;
+    const data = exportRows.map(r => [r.name, ...visibleCols.map(c => r[c.key] ?? "")]);
+    const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Catalogue");
+    XLSX.writeFile(wb, `catalogue_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
+  // ── wms_thresholds : table existante, on y stocke refs + seuils + supplier_date ──
+  // Structure : odoo_ref, threshold, product_name, supplier_date (colonne à ajouter)
+
+  const smLoadAll = async (): Promise<{refs:{ref:string;name:string}[];thrMap:Record<string,number>;supMap:Record<string,string|null>;expectedMap:Record<string,number>}> => {
+    const {data,error}=await supa.sb.from("wms_thresholds").select("odoo_ref,threshold,product_name,supplier_date,expected_qty").order("odoo_ref");
+    if (error) throw new Error("wms_thresholds: "+error.message);
+    const rows=data||[];
+    const refs=rows.map((r:any)=>({ref:r.odoo_ref,name:r.product_name||r.odoo_ref}));
+    const thrMap:Record<string,number>=Object.fromEntries(rows.map((r:any)=>[r.odoo_ref,r.threshold]));
+    const supMap:Record<string,string|null>=Object.fromEntries(rows.filter((r:any)=>r.supplier_date).map((r:any)=>[r.odoo_ref,r.supplier_date]));
+    const expectedMap:Record<string,number>=Object.fromEntries(rows.filter((r:any)=>r.expected_qty>0).map((r:any)=>[r.odoo_ref,r.expected_qty]));
+    return {refs,thrMap,supMap,expectedMap};
+  };
+
+  // ── Chargement complet depuis wms_thresholds ─────────────────────────────
+  const smLoad = useCallback(async (delivMonth?:string) => {
+    if (!session) return;
+    setSmLoading(true); setSmMsg("Chargement références...");
+    try {
+      const {refs,thrMap,supMap,expectedMap}=await smLoadAll();
+      setSmRefs(refs);
+      setSmExpected(expectedMap);
+      if (!refs.length){setSmLoading(false);setSmMsg("");return;}
+      await smSyncOdoo(refs,thrMap,supMap,delivMonth||smDeliveryMonth,expectedMap);
+    } catch(e:any){setError(e.message);}
+    finally{setSmLoading(false);setSmMsg("");}
+  },[session,smSyncOdoo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Import Excel → upsert dans wms_thresholds (garde seuils existants) ──
+  const smImportExcel = async (e:React.ChangeEvent<HTMLInputElement>) => {
+    const file=e.target.files?.[0]; if(!file)return;
+    const XLSX=(await import("xlsx"));
+    setSmLoading(true);setSmMsg("Lecture Excel...");
+    try{
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(buf,{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const data:any[][]=XLSX.utils.sheet_to_json(ws,{header:1});
+      const headers=(data[0]||[]).map((h:any)=>String(h||"").toLowerCase().trim());
+      const ri=headers.findIndex((h:string)=>h.includes("ref")||h.includes("code")||h.includes("sku")||h.includes("article"));
+      const ni=headers.findIndex((h:string)=>h.includes("nom")||h.includes("name")||h.includes("désig")||h.includes("produit"));
+      const rc=ri>=0?ri:0, nc=ni>=0?ni:-1;
+      const newRefs:{ref:string;name:string}[]=[];
+      for(let i=1;i<data.length;i++){const row=data[i];const ref=String(row[rc]??"").trim();if(!ref)continue;newRefs.push({ref,name:nc>=0?String(row[nc]??"").trim():""});}
+      if(!newRefs.length){setError("Aucune référence trouvée");return;}
+
+      setSmMsg(`${newRefs.length} refs — sauvegarde Supabase...`);
+      // Garde seuils/ruptures existants pour ces refs, supprime tout le reste
+      const {data:existing}=await supa.sb.from("wms_thresholds").select("odoo_ref,threshold,supplier_date");
+      const existMap:Record<string,{threshold:number;supplier_date:string|null}>=Object.fromEntries((existing||[]).map((r:any)=>[r.odoo_ref,{threshold:r.threshold,supplier_date:r.supplier_date}]));
+
+      // Supprimer les anciennes refs qui ne sont plus dans la nouvelle liste
+      const newRefSet=new Set(newRefs.map(r=>r.ref));
+      const toDelete=(existing||[]).filter((r:any)=>!newRefSet.has(r.odoo_ref)).map((r:any)=>r.odoo_ref);
+      for(let i=0;i<toDelete.length;i+=100){
+        await supa.sb.from("wms_thresholds").delete().in("odoo_ref",toDelete.slice(i,i+100));
+      }
+
+      const upsertRows=newRefs.map(r=>({
+        odoo_ref:r.ref,
+        product_name:r.name,
+        threshold:existMap[r.ref]?.threshold??0,
+        updated_at:new Date().toISOString(),
+      }));
+      // Upsert par batch de 500
+      for(let i=0;i<upsertRows.length;i+=500){
+        const {error}=await supa.sb.from("wms_thresholds").upsert(upsertRows.slice(i,i+500),{onConflict:"odoo_ref"});
+        if(error) throw new Error(error.message);
+      }
+
+      setSmRefs(newRefs);
+      setSmMsg(`${newRefs.length} refs — sync Odoo...`);
+      const thrMap:Record<string,number>=Object.fromEntries(newRefs.map(r=>[r.ref,existMap[r.ref]?.threshold??0]));
+      const supMap:Record<string,string|null>=Object.fromEntries(newRefs.filter(r=>existMap[r.ref]?.supplier_date).map(r=>[r.ref,existMap[r.ref]?.supplier_date]));
+      // Recharge expected depuis Supabase pour ne pas perdre l'order conf après un import refs
+      let expMap=smExpected;
+      try{const {expectedMap}=await smLoadAll().then(r=>r).catch(()=>({expectedMap:{}} as any));if(Object.keys(expectedMap||{}).length)expMap=expectedMap;}catch{}
+      await smSyncOdoo(newRefs,thrMap,supMap,smDeliveryMonth,expMap);
+    }catch(e:any){setError("Import: "+e.message);}
+    finally{setSmLoading(false);setSmMsg("");if(smFileRef.current)smFileRef.current.value="";}
+  };
+
+  const smSaveThr = async (ref:string,val:string,name:string) => {
+    const n=parseFloat(val); if(isNaN(n)||n<0){setSmEditThr(null);return;}
+    setSmRows(r=>r.map(row=>{if(row.ref!==ref)return row;const u={...row,threshold:n};u.status=smStatus(u.stock,u.conso,n,u.daysLeft,u.daysUntilDeliv);return u;}));
+    setSmEditThr(null);
+    try { await supa.sb.from("wms_thresholds").upsert({odoo_ref:ref,threshold:n,product_name:name,updated_at:new Date().toISOString()},{onConflict:"odoo_ref"}); } catch {}
+  };
+
+  const smResetThresholds = async () => {
+    const toUpdate=smRows.filter(r=>r.conso>0&&r.status!=="not_found");
+    if(!toUpdate.length)return;
+    const newVal=toUpdate.map(r=>Math.round(r.conso));
+    setSmRows(rows=>rows.map(row=>{
+      const idx=toUpdate.findIndex(r=>r.ref===row.ref);
+      if(idx<0)return row;
+      const n=newVal[idx];
+      const u={...row,threshold:n};
+      u.status=smStatus(u.stock,u.conso,n,u.daysLeft,u.daysUntilDeliv);
+      return u;
+    }));
+    try {
+      await supa.sb.from("wms_thresholds").upsert(
+        toUpdate.map((r,i)=>({odoo_ref:r.ref,threshold:newVal[i],product_name:r.name,updated_at:new Date().toISOString()})),
+        {onConflict:"odoo_ref"}
+      );
+    } catch {}
+  };
+
+  // Import Order Confirmation allemagne → colonne "Attendu"
+  const smImportOrder = async (e:React.ChangeEvent<HTMLInputElement>) => {
+    const file=e.target.files?.[0]; if(!file)return;
+    if(!session){setSmMsg("Connecte-toi d'abord à Odoo");return;}
+    const XLSX=(await import("xlsx"));
+    setSmLoading(true);setSmMsg("Lecture order confirmation...");
+    try{
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(buf,{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const data:any[][]=XLSX.utils.sheet_to_json(ws,{header:1,raw:true});
+      if(!data.length)throw new Error("Fichier vide");
+
+      // Colonnes connues : G=6 (Article-No.), I=8 (EAN), K=10 (Quantity available)
+      const headers=(data[0]||[]).map((h:any)=>String(h||"").toLowerCase().trim());
+      const eanIdx=headers.findIndex((h:string)=>h.includes("ean")||h.includes("barcode")||h.includes("gtin"));
+      const qtyIdx=headers.findIndex((h:string)=>h.includes("available"));
+      const ei=eanIdx>=0?eanIdx:8;   // col I
+      const qi=qtyIdx>=0?qtyIdx:10;  // col K
+
+      // Helpers
+      const parseQty=(v:any):number=>{
+        if(typeof v==="number") return v;
+        // Supprime espaces normaux, NBSP (U+00A0), espace fine (U+202F) utilisés comme séparateurs de milliers
+        const s=String(v??"").replace(/[\s  ]/g,"").replace(",",".");
+        return parseFloat(s)||0;
+      };
+      const parseEan=(v:any):string=>String(v??"").trim().replace(/\.0+$/,"").replace(/\s/g,"");
+
+      // Parse EAN → qty
+      const eanQty:Record<string,number>={};
+      for(let i=1;i<data.length;i++){
+        const row=data[i];
+        const ean=parseEan(row[ei]);
+        const qty=parseQty(row[qi]);
+        if(ean&&ean.length>=8&&qty>0) eanQty[ean]=(eanQty[ean]||0)+qty;
+      }
+      const eans=Object.keys(eanQty);
+      if(!eans.length)throw new Error("Aucune ligne valide trouvée (EAN vide ou qté=0)");
+      setSmMsg(`${eans.length} EAN — matching Odoo barcodes...`);
+
+      // Matching via barcode sur product.product
+      const byBarcode:any[]=await odoo.searchRead(
+        session,"product.product",
+        [["barcode","in",eans],["active","in",[true,false]]],
+        ["id","default_code","barcode"],0
+      );
+
+      // Construit barcode → default_code
+      const barcodeToCode:Record<string,string>={};
+      for(const p of byBarcode) if(p.barcode&&p.default_code) barcodeToCode[String(p.barcode)]=p.default_code;
+
+      // Si certains EAN pas trouvés sur product.product, essai sur product.template
+      const missing=eans.filter(e=>!barcodeToCode[e]);
+      if(missing.length){
+        const byTmpl:any[]=await odoo.searchRead(
+          session,"product.template",
+          [["barcode","in",missing]],
+          ["id","default_code","barcode"],0
+        );
+        // Pour chaque template trouvé, récupère les variants
+        const tmplIds=byTmpl.map(t=>t.id);
+        if(tmplIds.length){
+          const variants:any[]=await odoo.searchRead(
+            session,"product.product",
+            [["product_tmpl_id","in",tmplIds],["active","in",[true,false]]],
+            ["id","default_code","product_tmpl_id"],0
+          );
+          const tmplToCode:Record<number,string>={};
+          for(const v of variants) if(v.default_code) tmplToCode[v.product_tmpl_id[0]??v.product_tmpl_id]=v.default_code;
+          for(const t of byTmpl) if(t.barcode&&tmplToCode[t.id]) barcodeToCode[String(t.barcode)]=tmplToCode[t.id];
+        }
+      }
+
+      // Construit expectedMap odoo_ref → qty
+      const newExp:Record<string,number>={};
+      let matched=0,unmatched=0;
+      for(const [ean,qty] of Object.entries(eanQty)){
+        const odooRef=barcodeToCode[ean];
+        if(odooRef){newExp[odooRef]=(newExp[odooRef]||0)+qty;matched++;}
+        else unmatched++;
+      }
+
+      if(!matched)throw new Error(`Aucun EAN matchés dans Odoo — vérifie que les barcodes sont saisis sur les produits (${unmatched} EAN non trouvés)`);
+
+      setSmMsg(`Sauvegarde Supabase...`);
+      // Remet expected_qty=0 pour toutes les refs, puis met à jour celles matchées
+      try{
+        await supa.sb.from("wms_thresholds").update({expected_qty:0}).not("odoo_ref","is",null);
+        const toUpsert=Object.entries(newExp).map(([odoo_ref,qty])=>({odoo_ref,expected_qty:Math.round(qty),updated_at:new Date().toISOString()}));
+        for(let i=0;i<toUpsert.length;i+=200){
+          await supa.sb.from("wms_thresholds").upsert(toUpsert.slice(i,i+200),{onConflict:"odoo_ref"});
+        }
+      }catch{}
+
+      setSmExpected(newExp);
+      setSmMsg(`✅ ${matched} refs matchées${unmatched>0?` · ${unmatched} EAN non trouvés`:""}`);
+      setSmRows(rows=>rows.map(row=>{
+        const exp=newExp[row.ref]??0;
+        return {...row,expected_qty:exp,status:smStatus(row.stock,row.conso,row.threshold,row.daysLeft,row.daysUntilDeliv,exp)};
+      }));
+    }catch(e:any){setSmMsg("❌ "+e.message);}
+    finally{setSmLoading(false);setTimeout(()=>setSmMsg(""),8000);if(smOrderFileRef.current)smOrderFileRef.current.value="";}
+  };
+
+  // Vide l'order confirmation (remet expected_qty à 0 partout)
+  const smClearOrderConf = async () => {
+    setSmExpected({});
+    // hasOrderConf=false après vidage → on recalcule avec daysDeliv normal
+    setSmRows(rows=>rows.map(row=>{
+      const {date:dd,label:dl}=smNextDelivery(row.supplierDate,smDeliveryMonth);
+      const dtu=Math.max(0,smDaysUntil(dd));
+      return {...row,expected_qty:0,daysUntilDeliv:dtu,delivLabel:dl,status:smStatus(row.stock,row.conso,row.threshold,row.daysLeft,dtu,0,false)};
+    }));
+    try{ await supa.sb.from("wms_thresholds").update({expected_qty:0}).not("odoo_ref","is",null); }catch{}
+  };
+
+  const smSaveSupDate = async (overrideDate?:string|null) => {
+    if(!smSupModal)return;
+    const {ref}=smSupModal;
+    const d=overrideDate!==undefined?overrideDate:(smSupInput||null);
+    setSmRows(r=>r.map(row=>{if(row.ref!==ref)return row;const {date:dd,label:dl}=smNextDelivery(d,smDeliveryMonth);const dtu=Math.max(0,smDaysUntil(dd));const u={...row,supplierDate:d,daysUntilDeliv:dtu,delivLabel:dl};u.status=smStatus(u.stock,u.conso,u.threshold,u.daysLeft,dtu,u.expected_qty);return u;}));
+    try { await supa.sb.from("wms_thresholds").update({supplier_date:d,updated_at:new Date().toISOString()}).eq("odoo_ref",ref); } catch {}
+    setSmSupModal(null);setSmSupInput("");
+  };
+
+  // Recalcule les rows quand le mois de livraison ou les attendus changent
+  useEffect(()=>{
+    if(!smRows.length) return;
+    const hasOrderConf=Object.keys(smExpected).length>0;
+    setSmRows(rows=>rows.map(row=>{
+      const {date:dd,label:dl}=smNextDelivery(row.supplierDate,smDeliveryMonth);
+      const dtu=Math.max(0,smDaysUntil(dd));
+      const exp=smExpected[row.ref]??row.expected_qty??0;
+      // Label: si order conf chargé et produit absent, indiquer livraison mois suivant
+      const delivLabel=(hasOrderConf && exp===0 && !row.supplierDate) ? dl+" →+1m" : dl;
+      return {...row,daysUntilDeliv:dtu,delivLabel,expected_qty:exp,status:smStatus(row.stock,row.conso,row.threshold,row.daysLeft,dtu,exp,hasOrderConf)};
+    }));
+  },[smDeliveryMonth,smExpected]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const smFiltered = useMemo(()=>{
+    const ord:Record<string,number>={critical:0,alert:1,no_data:2,ok:3,not_found:4};
+    return smRows.filter(r=>{
+      if(smFilter==="critical"&&r.status!=="critical")return false;
+      if(smFilter==="alert"&&r.status!=="alert")return false;
+      if(smFilter==="ok"&&r.status!=="ok"&&r.status!=="no_data")return false;
+      if(smSearch){const q=smSearch.toLowerCase();if(!r.ref.toLowerCase().includes(q)&&!r.name.toLowerCase().includes(q))return false;}
+      return true;
+    }).sort((a,b)=>ord[a.status]-ord[b.status]||(a.daysLeft-b.daysLeft));
+  },[smRows,smFilter,smSearch]);
+
+  const smCounts=useMemo(()=>({critical:smRows.filter(r=>r.status==="critical").length,alert:smRows.filter(r=>r.status==="alert").length,ok:smRows.filter(r=>r.status==="ok").length}),[smRows]);
+
+  // Options mois pour le sélecteur (mois courant + 5 suivants)
+  const smMonthOptions = useMemo(()=>{
+    const opts=[];
+    const now=new Date();
+    for(let i=0;i<6;i++){
+      const d=new Date(now.getFullYear(),now.getMonth()+i,1);
+      const val=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      const label=`15 ${d.toLocaleDateString("fr-FR",{month:"long",year:"numeric"})}`;
+      opts.push({val,label});
+    }
+    return opts;
+  },[]);
+
+  // Export Excel des lignes sélectionnées (ou toutes si rien sélectionné)
+  const smExportExcel = async () => {
+    const XLSX = await import("xlsx");
+    const toExport = smFiltered.filter(r=> smSelected.size===0 || smSelected.has(r.ref));
+    const wsData = [
+      ["Référence","Nom","Stock","Conso/mois","Attendu","Seuil min","Jours restants","Prochaine livraison","Statut","Date rupture fourn."],
+      ...toExport.map(r=>[r.ref,r.name,r.stock,r.conso,r.expected_qty||"",r.threshold,r.daysLeft>=999?"∞":r.daysLeft,r.delivLabel,{ok:"OK",alert:"Alerte",critical:"Critique",no_data:"Pas de données",not_found:"Introuvable"}[r.status],r.supplierDate||""])
+    ];
+    const ws=XLSX.utils.aoa_to_sheet(wsData);
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,"Suivi Stock");
+    XLSX.writeFile(wb,`suivi_stock_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
 
   // ── Computed ──
   const months = useMemo(() => monthsBack(consoMonths), [consoMonths]);
@@ -1410,535 +2048,208 @@ export default function Dashboard() {
         {supaError && <div style={{ background: "var(--warning-soft)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 16px", fontSize: 13, color: "var(--warning)", marginBottom: 12 }}>⚠ {supaError} — mode dégradé localStorage</div>}
         {error && <div style={{ background: "var(--danger-soft)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "14px 18px", fontSize: 14, color: "var(--danger)", marginBottom: 24, display: "flex", alignItems: "center", gap: 10, animation: "fadeIn .3s ease both" }}>{I.alert}<span style={{ flex: 1 }}>{error}</span><button onClick={() => setError("")} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer", fontSize: 18, padding: 4 }}>×</button></div>}
 
-        {/* ══════════ ALERTES ══════════ */}
-        {tab === "alerts" && (() => {
-          // Compute overstock items (>180 days of stock based on conso)
-          const OVERSTOCK_DAYS = 180;
-          const overstockItems = Object.entries(stockMap)
-            .map(([pidStr, data]) => {
-              const pid = Number(pidStr);
-              const thresh = thresholds[pid];
-              if (thresh === undefined) return null;
-              if (data.qty <= thresh) return null; // already in alert, skip
-              const consoRow = conso.find((c) => c.ref === data.ref);
-              const dailyAvg = consoRow ? consoRow.avg / 30 : 0;
-              if (dailyAvg <= 0) return null;
-              const daysOfStock = Math.round(data.qty / dailyAvg);
-              if (daysOfStock <= OVERSTOCK_DAYS) return null;
-              return { pid, ref: data.ref, name: data.name, qty: data.qty, thresh, daysOfStock, avg: consoRow!.avg };
-            })
-            .filter(Boolean) as { pid: number; ref: string; name: string; qty: number; thresh: number; daysOfStock: number; avg: number }[];
-          overstockItems.sort((a, b) => b.daysOfStock - a.daysOfStock);
+        {/* ══════════ SUIVI STOCK ══════════ */}
+        {tab === "stock-monitor" && (
+          <div style={{animation:"fadeIn .3s ease both"}}>
+            {/* Supplier date modal */}
+            {smSupModal&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000}}>
+              <div style={{background:"#fff",borderRadius:14,padding:28,width:360,boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}}>
+                <div style={{fontSize:15,fontWeight:800,marginBottom:4}}>📅 Rupture fournisseur</div>
+                <div style={{fontSize:12,color:"var(--text-muted)",marginBottom:16}}>{smSupModal.ref} — {smSupModal.name}</div>
+                {smSupModal.cur==="9999-12-31"&&(
+                  <div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"10px 12px",fontSize:12,color:"#dc2626",fontWeight:700,marginBottom:14}}>⛔ Ce produit est actuellement en rupture définitive</div>
+                )}
+                <label style={{fontSize:12,fontWeight:600,display:"flex",flexDirection:"column",gap:6}}>
+                  Date de prochaine dispo fournisseur
+                  <input type="date" value={smSupInput==="9999-12-31"?"":smSupInput} onChange={e=>setSmSupInput(e.target.value)} style={{padding:"10px 12px",border:"1px solid var(--border)",borderRadius:8,fontSize:13,fontFamily:"inherit"}}/>
+                </label>
+                <div style={{fontSize:11,color:"var(--text-muted)",marginTop:8}}>Laisse vide → livraison standard (15 du mois choisi).</div>
+                <div style={{display:"flex",gap:8,marginTop:18}}>
+                  <button onClick={()=>{setSmSupModal(null);setSmSupInput("");}} className="wms-btn" style={{flex:1}}>Annuler</button>
+                  <button onClick={()=>smSaveSupDate()} className="wms-btn wms-btn-primary" style={{flex:2}}>Enregistrer date</button>
+                </div>
+                <div style={{display:"flex",gap:8,marginTop:8}}>
+                  <button onClick={()=>smSaveSupDate("9999-12-31")}
+                    style={{flex:1,padding:"8px 0",background:"#111827",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700}}>
+                    ⛔ Rupture définitive
+                  </button>
+                  {smSupModal.cur&&<button onClick={()=>smSaveSupDate(null)}
+                    style={{flex:1,padding:"8px 0",background:"#fef2f2",color:"var(--danger)",border:"1px solid #fecaca",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>
+                    ✅ Effacer rupture
+                  </button>}
+                </div>
+              </div>
+            </div>}
 
-          return (
-          <div style={{ animation: "fadeIn .3s ease both" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}>
+            {/* Header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
               <div>
-                <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Alertes stock</h2>
-                <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
-                  Seuils min. configurables — jours restants estimés via la consommation moyenne
-                  {consoSyncedAt && <span style={{ marginLeft: 10, color: "var(--success)", fontWeight: 600 }}>· conso importée le {consoSyncedAt.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}</span>}
-                  {!consoSyncedAt && Object.keys(avgMonthlyByRef).length === 0 && <span style={{ marginLeft: 10, color: "var(--warning)", fontWeight: 600 }}>· aucune conso chargée</span>}
+                <h2 style={{fontSize:22,fontWeight:800,letterSpacing:"-.3px",marginBottom:4}}>Suivi Stock</h2>
+                <p style={{fontSize:13,color:"var(--text-muted)"}}>Stock en temps réel · Conso moyenne 3 mois (OUT) · Livraison le 15 du mois suivant</p>
+              </div>
+              <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontSize:12,color:"var(--text-muted)",whiteSpace:"nowrap"}}>📦 Prochaine récep.</span>
+                  <select value={smDeliveryMonth} onChange={e=>smSetDeliveryMonth(e.target.value)}
+                    style={{padding:"7px 10px",border:"1px solid var(--border)",borderRadius:8,fontSize:13,fontFamily:"inherit",cursor:"pointer",outline:"none",background:"#fff"}}>
+                    {smMonthOptions.map(o=><option key={o.val} value={o.val}>{o.label}</option>)}
+                  </select>
+                </div>
+                <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth)} disabled={smLoading}>{smLoading?<Spinner/>:I.refresh} Actualiser</button>
+                <input ref={smFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={smImportExcel} style={{display:"none"}}/>
+                <button className="wms-btn wms-btn-primary" onClick={()=>smFileRef.current?.click()} disabled={smLoading}>📤 Importer refs</button>
+                <input ref={smOrderFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={smImportOrder} style={{display:"none"}}/>
+                <button className="wms-btn" onClick={()=>smOrderFileRef.current?.click()} disabled={smLoading} style={{borderColor:"#8b5cf6",color:"#7c3aed"}} title="Order confirmation fournisseur → colonne Attendu">📦 Order conf.</button>
+                {Object.keys(smExpected).length>0&&(
+                  <button className="wms-btn" onClick={smClearOrderConf} title="Vider l'order confirmation" style={{borderColor:"#ef4444",color:"#ef4444"}}>🗑 Vider order</button>
+                )}
+              </div>
+            </div>
+
+            {smMsg&&<div style={{fontSize:13,color:"var(--accent)",marginBottom:12}}>⏳ {smMsg}</div>}
+
+            {/* No refs */}
+            {smRefs.length===0&&!smLoading&&(
+              <div style={{background:"var(--bg)",border:"1px solid var(--border)",borderRadius:14,padding:48,textAlign:"center"}}>
+                <div style={{fontSize:36,marginBottom:12}}>📋</div>
+                <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>Aucune référence chargée</div>
+                <p style={{fontSize:13,color:"var(--text-muted)",marginBottom:20}}>Importe ton fichier Excel avec tes ~350 références à surveiller.</p>
+                <p style={{fontSize:12,color:"var(--text-muted)",background:"#f8fafc",padding:"12px 16px",borderRadius:8,display:"inline-block",textAlign:"left"}}>
+                  <strong>Format :</strong> colonne "Ref" (ou "Code", "SKU"…) avec les références Odoo. Colonne "Nom" optionnelle.
                 </p>
               </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button className="wms-btn" style={{ background: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-soft)" : "var(--accent-soft)", color: consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success)" : "var(--accent)", border: `1px solid ${consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "var(--success-border)" : "var(--accent-border)"}` }}
-                  onClick={async () => { await loadConso(); loadAlerts(); }} disabled={loading}>
-                  {loading ? <Spinner /> : I.upload} {consoSyncedAt || Object.keys(avgMonthlyByRef).length > 0 ? "Màj conso Odoo" : "Import conso Odoo"}
-                </button>
-                <label className="wms-btn" style={{ background: pendingOrders.length > 0 ? "rgba(37,99,235,.12)" : "var(--bg-surface)", color: pendingOrders.length > 0 ? "var(--accent)" : "var(--text-secondary)", border: `1px solid ${pendingOrders.length > 0 ? "var(--accent-border)" : "var(--border)"}`, cursor: "pointer" }}>
-                  {orderImporting ? <Spinner /> : "📦"} {pendingOrders.length > 0 ? (() => { const nb = Array.from(new Set(pendingOrders.map(o => o.batch_id))).length; return `Màj commande (${nb} lot${nb > 1 ? "s" : ""})`; })() : "Import order confirmation"}
-                  <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; await importOrderConfirmation(file); e.target.value = ""; }} disabled={orderImporting} />
-                </label>
-                <button className="wms-btn wms-btn-primary" onClick={loadAlerts} disabled={loading}>{loading ? <Spinner /> : I.refresh} Actualiser</button>
-              </div>
-            </div>
-
-            {(() => {
-              // Critique : couverture effective (daysLeft, commande incluse) ≤ 7j OU stock < 25% du seuil
-              // Attention : couverture 7-44j
-              const criticalAlerts = alerts.filter(a =>
-                a.daysLeft <= 0 || a.daysLeft <= 7 || (a.threshold > 0 && a.qty / a.threshold <= 0.25)
-              );
-              const warningAlerts = alerts.filter(a => !criticalAlerts.includes(a));
-
-              const AccordionSection = ({ open, onToggle, color, dot, pulseAnim, title, count, onExport, children }: any) => (
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ display: "flex", alignItems: "stretch", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: open ? "10px 10px 0 0" : 10, overflow: "hidden" }}>
-                    <button onClick={onToggle} style={{ flex: 1, display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", transition: "background .12s" }}>
-                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0, animation: pulseAnim ? "pulse-dot 1.5s ease-in-out infinite" : "none" }} />
-                      <span style={{ fontSize: 12, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: ".8px", flex: 1, textAlign: "left" }}>{title}</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", fontFamily: MONO }}>{count} article{count > 1 ? "s" : ""}</span>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2.5" style={{ transform: open ? "rotate(180deg)" : "rotate(0)", transition: "transform .2s", flexShrink: 0 }}><path d="M6 9l6 6 6-6"/></svg>
-                    </button>
-                    {onExport && (
-                      <button onClick={(e) => { e.stopPropagation(); onExport(); }} title="Exporter en Excel" style={{ padding: "0 16px", background: "none", border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "var(--text-muted)", fontFamily: "inherit", whiteSpace: "nowrap", transition: "background .12s, color .12s" }} onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "var(--bg-hover)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)"; }} onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "none"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)"; }}>
-                        {I.download} Export Excel
-                      </button>
-                    )}
-                  </div>
-                  {open && <div style={{ border: "1px solid var(--border)", borderTop: "none", borderRadius: "0 0 10px 10px", padding: "12px", display: "grid", gap: 8 }}>{children}</div>}
-                </div>
-              );
-
-              const AlertCard = ({ a }: { a: typeof alerts[0] }) => {
-                const daysLeft = a.daysLeft;
-                // Si commande en cours couvre le risque → couleur atténuée
-                const hasIncoming = !!a.incomingQty;
-                const color = hasIncoming ? "var(--success)" : daysLeft <= 7 ? "var(--danger)" : daysLeft <= 21 ? "var(--warning)" : "var(--orange)";
-                const bg = hasIncoming ? "var(--success-soft)" : daysLeft <= 7 ? "var(--danger-soft)" : daysLeft <= 21 ? "var(--warning-soft)" : "rgba(249,115,22,.06)";
-                const borderColor = hasIncoming ? "var(--success)" : color;
-                const rawLabel = a.rawDaysLeft !== undefined && a.rawDaysLeft < 9999 && a.rawDaysLeft !== daysLeft ? `${a.rawDaysLeft}j sans cde` : null;
-                const daysLabel = daysLeft >= 9999 ? "—" : daysLeft <= 0 ? "Rupture !" : `${daysLeft}j`;
-                const ratio = a.threshold > 0 ? a.qty / a.threshold : 1;
-                return (
-                  <div style={{ background: bg, borderLeft: `3px solid ${borderColor}`, borderRadius: 8, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                    <div style={{ flex: 1, minWidth: 200 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>{a.ref && <span style={{ fontFamily: MONO, color: "var(--accent)", marginRight: 8, fontSize: 11 }}>[{a.ref}]</span>}{a.name}</div>
-                      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
-                        <span>Stock : <strong style={{ color: hasIncoming ? "var(--text-primary)" : color }}>{a.qty}</strong></span>
-                        {a.consoAvg > 0 && <span>Conso : <strong>{a.consoAvg}/mois</strong></span>}
-                        {a.threshold > 0 && <span>Seuil : <strong>{a.threshold}</strong></span>}
-                        {hasIncoming && <span style={{ color: "var(--success)", fontWeight: 700 }}>📦 +{a.incomingQty} le {a.incomingDate}</span>}
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-                      {rawLabel && <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: MONO }}>{rawLabel}</span>}
-                      <div style={{ height: 6, width: 80, background: "rgba(128,128,128,.15)", borderRadius: 3, overflow: "hidden" }}>
-                        <div style={{ height: "100%", width: `${Math.min(ratio * 100, 100)}%`, background: borderColor, borderRadius: 3 }} />
-                      </div>
-                      <span style={{ fontSize: 13, fontWeight: 800, color: borderColor, fontFamily: MONO, minWidth: 52, textAlign: "right" }}>{daysLabel}</span>
-                    </div>
-                  </div>
-                );
-              };
-
-              const exportAlerts = async (items: typeof alerts, filename: string, isCritical: boolean) => {
-                // ── Vrai .xlsx avec styles natifs via Open XML + fflate (ZIP) ──
-                const fflate = await import("fflate");
-                const today = new Date();
-                const dateStr = today.toISOString().split("T")[0];
-                const statut = isCritical ? "Déjà en rupture" : "Rupture imminente";
-
-                // Palette couleurs ARGB (sans #)
-                const HDR_BG   = "FF1E293B";
-                const ROW_FILL = isCritical ? "FFFEE2E2" : "FFFFF7ED";
-                const ALT_FILL = isCritical ? "FFFECACA" : "FFFED7AA";
-                const ROW_FONT = isCritical ? "FF7F1D1D" : "FF78350F";
-
-                // ── Shared strings ──
-                const strs: string[] = [];
-                const ss = (v: string) => { let i = strs.indexOf(v); if (i < 0) { i = strs.length; strs.push(v); } return i; };
-                const xmlEsc = (s: string) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-                const colLetter = (n: number) => { let s=""; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);}return s; };
-
-                const HEADERS = ["Réf","Désignation","Prochaine dispo","Date prévue de rupture","Statut"];
-                HEADERS.forEach(ss);
-
-                // ── Build row data ──
-                const dataRows: string[][] = items.map(a => {
-                  let dateRupture = "—";
-                  if (a.daysLeft <= 0) dateRupture = "En rupture";
-                  else if (a.daysLeft < 9999) {
-                    const d = new Date(today.getTime() + a.daysLeft * 86400000);
-                    dateRupture = d.toLocaleDateString("fr-FR",{day:"2-digit",month:"short",year:"numeric"});
-                  }
-                  const dispo = a.incomingQty ? `+${a.incomingQty} le ${a.incomingDate}` : "—";
-                  return [a.ref, a.name.replace(/\[.*?\]\s*/,""), dispo, dateRupture, statut];
-                });
-                dataRows.forEach(r => r.forEach(v => ss(v)));
-
-                // ── Worksheet XML ──
-                const NCOLS = 5;
-                const colWidths = [14,52,22,24,22];
-                let wsRows = `<row r="1" ht="17" customHeight="1">`;
-                HEADERS.forEach((h,ci) => { wsRows+=`<c r="${colLetter(ci+1)}1" t="s" s="1"><v>${strs.indexOf(h)}</v></c>`; });
-                wsRows += `</row>`;
-                dataRows.forEach((r,ri) => {
-                  const rowNum = ri+2;
-                  const sIdx = ri%2===0 ? 2 : 3;
-                  wsRows += `<row r="${rowNum}" ht="15">`;
-                  r.forEach((v,ci) => { wsRows+=`<c r="${colLetter(ci+1)}${rowNum}" t="s" s="${sIdx}"><v>${strs.indexOf(v)}</v></c>`; });
-                  wsRows += `</row>`;
-                });
-
-                const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1"/></sheetView></sheetViews>
-<sheetFormatPr defaultRowHeight="15"/>
-<cols>${colWidths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join("")}</cols>
-<sheetData>${wsRows}</sheetData>
-<autoFilter ref="A1:${colLetter(NCOLS)}1"/>
-</worksheet>`;
-
-                // ── Styles XML ──
-                const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<fonts count="3">
-  <font><sz val="11"/><name val="Calibri"/></font>
-  <font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
-  <font><sz val="11"/><color rgb="${ROW_FONT}"/><name val="Calibri"/></font>
-</fonts>
-<fills count="5">
-  <fill><patternFill patternType="none"/></fill>
-  <fill><patternFill patternType="gray125"/></fill>
-  <fill><patternFill patternType="solid"><fgColor rgb="${HDR_BG}"/><bgColor indexed="64"/></patternFill></fill>
-  <fill><patternFill patternType="solid"><fgColor rgb="${ROW_FILL}"/><bgColor indexed="64"/></patternFill></fill>
-  <fill><patternFill patternType="solid"><fgColor rgb="${ALT_FILL}"/><bgColor indexed="64"/></patternFill></fill>
-</fills>
-<borders count="2">
-  <border><left/><right/><top/><bottom/><diagonal/></border>
-  <border>
-    <left style="thin"><color rgb="FFCBD5E1"/></left>
-    <right style="thin"><color rgb="FFCBD5E1"/></right>
-    <top style="thin"><color rgb="FFCBD5E1"/></top>
-    <bottom style="thin"><color rgb="FFCBD5E1"/></bottom>
-    <diagonal/>
-  </border>
-</borders>
-<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="4">
-  <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-  <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
-  <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
-  <xf numFmtId="0" fontId="2" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
-</cellXfs>
-</styleSheet>`;
-
-                // ── Shared strings XML ──
-                const ssXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${strs.length}" uniqueCount="${strs.length}">
-${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
-</sst>`;
-
-                // ── Workbook + rels ──
-                const wbXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<sheets><sheet name="Alertes" sheetId="1" r:id="rId1"/></sheets></workbook>`;
-
-                const ctXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="xml" ContentType="application/xml"/>
-<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
-</Types>`;
-
-                const relsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-</Relationships>`;
-
-                const wbRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
-</Relationships>`;
-
-                const enc = (s: string) => fflate.strToU8(s);
-                const zipped = fflate.zipSync({
-                  "[Content_Types].xml": enc(ctXml),
-                  "_rels/.rels": enc(relsXml),
-                  "xl/workbook.xml": enc(wbXml),
-                  "xl/_rels/workbook.xml.rels": enc(wbRelsXml),
-                  "xl/styles.xml": enc(stylesXml),
-                  "xl/sharedStrings.xml": enc(ssXml),
-                  "xl/worksheets/sheet1.xml": enc(sheetXml),
-                });
-
-                const blob = new Blob([zipped.buffer as ArrayBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-                const url = URL.createObjectURL(blob);
-                const anchor = document.createElement("a");
-                anchor.href = url; anchor.download = `${filename}_${dateStr}.xlsx`;
-                document.body.appendChild(anchor); anchor.click();
-                document.body.removeChild(anchor); URL.revokeObjectURL(url);
-              };
-
-              return <>
-                {criticalAlerts.length > 0 && (
-                  <AccordionSection open={alertsUnderstockOpen} onToggle={() => setAlertsUnderstockOpen(o => !o)} color="var(--danger)" dot pulseAnim title="Critique — rupture imminente" count={criticalAlerts.length} onExport={() => exportAlerts(criticalAlerts, "alertes_critique", true)}>
-                    {criticalAlerts.map(a => <AlertCard key={a.productId} a={a} />)}
-                  </AccordionSection>
-                )}
-                {warningAlerts.length > 0 && (
-                  <AccordionSection open={alertsWarningOpen} onToggle={() => setAlertsWarningOpen(o => !o)} color="var(--warning)" dot={false} pulseAnim={false} title="Attention — stock bas" count={warningAlerts.length} onExport={() => exportAlerts(warningAlerts, "alertes_stock_bas", false)}>
-                    {warningAlerts.map(a => <AlertCard key={a.productId} a={a} />)}
-                  </AccordionSection>
-                )}
-                {overstockItems.length > 0 && (
-                  <AccordionSection open={alertsOverstockOpen} onToggle={() => setAlertsOverstockOpen(o => !o)} color="var(--purple)" dot={false} pulseAnim={false} title={`Stock conséquent (>${OVERSTOCK_DAYS}j)`} count={overstockItems.length}>
-                    {overstockItems.map(item => (
-                      <div key={item.pid} style={{ background: "var(--purple-soft)", borderLeft: "3px solid var(--purple-border)", borderRadius: 8, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                        <div style={{ flex: 1, minWidth: 200 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600 }}>{item.ref && <span style={{ fontFamily: MONO, color: "var(--accent)", marginRight: 8, fontSize: 11 }}>[{item.ref}]</span>}{item.name}</div>
-                          <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4, display: "flex", gap: 16, flexWrap: "wrap" }}>
-                            <span>Stock : <strong style={{ color: "var(--text-secondary)" }}>{item.qty}</strong></span>
-                            <span>Seuil : <strong>{item.thresh}</strong></span>
-                            <span>Moy : <strong>{item.avg}/mois</strong></span>
-                          </div>
-                        </div>
-                        <div style={{ textAlign: "right", flexShrink: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--purple)", fontFamily: MONO }}>{item.daysOfStock}j de stock</div>
-                          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>+{item.daysOfStock - OVERSTOCK_DAYS}j au-dessus</div>
-                        </div>
-                      </div>
-                    ))}
-                  </AccordionSection>
-                )}
-                {alerts.length === 0 && overstockItems.length === 0 && Object.keys(stockMap).length > 0 && (
-                  <div style={{ background: "var(--success-soft)", border: "1px solid var(--success-border)", borderRadius: 12, padding: "22px 28px", marginBottom: 28, display: "flex", alignItems: "center", gap: 16, animation: "fadeIn .4s ease both" }}>
-                    {I.check}<div><div style={{ fontSize: 15, fontWeight: 700, color: "var(--success)" }}>Tous les stocks sont OK</div><div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>Aucun article en sous-stock ou surstock.</div></div>
-                  </div>
-                )}
-
-                {/* ── Section commandes fournisseur en cours ── */}
-                {pendingOrders.length > 0 && (() => {
-                  const batches = Array.from(new Map(pendingOrders.map(o => [o.batch_id, o])).values());
-                  return (
-                    <div style={{ marginTop: 24, borderTop: "1px solid var(--border)", paddingTop: 20 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-secondary)", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-                        📦 Commandes fournisseur en cours
-                        <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 400 }}>— impact déjà intégré dans les calculs ci-dessus</span>
-                      </div>
-                      {batches.map(batch => {
-                        const batchLines = pendingOrders.filter(o => o.batch_id === batch.batch_id);
-                        const matched = batchLines.filter(o => o.odoo_ref).length;
-                        const recDate = new Date(batch.expected_reception_date + "T12:00:00");
-                        const daysToRec = Math.round((recDate.getTime() - Date.now()) / 86400000);
-                        return (
-                          <div key={batch.batch_id} style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 18px", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                            <div>
-                              <div style={{ fontSize: 13, fontWeight: 600 }}>
-                                Commande du {new Date(batch.order_date + "T12:00:00").toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" })}
-                                <span style={{ marginLeft: 12, fontSize: 11, fontFamily: MONO, color: "var(--accent)" }}>{batchLines.length} articles · {matched} matchés</span>
-                              </div>
-                              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>
-                                Réception prévue le <strong style={{ color: daysToRec <= 0 ? "var(--success)" : "var(--text-primary)" }}>
-                                  {recDate.toLocaleDateString("fr-FR", { day: "2-digit", month: "long" })}
-                                </strong>
-                                {daysToRec > 0 ? ` (dans ${daysToRec}j)` : " ✓ date passée"}
-                              </div>
-                            </div>
-                            <button className="wms-btn" onClick={async () => {
-                              if (!confirm(`Marquer la commande du ${new Date(batch.order_date + "T12:00:00").toLocaleDateString("fr-FR")} comme reçue ?\nCela supprimera les ${batchLines.length} articles de Supabase.`)) return;
-                              try {
-                                await supa.deletePendingOrderBatch(batch.batch_id);
-                                setPendingOrders(p => p.filter(o => o.batch_id !== batch.batch_id));
-                                loadAlerts();
-                              } catch (e: any) { alert("Erreur : " + e.message); }
-                            }} style={{ background: "var(--success-soft)", color: "var(--success)", border: "1px solid var(--success-border)", padding: "8px 16px", fontSize: 12 }}>
-                              ✓ Marquer reçue
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
-              </>;
-            })()}
-            {/* Threshold manager */}
-            <div className="wms-card" style={{ padding: 24 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
-                <div>
-                  <div style={{ fontSize: 15, fontWeight: 700 }}>Gérer les seuils</div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
-                    Seuil = consommation moyenne mensuelle (mois actifs).
-                    {watchlist.size > 0 && <span style={{ marginLeft: 8, color: "var(--accent)", fontWeight: 600 }}>📋 {watchlist.size} produits en surveillance</span>}
-                  </div>
-                </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {/* Toggle watchlist mode */}
-                  <button className="wms-btn" onClick={() => setWatchlistMode(m => !m)} style={{ padding: "8px 14px", fontSize: 13, background: watchlistMode ? "var(--accent-soft)" : "var(--bg-surface)", color: watchlistMode ? "var(--accent)" : "var(--text-muted)", border: `1px solid ${watchlistMode ? "var(--accent-border)" : "var(--border)"}` }}>
-                    {watchlistMode ? "📋 Watchlist ON" : "📋 Tout afficher"}
-                  </button>
-                  {/* Upload watchlist Excel */}
-                  <label className="wms-btn" style={{ background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid var(--accent-border)", cursor: "pointer", padding: "8px 14px", fontSize: 13 }}>
-                    📥 Ma liste produits
-                    <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={async (e) => {
-                      const file = e.target.files?.[0]; if (!file) return;
-                      try {
-                        const XLSX = await import("xlsx");
-                        const data = await file.arrayBuffer();
-                        const wb = XLSX.read(data, { type: "array" });
-                        const ws = wb.Sheets[wb.SheetNames[0]];
-                        const rows: any[] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-                        // Col A = ref (skip header if text)
-                        const items: supa.WmsWatchlistItem[] = [];
-                        for (const row of rows) {
-                          const ref = String(row[0] || "").trim();
-                          if (!ref || ref.toLowerCase() === "ref" || ref.toLowerCase() === "référence") continue;
-                          const name = String(row[1] || "").trim();
-                          // Find product name from stockMap if not provided
-                          const fromStock = Object.values(stockMap).find(s => s.ref === ref);
-                          items.push({ odoo_ref: ref, product_name: name || fromStock?.name || "" });
-                        }
-                        await supa.saveWatchlist(items);
-                        const newSet = new Set(items.map(i => i.odoo_ref));
-                        setWatchlist(newSet);
-                        setWatchlistMode(true);
-                        alert(`✓ ${items.length} produit(s) chargés en surveillance.\nMode watchlist activé.`);
-                        loadAlerts();
-                      } catch (err: any) { alert("Erreur: " + err.message); }
-                      e.target.value = "";
-                    }} />
-                  </label>
-                  <label className="wms-btn" style={{ background: "var(--purple-soft)", color: "var(--purple)", border: "1px solid var(--purple-border)", cursor: "pointer", padding: "8px 14px", fontSize: 13 }}>
-                    {I.upload} Importer Excel
-                    <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={async (e) => {
-                      const file = e.target.files?.[0]; if (!file) return;
-                      try { const XLSX = await import("xlsx"); const data = await file.arrayBuffer(); const wb = XLSX.read(data, { type: "array" }); const ws = wb.Sheets[wb.SheetNames[0]]; const rows: any[] = XLSX.utils.sheet_to_json(ws, { header: 1 }); const nt = { ...thresholds }; let imp = 0; for (const row of rows) { const ref = String(row[0] || "").trim(); const val = Number(row[1]); if (!ref || isNaN(val) || val < 0) continue; const match = Object.entries(stockMap).find(([, d]) => d.ref === ref); if (match) { nt[Number(match[0])] = val; imp++; } } saveThresholdsLocal(nt); alert(`${imp} seuil(s) importé(s)`); } catch { alert("Erreur lecture Excel"); } e.target.value = "";
-                    }} />
-                  </label>
-                  {/* Export thresholds */}
-                  <button className="wms-btn wms-btn-ghost" onClick={() => {
-                    const lines = Object.entries(thresholds).map(([pid, thresh]) => {
-                      const p = stockMap[Number(pid)];
-                      return p ? `${p.ref}\t${thresh}\t${p.name}` : null;
-                    }).filter(Boolean);
-                    if (!lines.length) { alert("Aucun seuil défini"); return; }
-                    const text = "Référence\tSeuil\tNom\n" + lines.join("\n");
-                    navigator.clipboard.writeText(text).then(() => alert(`${lines.length} seuil(s) copiés dans le presse-papier`));
-                  }} style={{ padding: "8px 14px", fontSize: 13 }}>
-                    📋 Copier
-                  </button>
-                </div>
-              </div>
-              {/* Seuil par défaut global */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, padding: "10px 14px", background: "var(--bg-surface)", borderRadius: 10, border: "1px solid var(--border)" }}>
-                <span style={{ fontSize: 13, color: "var(--text-sec)", flex: 1 }}>
-                  Seuil par défaut (articles sans seuil défini)
-                </span>
-                <input type="number" min={0} value={defaultThreshold}
-                  onChange={e => {
-                    const v = Math.max(0, Number(e.target.value));
-                    setDefaultThreshold(v);
-                    try { localStorage.setItem("wms_default_threshold", String(v)); } catch {}
-                  }}
-                  style={{ width: 70, padding: "6px 10px", borderRadius: 8, border: "1.5px solid var(--border)", fontSize: 14, fontWeight: 700, textAlign: "center", background: "var(--bg)", color: "var(--text)" }}
-                />
-              </div>
-              <input className="wms-input" value={stockSearch} onChange={(e) => setStockSearch(e.target.value)} placeholder="Filtrer par référence ou nom..." style={{ marginBottom: 16 }} />
-              <div className="wms-scrollbar" style={{ maxHeight: 420, overflowY: "auto" }}>
-                {Object.keys(stockMap).length === 0 && !loading && <EmptyState icon={I.refresh} title='Cliquez sur "Actualiser"' sub="pour charger les produits" />}
-                {Object.entries(stockMap)
-                  .filter(([, d]) => !watchlistMode || watchlist.size === 0 || watchlist.has(d.ref))
-                  .filter(([, d]) => !stockSearch || d.ref.toLowerCase().includes(stockSearch.toLowerCase()) || d.name.toLowerCase().includes(stockSearch.toLowerCase()))
-                  .map(([pidStr, data]) => {
-                  const pid = Number(pidStr); const { qty, name, ref } = data; const thresh = thresholds[pid]; const isAlert = thresh !== undefined && qty <= thresh;
-                  const consoRow = conso.find((c) => c.ref === ref);
-                  const suggestedThresh = consoRow && consoRow.avg > 0 ? consoRow.avg : null;
-                  return (
-                    <div key={pid} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 0", borderBottom: "1px solid var(--border)" }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: thresh !== undefined ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {ref && <span style={{ fontFamily: MONO, color: "var(--accent)", fontWeight: 700, marginRight: 8, fontSize: 12 }}>[{ref}]</span>}{name}
-                        </div>
-                        <div style={{ fontSize: 12, color: isAlert ? "var(--danger)" : "var(--text-muted)", marginTop: 2 }}>
-                          Stock : <strong>{qty}</strong>
-                          {thresh !== undefined && ` · Seuil : ${thresh}`}
-                          {suggestedThresh && thresh === undefined && <span style={{ marginLeft: 8, color: "var(--text-muted)" }}>conso moy: {suggestedThresh}/mois</span>}
-                          {isAlert && <span style={{ marginLeft: 8, color: "var(--danger)", fontWeight: 700 }}>● Alerte</span>}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
-                        {editThresh === pid ? (
-                          <>
-                            <input className="wms-input" value={editVal} onChange={(e) => setEditVal(e.target.value)} type="number" min="0" style={{ width: 80, padding: "6px 10px" }} autoFocus onKeyDown={(e) => { if (e.key === "Enter") { const v = Number(editVal); if (!isNaN(v) && v >= 0) saveThresholdsLocal({ ...thresholds, [pid]: v }); setEditThresh(null); } if (e.key === "Escape") setEditThresh(null); }} />
-                            {suggestedThresh && <button className="wms-btn" onClick={() => setEditVal(String(suggestedThresh))} title={`= 1 mois conso (${suggestedThresh})`} style={{ padding: "6px 8px", fontSize: 11, background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid var(--accent-border)" }}>⚡</button>}
-                            <button className="wms-btn" onClick={() => { const v = Number(editVal); if (!isNaN(v) && v >= 0) saveThresholdsLocal({ ...thresholds, [pid]: v }); setEditThresh(null); }} style={{ background: "var(--success)", color: "#fff", padding: "6px 10px", fontSize: 13 }}>✓</button>
-                            <button className="wms-btn wms-btn-danger" onClick={async () => { const t = { ...thresholds }; const ref = stockMap[pid]?.ref; delete t[pid]; setThresholds(t); if (ref) { try { await supa.deleteThreshold(ref); } catch {} } setEditThresh(null); }} style={{ padding: "6px 10px", fontSize: 12 }}>✕</button>
-                          </>
-                        ) : (
-                          <button className="wms-btn" onClick={() => { setEditThresh(pid); setEditVal(thresh !== undefined ? String(thresh) : suggestedThresh ? String(suggestedThresh) : ""); }} style={{ flexShrink: 0, padding: "6px 14px", fontSize: 12, fontWeight: thresh !== undefined ? 700 : 400, fontFamily: thresh !== undefined ? MONO : "inherit", background: thresh !== undefined ? (isAlert ? "var(--danger-soft)" : "var(--warning-soft)") : "var(--bg-surface)", color: thresh !== undefined ? (isAlert ? "var(--danger)" : "var(--warning)") : "var(--text-muted)", border: `1px solid ${thresh !== undefined ? (isAlert ? "var(--danger-border)" : "var(--warning-border)") : "var(--border)"}` }}>
-                            {thresh !== undefined ? `Seuil: ${thresh}` : suggestedThresh ? `+ ${suggestedThresh}` : "+ Seuil"}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-          );
-        })()}
-
-        {/* ══════════ CONSO ══════════ */}
-        {tab === "conso" && (
-          <div style={{ animation: "fadeIn .3s ease both" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
-              <div><h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Consommation mensuelle</h2><p style={{ fontSize: 13, color: "var(--text-muted)" }}>Quantités sorties vers clients (hors transferts internes)</p></div>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <button className="wms-btn wms-btn-primary" onClick={() => loadConso()} disabled={loading}>{loading ? <Spinner /> : I.refresh} Charger (12 mois)</button>
-                {conso.length > 0 && (
-                  <button className="wms-btn wms-btn-ghost" onClick={async () => {
-                    const XLSX = await import("xlsx");
-                    const rows = sortedConso.map(r => {
-                      const obj: any = { "Référence": r.ref, "Désignation": r.name };
-                      months.forEach(m => { obj[fmtMonth(m)] = r.months[m] || 0; });
-                      obj["Moy/mois"] = r.avg; obj["Total"] = r.total;
-                      return obj;
-                    });
-                    const ws = XLSX.utils.json_to_sheet(rows);
-                    const wb = XLSX.utils.book_new();
-                    XLSX.utils.book_append_sheet(wb, ws, "Conso");
-                    XLSX.writeFile(wb, `conso_12mois_${new Date().toISOString().split("T")[0]}.xlsx`);
-                  }} style={{ padding: "10px 14px", fontSize: 13 }}>📥 Export Excel</button>
-                )}
-              </div>
-            </div>
-            <input className="wms-input" value={consoSearch} onChange={(e) => setConsoSearch(e.target.value)} placeholder="Filtrer par référence ou nom..." style={{ marginBottom: 16 }} />
-            {conso.length > 0 && (
-              <div className="wms-card"><div className="wms-scrollbar" style={{ overflowX: "auto" }}>
-                <table className="wms-table">
-                  <thead><tr>
-                    {[{ k: "ref", l: "Référence" }, { k: "name", l: "Désignation" }].map((h) => (
-                      <th key={h.k} style={{ position: h.k === "ref" ? "sticky" as const : undefined, left: h.k === "ref" ? 0 : undefined, zIndex: h.k === "ref" ? 3 : 2 }}>
-                        <div className="th-inner" onClick={() => setConsoColSort((p) => ({ col: h.k, dir: p.col === h.k ? (p.dir === "desc" ? "asc" : p.dir === "asc" ? null : "desc") : "desc" }))}>
-                          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>{h.l}{consoColSort.col === h.k && consoColSort.dir === "asc" && I.sortAsc}{consoColSort.col === h.k && consoColSort.dir === "desc" && I.sortDesc}</span>{I.chevronDown}
-                        </div>
-                      </th>
-                    ))}
-                    {months.map((m) => (
-                      <th key={m} style={{ textAlign: "center" }}>
-                        <div className="th-inner" style={{ justifyContent: "center" }} onClick={() => setConsoColSort((p) => ({ col: m, dir: p.col === m ? (p.dir === "desc" ? "asc" : p.dir === "asc" ? null : "desc") : "desc" }))}>
-                          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>{fmtMonth(m)}{consoColSort.col === m && consoColSort.dir === "asc" && I.sortAsc}{consoColSort.col === m && consoColSort.dir === "desc" && I.sortDesc}</span>
-                        </div>
-                      </th>
-                    ))}
-                    {[{ k: "avg", l: "Moy/mois", c: "var(--purple)" }, { k: "total", l: "Total", c: "var(--text-primary)" }].map((h) => (
-                      <th key={h.k} style={{ textAlign: "center" }}>
-                        <div className="th-inner" style={{ justifyContent: "center", color: h.c }} onClick={() => setConsoColSort((p) => ({ col: h.k, dir: p.col === h.k ? (p.dir === "desc" ? "asc" : p.dir === "asc" ? null : "desc") : "desc" }))}>
-                          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>{h.l}{consoColSort.col === h.k && consoColSort.dir === "asc" && I.sortAsc}{consoColSort.col === h.k && consoColSort.dir === "desc" && I.sortDesc}</span>
-                        </div>
-                      </th>
-                    ))}
-                  </tr></thead>
-                  <tbody>
-                    {sortedConso.map((row, i) => {
-                      const max = Math.max(...months.map((m) => row.months[m] || 0));
-                      return (
-                        <tr key={i}>
-                          <td style={{ fontWeight: 700, fontFamily: MONO, color: "var(--accent)", fontSize: 12, whiteSpace: "nowrap", position: "sticky", left: 0, background: "var(--bg-raised)", zIndex: 1 }}>{row.ref || "—"}</td>
-                          <td style={{ fontSize: 12 }}>{row.name.replace(/\[.*?\]\s*/, "")}</td>
-                          {months.map((m) => { const val = row.months[m] || 0; const intensity = max > 0 ? val / max : 0; return (
-                            <td key={m} style={{ textAlign: "center", background: val > 0 ? `rgba(var(--heat-color),${intensity * .2 + .04})` : "transparent", color: val > 0 ? "var(--text-primary)" : "var(--text-muted)", fontWeight: val > 0 ? 600 : 400, fontFamily: val > 0 ? MONO : "inherit", fontSize: 12 }}>{val > 0 ? val : "—"}</td>
-                          ); })}
-                          <td style={{ textAlign: "center", fontWeight: 600, color: "var(--purple)", fontFamily: MONO, fontSize: 12 }}>{row.avg > 0 ? row.avg : "—"}</td>
-                          <td style={{ textAlign: "center", fontWeight: 800, fontFamily: MONO, fontSize: 13 }}>{row.total}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div></div>
             )}
-            {conso.length === 0 && !loading && <EmptyState icon={I.chart} title='Cliquez sur "Charger"' sub="pour afficher la consommation mensuelle" />}
-            {loading && <div style={{ textAlign: "center", padding: 40 }}><Spinner size={24} /></div>}
+
+            {smRefs.length>0&&(
+              <>
+                {/* KPIs */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:18}}>
+                  {([
+                    {label:"Références",val:smRefs.length,color:"#3b82f6",bg:"#eff6ff",f:null},
+                    {label:"🔴 Critiques",val:smCounts.critical,color:"#ef4444",bg:"#fef2f2",f:"critical"},
+                    {label:"🟡 Alertes",val:smCounts.alert,color:"#f59e0b",bg:"#fffbeb",f:"alert"},
+                    {label:"🟢 OK",val:smCounts.ok,color:"#22c55e",bg:"#f0fdf4",f:"ok"},
+                  ] as any[]).map(({label,val,color,bg,f})=>(
+                    <div key={label} onClick={()=>f&&setSmFilter((p:any)=>p===f?"all":f)} style={{background:bg,border:`1px solid ${color}22`,borderRadius:12,padding:"14px 18px",cursor:f?"pointer":"default",outline:smFilter===f?`2px solid ${color}`:"none"}}>
+                      <div style={{fontSize:11,fontWeight:700,color,textTransform:"uppercase",letterSpacing:.5}}>{label}</div>
+                      <div style={{fontSize:30,fontWeight:900,color,lineHeight:1.2}}>{val}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Filters */}
+                <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
+                  {(["all","critical","alert","ok"] as const).map(f=>(
+                    <button key={f} onClick={()=>setSmFilter(f)} className="wms-btn" style={{borderRadius:20,background:smFilter===f?"var(--accent)":"#fff",color:smFilter===f?"#fff":"var(--text-muted)",border:`1px solid ${smFilter===f?"var(--accent)":"var(--border)"}`}}>
+                      {{all:"Tout",critical:"Critiques",alert:"Alertes",ok:"OK"}[f]}
+                    </button>
+                  ))}
+                  <input placeholder="🔍 Ref ou nom..." value={smSearch} onChange={e=>setSmSearch(e.target.value)}
+                    style={{marginLeft:"auto",padding:"7px 12px",border:"1px solid var(--border)",borderRadius:8,fontSize:13,fontFamily:"inherit",width:220,outline:"none"}}/>
+                  <span style={{fontSize:12,color:"var(--text-muted)"}}>{smFiltered.length} ligne{smFiltered.length!==1?"s":""}</span>
+                  <button className="wms-btn" onClick={smExportExcel} style={{whiteSpace:"nowrap"}}>
+                    📥 {smSelected.size>0?`Exporter ${smSelected.size} sél.`:"Exporter tout"}
+                  </button>
+                  <button className="wms-btn" onClick={smResetThresholds} title="Remet tous les seuils à 1× conso/mois" style={{whiteSpace:"nowrap",borderColor:"#f59e0b",color:"#b45309"}}>
+                    🔄 Seuils = conso
+                  </button>
+                </div>
+
+                {/* Table */}
+                <div style={{background:"#fff",border:"1px solid var(--border)",borderRadius:14,overflow:"hidden"}}>
+                  <div style={{overflowX:"auto",maxHeight:"calc(100vh - 360px)",overflowY:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                      <thead style={{position:"sticky",top:0,zIndex:5}}>
+                        <tr style={{background:"var(--bg)",borderBottom:"1px solid var(--border)"}}>
+                          <th style={{padding:"10px 12px",width:36}}>
+                            <input type="checkbox"
+                              checked={smSelected.size===smFiltered.length&&smFiltered.length>0}
+                              ref={el=>{if(el)el.indeterminate=smSelected.size>0&&smSelected.size<smFiltered.length;}}
+                              onChange={e=>setSmSelected(e.target.checked?new Set(smFiltered.map(r=>r.ref)):new Set())}
+                              style={{cursor:"pointer",width:15,height:15}}/>
+                          </th>
+                          {["Référence","Nom produit","Stock","Conso/mois","Attendu","Seuil min ✏","Jours restants","Prochaine livraison","Statut","Rupture"].map(h=>(
+                            <th key={h} style={{padding:"10px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:"var(--text-muted)",whiteSpace:"nowrap"}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {smFiltered.map((row,i)=>{
+                          const sc={critical:"#ef4444",alert:"#f59e0b",ok:"#22c55e",no_data:"#9ca3af",not_found:"#d1d5db"};
+                          const sb2={critical:"#fff5f5",alert:"#fffdf0",ok:"#fff",no_data:"#fafafa",not_found:"#f9fafb"};
+                          const rowBg=i%2===0?sb2[row.status]:"#fafafa";
+                          return(
+                            <tr key={row.ref} style={{background:rowBg,borderBottom:"1px solid var(--border)"}}>
+                              <td style={{padding:"10px 12px",width:36}}>
+                                <input type="checkbox" checked={smSelected.has(row.ref)}
+                                  onChange={e=>{const s=new Set(smSelected);e.target.checked?s.add(row.ref):s.delete(row.ref);setSmSelected(s);}}
+                                  style={{cursor:"pointer",width:15,height:15}}/>
+                              </td>
+                              <td style={{padding:"10px 12px",fontWeight:700,fontFamily:"monospace",fontSize:12}}>{row.ref}</td>
+                              <td style={{padding:"10px 12px",maxWidth:240,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.name}</td>
+                              <td style={{padding:"10px 12px",textAlign:"right",fontWeight:600}}>{row.status==="not_found"?"—":row.stock}</td>
+                              <td style={{padding:"10px 12px",textAlign:"right",color:"var(--text-muted)"}}>{row.status==="not_found"?"—":row.conso===0?<span style={{fontSize:11}}>n/a</span>:row.conso}</td>
+                              <td style={{padding:"10px 12px",textAlign:"right"}}>
+                                {row.expected_qty>0
+                                  ? <span style={{fontWeight:700,color:"#8b5cf6"}}>+{row.expected_qty}</span>
+                                  : <span style={{color:"#d1d5db",fontSize:11}}>—</span>}
+                              </td>
+                              <td style={{padding:"6px 12px",textAlign:"right"}}>
+                                {row.status==="not_found"?"—":smEditThr?.ref===row.ref?(
+                                  <input autoFocus type="number" value={smEditThr.val}
+                                    onChange={e=>setSmEditThr(t=>t?{...t,val:e.target.value}:t)}
+                                    onBlur={()=>smSaveThr(row.ref,smEditThr.val,row.name)}
+                                    onKeyDown={e=>{if(e.key==="Enter")smSaveThr(row.ref,smEditThr.val,row.name);if(e.key==="Escape")setSmEditThr(null);}}
+                                    style={{width:64,padding:"4px 8px",border:"1px solid var(--accent)",borderRadius:6,fontSize:13,fontFamily:"inherit",textAlign:"right",outline:"none"}}/>
+                                ):(
+                                  <div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"flex-end"}}>
+                                    {row.conso>0&&row.threshold>0&&(row.threshold<row.conso*0.5||row.threshold>row.conso*2)&&(
+                                      <span title={`Conso = ${row.conso} — seuil semble incorrect`} style={{fontSize:14,cursor:"default"}}>⚠️</span>
+                                    )}
+                                    <button onClick={()=>setSmEditThr({ref:row.ref,val:String(row.threshold)})}
+                                      style={{background:"transparent",border:"1px dashed var(--border)",borderRadius:6,padding:"3px 10px",cursor:"pointer",fontSize:13,fontFamily:"inherit",minWidth:44}}>
+                                      {row.threshold}
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                              <td style={{padding:"10px 12px",textAlign:"right",fontWeight:700,color:sc[row.status]}}>
+                                {row.status==="not_found"?"—":row.daysLeft>=999?"∞":`${row.daysLeft}j`}
+                              </td>
+                              <td style={{padding:"10px 12px",fontSize:12,color:row.supplierDate==="9999-12-31"?"#111827":row.supplierDate?"var(--danger)":"var(--text-muted)",fontWeight:row.supplierDate?700:400}}>
+                                {row.supplierDate==="9999-12-31"?"⛔ Rupture déf.":(row.supplierDate?"⚠️ ":"")+( row.status!=="not_found"?`${row.delivLabel} (${row.daysUntilDeliv}j)`:"-")}
+                              </td>
+                              <td style={{padding:"10px 12px"}}>
+                                <span style={{display:"inline-block",padding:"3px 10px",borderRadius:20,background:`${sc[row.status]}18`,color:sc[row.status],fontSize:11,fontWeight:700,border:`1px solid ${sc[row.status]}44`}}>
+                                  {{ok:"OK",alert:"Alerte",critical:"Critique",no_data:"Pas de données",not_found:"Introuvable"}[row.status]}
+                                </span>
+                              </td>
+                              <td style={{padding:"8px 12px"}}>
+                                {row.status!=="not_found"&&(
+                                  <button onClick={()=>{setSmSupModal({ref:row.ref,name:row.name,cur:row.supplierDate||""});setSmSupInput(row.supplierDate||"");}}
+                                    style={{padding:"4px 10px",border:`1px solid ${row.supplierDate?"#ef4444":"var(--border)"}`,borderRadius:6,background:row.supplierDate?"#fef2f2":"#fff",color:row.supplierDate?"#ef4444":"var(--text-muted)",cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>
+                                    {row.supplierDate?"📅 Modif.":"📅 Rupture"}
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {smFiltered.length===0&&<tr><td colSpan={11} style={{padding:40,textAlign:"center",color:"var(--text-muted)"}}>
+                          {smLoading?"Chargement...":"Aucun résultat"}
+                        </td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:20,marginTop:10,fontSize:11,color:"var(--text-muted)",flexWrap:"wrap"}}>
+                  <span>🔴 <strong>Critique</strong> : rupture avant la livraison</span>
+                  <span>🟡 <strong>Alerte</strong> : moins de 14j de marge ou sous le seuil</span>
+                  <span>🟢 <strong>OK</strong> : stock suffisant</span>
+                  <span style={{marginLeft:"auto"}}>Seuils cliquables · Livraison standard = 15 du mois suivant</span>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -2365,6 +2676,188 @@ ${strs.map(s=>`<si><t xml:space="preserve">${xmlEsc(s)}</t></si>`).join("\n")}
             {moveRef.trim() && moves.length === 0 && moveSearched && !loading && <EmptyState icon={I.search} title="Aucun mouvement trouvé" sub={`Référence "${moveRef}" introuvable dans l'historique`} />}
             {!moveRef.trim() && <EmptyState icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>} title="Entrez une référence produit" sub="pour analyser ses entrées, sorties et détecter les anomalies" />}
             {loading && <div style={{ textAlign: "center", padding: 40 }}><Spinner size={24} /></div>}
+          </div>
+        )}
+
+        {/* ══════════════════ CATALOGUE ══════════════════ */}
+        {tab === "catalogue" && (
+          <div style={{ animation: "fadeIn .3s ease both", padding: "0 24px 24px" }}>
+
+            {/* Barre recherche + boutons */}
+            <div style={{ display:"flex", gap:12, alignItems:"center", marginBottom:16, flexWrap:"wrap" }}>
+              <div style={{ position:"relative", flex:1, minWidth:260 }}>
+                <span style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)", color:"var(--text-muted)", pointerEvents:"none" }}>
+                  {I.search}
+                </span>
+                <input
+                  className="wms-input"
+                  style={{ paddingLeft:36, fontSize:15 }}
+                  placeholder="Rechercher un article… (nom, référence, EAN)"
+                  value={catQuery}
+                  onChange={e => { setCatQuery(e.target.value); catTrigger(e.target.value, catCols); }}
+                  autoFocus
+                />
+              </div>
+
+              {/* Colonnes toggle */}
+              <div style={{ position:"relative" }}>
+                <button className="wms-btn wms-btn-ghost" onClick={()=>setCatColsOpen(v=>!v)} style={{ gap:6 }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                  Colonnes <span style={{ background:"var(--accent)", color:"#fff", borderRadius:10, padding:"1px 7px", fontSize:11 }}>{catCols.size}</span>
+                </button>
+                {catColsOpen && (
+                  <div style={{ position:"absolute", top:"calc(100% + 6px)", right:0, zIndex:50, background:"var(--bg-raised)", border:"1px solid var(--border)", borderRadius:12, boxShadow:"var(--shadow-popup)", padding:16, minWidth:320, animation:"dropIn .15s ease both" }}>
+                    {(["Identité","Caractéristiques","Stock","Achat","Vente"] as const).map(grp => (
+                      <div key={grp} style={{ marginBottom:12 }}>
+                        <div style={{ fontSize:10, fontWeight:700, color:"var(--text-muted)", textTransform:"uppercase", letterSpacing:".5px", marginBottom:6 }}>{grp}</div>
+                        <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                          {CAT_COL_DEFS.filter(c=>c.group===grp).map(c=>(
+                            <label key={c.key} style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:6, background: catCols.has(c.key)?"var(--accent-soft)":"var(--bg-surface)", border:`1px solid ${catCols.has(c.key)?"var(--accent-border)":"var(--border)"}`, cursor:"pointer", fontSize:12, color: catCols.has(c.key)?"var(--accent)":"var(--text-secondary)", transition:"all .15s" }}>
+                              <input type="checkbox" checked={catCols.has(c.key)} onChange={()=>catToggleCol(c.key)} style={{ accentColor:"var(--accent)", width:12, height:12 }}/>
+                              {c.label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{ display:"flex", gap:8, paddingTop:8, borderTop:"1px solid var(--border)", marginTop:4 }}>
+                      <button className="wms-btn wms-btn-ghost" style={{ fontSize:12, padding:"6px 12px" }} onClick={()=>{ setCatCols(new Set(CAT_DEFAULT_COLS)); catTrigger(catQuery, new Set(CAT_DEFAULT_COLS)); }}>Réinitialiser</button>
+                      <button className="wms-btn wms-btn-primary" style={{ fontSize:12, padding:"6px 12px", flex:1 }} onClick={()=>setCatColsOpen(false)}>Fermer</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <button className="wms-btn wms-btn-ghost" onClick={catExportXlsx} disabled={!catRows.length} title={catSelected.size>0?`Exporter ${catSelected.size} ligne(s) sélectionnée(s)`:"Exporter tous les résultats"}>
+                {I.download} Excel{catSelected.size>0?` (${catSelected.size})`:""}
+              </button>
+              {catSelected.size>0&&<button className="wms-btn wms-btn-ghost" style={{fontSize:12,padding:"6px 10px",color:"var(--text-muted)"}} onClick={()=>setCatSelected(new Set())}>✕ Déselect.</button>}
+            </div>
+
+            {/* Message statut */}
+            {catMsg && (
+              <div style={{ fontSize:12, color: catLoading?"var(--text-muted)":"var(--success)", marginBottom:12, display:"flex", alignItems:"center", gap:8 }}>
+                {catLoading && <span style={{ width:12, height:12, border:"2px solid var(--border)", borderTopColor:"var(--accent)", borderRadius:"50%", display:"inline-block", animation:"spin .7s linear infinite" }}/>}
+                {catMsg}
+              </div>
+            )}
+
+            {/* Tableau résultats */}
+            {catRows.length > 0 && (
+              <div className="wms-card" style={{ overflow:"auto" }}>
+                <table className="wms-table" style={{ minWidth: 600 }}>
+                  <thead>
+                    <tr>
+                      <th style={{width:32,padding:"0 8px"}}><input type="checkbox" style={{accentColor:"var(--accent)"}} checked={catRows.length>0&&catSelected.size===catRows.length} onChange={e=>{if(e.target.checked)setCatSelected(new Set(catRows.map(r=>r._id)));else setCatSelected(new Set());}}/></th>
+                      <th><div className="th-inner" style={{ minWidth:180 }}>Nom produit</div></th>
+                      {CAT_COL_DEFS.filter(c=>catCols.has(c.key)).map(c=>(
+                        <th key={c.key}><div className="th-inner" style={{ minWidth:c.w }}>{c.label}</div></th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {catRows.map((row,i)=>{
+                      const mkEditCell = (field: string, value: string, style?: React.CSSProperties) => {
+                        const editKey = `${row._id}:${field}`;
+                        const isEditing = catEdit?.rowId === row._id && catEdit?.field === field;
+                        const isSavingThis = catSaving === editKey;
+                        if (isEditing) {
+                          return (
+                            <input
+                              autoFocus
+                              defaultValue={catEdit!.value}
+                              style={{ width:"100%", minWidth:80, border:"1.5px solid var(--accent)", borderRadius:6, padding:"2px 6px", fontSize:13, background:"var(--bg-surface)", color:"var(--text-primary)", outline:"none", ...style }}
+                              onBlur={e => catSaveField(row, field, e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key==="Enter") catSaveField(row, field, (e.target as HTMLInputElement).value);
+                                if (e.key==="Escape") setCatEdit(null);
+                              }}
+                            />
+                          );
+                        }
+                        return (
+                          <span
+                            onClick={() => setCatEdit({ rowId: row._id, field, value: String(value??"") })}
+                            title="Cliquer pour modifier"
+                            style={{ cursor:"pointer", display:"inline-flex", alignItems:"center", gap:4, borderRadius:4, padding:"1px 4px", transition:"background .15s", ...style }}
+                            onMouseEnter={e=>(e.currentTarget.style.background="var(--accent-soft)")}
+                            onMouseLeave={e=>(e.currentTarget.style.background="transparent")}
+                          >
+                            {isSavingThis ? <span style={{opacity:.5}}>…</span> : (value||"—")}
+                            {!isSavingThis && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2.5" style={{flexShrink:0,opacity:.5}}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>}
+                          </span>
+                        );
+                      };
+                      return (
+                      <tr key={row._id ?? i} style={{background:catSelected.has(row._id)?"var(--accent-soft)":""}}>
+                        <td style={{width:32,padding:"0 8px"}}><input type="checkbox" style={{accentColor:"var(--accent)"}} checked={catSelected.has(row._id)} onChange={e=>{setCatSelected(prev=>{const n=new Set(prev);e.target.checked?n.add(row._id):n.delete(row._id);return n;})}}/></td>
+                        <td style={{ fontWeight:600, color:"var(--text-primary)", fontSize:13 }}>
+                          {mkEditCell("name", row.name)}
+                        </td>
+                        {CAT_COL_DEFS.filter(c=>catCols.has(c.key)).map(c=>{
+                          const v = row[c.key];
+                          // Champs éditables inline
+                          if (c.key==="weight") {
+                            return <td key={c.key}>{mkEditCell("weight", v!==""&&v!==undefined?String(v):"", {fontFamily:"'JetBrains Mono',monospace",fontSize:12})}</td>;
+                          }
+                          if (c.key==="barcode") {
+                            return <td key={c.key}>{mkEditCell("barcode", v||"", {fontSize:12})}</td>;
+                          }
+                          // Mise en forme contextuelle
+                          if (c.key==="qty_available"||c.key==="qty_virtual") {
+                            const n = Number(v);
+                            const col = n<=0?"var(--danger)":n<5?"var(--warning)":"var(--success)";
+                            return <td key={c.key} style={{ color:col, fontWeight:600 }}>{n}</td>;
+                          }
+                          if (c.key==="tracking") {
+                            const bg = v==="Lot"?"rgba(217,119,6,.1)":v==="Série"?"rgba(124,58,237,.1)":"var(--bg-surface)";
+                            const color = v==="Lot"?"var(--warning)":v==="Série"?"var(--purple)":"var(--text-muted)";
+                            return <td key={c.key}><span className="wms-badge" style={{ background:bg, color }}>{v||"—"}</span></td>;
+                          }
+                          if (c.key==="dluo") {
+                            const parts = String(v||"").split(" | ");
+                            return <td key={c.key} style={{ fontSize:11 }}>
+                              {parts.map((p,pi)=>{
+                                const dateStr = p.match(/\d{2}\/\d{2}\/\d{4}/)?.[0];
+                                const isExpired = dateStr ? new Date(dateStr.split("/").reverse().join("-")) < new Date() : false;
+                                const isSoon = dateStr ? (new Date(dateStr.split("/").reverse().join("-")).getTime()-Date.now()) < 30*86400000 : false;
+                                const c2 = isExpired?"var(--danger)":isSoon?"var(--warning)":"var(--text-secondary)";
+                                return <span key={pi} style={{ color:c2, display:"block" }}>{p}</span>;
+                              })}
+                            </td>;
+                          }
+                          if ((c.key==="sup_price"||c.key==="list_price"||c.key==="standard_price") && v!=="") {
+                            return <td key={c.key} style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12 }}>{Number(v).toFixed(2)} €</td>;
+                          }
+                          if (c.key==="locations") {
+                            const s = v===""||v===undefined?"—":String(v);
+                            return <td key={c.key} style={{ fontSize:11, maxWidth:240, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={s}>{s}</td>;
+                          }
+                          return <td key={c.key} style={{ fontSize:12 }}>{v===""||v===undefined?"—":String(v)}</td>;
+                        })}
+                      </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Etat vide */}
+            {!catLoading && catQuery.trim().length >= 2 && catRows.length===0 && catMsg && !catMsg.startsWith("Erreur") && (
+              <div style={{ textAlign:"center", padding:"60px 0", color:"var(--text-muted)" }}>
+                <div style={{ fontSize:32, marginBottom:8 }}>🔍</div>
+                <div style={{ fontWeight:600 }}>Aucun produit trouvé pour « {catQuery} »</div>
+              </div>
+            )}
+            {!catLoading && catQuery.trim().length < 2 && (
+              <div style={{ textAlign:"center", padding:"80px 0", color:"var(--text-muted)" }}>
+                <div style={{ fontSize:40, marginBottom:12 }}>🔎</div>
+                <div style={{ fontWeight:600, fontSize:16, marginBottom:6 }}>Recherche dans le catalogue Odoo</div>
+                <div style={{ fontSize:13 }}>Tapez au moins 2 caractères — nom, référence, EAN…</div>
+                <div style={{ fontSize:12, marginTop:8, color:"var(--text-muted)" }}>Cochez les colonnes à afficher, puis exportez en Excel</div>
+              </div>
+            )}
           </div>
         )}
 
