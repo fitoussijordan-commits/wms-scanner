@@ -133,6 +133,27 @@ export async function printPdfLabel(
   } catch (e: any) { return { success: false, error: e.message }; }
 }
 
+export async function printZpl(
+  printerId: number, zpl: string, title: string = "Étiquette"
+): Promise<{ success: boolean; jobId?: number; error?: string }> {
+  try {
+    const jobId = await submitPrintJob(printerId, title, zpl, 1);
+    return { success: true, jobId };
+  } catch (e: any) { return { success: false, error: e.message }; }
+}
+
+// ZPL → PDF via Labelary puis envoi PDF à PrintNode
+// À utiliser quand le driver Windows ne comprend pas le ZPL brut
+export async function printZplAsPdf(
+  printerId: number, zpl: string, title: string = "Étiquette",
+  widthMM: number = 100, heightMM: number = 150
+): Promise<{ success: boolean; jobId?: number; error?: string }> {
+  try {
+    const jobId = await submitPaletteJob(printerId, title, zpl, widthMM, heightMM);
+    return { success: true, jobId };
+  } catch (e: any) { return { success: false, error: e.message }; }
+}
+
 // ============================================
 // ZPL HELPERS
 // ============================================

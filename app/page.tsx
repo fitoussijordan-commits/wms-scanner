@@ -8,6 +8,9 @@ import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
 import SupplierImportScreen from "@/components/SupplierImportScreen";
+import ArticleCreatorScreen from "@/components/ArticleCreatorScreen";
+import FreeScanScreen from "@/components/FreeScanScreen";
+import ReturnsScreen from "@/components/ReturnsScreen";
 
 
 // ── Helpers PDF ─────────────────────────────────────────────────────────────────
@@ -78,6 +81,7 @@ async function generateEshopPackingSlipPDF(order: {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const W = 210; const M = 15;
+  const PAGE_H = 297;
 
   const BLACK  = [0, 0, 0]       as [number,number,number];
   const GRAY   = [110, 110, 110]  as [number,number,number];
@@ -85,23 +89,69 @@ async function generateEshopPackingSlipPDF(order: {
   const DARK   = [20, 20, 20]     as [number,number,number];
   const ACCENT = [40, 40, 40]     as [number,number,number];
 
+  const tW   = W - M * 2;
+  const qtyW = 18;
+  const artW = tW - qtyW;
+
+  // ── Helper : footer ──
+  const drawFooter = (pageNum: number, totalPages: number) => {
+    const footY = PAGE_H - M;
+    doc.setDrawColor(...LGRAY);
+    doc.setLineWidth(0.3);
+    doc.line(M, footY - 4, W - M, footY - 4);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(...GRAY);
+    doc.text("WALA France — 35 Rue d'Hauteville, 75010 Paris — +33 1 43 55 32 42", W / 2, footY - 1, { align: "center" });
+    if (totalPages > 1) doc.text(`Page ${pageNum}/${totalPages}`, W - M, footY - 1, { align: "right" });
+  };
+
+  // ── Helper : en-tête tableau articles ──
+  const drawArticlesHeader = (yPos: number) => {
+    doc.setFillColor(245, 245, 245);
+    doc.rect(M, yPos, tW, 7, "F");
+    doc.setDrawColor(...LGRAY);
+    doc.setLineWidth(0.4);
+    doc.rect(M, yPos, tW, 7);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    doc.setTextColor(...ACCENT);
+    doc.text("ARTICLE", M + 3, yPos + 5);
+    doc.text("QTÉ", W - M - 3, yPos + 5, { align: "right" });
+    return yPos + 7;
+  };
+
   // ── Header zone: Logo (left) + Barcode (right) ──
   const headerY = M;
-  const logoSz = 50; // carré 50×50mm
+  let logoH = 18; // hauteur par défaut si image non chargée
 
-  // Logo Dr. Hauschka PNG — affiché en carré
+  // Logo Dr. Hauschka PNG — dimensions naturelles du fichier
   let logoLoaded = false;
+  let logoBase64 = "";
   try {
     const logoRes = await fetch("/logo-dr-hauschka.png");
     if (logoRes.ok) {
       const logoBlob = await logoRes.blob();
-      const logoBase64 = await new Promise<string>((resolve, reject) => {
+      logoBase64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve((reader.result as string).split(",")[1]);
         reader.onerror = reject;
         reader.readAsDataURL(logoBlob);
       });
-      doc.addImage(`data:image/png;base64,${logoBase64}`, "PNG", M, headerY, logoSz, logoSz);
+      // Lire les dimensions naturelles sans déformer
+      const imgEl = new Image();
+      imgEl.src = `data:image/png;base64,${logoBase64}`;
+      await new Promise<void>((res) => { imgEl.onload = () => res(); imgEl.onerror = () => res(); });
+      const aspect = imgEl.naturalWidth > 0 ? imgEl.naturalWidth / imgEl.naturalHeight : 3;
+      // Conversion px → mm à 96dpi : 1px = 0.2646mm — on plafonne à 55mm de large et 30mm de haut
+      const nativeW_mm = imgEl.naturalWidth * 0.2646;
+      const nativeH_mm = imgEl.naturalHeight * 0.2646;
+      const maxW = 55; const maxH = 30;
+      let lw = Math.min(nativeW_mm, maxW);
+      let lh = lw / aspect;
+      if (lh > maxH) { lh = maxH; lw = lh * aspect; }
+      logoH = lh;
+      doc.addImage(`data:image/png;base64,${logoBase64}`, "PNG", M, headerY, lw, lh);
       logoLoaded = true;
     }
   } catch {}
@@ -130,8 +180,8 @@ async function generateEshopPackingSlipPDF(order: {
   doc.setTextColor(...GRAY);
   doc.text(`${order.order_number}`, bcX + bcW / 2, headerY + 4 + bcH + 3.5, { align: "center" });
 
-  // Y après la zone header
-  let y = headerY + logoSz + 8;
+  // Y après la zone header (basé sur la vraie hauteur du logo)
+  let y = headerY + Math.max(logoH, bcH + 8) + 6;
 
   // ── Titre "BON DE LIVRAISON" ──
   doc.setFont("helvetica", "bold");
@@ -152,7 +202,6 @@ async function generateEshopPackingSlipPDF(order: {
   y += 7;
 
   // ── Tableau infos (2 colonnes : gauche = infos commande, droite = adresses) ──
-  const tW = W - M * 2;
   const leftW = 68; // colonne commande
   const midW  = 56; // colonne expéditeur
   const rightW = tW - leftW - midW; // colonne destinataire
@@ -247,25 +296,11 @@ async function generateEshopPackingSlipPDF(order: {
 
   y += tH + 10;
 
-  // ── Tableau articles ──
-  const qtyW  = 18;
-  const artW  = tW - qtyW;
+  // ── Tableau articles avec pagination ──
+  const CONTENT_MAX_Y = PAGE_H - M - 14; // espace footer réservé
 
-  // Header bande grise
-  doc.setFillColor(245, 245, 245);
-  doc.rect(M, y, tW, 7, "F");
-  doc.setDrawColor(...LGRAY);
-  doc.setLineWidth(0.4);
-  doc.rect(M, y, tW, 7);
+  y = drawArticlesHeader(y);
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8.5);
-  doc.setTextColor(...ACCENT);
-  doc.text("ARTICLE", M + 3, y + 5);
-  doc.text("QTÉ", W - M - 3, y + 5, { align: "right" });
-  y += 7;
-
-  // Rows
   for (const item of order.items) {
     const nameLines = doc.splitTextToSize(item.name, artW - 8);
     const subLines: string[] = [];
@@ -273,6 +308,13 @@ async function generateEshopPackingSlipPDF(order: {
     if (item.odooRef) subLines.push(`Réf : ${item.odooRef}`);
     if (item.properties) subLines.push(item.properties);
     const rowH = nameLines.length * 5.2 + subLines.length * 4 + 8;
+
+    // ── Saut de page si débordement ──
+    if (y + rowH > CONTENT_MAX_Y) {
+      doc.addPage();
+      y = M;
+      y = drawArticlesHeader(y);
+    }
 
     // Article name — bold noir
     doc.setFont("helvetica", "bold");
@@ -303,15 +345,12 @@ async function generateEshopPackingSlipPDF(order: {
     doc.line(M, y, W - M, y);
   }
 
-  // ── Footer ──
-  const footY = 285;
-  doc.setDrawColor(...LGRAY);
-  doc.setLineWidth(0.3);
-  doc.line(M, footY - 4, W - M, footY - 4);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(7.5);
-  doc.setTextColor(...GRAY);
-  doc.text("WALA France — 35 Rue d'Hauteville, 75010 Paris — +33 1 43 55 32 42", W / 2, footY, { align: "center" });
+  // ── Footer sur toutes les pages ──
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    drawFooter(p, totalPages);
+  }
 
   return doc.output("datauristring").split(",")[1];
 }
@@ -656,7 +695,7 @@ const DH_LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAATgAAACiCAYAAADV9
 // ============================================
 // DESIGN TOKENS
 // ============================================
-const C = {
+const C_LIGHT = {
   bg: "#f5f6f8", white: "#ffffff", card: "#ffffff", overlay: "rgba(0,0,0,0.04)",
   blue: "#2563eb", blueSoft: "#eff6ff", blueBorder: "#bfdbfe", blueDark: "#1d4ed8",
   green: "#16a34a", greenSoft: "#f0fdf4", greenBorder: "#bbf7d0",
@@ -667,6 +706,19 @@ const C = {
   shadow: "0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04)",
   shadowLg: "0 4px 12px rgba(0,0,0,0.1)",
 };
+const C_DARK = {
+  bg: "#0f172a", white: "#1e293b", card: "#1e293b", overlay: "rgba(255,255,255,0.04)",
+  blue: "#3b82f6", blueSoft: "#1e3a5f", blueBorder: "#1e40af", blueDark: "#60a5fa",
+  green: "#22c55e", greenSoft: "#14532d", greenBorder: "#166534",
+  orange: "#f97316", orangeSoft: "#431407", orangeBorder: "#7c2d12",
+  red: "#ef4444", redSoft: "#450a0a", redBorder: "#7f1d1d",
+  text: "#f1f5f9", textSec: "#94a3b8", textMuted: "#64748b",
+  border: "#334155", borderStrong: "#475569",
+  shadow: "0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3)",
+  shadowLg: "0 4px 12px rgba(0,0,0,0.5)",
+};
+// eslint-disable-next-line prefer-const
+let C: typeof C_LIGHT = { ...C_LIGHT };
 
 // ============================================
 // HAPTICS
@@ -928,7 +980,18 @@ function getProductRemainingAtLoc(lines: any[], locId: number, productId: number
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport">("login");
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    try { return localStorage.getItem("wms_dark") === "true"; } catch { return false; }
+  });
+  // Applique le thème à chaque render — tous les composants fils liront le C mis à jour
+  Object.assign(C, isDark ? C_DARK : C_LIGHT);
+
+  const toggleDark = (val: boolean) => {
+    try { localStorage.setItem("wms_dark", val ? "true" : "false"); } catch {}
+    setIsDark(val);
+  };
+
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -964,6 +1027,12 @@ export default function Page() {
   const [curStock, setCurStock] = useState<any[]>([]);
   const [allStock, setAllStock] = useState<any[]>([]);
   const [feedback, setFeedback] = useState<{ t: string; m: string } | null>(null);
+
+  // Badge counts (home screen)
+  const [badgeWaiting,  setBadgeWaiting]  = useState<number | null>(null);
+  const [badgeEshop,    setBadgeEshop]    = useState<number | null>(null);
+  const [badgeReturns,  setBadgeReturns]  = useState<number | null>(null);
+  const [badgeNegStock, setBadgeNegStock] = useState<number | null>(null);
 
   // Preparation state
   const [pickings, setPickings] = useState<any[]>([]);
@@ -1018,6 +1087,15 @@ export default function Page() {
   // New order notification (desktop only)
   const [newOrderNotif, setNewOrderNotif] = useState<{ count: number; names: string[] } | null>(null);
   const knownOrderIdsRef = useRef<Set<number>>(new Set());
+
+  // ── Control Center (desktop only) ────────────────────────────────────────
+  const [ccData, setCcData] = useState<{
+    waitingToday: { count: number; names: string[] };
+    inPrep: { count: number; names: string[] };
+    eshopWaiting: { count: number; names: string[] };
+    lastUpdate: string;
+  } | null>(null);
+  const [ccLoading, setCcLoading] = useState(false);
 
   // Print modal
   const [printReq, setPrintReq] = useState<PrintRequest | null>(null);
@@ -1112,6 +1190,73 @@ export default function Page() {
     }
   }, [screen, session]);
 
+  // ── Badges compteurs home ────────────────────────────────────────────────────
+  const loadBadges = useCallback(async () => {
+    if (!session) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    const [waiting, eshop, returns, negStock] = await Promise.allSettled([
+      // 1. En attente — commandes du jour
+      (async () => {
+        const all = await odoo.getWaitingPickings(session);
+        return all.filter((p: any) => {
+          const d: string = p.shipping_date || p.scheduled_date || p.date_deadline || "";
+          return d.startsWith(todayStr);
+        }).length;
+      })(),
+      // 2. E-shop — commandes SendCloud filtrées (status "0" + intégration 527093 + Mondial Relay / Colissimo)
+      (async () => {
+        const res = await fetch("/api/sendcloud?action=orders");
+        if (!res.ok) return 0;
+        const data = await res.json();
+        return (data.orders || []).filter((o: any) => {
+          const statusCode = o.order_details?.status?.code ?? o.status?.code;
+          if (statusCode !== "0") return false;
+          if (o.integration_id && o.integration_id !== 527093) return false;
+          const carrierStr = [
+            o.shipping_details?.delivery_indicator || "",
+            o.shipping_details?.shipping_method_name || "",
+            o.order_details?.shipping_method_name || "",
+            o.carrier?.name || "",
+            o.carrier?.code || "",
+          ].join(" ").toLowerCase();
+          return carrierStr.includes("mondial") || carrierStr.includes("colissimo");
+        }).length;
+      })(),
+      // 3. Retours — WH/RET/ en attente
+      (async () => {
+        const types = await odoo.searchRead(session, "stock.picking.type", [["sequence_code", "ilike", "RET"]], ["id", "sequence_code"], 20);
+        const typeIds = types.filter((t: any) => t.sequence_code?.toUpperCase().includes("RET")).map((t: any) => t.id);
+        if (!typeIds.length) return 0;
+        const picks = await odoo.searchRead(session, "stock.picking", [
+          ["picking_type_id", "in", typeIds],
+          ["state", "in", ["confirmed", "assigned", "waiting", "partially_available"]],
+        ], ["id"], 200);
+        return picks.length;
+      })(),
+      // 4. Stock négatif — produits distincts avec qty < 0
+      (async () => {
+        const quants = await odoo.searchRead(session, "stock.quant", [
+          ["quantity", "<", 0],
+          ["location_id.usage", "=", "internal"],
+        ], ["product_id"], 500);
+        return new Set(quants.map((q: any) => q.product_id[0])).size;
+      })(),
+    ]);
+
+    if (waiting.status  === "fulfilled") setBadgeWaiting(waiting.value   > 0 ? waiting.value   : null);
+    if (eshop.status    === "fulfilled") setBadgeEshop(eshop.value       > 0 ? eshop.value       : null);
+    if (returns.status  === "fulfilled") setBadgeReturns(returns.value   > 0 ? returns.value   : null);
+    if (negStock.status === "fulfilled") setBadgeNegStock(negStock.value > 0 ? negStock.value : null);
+  }, [session]);
+
+  useEffect(() => {
+    if (screen !== "home" || !session) return;
+    loadBadges();
+    const id = setInterval(loadBadges, 2 * 60 * 1000); // toutes les 2 min
+    return () => clearInterval(id);
+  }, [screen, session, loadBadges]);
+
   // Polling nouvelles commandes en attente — desktop uniquement, toutes les 60s
   useEffect(() => {
     if (!session) return;
@@ -1203,6 +1348,60 @@ export default function Page() {
 
     checkNewOrders();
     const interval = setInterval(checkNewOrders, 60_000);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  // ── Control Center polling (desktop only, every 60s) ─────────────────────
+  const ccRefreshRef = useRef<(() => Promise<void>) | null>(null);
+  useEffect(() => {
+    if (!session) return;
+    const isDesktop = typeof window !== "undefined" && !("ontouchstart" in window) && window.innerWidth >= 1024;
+    if (!isDesktop) return;
+
+    const refresh = async () => {
+      setCcLoading(true);
+      try {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const [allWaiting, inPrepList] = await Promise.all([
+          odoo.getWaitingPickings(session).catch(() => []),
+          odoo.getOutgoingPickings(session).catch(() => []),
+        ]);
+        const waitingToday = (allWaiting as any[]).filter((p: any) => {
+          const d: string = p.shipping_date || p.scheduled_date || p.date_deadline || "";
+          return d.startsWith(todayStr);
+        });
+        let eshopOrders: any[] = [];
+        try {
+          const res = await fetch("/api/sendcloud?action=orders");
+          if (res.ok) {
+            const data = await res.json();
+            eshopOrders = (data.orders || []).filter((o: any) => {
+              const statusCode = o?.order_details?.status?.code ?? o?.status?.code;
+              if (statusCode !== "0") return false;
+              const integId = o?.integration_id;
+              if (integId && integId !== 527093) return false;
+              const carrierStr = [
+                o?.shipping_details?.delivery_indicator || "",
+                o?.shipping_details?.shipping_method_name || "",
+                o?.order_details?.shipping_method_name || "",
+                o?.carrier?.name || "", o?.carrier?.code || "",
+              ].join(" ").toLowerCase();
+              return carrierStr.includes("mondial") || carrierStr.includes("colissimo");
+            });
+          }
+        } catch {}
+        setCcData({
+          waitingToday: { count: waitingToday.length, names: (waitingToday as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
+          inPrep: { count: (inPrepList as any[]).length, names: (inPrepList as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
+          eshopWaiting: { count: eshopOrders.length, names: eshopOrders.slice(0, 6).map((o: any) => o.order_number || `#${o.order_id || o.id}`) },
+          lastUpdate: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+        });
+      } catch {} finally { setCcLoading(false); }
+    };
+    ccRefreshRef.current = refresh;
+    refresh();
+    const interval = setInterval(refresh, 60_000);
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
@@ -2010,10 +2209,10 @@ export default function Page() {
               {[
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Transfert", color: "#2563eb", onClick: () => { resetTransfer(); setScreen("transfer"); }, badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>, label: "Préparation", color: "#7c3aed", onClick: () => { loadPickings(); setScreen("prep"); }, badge: pickings.length > 0 ? pickings.length : null },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>, label: "En attente", color: "#f59e0b", onClick: () => setScreen("waitingOrders"), badge: null },
+                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>, label: "En attente", color: "#f59e0b", onClick: () => setScreen("waitingOrders"), badge: badgeWaiting },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Arrivage", color: "#059669", onClick: () => setScreen("arrival"), badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>, label: "Palettes WMS", color: "#0f766e", onClick: () => setScreen("palettes"), badge: null },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>, label: "E-shop", color: "#db2777", onClick: () => setScreen("eshop"), badge: null },
+                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>, label: "E-shop", color: "#db2777", onClick: () => setScreen("eshop"), badge: badgeEshop },
               ].map((btn, i) => (
                 <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 8, padding: "18px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, cursor: "pointer", fontFamily: "inherit", boxShadow: C.shadow, position: "relative" as const }}>
                   <div style={{ width: 40, height: 40, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>{btn.icon}</div>
@@ -2031,16 +2230,23 @@ export default function Page() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
               {[
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>, label: "Ajustement", onClick: () => setScreen("inventory"), admin: false },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Import produits", onClick: () => setScreen("productImport"), admin: false },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>, label: "Import WALA", onClick: () => setScreen("supplierImport"), admin: true },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: true },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="3" y="17" width="5" height="5" rx="1"/><line x1="12" y1="5" x2="21" y2="5"/><line x1="12" y1="12" x2="21" y2="12"/><line x1="12" y1="19" x2="21" y2="19"/></svg>, label: "Scan libre", onClick: () => setScreen("freeScan"), admin: false },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Retours", onClick: () => setScreen("returns"), admin: false, badge: badgeReturns, badgeColor: "#ea580c" },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Gestion articles", onClick: () => setScreen("productImport"), admin: false, badge: null, badgeColor: "" },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>, label: "Import WALA", onClick: () => setScreen("supplierImport"), admin: true, badge: null, badgeColor: "" },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true, badge: badgeNegStock, badgeColor: "#ef4444" },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: false },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels"), admin: false },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; }, admin: true },
               ].filter(btn => !btn.admin || (session && odoo.isAdmin(session))).map((btn, i) => (
-                <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 6, padding: "14px 6px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}>
+                <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 6, padding: "14px 6px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", position: "relative" as const }}>
                   {btn.icon}
                   <span style={{ fontSize: 11, fontWeight: 600, color: C.textSec }}>{btn.label}</span>
+                  {(btn as any).badge != null && (
+                    <div style={{ position: "absolute" as const, top: 5, right: 5, minWidth: 17, height: 17, borderRadius: 9, background: (btn as any).badgeColor || "#6b7280", color: "#fff", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>
+                      {(btn as any).badge}
+                    </div>
+                  )}
                 </button>
               ))}
             </div>
@@ -2372,7 +2578,7 @@ export default function Page() {
 
         {/* ===== SETTINGS ===== */}
         {screen === "settings" && session && (
-          <SettingsScreen onBack={goHome} session={session} />
+          <SettingsScreen onBack={goHome} session={session} isDark={isDark} onToggleDark={toggleDark} />
         )}
 
         {/* ===== HISTORY ===== */}
@@ -2403,6 +2609,12 @@ export default function Page() {
         {screen === "supplierImport" && session && odoo.isAdmin(session) && (
           <SupplierImportScreen session={session} onBack={goHome} onToast={showToast} />
         )}
+        {screen === "freeScan" && session && (
+          <FreeScanScreen session={session} onBack={goHome} onToast={showToast} />
+        )}
+        {screen === "returns" && session && (
+          <ReturnsScreen session={session} onBack={goHome} onToast={showToast} />
+        )}
         {screen === "reprintLabel" && session && odoo.isAdmin(session) && (
           <ReprintLabelScreen session={session} onBack={goHome} onToast={showToast} />
         )}
@@ -2422,6 +2634,85 @@ export default function Page() {
           <EshopScreen session={session} onBack={goHome} onToast={showToast} />
         )}
       </main>
+
+      {/* ── Control Center — desktop + home only ── */}
+      {screen === "home" && session && (
+        <div style={{
+          position: "fixed", top: 60, right: 20, width: 290,
+          display: "none",
+        }}
+          className="cc-panel"
+        >
+          {/* header */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 8, height: 8, borderRadius: 4, background: ccLoading ? "#f59e0b" : "#10b981", boxShadow: ccLoading ? "0 0 6px #f59e0b" : "0 0 6px #10b981" }} />
+              <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1 }}>Centre de contrôle</span>
+            </div>
+            <button onClick={() => ccRefreshRef.current && ccRefreshRef.current()}
+              style={{ background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 16, lineHeight: 1, padding: 4 }}
+              title="Actualiser">↻</button>
+          </div>
+
+          {/* card helper */}
+          {(() => {
+            const CcCard = ({ color, bg, icon, label, count, names, onClick }: { color: string; bg: string; icon: string; label: string; count: number; names: string[]; onClick: () => void }) => (
+              <button onClick={onClick} style={{
+                width: "100%", textAlign: "left" as const, background: C.white,
+                border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "14px 16px",
+                marginBottom: 10, cursor: "pointer", fontFamily: "inherit",
+                boxShadow: "0 1px 6px rgba(0,0,0,0.06)", transition: "box-shadow .15s",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: count > 0 ? 10 : 0 }}>
+                  <div style={{ width: 38, height: 38, borderRadius: 10, background: bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>{icon}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{label}</div>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: count > 0 ? color : C.textMuted, lineHeight: 1.1 }}>{ccData ? count : "—"}</div>
+                  </div>
+                </div>
+                {count > 0 && names.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column" as const, gap: 3 }}>
+                    {names.map((n, i) => (
+                      <div key={i} style={{ fontSize: 11, color: C.textSec, background: C.bg, borderRadius: 6, padding: "3px 8px", fontWeight: 600 }}>{n}</div>
+                    ))}
+                    {count > names.length && (
+                      <div style={{ fontSize: 11, color: C.textMuted, padding: "2px 8px" }}>+{count - names.length} autre{count - names.length > 1 ? "s" : ""}</div>
+                    )}
+                  </div>
+                )}
+              </button>
+            );
+            return (
+              <>
+                <CcCard color="#f59e0b" bg="#fef3c7" icon="⏳" label="En attente aujourd'hui"
+                  count={ccData?.waitingToday.count ?? 0}
+                  names={ccData?.waitingToday.names ?? []}
+                  onClick={() => setScreen("waitingOrders")} />
+                <CcCard color="#7c3aed" bg="#ede9fe" icon="📦" label="En préparation"
+                  count={ccData?.inPrep.count ?? 0}
+                  names={ccData?.inPrep.names ?? []}
+                  onClick={() => { loadPickings(); setScreen("prep"); }} />
+                <CcCard color="#db2777" bg="#fce7f3" icon="🛒" label="E-shop en attente"
+                  count={ccData?.eshopWaiting.count ?? 0}
+                  names={ccData?.eshopWaiting.names ?? []}
+                  onClick={() => setScreen("eshop")} />
+              </>
+            );
+          })()}
+
+          {ccData && (
+            <div style={{ textAlign: "center" as const, fontSize: 10, color: C.textMuted, marginTop: 4 }}>
+              Mis à jour à {ccData.lastUpdate} · actualise auto toutes les 60s
+            </div>
+          )}
+        </div>
+      )}
+
+      <style>{`
+        @media (min-width: 1024px) {
+          .cc-panel { display: block !important; }
+        }
+      `}</style>
 
       {/* Print Modal — rendered at root level for z-index */}
       {printReq && <PrintModal req={printReq} onClose={() => setPrintReq(null)} onToast={showToast} />}
@@ -3759,7 +4050,10 @@ function ProductResult({ product, stock, onRename }: { product: any; stock: any[
               </button>
             )}
           </div>
-          <span style={{ fontWeight: 700, marginLeft: 8, color: (q.quantity - (q.reserved_quantity||0)) > 0 ? C.green : C.orange }}>{q.quantity - (q.reserved_quantity||0)}</span>
+          <div style={{ textAlign: "right" as const, marginLeft: 8, flexShrink: 0 }}>
+            <div style={{ fontWeight: 700, color: (q.quantity - (q.reserved_quantity||0)) > 0 ? C.green : C.orange }}>{q.quantity - (q.reserved_quantity||0)} dispo</div>
+            <div style={{ fontSize: 10, color: C.textMuted }}>{q.quantity} phys{(q.reserved_quantity||0) > 0 ? ` · ${q.reserved_quantity} rés` : ""}</div>
+          </div>
         </div>
       ))}
     </Section>
@@ -3795,7 +4089,10 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
             <span style={{ fontWeight: 600 }}>{q.location_id[1]}</span>
 
           </div>
-          <span style={{ fontWeight: 700, color: C.green }}>{q.quantity - (q.reserved_quantity||0)}</span>
+          <div style={{ textAlign: "right" as const }}>
+            <div style={{ fontWeight: 700, color: (q.quantity - (q.reserved_quantity||0)) > 0 ? C.green : C.orange }}>{q.quantity - (q.reserved_quantity||0)} dispo</div>
+            <div style={{ fontSize: 10, color: C.textMuted }}>{q.quantity} phys{(q.reserved_quantity||0) > 0 ? ` · ${q.reserved_quantity} rés` : ""}</div>
+          </div>
         </div>
       ))}
     </Section>
@@ -4307,15 +4604,50 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     try {
       const orderId = p._raw?.order_id || p.id;
       const orderNumber = p.order_number;
-      const res = await fetch(`/api/sendcloud?action=label&order_id=${encodeURIComponent(orderId)}&order_number=${encodeURIComponent(orderNumber)}`);
+      // POST pour passer tout le _raw au serveur → pas besoin de refetch V3
+      const res = await fetch("/api/sendcloud?action=label", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: orderId, order_number: orderNumber, order_raw: p._raw }),
+      });
       const data = await res.json();
 
-      // 202 = colis trouvé mais étiquette pas encore prête
+      // 202 = colis trouvé mais étiquette pas encore prête — retry auto après 10s
       if (res.status === 202 || data.labelPending) {
-        onToast(`⏳ Étiquette en cours — réessaie dans quelques secondes`);
+        onToast(`⏳ Étiquette en cours — nouvelle tentative dans 10s…`);
+        await new Promise(r => setTimeout(r, 10000));
+        // Retry une fois automatiquement
+        const res2 = await fetch("/api/sendcloud?action=label", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ order_id: orderId, order_number: orderNumber, order_raw: p._raw }),
+        });
+        const data2 = await res2.json();
+        if (res2.status === 202 || data2.labelPending) {
+          onToast(`⏳ Toujours en cours — réessaie manuellement dans quelques secondes`);
+          return;
+        }
+        if (!res2.ok) throw new Error(data2.error || "Erreur étiquette (retry)");
+        if (!data2.labelBase64) throw new Error("Pas de PDF reçu (retry)");
+        // Substituer pour la suite
+        Object.assign(data, data2);
+        Object.assign(res, { ok: true });
+        // fallthrough au code d'impression ci-dessous
+        const scCfg2 = pn.getLabelTypeConfig("sendcloud");
+        const printerId2 = scCfg2.printerId || pn.getSavedPrinterId();
+        if (printerId2) {
+          const result2 = await pn.printPdfLabel(printerId2, data2.labelBase64, `SendCloud ${orderNumber}`);
+          if (result2.success) { onToast(`✓ Étiquette ${data2.tracking || orderNumber} imprimée`); vibrateSuccess(); }
+          else throw new Error(result2.error || "Erreur impression (retry)");
+        } else {
+          const byteArray2 = Uint8Array.from(atob(data2.labelBase64), c => c.charCodeAt(0));
+          const blob2 = new Blob([byteArray2], { type: "application/pdf" });
+          window.open(URL.createObjectURL(blob2), "_blank");
+          onToast("PDF ouvert dans un nouvel onglet");
+        }
         return;
       }
-      if (!res.ok) { throw new Error(data.error || "Erreur étiquette"); }
+      if (!res.ok) { throw new Error([data.error, data.hint].filter(Boolean).join(" | ")); }
       if (!data.labelBase64) { throw new Error("Pas de PDF reçu"); }
 
       const scCfg = pn.getLabelTypeConfig("sendcloud");
@@ -5010,10 +5342,13 @@ function PalletRefSearch({ packingData, matchData }: { packingData: any; matchDa
     for (const pallet of packingData.pallets) {
       const summary: Record<string, any> = {};
       for (const c of pallet.cartons) {
-        const key = `${c.supplierRef}_${c.lot}`;
-        if (!summary[key]) summary[key] = { palletNo: pallet.palletNo, supplierRef: c.supplierRef, lot: c.lot, expiry: c.expiry, qty: 0, cartonCount: 0 };
-        summary[key].qty += c.qtyProduct;
-        summary[key].cartonCount += 1;
+        const arts: any[] = c.articles?.length > 0 ? c.articles : [{ supplierRef: c.supplierRef, lot: c.lot, expiry: c.expiry, qtyProduct: c.qtyProduct }];
+        arts.forEach((art: any, artIdx: number) => {
+          const key = `${art.supplierRef}_${art.lot}`;
+          if (!summary[key]) summary[key] = { palletNo: pallet.palletNo, supplierRef: art.supplierRef, lot: art.lot, expiry: art.expiry, qty: 0, cartonCount: 0 };
+          summary[key].qty += art.qtyProduct;
+          if (!c.isVrac || artIdx === 0) summary[key].cartonCount += 1;
+        });
       }
       for (const v of Object.values(summary) as any[]) {
         const match = matchData[v.supplierRef];
@@ -5156,6 +5491,7 @@ function applyMapping(row: any[], headers: string[], mapping: ColMapping): Impor
 }
 
 function ProductImportScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+  const [tab, setTab] = useState<"import" | "create">("import");
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [checking, setChecking] = useState(false);
   const [currentIdx, setCurrentIdx] = useState<number | null>(null);
@@ -5169,6 +5505,11 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   const [rawData, setRawData] = useState<any[][]>([]);
   const [mapping, setMapping] = useState<ColMapping | null>(null);
   const [showMapping, setShowMapping] = useState(false);
+
+  // ── Onglet Créer article ─────────────────────────────────────────
+  if (tab === "create") {
+    return <ArticleCreatorScreen session={session} onBack={() => setTab("import")} onToast={onToast} />;
+  }
 
   // ── Parse Excel ──────────────────────────────────────────────────
   const handleFile = async (file: File) => {
@@ -5388,14 +5729,26 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   // ── Vue liste ────────────────────────────────────────────────────
   return (
     <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
         <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 10, padding: 8 }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Import produits</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Gestion articles</div>
           {fileName && <div style={{ fontSize: 12, color: C.textMuted }}>{fileName}</div>}
         </div>
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 20, background: C.bg, borderRadius: 12, padding: 4 }}>
+        {([["import", "Import Excel"], ["create", "Créer article"]] as const).map(([t, label]) => (
+          <button key={t} onClick={() => setTab(t)}
+            style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600,
+              background: tab === t ? C.white : "transparent", color: tab === t ? C.text : C.textMuted,
+              boxShadow: tab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none", transition: "all 0.15s" }}>
+            {label}
+          </button>
+        ))}
       </div>
 
       {rows.length === 0 ? (
@@ -5539,7 +5892,13 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
   // Enrich packing data with Odoo matches
   const enrichWithOdoo = async (data: any) => {
     const allRefs = Array.from(new Set(
-      data.pallets.flatMap((p: any) => p.cartons.map((c: any) => c.supplierRef)).filter(Boolean)
+      data.pallets.flatMap((p: any) =>
+        p.cartons.flatMap((c: any) =>
+          c.articles?.length > 0
+            ? c.articles.map((a: any) => a.supplierRef)
+            : [c.supplierRef]
+        )
+      ).filter(Boolean)
     )) as string[];
     if (allRefs.length > 0 && session) {
       const matches = await odoo.matchSupplierRefs(session, allRefs);
@@ -5748,15 +6107,20 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
           {/* Palettes */}
           {packingData.pallets.map((pallet: any, pi: number) => {
             const isOpen = !!openPallets[pallet.palletNo];
-            // Aggregate products on this pallet
-            const prodSummary: Record<string, { supplierRef: string; desc: string; lot: string; expiry: string; totalQty: number; cartonCount: number }> = {};
+            // Aggregate products on this pallet — supporte les cartons vrac (multi-articles)
+            const prodSummary: Record<string, { supplierRef: string; desc: string; lot: string; expiry: string; totalQty: number; cartonCount: number; hasVrac: boolean }> = {};
             for (const c of pallet.cartons) {
-              const key = `${c.supplierRef}_${c.lot}`;
-              if (!prodSummary[key]) {
-                prodSummary[key] = { supplierRef: c.supplierRef, desc: c.productDesc, lot: c.lot, expiry: c.expiry, totalQty: 0, cartonCount: 0 };
-              }
-              prodSummary[key].totalQty += c.qtyProduct;
-              prodSummary[key].cartonCount += 1;
+              const arts: any[] = c.articles?.length > 0 ? c.articles : [{ supplierRef: c.supplierRef, productDesc: c.productDesc, lot: c.lot, expiry: c.expiry, qtyProduct: c.qtyProduct }];
+              arts.forEach((art: any, artIdx: number) => {
+                const key = `${art.supplierRef}_${art.lot}`;
+                if (!prodSummary[key]) {
+                  prodSummary[key] = { supplierRef: art.supplierRef, desc: art.productDesc, lot: art.lot, expiry: art.expiry, totalQty: 0, cartonCount: 0, hasVrac: false };
+                }
+                prodSummary[key].totalQty += art.qtyProduct;
+                // Pour le vrac : 1 carton partagé → on l'attribue uniquement au 1er article pour éviter le doublon
+                if (!c.isVrac || artIdx === 0) prodSummary[key].cartonCount += 1;
+                if (c.isVrac) prodSummary[key].hasVrac = true;
+              });
             }
             const products = Object.values(prodSummary);
 
@@ -5790,11 +6154,16 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                         <div key={j} style={{ ...cardStyle, marginBottom: 6, borderLeft: `3px solid ${isMatched ? C.green : C.orange}` }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                             <div style={{ flex: 1 }}>
-                              {isMatched ? (
-                                <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{match.product_name}</div>
-                              ) : (
-                                <div style={{ fontSize: 13, fontWeight: 700, color: C.orange }}>{prod.desc} <span style={{ fontSize: 10, fontWeight: 400 }}>(non trouvé)</span></div>
-                              )}
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" as const }}>
+                                {isMatched ? (
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{match.product_name}</div>
+                                ) : (
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: C.orange }}>{prod.desc} <span style={{ fontSize: 10, fontWeight: 400 }}>(non trouvé)</span></div>
+                                )}
+                                {prod.hasVrac && (
+                                  <span style={{ fontSize: 9, fontWeight: 700, color: "#7c3aed", background: "#ede9fe", padding: "1px 6px", borderRadius: 5, letterSpacing: "0.04em" }}>VRAC</span>
+                                )}
+                              </div>
                               <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
                                 Réf fourn: {prod.supplierRef}
                                 {match?.default_code && <span> · Réf interne: {match.default_code}</span>}
@@ -5876,6 +6245,15 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const [resending, setResending] = useState<Record<number, boolean>>({});
   const [newWeight, setNewWeight] = useState<Record<number, string>>({});
   const [addingPkg, setAddingPkg] = useState<Record<number, boolean>>({});
+  const [printingPL, setPrintingPL] = useState<Record<number, boolean>>({});
+  const [printingAllPL, setPrintingAllPL] = useState<Record<number, boolean>>({});
+  // Mode scan direct : quand on scanne un OUT, on affiche directement les colis
+  const [scanMode, setScanMode] = useState(false); // true = vue "scan → colis directs"
+  const [scanPicking, setScanPicking] = useState<any | null>(null);
+  const [scanPkgs, setScanPkgs] = useState<any[]>([]);
+  const [scanAtts, setScanAtts] = useState<any[]>([]);
+  const [scanLoading, setScanLoading] = useState(false);
+  const scanInputRef = useRef<HTMLInputElement>(null);
   const [printingPdf, setPrintingPdf] = useState(false);
   const [pdfRaw, setPdfRaw] = useState<{ bytes: Uint8Array; fileName: string; numPages: number } | null>(null);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
@@ -5889,6 +6267,37 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
   const printLocalPdf = () => pdfInputRef.current?.click();
+
+  // ── Mode SCAN direct ──────────────────────────────────────────────────────────
+  const loadScanPicking = async (outNumber: string) => {
+    setScanLoading(true);
+    setScanPicking(null); setScanPkgs([]); setScanAtts([]);
+    try {
+      const results = await odoo.searchPickingByCommande(session, outNumber.trim());
+      if (results.length === 0) { onToast("❌ Aucun OUT trouvé : " + outNumber.trim()); setScanLoading(false); return; }
+      const p = results[0];
+      setScanPicking(p);
+      const [att, pkgs] = await Promise.all([
+        odoo.getPickingAttachments(session, p.id),
+        odoo.getPickingPackages(session, p.id),
+      ]);
+      // Enrich packages with weight
+      let pkgsEnriched = pkgs;
+      if (pkgs.length > 0) {
+        try {
+          const pkgDetails = await odoo.searchRead(session, "stock.quant.package",
+            [["id", "in", pkgs.map((pk: any) => pk.id)]],
+            ["id", "name", "shipping_weight", "pack_weight"], pkgs.length);
+          const pkgMap: Record<number, any> = {};
+          for (const d of pkgDetails) pkgMap[d.id] = d;
+          pkgsEnriched = pkgs.map((pk: any) => ({ ...pk, ...(pkgMap[pk.id] || {}) }));
+        } catch {}
+      }
+      setScanPkgs(pkgsEnriched);
+      setScanAtts(att);
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setScanLoading(false);
+  };
 
   const getCrop = (pageIdx: number) => pdfCropPerPage[pageIdx] ?? PDF_CROP_DEFAULT;
 
@@ -5968,8 +6377,24 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
       const results = await odoo.searchDoneOutPickings(session, q);
       setPickings(results);
       if (results.length === 0) onToast("Aucun OUT trouvé");
+      // Auto-expand si un seul résultat (recherche directe par numéro)
+      if (results.length === 1) {
+        setExpanded(results[0].id);
+        loadDetail(results[0].id);
+      }
     } catch (e: any) { onToast("❌ " + e.message); }
     setSearching(false);
+  };
+
+  // Debounce auto-search quand ça ressemble à un numéro OUT
+  const autoSearchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleQueryChange = (val: string) => {
+    setQuery(val);
+    if (autoSearchRef.current) clearTimeout(autoSearchRef.current);
+    // Déclenche auto si le texte ressemble à OUT/xxxxx (ex: "WH/OUT/", "OUT/2024/")
+    if (/out[\\/]/i.test(val) && val.trim().length >= 6) {
+      autoSearchRef.current = setTimeout(() => search(val), 500);
+    }
   };
 
   const loadDetail = async (pickingId: number, force = false) => {
@@ -6033,6 +6458,129 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
     setResending(prev => ({ ...prev, [picking.id]: false }));
   };
 
+  const printPackingList = async (picking: any, pkg: any) => {
+    setPrintingPL(prev => ({ ...prev, [pkg.id]: true }));
+    try {
+      const cfg = pn.getLabelTypeConfig("palette");
+      const pid = cfg.printerId || pn.getLabelTypeConfig("blank").printerId || pn.getSavedPrinterId();
+      if (!pid) { onToast("⚠️ Aucune imprimante configurée dans les paramètres (config Étiquette palette)"); return; }
+
+      // Récupérer le poids du colis directement depuis Odoo (shipping_weight)
+      let pkgWeight: number | null = null;
+      try {
+        const pkgData = await odoo.searchRead(session, "stock.quant.package",
+          [["id", "=", pkg.id]], ["id", "name", "shipping_weight", "pack_weight"], 1);
+        if (pkgData.length > 0) {
+          pkgWeight = pkgData[0].shipping_weight || pkgData[0].pack_weight || null;
+        }
+      } catch {}
+
+      // Récupérer les move lines du package — filtrer qty_done > 0
+      const allLines = await odoo.searchRead(session, "stock.move.line",
+        [["result_package_id", "=", pkg.id]],
+        ["product_id", "qty_done", "lot_id", "product_uom_id"],
+        100
+      );
+      // Ignorer les lignes à zéro (Odoo crée parfois des doublons vides)
+      const lines = allLines.filter((l: any) => (l.qty_done || 0) > 0);
+
+      // Récupérer barcode + default_code des produits
+      const prodIds = Array.from(new Set(lines.map((l: any) => Array.isArray(l.product_id) ? l.product_id[0] : l.product_id).filter(Boolean))) as number[];
+      const prods = prodIds.length ? await odoo.searchRead(session, "product.product",
+        [["id", "in", prodIds]], ["id", "default_code", "barcode", "name"], prodIds.length) : [];
+      const prodMap: Record<number, any> = {};
+      for (const p of prods) prodMap[p.id] = p;
+
+      // ── Déduplique les lignes par produit+lot (Odoo peut créer des doublons) ──
+      const lineMap: Record<string, { prodId: number; qty: number; lot: string; lineRef: any }> = {};
+      for (const line of lines) {
+        const prodId = Array.isArray(line.product_id) ? line.product_id[0] : line.product_id;
+        const lot = line.lot_id ? (Array.isArray(line.lot_id) ? line.lot_id[1] : String(line.lot_id)) : "";
+        const key = `${prodId}__${lot}`;
+        if (lineMap[key]) {
+          lineMap[key].qty += Math.round(line.qty_done || 0);
+        } else {
+          lineMap[key] = { prodId, qty: Math.round(line.qty_done || 0), lot, lineRef: line };
+        }
+      }
+      const dedupedLines = Object.values(lineMap);
+
+      // ── ZPL 100×150mm @203dpi = 812 × 1218 dots ──────────────────────────
+      const W = 812;
+      const zplStr = (s: string) => (s || "")
+        .replace(/[^\x20-\xFF]/g, "?")
+        .replace(/\^/g, " ")
+        .replace(/~/g, " ");
+
+      let zpl = `^XA\n^PW${W}\n^LL1218\n^CI28\n`;
+
+      // ── En-tête : PACK + poids (toujours affiché) ──
+      zpl += `^FO20,20^A0N,38,38^FD${zplStr(pkg.name || "")}^FS\n`;
+      const weightStr = pkgWeight != null ? `${pkgWeight} kg` : (pkg.shipping_weight || pkg.pack_weight ? `${pkg.shipping_weight || pkg.pack_weight} kg` : "- kg");
+      zpl += `^FO${W - 230},20^A0N,36,36^FD${weightStr}^FS\n`;
+      zpl += `^FO10,68^GB${W - 20},3,3^FS\n`;
+
+      let y = 82;
+      for (const entry of dedupedLines) {
+        const prod = prodMap[entry.prodId] || {};
+        const ref = prod.default_code || "";
+        const name = prod.name || (Array.isArray(entry.lineRef.product_id) ? entry.lineRef.product_id[1] : "") || "";
+        const barcode = prod.barcode || ref || "";
+
+        // Ref + quantité (gros)
+        zpl += `^FO20,${y}^A0N,34,34^FD${zplStr(ref)}^FS\n`;
+        zpl += `^FO${W - 190},${y}^A0N,40,40^FDx${entry.qty}^FS\n`;
+        y += 42;
+
+        // Nom — retour à la ligne auto sur 2 lignes max
+        zpl += `^FO20,${y}^A0N,24,24^FB${W - 40},2,2,L^FD${zplStr(name)}^FS\n`;
+        const nameLines = name.length > 42 ? 2 : 1;
+        y += 26 * nameLines + 4;
+
+        // Lot
+        if (entry.lot) {
+          zpl += `^FO20,${y}^A0N,22,22^FDLot: ${zplStr(entry.lot)}^FS\n`;
+          y += 28;
+        }
+
+        // Barcode (haut = 75)
+        if (barcode) {
+          zpl += `^FO20,${y}^BY2,3,75^BCN,75,Y,N,N^FD${barcode}^FS\n`;
+          y += 96;
+        }
+
+        zpl += `^FO10,${y}^GB${W - 20},1,1^FS\n`;
+        y += 12;
+        if (y > 1170) break;
+      }
+      zpl += `^XZ`;
+
+      // Utilise ZPL→PDF via Labelary (même chemin que étiquette palette)
+      // pour éviter que le driver Windows imprime le ZPL en texte brut
+      const result = await pn.printZplAsPdf(pid, zpl, `PackingList-${pkg.name}`, 100, 150);
+      if (result.success) onToast(`✅ Packing list ${pkg.name} envoyée`);
+      else onToast("❌ " + (result.error || "Erreur impression"));
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setPrintingPL(prev => ({ ...prev, [pkg.id]: false }));
+  };
+
+  // Impression en chaîne de tous les colis d'un picking
+  const printAllPackingLists = async (picking: any, pkgs: any[]) => {
+    if (!pkgs.length) { onToast("⚠️ Aucun colis sur cette commande"); return; }
+    setPrintingAllPL(prev => ({ ...prev, [picking.id]: true }));
+    let ok = 0; let err = 0;
+    for (const pkg of pkgs) {
+      try {
+        await printPackingList(picking, pkg);
+        ok++;
+        // Pause 800ms entre chaque pour ne pas saturer l'imprimante
+        if (pkgs.indexOf(pkg) < pkgs.length - 1) await new Promise(r => setTimeout(r, 800));
+      } catch { err++; }
+    }
+    onToast(err === 0 ? `✅ ${ok} packing list${ok > 1 ? "s" : ""} envoyée${ok > 1 ? "s" : ""}` : `⚠️ ${ok} ok, ${err} erreur(s)`);
+    setPrintingAllPL(prev => ({ ...prev, [picking.id]: false }));
+  };
+
   const addPackage = async (picking: any) => {
     const w = parseFloat(newWeight[picking.id] || "");
     if (!w || w <= 0) { onToast("⚠️ Entrez un poids valide (ex: 2.5)"); return; }
@@ -6060,42 +6608,308 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
     setAddingPkg(prev => ({ ...prev, [picking.id]: false }));
   };
 
+  // ── state onglet local ──────────────────────────────────────────────────────
+  const [reprTab, setReprTab] = useState<"transport" | "packinglist">("transport");
+
+  // ── rendu ────────────────────────────────────────────────────────────────────
+  const tabStyle = (active: boolean) => ({
+    flex: 1, padding: "8px 0", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
+    cursor: "pointer", border: "none", borderRadius: 8,
+    background: active ? C.blue : "transparent",
+    color: active ? "#fff" : C.textMuted,
+    transition: "background .15s",
+  } as React.CSSProperties);
+
+  // Réutilisé dans les deux onglets pour afficher un colis avec boutons
+  const renderPkgRow = (picking: any, pkg: any) => {
+    const weight = pkg.shipping_weight || pkg.pack_weight || null;
+    const isPL = !!printingPL[pkg.id];
+    return (
+      <div key={pkg.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", background: C.bg, borderRadius: 10, marginBottom: 8, border: `1px solid ${C.border}` }}>
+        <span style={{ fontSize: 22 }}>📦</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{pkg.name}</div>
+          {weight != null && weight > 0
+            ? <div style={{ fontSize: 11, color: C.textMuted }}>{weight} kg</div>
+            : <div style={{ fontSize: 11, color: "#f59e0b" }}>Poids non renseigné</div>}
+        </div>
+        <button onClick={() => printPackingList(picking, pkg)} disabled={isPL}
+          style={{ padding: "7px 12px", background: isPL ? C.border : C.blue, color: isPL ? C.textMuted : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: isPL ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const, opacity: isPL ? 0.6 : 1 }}>
+          {isPL ? "…" : "🖨 Imprimer"}
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+      {/* ── En-tête ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
+        <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>Réimprimer étiquettes</div>
+      </div>
+
+      {/* ── Onglets ── */}
+      <div style={{ display: "flex", gap: 4, background: C.bg, borderRadius: 10, padding: 4, marginBottom: 16, border: `1px solid ${C.border}` }}>
+        <button style={tabStyle(reprTab === "transport")} onClick={() => setReprTab("transport")}>🚚 Transporteur</button>
+        <button style={tabStyle(reprTab === "packinglist")} onClick={() => { setReprTab("packinglist"); setTimeout(() => scanInputRef.current?.focus(), 50); }}>📦 Packing lists</button>
+      </div>
+
+      {/* ══════════════════════════════════════════════════════
+          ONGLET 1 — Étiquettes transporteur (PDF TNT)
+      ══════════════════════════════════════════════════════ */}
+      {reprTab === "transport" && (
         <div>
-          <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>Étiquettes transporteur</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>Bons de livraison validés — colis TNT</div>
+          {/* Barre de recherche */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <input value={query} onChange={e => handleQueryChange(e.target.value)} onKeyDown={e => e.key === "Enter" && search()}
+              placeholder="WH/OUT/00123, partenaire, réf…"
+              style={{ flex: 1, padding: "10px 14px", border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text }} autoFocus />
+            <button onClick={() => search()} disabled={searching}
+              style={{ padding: "10px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: searching ? 0.6 : 1 }}>
+              {searching ? "…" : "🔍"}
+            </button>
+          </div>
+
+          {/* Imprimer un PDF local */}
+          <input ref={pdfInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handlePdfFile} />
+          <button onClick={printLocalPdf} disabled={printingPdf}
+            style={{ width: "100%", padding: 12, background: printingPdf ? C.bg : "#f0fdf4", border: `1.5px solid ${C.greenBorder}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, color: C.green, fontFamily: "inherit", marginBottom: 12, opacity: printingPdf ? 0.6 : 1 }}>
+            {printingPdf ? "Envoi en cours…" : "🖨️ Imprimer un PDF depuis mon Mac"}
+          </button>
+
+          {pickings.length === 0 && !searching && (
+            <button onClick={() => search("")}
+              style={{ width: "100%", padding: 12, background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 13, color: C.textMuted, fontFamily: "inherit" }}>
+              Afficher les 50 derniers OUT validés
+            </button>
+          )}
+
+          {/* Liste des pickings */}
+          {pickings.map(p => {
+            const isOpen = expanded === p.id;
+            const atts = attachments[p.id] || [];
+            const pkgs = packages[p.id] || [];
+            const loading = loadingDetail[p.id];
+            const adding = addingPkg[p.id];
+            const dateStr = p.date_done ? new Date(p.date_done).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+            return (
+              <div key={p.id} style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 10, overflow: "hidden", boxShadow: C.shadow }}>
+                <button onClick={() => toggleExpand(p.id)}
+                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</span>
+                      {p.carrier_id && <span style={{ fontSize: 11, color: "#7c3aed", background: "#f3e8ff", padding: "2px 6px", borderRadius: 4, fontWeight: 600 }}>{p.carrier_id[1]}</span>}
+                    </div>
+                    {p.partner_id && <div style={{ fontSize: 12, color: C.textMuted }}>{p.partner_id[1]}</div>}
+                    <div style={{ display: "flex", gap: 8, marginTop: 2, flexWrap: "wrap" as const }}>
+                      {p.origin && <span style={{ fontSize: 11, color: C.textMuted }}>Origine : {p.origin}</span>}
+                      {p.carrier_tracking_ref && <span style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>🚚 {p.carrier_tracking_ref}</span>}
+                      {dateStr && <span style={{ fontSize: 11, color: C.textMuted }}>{dateStr}</span>}
+                    </div>
+                  </div>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"
+                    style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .2s", flexShrink: 0 }}>
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </button>
+                {isOpen && (
+                  <div style={{ borderTop: `1px solid ${C.border}`, padding: "12px 14px" }}>
+                    {loading && <div style={{ color: C.textMuted, fontSize: 13, paddingBottom: 8 }}>Chargement…</div>}
+                    {!loading && (
+                      <div style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginBottom: 8 }}>📦 Colis ({pkgs.length})</div>
+                        {pkgs.length === 0 && <div style={{ fontSize: 12, color: C.textMuted, fontStyle: "italic" }}>Aucun colis associé.</div>}
+                        {pkgs.map((pkg: any) => renderPkgRow(p, pkg))}
+                      </div>
+                    )}
+                    {!loading && (
+                      <div style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginBottom: 8 }}>🖨 Étiquettes PDF ({atts.length})</div>
+                        {atts.length === 0 && <div style={{ fontSize: 12, color: C.textMuted, fontStyle: "italic", marginBottom: 4 }}>Aucune étiquette PDF trouvée.</div>}
+                        {atts.map((att: any) => (
+                          <div key={att.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, padding: "7px 10px", background: C.bg, borderRadius: 8 }}>
+                            <span style={{ fontSize: 12, flex: 1, color: C.text, fontWeight: 500 }}>📄 {att.name}</span>
+                            <button onClick={() => printAttachment(att)} disabled={printing[att.id]}
+                              style={{ padding: "5px 12px", background: C.blue, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: printing[att.id] ? 0.6 : 1 }}>
+                              {printing[att.id] ? "…" : "🖨 Imprimer"}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {!loading && (
+                      <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#166534", marginBottom: 10 }}>➕ Ajouter un colis TNT</div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 11, color: "#166534", marginBottom: 4 }}>Poids (kg)</div>
+                            <input type="number" min="0.1" step="0.1" value={newWeight[p.id] || ""}
+                              onChange={e => setNewWeight(prev => ({ ...prev, [p.id]: e.target.value }))}
+                              onKeyDown={e => e.key === "Enter" && !adding && addPackage(p)}
+                              placeholder="ex : 2.5"
+                              style={{ width: "100%", padding: "8px 10px", border: "1px solid #86efac", borderRadius: 8, fontSize: 14, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+                          </div>
+                          <button onClick={() => addPackage(p)} disabled={adding}
+                            style={{ marginTop: 20, padding: "8px 14px", background: adding ? C.border : "#16a34a", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: adding ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const, opacity: adding ? 0.7 : 1 }}>
+                            {adding ? "Envoi…" : "📦 Créer + TNT"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <button onClick={() => resendToShipper(p)} disabled={resending[p.id]}
+                      style={{ width: "100%", padding: "8px 0", background: resending[p.id] ? C.border : "#7c3aed", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: resending[p.id] ? 0.7 : 1 }}>
+                      {resending[p.id] ? "Envoi en cours…" : "🔄 Réémettre étiquette (tous les colis)"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
-      </div>
+      )}
 
-      {/* Barre de recherche */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <input
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && search()}
-          placeholder="WH/OUT/00123, partenaire, réf..."
-          style={{ flex: 1, padding: "10px 14px", border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }}
-          autoFocus
-        />
-        <button onClick={() => search()} disabled={searching}
-          style={{ padding: "10px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: searching ? 0.6 : 1 }}>
-          {searching ? "…" : "🔍"}
-        </button>
-      </div>
+      {/* ══════════════════════════════════════════════════════
+          ONGLET 2 — Packing lists (scan OUT → colis directs)
+      ══════════════════════════════════════════════════════ */}
+      {reprTab === "packinglist" && (
+        <div>
+          {/* Zone de scan/saisie */}
+          <div style={{ background: C.white, borderRadius: 14, border: `2px solid ${C.blue}`, padding: "16px 14px", marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.blue, marginBottom: 10 }}>📷 Scanner ou saisir le numéro OUT</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                ref={scanInputRef}
+                value={scanMode && scanPicking ? scanPicking.name : ""}
+                onChange={e => {
+                  // Si l'utilisateur efface, reset
+                  if (!e.target.value) { setScanMode(false); setScanPicking(null); setScanPkgs([]); setScanAtts([]); }
+                }}
+                onKeyDown={async e => {
+                  if (e.key === "Enter") {
+                    const val = (e.target as HTMLInputElement).value.trim();
+                    if (val) { setScanMode(true); await loadScanPicking(val); }
+                  }
+                }}
+                placeholder="WH/OUT/00123 ou S00123 — scan ou saisie"
+                style={{ flex: 1, padding: "12px 14px", border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 15, fontFamily: "inherit", background: C.bg, color: C.text, fontWeight: 600 }}
+                autoFocus
+              />
+              <button
+                onClick={async () => {
+                  const val = scanInputRef.current?.value?.trim() || "";
+                  if (val) { setScanMode(true); await loadScanPicking(val); }
+                }}
+                disabled={scanLoading}
+                style={{ padding: "12px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: scanLoading ? 0.6 : 1 }}>
+                {scanLoading ? "…" : "🔍"}
+              </button>
+            </div>
+            {/* Saisie libre si le input contrôlé est vide */}
+            {(!scanMode || !scanPicking) && (
+              <input
+                ref={r => { if (r && reprTab === "packinglist" && !scanPicking) r.focus(); }}
+                placeholder="WH/OUT/00123 — Entrée ou scan"
+                style={{ display: "none" }}
+              />
+            )}
+          </div>
 
-      {/* Imprimer un PDF local (étiquette transporteur générée ailleurs) */}
-      <input ref={pdfInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handlePdfFile} />
-      <button onClick={printLocalPdf} disabled={printingPdf}
-        style={{ width: "100%", padding: 12, background: printingPdf ? C.bg : "#f0fdf4", border: `1.5px solid ${C.greenBorder}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, color: C.green, fontFamily: "inherit", marginBottom: 12, opacity: printingPdf ? 0.6 : 1 }}>
-        {printingPdf ? "Envoi en cours…" : "🖨️ Imprimer un PDF depuis mon Mac"}
-      </button>
+          {/* Zone scan libre — input non contrôlé pour le scan */}
+          {!scanPicking && (
+            <div style={{ position: "relative" }}>
+              <input
+                key="scan-free"
+                autoFocus
+                onKeyDown={async e => {
+                  if (e.key === "Enter") {
+                    const val = (e.target as HTMLInputElement).value.trim();
+                    if (val) { setScanMode(true); (e.target as HTMLInputElement).value = ""; await loadScanPicking(val); }
+                  }
+                }}
+                placeholder="WH/OUT/00123 — scan ou saisie"
+                style={{ width: "100%", padding: "14px 16px", border: `2px solid ${C.blue}`, borderRadius: 12, fontSize: 16, fontFamily: "inherit", background: C.white, color: C.text, boxSizing: "border-box" as const, fontWeight: 600, outline: "none" }}
+              />
+              {scanLoading && (
+                <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", color: C.textMuted, fontSize: 13 }}>Recherche…</div>
+              )}
+            </div>
+          )}
 
-      {/* Modale aperçu PDF — rognage par page avec curseurs */}
+          {/* Résultat : picking trouvé + ses colis */}
+          {scanPicking && !scanLoading && (
+            <div>
+              {/* Header picking */}
+              <div style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, padding: "12px 14px", marginBottom: 12, boxShadow: C.shadow }}>
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{scanPicking.name}</div>
+                    {scanPicking.partner_id && <div style={{ fontSize: 13, color: C.textMuted, marginTop: 2 }}>{scanPicking.partner_id[1]}</div>}
+                    {scanPicking.origin && <div style={{ fontSize: 12, color: C.textMuted }}>Réf : {scanPicking.origin}</div>}
+                    {scanPicking.carrier_tracking_ref && <div style={{ fontSize: 12, color: C.green, fontWeight: 600, marginTop: 2 }}>🚚 {scanPicking.carrier_tracking_ref}</div>}
+                  </div>
+                  <button
+                    onClick={() => { setScanPicking(null); setScanPkgs([]); setScanAtts([]); setScanMode(false); setTimeout(() => scanInputRef.current?.focus(), 50); }}
+                    style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: C.textMuted, padding: 4 }}>✕</button>
+                </div>
+                <div style={{ marginTop: 8, fontSize: 12, color: C.textMuted }}>
+                  {scanPkgs.length} colis · {scanAtts.length} étiquette{scanAtts.length > 1 ? "s" : ""} PDF
+                </div>
+              </div>
+
+              {/* Bouton imprimer TOUT en chaîne */}
+              {scanPkgs.length > 1 && (
+                <button
+                  onClick={() => printAllPackingLists(scanPicking, scanPkgs)}
+                  disabled={!!printingAllPL[scanPicking.id]}
+                  style={{ width: "100%", padding: "13px 0", background: printingAllPL[scanPicking.id] ? C.border : "#16a34a", color: "#fff", border: "none", borderRadius: 12, fontSize: 14, fontWeight: 800, cursor: printingAllPL[scanPicking.id] ? "not-allowed" : "pointer", fontFamily: "inherit", marginBottom: 12, opacity: printingAllPL[scanPicking.id] ? 0.7 : 1 }}>
+                  {printingAllPL[scanPicking.id] ? "Impression en cours…" : `🖨 Imprimer les ${scanPkgs.length} packing lists`}
+                </button>
+              )}
+
+              {/* Liste des colis */}
+              {scanPkgs.length === 0 && (
+                <div style={{ textAlign: "center", color: C.textMuted, fontSize: 14, padding: "20px 0", fontStyle: "italic" }}>
+                  Aucun colis associé à cette commande
+                </div>
+              )}
+              {scanPkgs.map((pkg: any) => renderPkgRow(scanPicking, pkg))}
+
+              {/* Étiquettes PDF transporteur si présentes */}
+              {scanAtts.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginBottom: 8 }}>🚚 Étiquettes transporteur ({scanAtts.length})</div>
+                  {scanAtts.map((att: any) => (
+                    <div key={att.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, padding: "7px 10px", background: C.bg, borderRadius: 8 }}>
+                      <span style={{ fontSize: 12, flex: 1, color: C.text, fontWeight: 500 }}>📄 {att.name}</span>
+                      <button onClick={() => printAttachment(att)} disabled={printing[att.id]}
+                        style={{ padding: "5px 12px", background: C.blue, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: printing[att.id] ? 0.6 : 1 }}>
+                        {printing[att.id] ? "…" : "🖨 Imprimer"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Nouveau scan */}
+              <button
+                onClick={() => { setScanPicking(null); setScanPkgs([]); setScanAtts([]); setScanMode(false); }}
+                style={{ width: "100%", marginTop: 16, padding: 12, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.textMuted, fontFamily: "inherit" }}>
+                🔄 Scanner une autre commande
+              </button>
+            </div>
+          )}
+
+          {scanLoading && (
+            <div style={{ textAlign: "center", color: C.textMuted, fontSize: 14, padding: "32px 0" }}>Recherche de la commande…</div>
+          )}
+        </div>
+      )}
+
+      {/* Modale aperçu PDF (partagée) */}
       {pdfPreviewUrl && pdfRaw && (() => {
         const crop = getCrop(pdfPage);
         const sides = [
@@ -6107,8 +6921,6 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
         return (
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 12 }}>
             <div style={{ background: C.white, borderRadius: 14, overflow: "hidden", width: "100%", maxWidth: 480, display: "flex", flexDirection: "column", maxHeight: "95vh" }}>
-
-              {/* Header + navigation pages */}
               <div style={{ padding: "11px 14px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ fontWeight: 700, fontSize: 13, color: C.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pdfRaw.fileName}</span>
                 {pdfRaw.numPages > 1 && (
@@ -6122,8 +6934,6 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
                 )}
                 <button onClick={closePdfPreview} style={{ marginLeft: 8, background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.textMuted, lineHeight: 1 }}>✕</button>
               </div>
-
-              {/* Sliders rognage */}
               <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}`, background: C.bg }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.4 }}>
                   Rogner — page {pdfPage + 1}{applyingCrop ? " …" : ""}
@@ -6138,18 +6948,12 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
                   </div>
                 ))}
               </div>
-
-              {/* Aperçu iframe */}
               <div style={{ flex: 1, minHeight: 0, opacity: applyingCrop ? 0.45 : 1, transition: "opacity 0.15s" }}>
                 <iframe key={pdfPreviewUrl} src={pdfPreviewUrl} style={{ width: "100%", height: 300, border: "none", display: "block" }} title="Aperçu PDF" />
               </div>
-
-              {/* Actions */}
               <div style={{ padding: 12, borderTop: `1px solid ${C.border}`, display: "flex", gap: 10 }}>
                 <button onClick={closePdfPreview}
-                  style={{ flex: 1, padding: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.textMuted, fontFamily: "inherit" }}>
-                  Annuler
-                </button>
+                  style={{ flex: 1, padding: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.textMuted, fontFamily: "inherit" }}>Annuler</button>
                 <button onClick={confirmPrintPdf} disabled={applyingCrop}
                   style={{ flex: 2, padding: 11, background: C.green, border: "none", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "inherit", opacity: applyingCrop ? 0.6 : 1 }}>
                   🖨️ Imprimer les {pdfRaw.numPages} page{pdfRaw.numPages > 1 ? "s" : ""}
@@ -6159,147 +6963,6 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
           </div>
         );
       })()}
-
-      {pickings.length === 0 && !searching && (
-        <button onClick={() => search("")}
-          style={{ width: "100%", padding: 12, background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 13, color: C.textMuted, fontFamily: "inherit" }}>
-          Afficher les 50 derniers OUT validés
-        </button>
-      )}
-
-      {/* Liste des pickings */}
-      {pickings.map(p => {
-        const isOpen = expanded === p.id;
-        const atts = attachments[p.id] || [];
-        const pkgs = packages[p.id] || [];
-        const loading = loadingDetail[p.id];
-        const adding = addingPkg[p.id];
-        const dateStr = p.date_done ? new Date(p.date_done).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
-
-        return (
-          <div key={p.id} style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 10, overflow: "hidden", boxShadow: C.shadow }}>
-            {/* Header */}
-            <button onClick={() => toggleExpand(p.id)}
-              style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</span>
-                  {p.carrier_id && <span style={{ fontSize: 11, color: "#7c3aed", background: "#f3e8ff", padding: "2px 6px", borderRadius: 4, fontWeight: 600 }}>{p.carrier_id[1]}</span>}
-                </div>
-                {p.partner_id && <div style={{ fontSize: 12, color: C.textMuted }}>{p.partner_id[1]}</div>}
-                <div style={{ display: "flex", gap: 8, marginTop: 2, flexWrap: "wrap" as const }}>
-                  {p.origin && <span style={{ fontSize: 11, color: C.textMuted }}>Origine : {p.origin}</span>}
-                  {p.carrier_tracking_ref && <span style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>🚚 {p.carrier_tracking_ref}</span>}
-                  {dateStr && <span style={{ fontSize: 11, color: C.textMuted }}>{dateStr}</span>}
-                </div>
-              </div>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"
-                style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .2s", flexShrink: 0 }}>
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
-            </button>
-
-            {/* Détail */}
-            {isOpen && (
-              <div style={{ borderTop: `1px solid ${C.border}`, padding: "12px 14px" }}>
-                {loading && <div style={{ color: C.textMuted, fontSize: 13, paddingBottom: 8 }}>Chargement…</div>}
-
-                {/* ── COLIS EXISTANTS ── */}
-                {!loading && (
-                  <div style={{ marginBottom: 14 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginBottom: 8 }}>
-                      📦 Colis ({pkgs.length})
-                    </div>
-                    {pkgs.length === 0 && (
-                      <div style={{ fontSize: 12, color: C.textMuted, fontStyle: "italic" }}>Aucun colis associé à ce BL.</div>
-                    )}
-                    {pkgs.map((pkg: any) => {
-                      const weight = pkg.shipping_weight || pkg.pack_weight || null;
-                      return (
-                        <div key={pkg.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: C.bg, borderRadius: 8, marginBottom: 6 }}>
-                          <span style={{ fontSize: 20 }}>📦</span>
-                          <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{pkg.name}</div>
-                            {weight != null && weight > 0
-                              ? <div style={{ fontSize: 11, color: C.textMuted }}>{weight} kg</div>
-                              : <div style={{ fontSize: 11, color: "#f59e0b" }}>Poids non renseigné</div>
-                            }
-                            {pkg.lines && pkg.lines.length > 0 && (
-                              <div style={{ fontSize: 11, color: C.textMuted }}>{pkg.lines.length} ligne{pkg.lines.length > 1 ? "s" : ""}</div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* ── ÉTIQUETTES PDF ── */}
-                {!loading && (
-                  <div style={{ marginBottom: 14 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginBottom: 8 }}>
-                      🖨 Étiquettes PDF ({atts.length})
-                    </div>
-                    {atts.length === 0 && (
-                      <div style={{ fontSize: 12, color: C.textMuted, fontStyle: "italic", marginBottom: 4 }}>Aucune étiquette PDF trouvée.</div>
-                    )}
-                    {atts.map((att: any) => (
-                      <div key={att.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, padding: "7px 10px", background: C.bg, borderRadius: 8 }}>
-                        <span style={{ fontSize: 12, flex: 1, color: C.text, fontWeight: 500 }}>📄 {att.name}</span>
-                        <button
-                          onClick={() => printAttachment(att)}
-                          disabled={printing[att.id]}
-                          style={{ padding: "5px 12px", background: C.blue, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: printing[att.id] ? 0.6 : 1 }}>
-                          {printing[att.id] ? "…" : "🖨 Imprimer"}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* ── AJOUTER UN COLIS ── */}
-                {!loading && (
-                  <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#166534", marginBottom: 10 }}>➕ Ajouter un colis TNT</div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 11, color: "#166534", marginBottom: 4 }}>Poids (kg)</div>
-                        <input
-                          type="number"
-                          min="0.1"
-                          step="0.1"
-                          value={newWeight[p.id] || ""}
-                          onChange={e => setNewWeight(prev => ({ ...prev, [p.id]: e.target.value }))}
-                          onKeyDown={e => e.key === "Enter" && !adding && addPackage(p)}
-                          placeholder="ex : 2.5"
-                          style={{ width: "100%", padding: "8px 10px", border: "1px solid #86efac", borderRadius: 8, fontSize: 14, fontFamily: "inherit", boxSizing: "border-box" as const }}
-                        />
-                      </div>
-                      <button
-                        onClick={() => addPackage(p)}
-                        disabled={adding}
-                        style={{ marginTop: 20, padding: "8px 14px", background: adding ? C.border : "#16a34a", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: adding ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const, opacity: adding ? 0.7 : 1 }}>
-                        {adding ? "Envoi…" : "📦 Créer + TNT"}
-                      </button>
-                    </div>
-                    <div style={{ fontSize: 11, color: "#166534", marginTop: 6 }}>
-                      Crée un nouveau colis avec ce poids, génère l'étiquette TNT et l'imprime automatiquement.
-                    </div>
-                  </div>
-                )}
-
-                {/* ── RE-ENVOYER AU TRANSPORTEUR ── */}
-                <button
-                  onClick={() => resendToShipper(p)}
-                  disabled={resending[p.id]}
-                  style={{ width: "100%", padding: "8px 0", background: resending[p.id] ? C.border : "#7c3aed", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: resending[p.id] ? 0.7 : 1 }}>
-                  {resending[p.id] ? "Envoi en cours…" : "🔄 Réémettre étiquette (tous les colis)"}
-                </button>
-              </div>
-            )}
-          </div>
-        );
-      })}
     </div>
   );
 }
@@ -7497,7 +8160,8 @@ function EshopChariotSkus({ session }: { session: any }) {
   );
 }
 
-function SettingsScreen({ onBack, session }: { onBack: () => void; session: any }) {
+function SettingsScreen({ onBack, session, isDark, onToggleDark }: { onBack: () => void; session: any; isDark: boolean; onToggleDark: (v: boolean) => void }) {
+  const [settingsTab, setSettingsTab] = useState<"printers" | "notifs" | "appearance" | "eshop">("printers");
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   const [loadingP, setLoadingP] = useState(false);
   const [msg, setMsg] = useState("");
@@ -7606,194 +8270,242 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
     return p ? p.name : `#${id}`;
   };
 
+  const TAB_BTN = (key: typeof settingsTab, icon: string, label: string) => (
+    <button onClick={() => setSettingsTab(key)} style={{
+      flex: 1, display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 4,
+      padding: "10px 6px", border: "none", cursor: "pointer", fontFamily: "inherit", borderRadius: 10,
+      background: settingsTab === key ? C.blue : C.white,
+      color: settingsTab === key ? "#fff" : C.textSec,
+      transition: "background .15s, color .15s",
+    }}>
+      <span style={{ fontSize: 18 }}>{icon}</span>
+      <span style={{ fontSize: 10, fontWeight: 600 }}>{label}</span>
+    </button>
+  );
+
+  const Toggle = ({ val, onChange }: { val: boolean; onChange: (v: boolean) => void }) => (
+    <button onClick={() => onChange(!val)} style={{
+      width: 44, height: 24, borderRadius: 12, border: "none", cursor: "pointer",
+      background: val ? C.green : C.border, position: "relative", transition: "background .2s", flexShrink: 0,
+    }}>
+      <div style={{ position: "absolute", top: 3, left: val ? 23 : 3, width: 18, height: 18, borderRadius: 9, background: "#fff", transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }} />
+    </button>
+  );
+
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
         <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
         <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Paramètres</h2>
       </div>
 
-      {/* Load printers */}
-      {hasKey && (
-        <Section>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>🖨 Imprimantes disponibles</div>
-          <button onClick={fetchPrinters} disabled={loadingP}
-            style={{ width: "100%", padding: 10, background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-            {loadingP ? "Chargement..." : printers.length > 0 ? `${printers.length} imprimante(s) trouvée(s) — Actualiser` : "Rechercher les imprimantes"}
-          </button>
-          {printers.length > 0 && (
-            <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap" as const, gap: 4 }}>
-              {printers.map(p => (
-                <div key={p.id} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: p.state === "online" ? C.greenSoft : C.orangeSoft, color: p.state === "online" ? C.green : C.orange, fontWeight: 600 }}>
-                  {p.name} #{p.id}
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
-      )}
-
-      {!hasKey && (
-        <Section>
-          <Alert type="info">Ajoute PRINTNODE_API_KEY dans les variables Vercel pour activer PrintNode.</Alert>
-        </Section>
-      )}
-
-      {/* Per-type configs */}
-      <Section>
-        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>⚙️ Configuration par type d'étiquette</div>
-        {LABEL_TYPES.map(({ key, label, icon }) => {
-          const cfg = configs[key];
-          const isOpen = openType === key;
-          return (
-            <div key={key} style={{ marginBottom: 8, border: `1.5px solid ${isOpen ? C.blue : C.border}`, borderRadius: 10, overflow: "hidden" }}>
-              {/* Header row */}
-              <button onClick={() => setOpenType(isOpen ? null : key)}
-                style={{ width: "100%", padding: "11px 14px", background: isOpen ? C.blueSoft : C.white, border: "none", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 16 }}>{icon}</span>
-                  <div style={{ textAlign: "left" as const }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{label}</div>
-                    <div style={{ fontSize: 10, color: C.textMuted }}>
-                      {printerName(cfg.printerId)} · {cfg.labelSize.widthMM}×{cfg.labelSize.heightMM}mm
-                    </div>
-                  </div>
-                </div>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2">
-                  {isOpen ? <polyline points="18 15 12 9 6 15"/> : <polyline points="6 9 12 15 18 9"/>}
-                </svg>
-              </button>
-
-              {/* Expanded config */}
-              {isOpen && (
-                <div style={{ padding: "12px 14px", background: C.white, borderTop: `1px solid ${C.border}` }}>
-                  {/* Printer selector */}
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 5 }}>Imprimante</div>
-                    {printers.length > 0 ? (
-                      <select value={cfg.printerId ?? ""} onChange={e => updateTypeConfig(key, { printerId: Number(e.target.value) || null })}
-                        style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: C.white }}>
-                        <option value="">-- Aucune --</option>
-                        {printers.map(p => <option key={p.id} value={p.id}>{p.name} (#{p.id})</option>)}
-                      </select>
-                    ) : (
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <input type="number" value={cfg.printerId ?? ""} placeholder="ID imprimante"
-                          onChange={e => updateTypeConfig(key, { printerId: Number(e.target.value) || null })}
-                          onKeyDown={e => e.stopPropagation()}
-                          style={{ flex: 1, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit" }} />
-                        <div style={{ fontSize: 10, color: C.textMuted, alignSelf: "center" }}>Recherche les imprimantes d'abord</div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Size */}
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 5 }}>Format étiquette</div>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const, marginBottom: 6 }}>
-                      {SIZES.map(s => (
-                        <button key={s.label} onClick={() => updateTypeConfig(key, { labelSize: { widthMM: s.w, heightMM: s.h } })}
-                          style={{ padding: "5px 10px", borderRadius: 6, border: `1.5px solid ${cfg.labelSize.widthMM === s.w && cfg.labelSize.heightMM === s.h ? C.blue : C.border}`,
-                            background: cfg.labelSize.widthMM === s.w && cfg.labelSize.heightMM === s.h ? C.blueSoft : C.white,
-                            color: cfg.labelSize.widthMM === s.w && cfg.labelSize.heightMM === s.h ? C.blue : C.text,
-                            fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-                          {s.label}
-                        </button>
-                      ))}
-                    </div>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <input type="number" value={cfg.labelSize.widthMM}
-                        onChange={e => updateTypeConfig(key, { labelSize: { ...cfg.labelSize, widthMM: Number(e.target.value) } })}
-                        onKeyDown={e => e.stopPropagation()}
-                        style={{ width: 60, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, textAlign: "center" as const, fontFamily: "inherit" }} />
-                      <span style={{ color: C.textMuted, fontSize: 12 }}>×</span>
-                      <input type="number" value={cfg.labelSize.heightMM}
-                        onChange={e => updateTypeConfig(key, { labelSize: { ...cfg.labelSize, heightMM: Number(e.target.value) } })}
-                        onKeyDown={e => e.stopPropagation()}
-                        style={{ width: 60, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, textAlign: "center" as const, fontFamily: "inherit" }} />
-                      <span style={{ color: C.textMuted, fontSize: 11 }}>mm</span>
-                    </div>
-                  </div>
-
-                  {/* Rapport PDF — uniquement pour packingslip */}
-                  {key === "packingslip" && (
-                    <div style={{ marginBottom: 10 }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 6 }}>Rapport Odoo à imprimer</div>
-                      {loadingReports ? (
-                        <div style={{ fontSize: 12, color: C.textMuted }}>Chargement…</div>
-                      ) : reportList.length === 0 ? (
-                        <button onClick={fetchReports} style={{ fontSize: 12, color: C.blue, background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit" }}>
-                          Charger les rapports disponibles
-                        </button>
-                      ) : (
-                        <div style={{ display: "flex", flexDirection: "column" as const, gap: 5 }}>
-                          {reportList.map(r => (
-                            <button key={r.id} onClick={() => { setSelectedReport(r.report_name); odoo.savePrepReportName(r.report_name); setMsg(`✓ ${r.name}`); setTimeout(() => setMsg(""), 2000); }}
-                              style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: selectedReport === r.report_name ? "#eff6ff" : C.bg, border: `1.5px solid ${selectedReport === r.report_name ? C.blue : C.border}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
-                              <div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${selectedReport === r.report_name ? C.blue : C.border}`, background: selectedReport === r.report_name ? C.blue : "transparent", flexShrink: 0 }} />
-                              <div>
-                                <div style={{ fontSize: 12, fontWeight: selectedReport === r.report_name ? 700 : 500, color: C.text }}>{r.name}</div>
-                                <div style={{ fontSize: 10, color: C.textMuted }}>{r.report_name}</div>
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Test button */}
-                  {hasKey && cfg.printerId && (
-                    <button onClick={() => testPrint(key)}
-                      style={{ padding: "7px 14px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: C.textSec }}>
-                      🖨 Imprimer test
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </Section>
-
-      {/* Notifications nouvelles commandes */}
-      <Section>
-        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>🔔 Notifications commandes</div>
-        {/* Toggle activation */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 8 }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Nouvelles commandes du jour</div>
-            <div style={{ fontSize: 11, color: C.textMuted }}>Bannière + notif navigateur (desktop uniquement)</div>
-          </div>
-          <button
-            onClick={() => toggleNotif(!notifEnabled)}
-            style={{ width: 44, height: 24, borderRadius: 12, border: "none", cursor: "pointer", background: notifEnabled ? C.green : C.border, position: "relative", transition: "background .2s", flexShrink: 0 }}>
-            <div style={{ position: "absolute", top: 3, left: notifEnabled ? 23 : 3, width: 18, height: 18, borderRadius: 9, background: "#fff", transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }} />
-          </button>
-        </div>
-        {/* Toggle son */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}` }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Son de notification</div>
-            <div style={{ fontSize: 11, color: C.textMuted }}>Bip sonore à chaque nouvelle commande</div>
-          </div>
-          <button
-            onClick={() => toggleSound(!notifSound)}
-            style={{ width: 44, height: 24, borderRadius: 12, border: "none", cursor: "pointer", background: notifSound ? C.green : C.border, position: "relative", transition: "background .2s", flexShrink: 0 }}>
-            <div style={{ position: "absolute", top: 3, left: notifSound ? 23 : 3, width: 18, height: 18, borderRadius: 9, background: "#fff", transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }} />
-          </button>
-        </div>
-      </Section>
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 18, background: C.bg, padding: 4, borderRadius: 12, border: `1px solid ${C.border}` }}>
+        {TAB_BTN("printers", "🖨", "Imprimantes")}
+        {TAB_BTN("notifs", "🔔", "Notifications")}
+        {TAB_BTN("eshop", "🛒", "E-shop")}
+        {TAB_BTN("appearance", "🎨", "Apparence")}
+      </div>
 
       {msg && (
-        <div style={{ textAlign: "center", fontSize: 13, fontWeight: 600, padding: 12,
-          color: msg.startsWith("✓") ? C.green : msg.startsWith("✕") || msg.startsWith("⚠") ? C.red : C.textSec,
+        <div style={{ textAlign: "center", fontSize: 13, fontWeight: 600, padding: "8px 12px", marginBottom: 10, borderRadius: 8,
+          background: msg.startsWith("✓") ? C.greenSoft : msg.startsWith("✕") || msg.startsWith("⚠") ? C.redSoft : C.blueSoft,
+          color: msg.startsWith("✓") ? C.green : msg.startsWith("✕") || msg.startsWith("⚠") ? C.red : C.blue,
         }}>{msg}</div>
       )}
 
-      <EshopChariotSkus session={session} />
+      {/* ── TAB: IMPRIMANTES ── */}
+      {settingsTab === "printers" && (
+        <>
+          {!hasKey && (
+            <Section>
+              <Alert type="info">Ajoute PRINTNODE_API_KEY dans les variables Vercel pour activer PrintNode.</Alert>
+            </Section>
+          )}
+
+          {hasKey && (
+            <Section>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 10 }}>Imprimantes disponibles</div>
+              <button onClick={fetchPrinters} disabled={loadingP} style={{
+                width: "100%", padding: "10px 14px", background: C.bg, color: C.text,
+                border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontWeight: 600,
+                cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              }}>
+                <span>🔍</span>
+                {loadingP ? "Recherche..." : printers.length > 0 ? `${printers.length} imprimante(s) — Actualiser` : "Rechercher les imprimantes"}
+              </button>
+              {printers.length > 0 && (
+                <div style={{ marginTop: 10, display: "flex", flexDirection: "column" as const, gap: 6 }}>
+                  {printers.map(p => (
+                    <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: 8, background: C.bg, border: `1px solid ${C.border}` }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{p.name}</div>
+                        <div style={{ fontSize: 10, color: C.textMuted }}>#{p.id}</div>
+                      </div>
+                      <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, fontWeight: 600,
+                        background: p.state === "online" ? C.greenSoft : C.orangeSoft,
+                        color: p.state === "online" ? C.green : C.orange,
+                      }}>{p.state === "online" ? "En ligne" : "Hors ligne"}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+          )}
+
+          <Section>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 10 }}>Configuration par type d'étiquette</div>
+            {LABEL_TYPES.map(({ key, label, icon }) => {
+              const cfg = configs[key];
+              const isOpen = openType === key;
+              return (
+                <div key={key} style={{ marginBottom: 8, border: `1.5px solid ${isOpen ? C.blue : C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                  <button onClick={() => setOpenType(isOpen ? null : key)} style={{
+                    width: "100%", padding: "11px 14px", background: isOpen ? C.blueSoft : C.white,
+                    border: "none", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "space-between",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 16 }}>{icon}</span>
+                      <div style={{ textAlign: "left" as const }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{label}</div>
+                        <div style={{ fontSize: 10, color: C.textMuted }}>{printerName(cfg.printerId)} · {cfg.labelSize.widthMM}×{cfg.labelSize.heightMM}mm</div>
+                      </div>
+                    </div>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2">
+                      {isOpen ? <polyline points="18 15 12 9 6 15"/> : <polyline points="6 9 12 15 18 9"/>}
+                    </svg>
+                  </button>
+                  {isOpen && (
+                    <div style={{ padding: "12px 14px", background: C.white, borderTop: `1px solid ${C.border}` }}>
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 5 }}>Imprimante</div>
+                        {printers.length > 0 ? (
+                          <select value={cfg.printerId ?? ""} onChange={e => updateTypeConfig(key, { printerId: Number(e.target.value) || null })}
+                            style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: C.white, color: C.text }}>
+                            <option value="">-- Aucune --</option>
+                            {printers.map(p => <option key={p.id} value={p.id}>{p.name} (#{p.id})</option>)}
+                          </select>
+                        ) : (
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <input type="number" value={cfg.printerId ?? ""} placeholder="ID imprimante"
+                              onChange={e => updateTypeConfig(key, { printerId: Number(e.target.value) || null })}
+                              onKeyDown={e => e.stopPropagation()}
+                              style={{ flex: 1, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: C.white, color: C.text }} />
+                            <div style={{ fontSize: 10, color: C.textMuted, alignSelf: "center" }}>Recherche les imprimantes d'abord</div>
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 5 }}>Format</div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const, marginBottom: 6 }}>
+                          {SIZES.map(s => (
+                            <button key={s.label} onClick={() => updateTypeConfig(key, { labelSize: { widthMM: s.w, heightMM: s.h } })} style={{
+                              padding: "5px 10px", borderRadius: 6,
+                              border: `1.5px solid ${cfg.labelSize.widthMM === s.w && cfg.labelSize.heightMM === s.h ? C.blue : C.border}`,
+                              background: cfg.labelSize.widthMM === s.w && cfg.labelSize.heightMM === s.h ? C.blueSoft : C.white,
+                              color: cfg.labelSize.widthMM === s.w && cfg.labelSize.heightMM === s.h ? C.blue : C.text,
+                              fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                            }}>{s.label}</button>
+                          ))}
+                        </div>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input type="number" value={cfg.labelSize.widthMM} onChange={e => updateTypeConfig(key, { labelSize: { ...cfg.labelSize, widthMM: Number(e.target.value) } })} onKeyDown={e => e.stopPropagation()}
+                            style={{ width: 60, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, textAlign: "center" as const, fontFamily: "inherit", background: C.white, color: C.text }} />
+                          <span style={{ color: C.textMuted, fontSize: 12 }}>×</span>
+                          <input type="number" value={cfg.labelSize.heightMM} onChange={e => updateTypeConfig(key, { labelSize: { ...cfg.labelSize, heightMM: Number(e.target.value) } })} onKeyDown={e => e.stopPropagation()}
+                            style={{ width: 60, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, textAlign: "center" as const, fontFamily: "inherit", background: C.white, color: C.text }} />
+                          <span style={{ color: C.textMuted, fontSize: 11 }}>mm</span>
+                        </div>
+                      </div>
+                      {key === "packingslip" && (
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 6 }}>Rapport Odoo</div>
+                          {loadingReports ? <div style={{ fontSize: 12, color: C.textMuted }}>Chargement…</div>
+                          : reportList.length === 0 ? (
+                            <button onClick={fetchReports} style={{ fontSize: 12, color: C.blue, background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit" }}>
+                              Charger les rapports disponibles
+                            </button>
+                          ) : (
+                            <div style={{ display: "flex", flexDirection: "column" as const, gap: 5 }}>
+                              {reportList.map(r => (
+                                <button key={r.id} onClick={() => { setSelectedReport(r.report_name); odoo.savePrepReportName(r.report_name); setMsg(`✓ ${r.name}`); setTimeout(() => setMsg(""), 2000); }}
+                                  style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: selectedReport === r.report_name ? C.blueSoft : C.bg, border: `1.5px solid ${selectedReport === r.report_name ? C.blue : C.border}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, color: C.text }}>
+                                  <div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${selectedReport === r.report_name ? C.blue : C.border}`, background: selectedReport === r.report_name ? C.blue : "transparent", flexShrink: 0 }} />
+                                  <div>
+                                    <div style={{ fontSize: 12, fontWeight: selectedReport === r.report_name ? 700 : 500 }}>{r.name}</div>
+                                    <div style={{ fontSize: 10, color: C.textMuted }}>{r.report_name}</div>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {hasKey && cfg.printerId && (
+                        <button onClick={() => testPrint(key)} style={{ padding: "7px 14px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: C.textSec }}>
+                          🖨 Test impression
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </Section>
+        </>
+      )}
+
+      {/* ── TAB: NOTIFICATIONS ── */}
+      {settingsTab === "notifs" && (
+        <Section>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 12 }}>Notifications commandes</div>
+          {[
+            { label: "Nouvelles commandes du jour", sub: "Bannière + notif navigateur (desktop uniquement)", val: notifEnabled, onChange: toggleNotif },
+            { label: "Son de notification", sub: "Bip sonore à chaque nouvelle commande", val: notifSound, onChange: toggleSound },
+          ].map(({ label, sub, val, onChange }) => (
+            <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 8 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{label}</div>
+                <div style={{ fontSize: 11, color: C.textMuted }}>{sub}</div>
+              </div>
+              <Toggle val={val} onChange={onChange} />
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {/* ── TAB: APPARENCE ── */}
+      {settingsTab === "appearance" && (
+        <Section>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 12 }}>Thème</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 8 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Mode sombre</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>Interface foncée pour travailler en lumière réduite</div>
+            </div>
+            <Toggle val={isDark} onChange={onToggleDark} />
+          </div>
+          {/* Preview swatches */}
+          <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+            {[C.blue, C.green, C.orange, C.red, C.text, C.border].map((col, i) => (
+              <div key={i} style={{ width: 28, height: 28, borderRadius: 6, background: col, border: `1px solid ${C.border}` }} />
+            ))}
+          </div>
+          <div style={{ marginTop: 8, fontSize: 11, color: C.textMuted }}>Palette active — {isDark ? "Mode sombre" : "Mode clair"}</div>
+
+        </Section>
+      )}
+
+      {/* ── TAB: E-SHOP ── */}
+      {settingsTab === "eshop" && (
+        <Section>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 12 }}>Configuration E-shop / Chariot</div>
+          <EshopChariotSkus session={session} />
+        </Section>
+      )}
     </>
   );
 }
@@ -8152,24 +8864,10 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
     if (!session) return;
     setColisLoading(true); setColisError("");
     try {
-      // Call Odoo putInPack to create a real package
-      const result = await odoo.putInPack(session, picking.id, []);
-      // putInPack may return a wizard or the package info
-      let odooPackageId: number | null = null;
-      let packageName = "";
-      if (result && typeof result === "object" && result.res_id) {
-        odooPackageId = result.res_id;
-        packageName = result.name || `PACK${result.res_id}`;
-      }
-      // Reload packages from Odoo to get real data
-      const packages = await odoo.getPickingPackages(session, picking.id);
-      const latestPkg = packages.length ? packages[packages.length - 1] : null;
-      if (latestPkg) {
-        odooPackageId = latestPkg.id;
-        packageName = latestPkg.name;
-      }
+      // Créer directement un stock.quant.package dans Odoo (fiable vs action_put_in_pack qui ouvre un wizard)
+      const pkg = await odoo.createPackage(session);
       const newId = colis.length + 1;
-      setColis(prev => [...prev, { id: newId, odooPackageId, name: packageName || `Colis ${newId}`, lines: [], weight: null, closed: false }]);
+      setColis(prev => [...prev, { id: newId, odooPackageId: pkg.id, name: pkg.name, lines: [], weight: null, closed: false }]);
       setCurrentColisId(newId);
     } catch (e: any) {
       setColisError(e.message || "Erreur création colis");
@@ -8190,6 +8888,11 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
     try {
       const currentPack = colis.find(c => c.id === currentColisId);
       if (currentPack?.odooPackageId) {
+        // Assigner les move lines au package dans Odoo (result_package_id)
+        if (currentPack.lines.length > 0) {
+          await odoo.assignLinesToPackage(session, currentPack.lines, currentPack.odooPackageId);
+        }
+        // Enregistrer le poids
         await odoo.setPackageWeight(session, currentPack.odooPackageId, w);
       }
       setColis(prev => prev.map(c => c.id === currentColisId ? { ...c, weight: w, closed: true } : c));

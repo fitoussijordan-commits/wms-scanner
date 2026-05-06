@@ -75,7 +75,15 @@ function parsePackingList(data: any[]): PackingLine[] {
       articleNo: String(getCellValue(row, ["ArticleNo", "Article-No", "ProductCode"]) || "").trim(),
       description: String(getCellValue(row, ["Description", "Designation", "Libelle"]) || "").trim(),
       qty: parseFloat(String(getCellValue(row, ["Quantity", "Qty", "Quantite"]) || "0").replace(",", ".")) || 0,
-      price: parseFloat(String(getCellValue(row, ["PriceNet", "Price", "Prix"]) || "0").replace(",", ".")) || 0,
+      price: (() => {
+        // Priorité : prix net remisé > prix net > prix unitaire > prix brut
+        const raw =
+          getCellValue(row, ["NettoEP","Netto-EP","NettoPrix","PrixNet","NetPrice","PriceNet","Nettopreis"]) ??
+          getCellValue(row, ["UnitPrice","PrixUnitaire","Einzelpreis","PrixUnit"]) ??
+          getCellValue(row, ["Price","Prix","Preis"]) ??
+          0;
+        return parseFloat(String(raw).replace(/\s/g,"").replace(",",".")) || 0;
+      })(),
       lotNo: String(getCellValue(row, ["Batch", "Lot", "BatchNo", "LotNo", "NumeroLot"]) || "").trim(),
       expiryDate: parseExcelDate(getCellValue(row, ["ExpiryDate", "Expiry", "BestBefore", "BBD", "MHD", "DateExpiration", "Expiration"])),
       invoiceNo: String(getCellValue(row, ["InvoiceNo", "Invoice", "FactureNo", "Facture"]) || "").trim(),
@@ -386,7 +394,7 @@ export default function SupplierImportScreen({
                   <table style={S.table}>
                     <thead>
                       <tr>
-                        {["Code WALA", "Réf. interne", "Produit", "Qté", "Lot", "Expiration"].map(h => (
+                        {["Code WALA", "Réf. interne", "Produit", "Qté", "Prix unit. (€)", "Total ligne (€)", "Lot", "Expiration"].map(h => (
                           <th key={h} style={S.th}>{h}</th>
                         ))}
                       </tr>
@@ -398,6 +406,8 @@ export default function SupplierImportScreen({
                           <td style={S.td}><code style={{ fontSize: 11, color: "#6366f1" }}>{l.defaultCode}</code></td>
                           <td style={{ ...S.td, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</td>
                           <td style={{ ...S.td, textAlign: "right" }}>{l.qty} {l.uomName}</td>
+                          <td style={{ ...S.td, textAlign: "right", fontFamily: "monospace", fontSize: 11 }}>{l.price.toFixed(2)}</td>
+                          <td style={{ ...S.td, textAlign: "right", fontFamily: "monospace", fontSize: 11 }}>{(l.qty * l.price).toFixed(2)}</td>
                           <td style={S.td}><code style={{ fontSize: 11 }}>{l.lotNo || "—"}</code></td>
                           <td style={S.td}>{l.expiryDate || "—"}</td>
                         </tr>
@@ -405,6 +415,16 @@ export default function SupplierImportScreen({
                     </tbody>
                   </table>
                 </div>
+                {/* Total calculé */}
+                {(() => {
+                  const total = matchedLines.reduce((s, l) => s + l.qty * l.price, 0);
+                  return (
+                    <div style={{ display: "flex", justifyContent: "flex-end", padding: "10px 12px 4px", borderTop: "1px solid #e5e7eb", fontSize: 13, fontWeight: 700, color: "#111827" }}>
+                      Total calculé : {total.toLocaleString("fr-FR", { minimumFractionDigits: 2 })} €
+                      <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: "#6b7280" }}>(vérifiez vs le total du fichier)</span>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 

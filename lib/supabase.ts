@@ -165,6 +165,61 @@ export async function savePrintConfig(
 // UTILS
 // ══════════════════════════════════════════
 
+// ══════════════════════════════════════════
+// SCAN LIBRE SESSIONS
+// ══════════════════════════════════════════
+
+export interface WmsScanEntry {
+  barcode: string;
+  qty: number;
+  odooRef: string;
+  productName: string;
+  matched: boolean;
+}
+
+export interface WmsScanSession {
+  id: string;
+  name: string;
+  date: string;
+  entries: WmsScanEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+export async function loadScanSessions(): Promise<WmsScanSession[]> {
+  const { data, error } = await sb
+    .from("wms_scan_sessions")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw new Error(error.message);
+  return (data || []) as WmsScanSession[];
+}
+
+export async function createScanSession(name: string): Promise<WmsScanSession> {
+  const date = new Date().toISOString().slice(0, 10);
+  const { data, error } = await sb
+    .from("wms_scan_sessions")
+    .insert({ name, date, entries: [] })
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data as WmsScanSession;
+}
+
+export async function updateScanSessionEntries(id: string, entries: WmsScanEntry[]): Promise<void> {
+  const { error } = await sb
+    .from("wms_scan_sessions")
+    .update({ entries, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteScanSession(id: string): Promise<void> {
+  const { error } = await sb.from("wms_scan_sessions").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
 /** Returns true if cache is older than maxAgeMinutes */
 export function isCacheStale(syncedAt: Date | null, maxAgeMinutes: number): boolean {
   if (!syncedAt) return true;

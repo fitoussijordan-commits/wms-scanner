@@ -693,6 +693,40 @@ export async function searchDoneOutPickings(session: OdooSession, query: string)
   );
 }
 
+// Recherche un OUT par numéro de commande (origin) ou numéro OUT — tous états
+// Cherche UNIQUEMENT sur origin et name pour éviter les faux-positifs sur partenaire/tracking
+export async function searchPickingByCommande(session: OdooSession, ref: string): Promise<any[]> {
+  const trimmed = ref.trim();
+  const domain: any[] = [
+    ["picking_type_code", "=", "outgoing"],
+    ["state", "in", ["done", "assigned", "waiting", "confirmed"]],
+    "|",
+      ["origin", "=", trimmed],      // correspondance exacte d'abord
+      ["name", "=", trimmed],
+  ];
+  let results = await searchRead(session, "stock.picking",
+    domain,
+    ["id", "name", "origin", "partner_id", "carrier_id", "carrier_tracking_ref", "date_done", "state"],
+    20, "date_done desc"
+  );
+  // Si rien en exact, fallback ilike sur origin + name seulement (pas partenaire/tracking)
+  if (results.length === 0) {
+    const domain2: any[] = [
+      ["picking_type_code", "=", "outgoing"],
+      ["state", "in", ["done", "assigned", "waiting", "confirmed"]],
+      "|",
+        ["origin", "ilike", trimmed],
+        ["name", "ilike", trimmed],
+    ];
+    results = await searchRead(session, "stock.picking",
+      domain2,
+      ["id", "name", "origin", "partner_id", "carrier_id", "carrier_tracking_ref", "date_done", "state"],
+      20, "date_done desc"
+    );
+  }
+  return results;
+}
+
 // Récupère les pièces jointes PDF d'un picking (labels transporteur)
 export async function getPickingAttachments(session: OdooSession, pickingId: number): Promise<any[]> {
   return searchRead(session, "ir.attachment",
@@ -935,11 +969,16 @@ export async function getProductLocations(session: OdooSession, productIds: numb
     "quantity desc"
   );
 
+  // Exclure les zones de sortie/expédition (usage=internal mais nom trompeur)
+  const EXCLUDE_LOC = /sortie|output|expéd|dispatch|transit/i;
+
   const prodLocMap: Record<number, { location_id: number; location_name: string; quantity: number }> = {};
   for (const q of quants) {
+    const locName: string = q.location_id[1] || "";
+    if (EXCLUDE_LOC.test(locName)) continue; // skip sortie-type locations
     const pid = q.product_id[0];
     if (!prodLocMap[pid] || q.quantity > prodLocMap[pid].quantity) {
-      prodLocMap[pid] = { location_id: q.location_id[0], location_name: q.location_id[1], quantity: q.quantity };
+      prodLocMap[pid] = { location_id: q.location_id[0], location_name: locName, quantity: q.quantity };
     }
   }
 
@@ -1184,6 +1223,38 @@ export async function putInPack(session: OdooSession, pickingId: number, moveLin
     },
   });
   return result;
+}
+
+/**
+ * Crée un vrai stock.quant.package dans Odoo et retourne son id + name.
+ * C'est la méthode fiable pour créer un colis — action_put_in_pack retourne
+ * un wizard interactif quand aucune ligne n'est sélectionnée.
+ */
+export async function createPackage(session: OdooSession): Promise<{ id: number; name: string }> {
+  const pkgId = await call(session, "/web/dataset/call_kw", {
+    model: "stock.quant.package",
+    method: "create",
+    args: [{}],
+    kwargs: {},
+  });
+  // Read back name (Odoo auto-generates it)
+  const pkgs = await searchRead(session, "stock.quant.package", [["id", "=", pkgId]], ["name"], 1);
+  const name = pkgs[0]?.name || `PACK${pkgId}`;
+  return { id: pkgId, name };
+}
+
+/**
+ * Assigne une liste de move lines à un package en écrivant result_package_id.
+ * Doit être appelé quand on ferme un colis pour persister dans Odoo.
+ */
+export async function assignLinesToPackage(session: OdooSession, moveLineIds: number[], packageId: number): Promise<void> {
+  if (!moveLineIds.length) return;
+  await call(session, "/web/dataset/call_kw", {
+    model: "stock.move.line",
+    method: "write",
+    args: [moveLineIds, { result_package_id: packageId }],
+    kwargs: {},
+  });
 }
 
 export async function getPickingPackages(session: OdooSession, pickingId: number): Promise<any[]> {
@@ -1533,3 +1604,50 @@ export async function setReceptionLots(
 }
 
 // validatePicking est déjà défini plus haut dans ce fichier (ligne ~710) — on réutilise l'existant.
+
+// ============================================
+// ARTICLE CREATOR — codification + création Odoo
+// ============================================
+
+/** Tous les default_code qui commencent par le préfixe donné (pour anti-doublon + prochain seq) */
+export async function getProductsByCodePrefix(session: OdooSession, prefix: string): Promise<string[]> {
+  const products = await searchRead(
+    session, "product.template",
+    [["default_code", "=like", `${prefix}%`]],
+    ["default_code"],
+    200
+  );
+  return (products || []).map((p: any) => p.default_code as string).filter(Boolean);
+}
+
+/** Unités de mesure disponibles dans Odoo */
+export async function getUoMs(session: OdooSession): Promise<{ id: number; name: string }[]> {
+  const uoms = await searchRead(session, "uom.uom", [["active", "=", true]], ["id", "name"], 100);
+  return (uoms || []).map((u: any) => ({ id: u.id, name: u.name }));
+}
+
+/** Crée un product.template dans Odoo et retourne l'ID créé */
+export async function createProductTemplate(session: OdooSession, data: {
+  name: string;
+  default_code: string;
+  barcode?: string;
+  uom_id: number;
+  tracking: "none" | "lot" | "serial";
+  weight?: number;
+  sale_ok?: boolean;
+  purchase_ok?: boolean;
+}): Promise<number> {
+  const vals: any = {
+    name: data.name,
+    default_code: data.default_code,
+    type: "product",          // storable
+    uom_id: data.uom_id,
+    uom_po_id: data.uom_id,
+    tracking: data.tracking,
+    sale_ok: data.sale_ok ?? true,
+    purchase_ok: data.purchase_ok ?? true,
+  };
+  if (data.barcode) vals.barcode = data.barcode;
+  if (data.weight) vals.weight = data.weight;
+  return create(session, "product.template", vals);
+}
