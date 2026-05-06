@@ -1036,6 +1036,7 @@ export default function Page() {
 
   // Preparation state
   const [pickings, setPickings] = useState<any[]>([]);
+  const [multiScanList, setMultiScanList] = useState<any[]>([]); // Persisté entre navigations
   const [selectedPicking, setSelectedPicking] = useState<any>(null);
   const [pendingConfirmPicking, setPendingConfirmPicking] = useState<any>(null); // picking à confirmer avant ouverture
   const [pickingMoves, setPickingMoves] = useState<any[]>([]);
@@ -2522,8 +2523,10 @@ export default function Page() {
             error={error}
             session={session}
             onRegisterScanHandler={(fn: ((c: string) => void) | null) => { multiPickScanRef.current = fn; }}
+            multiScanList={multiScanList}
+            setMultiScanList={setMultiScanList}
             onOpen={(p: any) => setPendingConfirmPicking(p)}
-            onOpenGroup={(group: any[]) => { if (group.length === 1) setPendingConfirmPicking(group[0]); else openGroupPicking(group); }}
+            onOpenGroup={(group: any[]) => { if (group.length === 1) { setPendingConfirmPicking(group[0]); } else { setMultiScanList([]); openGroupPicking(group); } }}
             onScanPicking={openPickingByName}
             onCheckAvail={checkPickingAvailability}
             onRefresh={loadPickings}
@@ -8501,48 +8504,54 @@ function SettingsScreen({ onBack, session, isDark, onToggleDark }: { onBack: () 
 // ============================================
 // PREPARATION LIST SCREEN
 // ============================================
-function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanPicking, onCheckAvail, onRefresh, onPrintBL, progressCache, session, onRegisterScanHandler }: any) {
+function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanPicking, onCheckAvail, onRefresh, onPrintBL, progressCache, session, onRegisterScanHandler, multiScanList, setMultiScanList }: any) {
   const [scanCode, setScanCode] = useState("");
   const [prepTab, setPrepTab] = useState<"list" | "multiscan" | "groups">("list");
 
   // ── Multi-scan state ──
   const [multiScanInput, setMultiScanInput] = useState("");
-  const [multiScanList, setMultiScanList] = useState<any[]>([]);
   const [multiScanLoading, setMultiScanLoading] = useState(false);
+  const [multiScanError, setMultiScanError] = useState("");
   const multiScanRef = useRef<HTMLInputElement>(null);
 
   const addToMultiScan = async (code: string) => {
     const trimmed = code.trim().toUpperCase();
     if (!trimmed || !session) return;
-    if (multiScanList.find((p: any) => p.name?.toUpperCase() === trimmed || p.origin?.toUpperCase() === trimmed)) {
+    // Déjà dans la liste
+    if ((multiScanList || []).find((p: any) => p.name?.toUpperCase() === trimmed || p.origin?.toUpperCase() === trimmed)) {
       setMultiScanInput(""); return;
     }
     setMultiScanLoading(true);
+    let found: any = null;
     try {
-      const found = pickings.find((p: any) =>
+      found = pickings.find((p: any) =>
         (p.name || "").toUpperCase() === trimmed || (p.origin || "").toUpperCase() === trimmed
       );
-      if (found) {
-        setMultiScanList(prev => [...prev, found]);
-      } else {
+      if (!found) {
         const results = await odoo.searchRead(session, "stock.picking",
           [["name", "=", trimmed], ["state", "=", "assigned"]],
           ["id", "name", "partner_id", "origin", "scheduled_date", "state", "picking_type_id"], 1
         );
-        if (results.length) setMultiScanList(prev => [...prev, results[0]]);
-        else {
-          // fallback: search by origin
-          const r2 = await odoo.searchRead(session, "stock.picking",
-            [["origin", "=", trimmed], ["state", "=", "assigned"]],
-            ["id", "name", "partner_id", "origin", "scheduled_date", "state", "picking_type_id"], 1
-          );
-          if (r2.length) setMultiScanList(prev => [...prev, r2[0]]);
-        }
+        if (results.length) found = results[0];
       }
-    } catch {}
+      if (!found) {
+        const r2 = await odoo.searchRead(session, "stock.picking",
+          [["origin", "=", trimmed], ["state", "=", "assigned"]],
+          ["id", "name", "partner_id", "origin", "scheduled_date", "state", "picking_type_id"], 1
+        );
+        if (r2.length) found = r2[0];
+      }
+      if (found) {
+        setMultiScanList((prev: any[]) => [...prev, found]);
+        setMultiScanError("");
+      } else {
+        setMultiScanError(`⚠ "${trimmed}" introuvable — scannez un numéro de picking (WH/PICK/...)`);
+      }
+    } catch (e: any) {
+      setMultiScanError(`Erreur: ${e.message}`);
+    }
     setMultiScanLoading(false);
     setMultiScanInput("");
-    setTimeout(() => multiScanRef.current?.focus(), 50);
   };
 
   // ── Brancher/débrancher le handler global selon l'onglet ──
@@ -8663,17 +8672,23 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
       {/* ── ONGLET MULTI-SCAN ── */}
       {prepTab === "multiscan" && (
         <div>
+          {/* Indicateur scan actif + saisie manuelle */}
           <div style={{ background: C.white, borderRadius: 14, border: `2px solid ${C.blue}`, padding: "14px 14px", marginBottom: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.blue, marginBottom: 10 }}>🔍 Scanner les numéros de picking à grouper</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <div style={{ width: 10, height: 10, borderRadius: "50%", background: multiScanLoading ? "#f59e0b" : "#16a34a", flexShrink: 0 }} />
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.blue }}>
+                {multiScanLoading ? "Recherche…" : "📷 Scanner prêt — scanne un WH/PICK/... directement"}
+              </div>
+            </div>
+            {/* Saisie manuelle uniquement — pas d'autoFocus pour éviter le clavier mobile */}
             <div style={{ display: "flex", gap: 8 }}>
               <input
                 ref={multiScanRef}
                 value={multiScanInput}
-                onChange={e => setMultiScanInput(e.target.value)}
+                onChange={e => { setMultiScanInput(e.target.value); if (multiScanError) setMultiScanError(""); }}
                 onKeyDown={e => { if (e.key === "Enter") { addToMultiScan(multiScanInput); } }}
                 disabled={multiScanLoading}
-                placeholder="WH/PICK/00123 — scan ou saisie"
-                autoFocus
+                placeholder="Saisie manuelle : WH/PICK/00123"
                 style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.bg, color: C.text, fontWeight: 600 }}
               />
               <button onClick={() => addToMultiScan(multiScanInput)} disabled={multiScanLoading || !multiScanInput.trim()}
@@ -8681,15 +8696,20 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
                 {multiScanLoading ? "…" : "+"}
               </button>
             </div>
+            {multiScanError && (
+              <div style={{ marginTop: 8, padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 13, color: "#dc2626", fontWeight: 600 }}>
+                {multiScanError}
+              </div>
+            )}
           </div>
 
-          {multiScanList.length === 0 && (
+          {(multiScanList || []).length === 0 && (
             <div style={{ textAlign: "center", color: C.textMuted, fontSize: 14, padding: "30px 0", fontStyle: "italic" }}>
               Scanne des pickings pour les ajouter au groupe
             </div>
           )}
 
-          {multiScanList.map((p: any, i: number) => {
+          {(multiScanList || []).map((p: any, i: number) => {
             const colors = ["#2563eb","#16a34a","#d97706","#dc2626","#7c3aed","#0891b2"];
             const col = colors[i % colors.length];
             return (
@@ -8700,16 +8720,16 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
                   {p.partner_id && <div style={{ fontSize: 12, color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{p.partner_id[1]}</div>}
                   {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>{p.origin}</div>}
                 </div>
-                <button onClick={() => setMultiScanList(prev => prev.filter((_: any, j: number) => j !== i))}
+                <button onClick={() => setMultiScanList((prev: any[]) => prev.filter((_: any, j: number) => j !== i))}
                   style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: C.textMuted, padding: 4, flexShrink: 0 }}>✕</button>
               </div>
             );
           })}
 
-          {multiScanList.length >= 2 && (
-            <button onClick={() => { onOpenGroup(multiScanList); setMultiScanList([]); }}
+          {(multiScanList || []).length >= 2 && (
+            <button onClick={() => { onOpenGroup(multiScanList); }}
               style={{ width: "100%", marginTop: 8, padding: "14px 0", background: "#16a34a", color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(22,163,74,0.3)" }}>
-              🚀 Démarrer la prépa — {multiScanList.length} pickings
+              🚀 Démarrer la prépa — {(multiScanList || []).length} pickings
             </button>
           )}
         </div>
@@ -9309,18 +9329,20 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           </div>
 
           {/* Colis destination — affiché uniquement en mode multi-pick */}
-          {picking._groupIds && picking._groupIds.length > 1 && activeLine && (() => {
-            const pickIdx = (picking._groupIds as number[]).indexOf(activeLine.picking_id?.[0]);
-            const srcPicking = picking._groupPickings?.[pickIdx];
-            const colisNum = pickIdx >= 0 ? pickIdx + 1 : "?";
-            const colisLabel = srcPicking?.origin || srcPicking?.name || `Colis ${colisNum}`;
-            const colors = ["#2563eb","#16a34a","#d97706","#dc2626","#7c3aed","#0891b2"];
-            const bg = colors[(pickIdx >= 0 ? pickIdx : 0) % colors.length];
-            return (
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: bg, color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: 13, fontWeight: 800, marginBottom: 10 }}>
-                📦 Colis {colisNum} — {colisLabel}
-              </div>
-            );
+          {picking._groupIds && picking._groupIds.length > 1 && activeLine && ((): JSX.Element | null => {
+            try {
+              const pickIdx = (picking._groupIds as number[]).indexOf(activeLine.picking_id?.[0]);
+              const srcPicking = Array.isArray(picking._groupPickings) ? picking._groupPickings[pickIdx] : undefined;
+              const colisNum = pickIdx >= 0 ? pickIdx + 1 : "?";
+              const colisLabel = srcPicking?.origin || srcPicking?.name || `Colis ${colisNum}`;
+              const colisColors = ["#2563eb","#16a34a","#d97706","#dc2626","#7c3aed","#0891b2"];
+              const bg = colisColors[(pickIdx >= 0 ? pickIdx : 0) % colisColors.length];
+              return (
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: bg, color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: 13, fontWeight: 800, marginBottom: 10 }}>
+                  📦 Colis {colisNum} — {colisLabel}
+                </div>
+              );
+            } catch { return null; }
           })()}
 
           {/* Lot */}
@@ -9336,7 +9358,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
             <div style={{ display: "flex", alignItems: "stretch", gap: 0, border: `1.5px solid ${C.border}`, borderRadius: 14, overflow: "hidden", background: C.white, marginBottom: 10 }}>
               <button
                 onClick={() => activeLine && onAdjustQty(activeLine.id, getQty(activeLine) - 1)}
-                disabled={loading || !activeLine || (activeLine.qty_done || 0) <= 0}
+                disabled={loading || !activeLine || getQty(activeLine) <= 0}
                 style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 24, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}`, opacity: !activeLine || getQty(activeLine) <= 0 ? 0.3 : 1 }}>
                 −
               </button>
@@ -9349,7 +9371,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
               </div>
               <button
                 onClick={() => activeLine && onAdjustQty(activeLine.id, getQty(activeLine) + 1)}
-                disabled={loading || !activeLine || (activeLine.qty_done || 0) >= (activeLine.reserved_uom_qty || 0)}
+                disabled={loading || !activeLine || getQty(activeLine) >= (activeLine.reserved_uom_qty || 0)}
                 style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 24, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderLeft: `1px solid ${C.blue}`, opacity: !activeLine || getQty(activeLine) >= (activeLine.reserved_uom_qty || 0) ? 0.3 : 1 }}>
                 +
               </button>
