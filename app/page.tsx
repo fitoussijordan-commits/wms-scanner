@@ -1139,6 +1139,8 @@ export default function Page() {
       else doQuickScan(code);
     }
     else if (screen === "prep") {
+      // Si l'onglet multi-scan est actif, router vers lui
+      if (multiPickScanRef.current) { multiPickScanRef.current(code); return; }
       if (/^WH\//i.test(code)) { openPickingByName(code); return; }
     }
     else if (screen === "prepDetail") {
@@ -1641,7 +1643,7 @@ export default function Page() {
     if (pickingGroup.length === 1) { openPicking(pickingGroup[0]); return; }
     setLoading(true); setError("");
     const mergedName = pickingGroup.map((p: any) => p.name).join(" + ");
-    const mergedPicking = { ...pickingGroup[0], name: mergedName, _groupIds: pickingGroup.map((p: any) => p.id) };
+    const mergedPicking = { ...pickingGroup[0], name: mergedName, _groupIds: pickingGroup.map((p: any) => p.id), _groupPickings: pickingGroup };
     setSelectedPicking(mergedPicking);
     setPrepScanned(new Set());
     setPrepStep(null);
@@ -1949,6 +1951,8 @@ export default function Page() {
   // Scan queue — accumule les scans pendant qu'un traitement est en cours
   const scanQueueRef = useRef<string[]>([]);
   const scanProcessingRef = useRef(false);
+  // Handler multi-scan — PrepListScreen le remplit quand l'onglet Multi-scan est actif
+  const multiPickScanRef = useRef<((code: string) => void) | null>(null);
   const processScanQueue = useCallback(async () => {
     if (scanProcessingRef.current) return;
     scanProcessingRef.current = true;
@@ -2516,6 +2520,8 @@ export default function Page() {
             pickings={pickings}
             loading={loading}
             error={error}
+            session={session}
+            onRegisterScanHandler={(fn: ((c: string) => void) | null) => { multiPickScanRef.current = fn; }}
             onOpen={(p: any) => setPendingConfirmPicking(p)}
             onOpenGroup={(group: any[]) => { if (group.length === 1) setPendingConfirmPicking(group[0]); else openGroupPicking(group); }}
             onScanPicking={openPickingByName}
@@ -2615,7 +2621,7 @@ export default function Page() {
         {screen === "returns" && session && (
           <ReturnsScreen session={session} onBack={goHome} onToast={showToast} />
         )}
-        {screen === "reprintLabel" && session && odoo.isAdmin(session) && (
+        {screen === "reprintLabel" && session && (
           <ReprintLabelScreen session={session} onBack={goHome} onToast={showToast} />
         )}
         {screen === "negativeStock" && session && odoo.isAdmin(session) && (
@@ -6287,7 +6293,7 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
         try {
           const pkgDetails = await odoo.searchRead(session, "stock.quant.package",
             [["id", "in", pkgs.map((pk: any) => pk.id)]],
-            ["id", "name", "shipping_weight", "pack_weight"], pkgs.length);
+            ["id", "name", "shipping_weight"], pkgs.length);
           const pkgMap: Record<number, any> = {};
           for (const d of pkgDetails) pkgMap[d.id] = d;
           pkgsEnriched = pkgs.map((pk: any) => ({ ...pk, ...(pkgMap[pk.id] || {}) }));
@@ -6411,7 +6417,7 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
         try {
           const pkgDetails = await odoo.searchRead(session, "stock.quant.package",
             [["id", "in", pkgs.map((pk: any) => pk.id)]],
-            ["id", "name", "shipping_weight", "pack_weight"],
+            ["id", "name", "shipping_weight"],
             pkgs.length
           );
           const pkgMap: Record<number, any> = {};
@@ -6465,95 +6471,108 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
       const pid = cfg.printerId || pn.getLabelTypeConfig("blank").printerId || pn.getSavedPrinterId();
       if (!pid) { onToast("⚠️ Aucune imprimante configurée dans les paramètres (config Étiquette palette)"); return; }
 
-      // Récupérer le poids du colis directement depuis Odoo (shipping_weight)
+      // ── Poids : lire shipping_weight depuis stock.quant.package ──
+      // Odoo renvoie false (pas null) pour les champs float vides
+      // pack_weight n'existe pas dans toutes les versions → on l'exclut pour éviter une erreur
       let pkgWeight: number | null = null;
       try {
         const pkgData = await odoo.searchRead(session, "stock.quant.package",
-          [["id", "=", pkg.id]], ["id", "name", "shipping_weight", "pack_weight"], 1);
+          [["id", "=", pkg.id]], ["id", "name", "shipping_weight"], 1);
         if (pkgData.length > 0) {
-          pkgWeight = pkgData[0].shipping_weight || pkgData[0].pack_weight || null;
+          const sw = pkgData[0].shipping_weight;
+          if (sw !== false && sw != null && sw > 0) pkgWeight = sw;
         }
-      } catch {}
+      } catch (e) {
+        console.warn("[printPackingList] Impossible de lire shipping_weight:", e);
+      }
 
-      // Récupérer les move lines du package — filtrer qty_done > 0
-      const allLines = await odoo.searchRead(session, "stock.move.line",
-        [["result_package_id", "=", pkg.id]],
-        ["product_id", "qty_done", "lot_id", "product_uom_id"],
+      // ── Contenu : stock.quant (stock réel du colis) ──
+      // Plus fiable que stock.move.line qui peut avoir des doublons de mouvements
+      const quants = await odoo.searchRead(session, "stock.quant",
+        [["package_id", "=", pkg.id], ["quantity", ">", 0]],
+        ["product_id", "quantity", "lot_id"],
         100
       );
-      // Ignorer les lignes à zéro (Odoo crée parfois des doublons vides)
-      const lines = allLines.filter((l: any) => (l.qty_done || 0) > 0);
 
-      // Récupérer barcode + default_code des produits
-      const prodIds = Array.from(new Set(lines.map((l: any) => Array.isArray(l.product_id) ? l.product_id[0] : l.product_id).filter(Boolean))) as number[];
+      // Récupérer barcode + default_code + weight des produits
+      const prodIds = Array.from(new Set(quants.map((q: any) => Array.isArray(q.product_id) ? q.product_id[0] : q.product_id).filter(Boolean))) as number[];
       const prods = prodIds.length ? await odoo.searchRead(session, "product.product",
         [["id", "in", prodIds]], ["id", "default_code", "barcode", "name"], prodIds.length) : [];
       const prodMap: Record<number, any> = {};
       for (const p of prods) prodMap[p.id] = p;
 
-      // ── Déduplique les lignes par produit+lot (Odoo peut créer des doublons) ──
-      const lineMap: Record<string, { prodId: number; qty: number; lot: string; lineRef: any }> = {};
-      for (const line of lines) {
-        const prodId = Array.isArray(line.product_id) ? line.product_id[0] : line.product_id;
-        const lot = line.lot_id ? (Array.isArray(line.lot_id) ? line.lot_id[1] : String(line.lot_id)) : "";
-        const key = `${prodId}__${lot}`;
-        if (lineMap[key]) {
-          lineMap[key].qty += Math.round(line.qty_done || 0);
-        } else {
-          lineMap[key] = { prodId, qty: Math.round(line.qty_done || 0), lot, lineRef: line };
-        }
-      }
-      const dedupedLines = Object.values(lineMap);
+      // Les quants sont déjà propres (pas de doublons sur stock.quant)
+      const dedupedLines = quants.map((q: any) => ({
+        prodId: Array.isArray(q.product_id) ? q.product_id[0] : q.product_id,
+        qty: Math.round(q.quantity || 0),
+        lot: q.lot_id ? (Array.isArray(q.lot_id) ? q.lot_id[1] : String(q.lot_id)) : "",
+        lineRef: q,
+      }));
 
       // ── ZPL 100×150mm @203dpi = 812 × 1218 dots ──────────────────────────
       const W = 812;
+      const MAX_PER_PAGE = 4;
       const zplStr = (s: string) => (s || "")
         .replace(/[^\x20-\xFF]/g, "?")
         .replace(/\^/g, " ")
         .replace(/~/g, " ");
 
-      let zpl = `^XA\n^PW${W}\n^LL1218\n^CI28\n`;
+      // Découper en pages de 4 références max
+      const pages: typeof dedupedLines[] = [];
+      for (let i = 0; i < dedupedLines.length; i += MAX_PER_PAGE)
+        pages.push(dedupedLines.slice(i, i + MAX_PER_PAGE));
+      const totalPages = pages.length;
 
-      // ── En-tête : PACK + poids (toujours affiché) ──
-      zpl += `^FO20,20^A0N,38,38^FD${zplStr(pkg.name || "")}^FS\n`;
-      const weightStr = pkgWeight != null ? `${pkgWeight} kg` : (pkg.shipping_weight || pkg.pack_weight ? `${pkg.shipping_weight || pkg.pack_weight} kg` : "- kg");
-      zpl += `^FO${W - 230},20^A0N,36,36^FD${weightStr}^FS\n`;
-      zpl += `^FO10,68^GB${W - 20},3,3^FS\n`;
+      const weightStr = pkgWeight != null ? `${pkgWeight} kg` : "- kg";
 
-      let y = 82;
-      for (const entry of dedupedLines) {
-        const prod = prodMap[entry.prodId] || {};
-        const ref = prod.default_code || "";
-        const name = prod.name || (Array.isArray(entry.lineRef.product_id) ? entry.lineRef.product_id[1] : "") || "";
-        const barcode = prod.barcode || ref || "";
+      // Générer une étiquette ZPL par page — Labelary les assemble en PDF multi-pages
+      let zpl = "";
+      for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
+        const pageLines = pages[pageIdx];
+        const pageLabel = totalPages > 1 ? ` (${pageIdx + 1}/${totalPages})` : "";
 
-        // Ref + quantité (gros)
-        zpl += `^FO20,${y}^A0N,34,34^FD${zplStr(ref)}^FS\n`;
-        zpl += `^FO${W - 190},${y}^A0N,40,40^FDx${entry.qty}^FS\n`;
-        y += 42;
+        zpl += `^XA\n^PW${W}\n^LL1218\n^CI28\n`;
 
-        // Nom — retour à la ligne auto sur 2 lignes max
-        zpl += `^FO20,${y}^A0N,24,24^FB${W - 40},2,2,L^FD${zplStr(name)}^FS\n`;
-        const nameLines = name.length > 42 ? 2 : 1;
-        y += 26 * nameLines + 4;
+        // ── En-tête : PACK + numéro de page + poids ──
+        zpl += `^FO20,20^A0N,48,48^FD${zplStr(pkg.name || "")}${zplStr(pageLabel)}^FS\n`;
+        zpl += `^FO${W - 250},20^A0N,44,44^FD${weightStr}^FS\n`;
+        zpl += `^FO10,82^GB${W - 20},3,3^FS\n`;
 
-        // Lot
-        if (entry.lot) {
-          zpl += `^FO20,${y}^A0N,22,22^FDLot: ${zplStr(entry.lot)}^FS\n`;
-          y += 28;
+        let y = 96;
+        for (const entry of pageLines) {
+          const prod = prodMap[entry.prodId] || {};
+          const ref = prod.default_code || "";
+          const name = prod.name || (Array.isArray(entry.lineRef.product_id) ? entry.lineRef.product_id[1] : "") || "";
+          const barcode = prod.barcode || ref || "";
+
+          // Ref + quantité (gros)
+          zpl += `^FO20,${y}^A0N,42,42^FD${zplStr(ref)}^FS\n`;
+          zpl += `^FO${W - 210},${y}^A0N,50,50^FDx${entry.qty}^FS\n`;
+          y += 52;
+
+          // Nom — retour à la ligne auto sur 2 lignes max
+          zpl += `^FO20,${y}^A0N,32,32^FB${W - 40},2,2,L^FD${zplStr(name)}^FS\n`;
+          const nameLines = name.length > 36 ? 2 : 1;
+          y += 34 * nameLines + 4;
+
+          // Lot
+          if (entry.lot) {
+            zpl += `^FO20,${y}^A0N,28,28^FDLot: ${zplStr(entry.lot)}^FS\n`;
+            y += 34;
+          }
+
+          // Barcode (haut = 90)
+          if (barcode) {
+            zpl += `^FO20,${y}^BY2,3,90^BCN,90,Y,N,N^FD${barcode}^FS\n`;
+            y += 112;
+          }
+
+          zpl += `^FO10,${y}^GB${W - 20},1,1^FS\n`;
+          y += 12;
         }
 
-        // Barcode (haut = 75)
-        if (barcode) {
-          zpl += `^FO20,${y}^BY2,3,75^BCN,75,Y,N,N^FD${barcode}^FS\n`;
-          y += 96;
-        }
-
-        zpl += `^FO10,${y}^GB${W - 20},1,1^FS\n`;
-        y += 12;
-        if (y > 1170) break;
+        zpl += `^XZ\n`;
       }
-      zpl += `^XZ`;
 
       // Utilise ZPL→PDF via Labelary (même chemin que étiquette palette)
       // pour éviter que le driver Windows imprime le ZPL en texte brut
@@ -6622,7 +6641,7 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
 
   // Réutilisé dans les deux onglets pour afficher un colis avec boutons
   const renderPkgRow = (picking: any, pkg: any) => {
-    const weight = pkg.shipping_weight || pkg.pack_weight || null;
+    const weight = pkg.shipping_weight || null;
     const isPL = !!printingPL[pkg.id];
     return (
       <div key={pkg.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", background: C.bg, borderRadius: 10, marginBottom: 8, border: `1px solid ${C.border}` }}>
@@ -6777,65 +6796,35 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
       ══════════════════════════════════════════════════════ */}
       {reprTab === "packinglist" && (
         <div>
-          {/* Zone de scan/saisie */}
-          <div style={{ background: C.white, borderRadius: 14, border: `2px solid ${C.blue}`, padding: "16px 14px", marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.blue, marginBottom: 10 }}>📷 Scanner ou saisir le numéro OUT</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input
-                ref={scanInputRef}
-                value={scanMode && scanPicking ? scanPicking.name : ""}
-                onChange={e => {
-                  // Si l'utilisateur efface, reset
-                  if (!e.target.value) { setScanMode(false); setScanPicking(null); setScanPkgs([]); setScanAtts([]); }
-                }}
-                onKeyDown={async e => {
-                  if (e.key === "Enter") {
-                    const val = (e.target as HTMLInputElement).value.trim();
-                    if (val) { setScanMode(true); await loadScanPicking(val); }
-                  }
-                }}
-                placeholder="WH/OUT/00123 ou S00123 — scan ou saisie"
-                style={{ flex: 1, padding: "12px 14px", border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 15, fontFamily: "inherit", background: C.bg, color: C.text, fontWeight: 600 }}
-                autoFocus
-              />
-              <button
-                onClick={async () => {
-                  const val = scanInputRef.current?.value?.trim() || "";
-                  if (val) { setScanMode(true); await loadScanPicking(val); }
-                }}
-                disabled={scanLoading}
-                style={{ padding: "12px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: scanLoading ? 0.6 : 1 }}>
-                {scanLoading ? "…" : "🔍"}
-              </button>
-            </div>
-            {/* Saisie libre si le input contrôlé est vide */}
-            {(!scanMode || !scanPicking) && (
-              <input
-                ref={r => { if (r && reprTab === "packinglist" && !scanPicking) r.focus(); }}
-                placeholder="WH/OUT/00123 — Entrée ou scan"
-                style={{ display: "none" }}
-              />
-            )}
-          </div>
-
-          {/* Zone scan libre — input non contrôlé pour le scan */}
+          {/* Zone de scan/saisie — input non contrôlé unique */}
           {!scanPicking && (
-            <div style={{ position: "relative" }}>
-              <input
-                key="scan-free"
-                autoFocus
-                onKeyDown={async e => {
-                  if (e.key === "Enter") {
-                    const val = (e.target as HTMLInputElement).value.trim();
-                    if (val) { setScanMode(true); (e.target as HTMLInputElement).value = ""; await loadScanPicking(val); }
-                  }
-                }}
-                placeholder="WH/OUT/00123 — scan ou saisie"
-                style={{ width: "100%", padding: "14px 16px", border: `2px solid ${C.blue}`, borderRadius: 12, fontSize: 16, fontFamily: "inherit", background: C.white, color: C.text, boxSizing: "border-box" as const, fontWeight: 600, outline: "none" }}
-              />
-              {scanLoading && (
-                <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", color: C.textMuted, fontSize: 13 }}>Recherche…</div>
-              )}
+            <div style={{ position: "relative", marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.blue, marginBottom: 10 }}>📷 Scanner ou saisir le numéro OUT</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  ref={scanInputRef}
+                  key="scan-input"
+                  autoFocus
+                  disabled={scanLoading}
+                  onKeyDown={async e => {
+                    if (e.key === "Enter") {
+                      const val = (e.target as HTMLInputElement).value.trim();
+                      if (val) { await loadScanPicking(val); (e.target as HTMLInputElement).value = ""; }
+                    }
+                  }}
+                  placeholder="WH/OUT/00123 ou S00123 — scan ou saisie manuelle"
+                  style={{ flex: 1, padding: "13px 14px", border: `2px solid ${C.blue}`, borderRadius: 10, fontSize: 15, fontFamily: "inherit", background: C.white, color: C.text, fontWeight: 600, outline: "none", boxSizing: "border-box" as const }}
+                />
+                <button
+                  onClick={async () => {
+                    const val = scanInputRef.current?.value?.trim() || "";
+                    if (val) { await loadScanPicking(val); if (scanInputRef.current) scanInputRef.current.value = ""; }
+                  }}
+                  disabled={scanLoading}
+                  style={{ padding: "12px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: scanLoading ? 0.6 : 1 }}>
+                  {scanLoading ? "…" : "🔍"}
+                </button>
+              </div>
             </div>
           )}
 
@@ -8512,8 +8501,124 @@ function SettingsScreen({ onBack, session, isDark, onToggleDark }: { onBack: () 
 // ============================================
 // PREPARATION LIST SCREEN
 // ============================================
-function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanPicking, onCheckAvail, onRefresh, onPrintBL, progressCache }: any) {
+function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanPicking, onCheckAvail, onRefresh, onPrintBL, progressCache, session, onRegisterScanHandler }: any) {
   const [scanCode, setScanCode] = useState("");
+  const [prepTab, setPrepTab] = useState<"list" | "multiscan" | "groups">("list");
+
+  // ── Multi-scan state ──
+  const [multiScanInput, setMultiScanInput] = useState("");
+  const [multiScanList, setMultiScanList] = useState<any[]>([]);
+  const [multiScanLoading, setMultiScanLoading] = useState(false);
+  const multiScanRef = useRef<HTMLInputElement>(null);
+
+  const addToMultiScan = async (code: string) => {
+    const trimmed = code.trim().toUpperCase();
+    if (!trimmed || !session) return;
+    if (multiScanList.find((p: any) => p.name?.toUpperCase() === trimmed || p.origin?.toUpperCase() === trimmed)) {
+      setMultiScanInput(""); return;
+    }
+    setMultiScanLoading(true);
+    try {
+      const found = pickings.find((p: any) =>
+        (p.name || "").toUpperCase() === trimmed || (p.origin || "").toUpperCase() === trimmed
+      );
+      if (found) {
+        setMultiScanList(prev => [...prev, found]);
+      } else {
+        const results = await odoo.searchRead(session, "stock.picking",
+          [["name", "=", trimmed], ["state", "=", "assigned"]],
+          ["id", "name", "partner_id", "origin", "scheduled_date", "state", "picking_type_id"], 1
+        );
+        if (results.length) setMultiScanList(prev => [...prev, results[0]]);
+        else {
+          // fallback: search by origin
+          const r2 = await odoo.searchRead(session, "stock.picking",
+            [["origin", "=", trimmed], ["state", "=", "assigned"]],
+            ["id", "name", "partner_id", "origin", "scheduled_date", "state", "picking_type_id"], 1
+          );
+          if (r2.length) setMultiScanList(prev => [...prev, r2[0]]);
+        }
+      }
+    } catch {}
+    setMultiScanLoading(false);
+    setMultiScanInput("");
+    setTimeout(() => multiScanRef.current?.focus(), 50);
+  };
+
+  // ── Brancher/débrancher le handler global selon l'onglet ──
+  useEffect(() => {
+    if (!onRegisterScanHandler) return;
+    if (prepTab === "multiscan") {
+      onRegisterScanHandler((code: string) => addToMultiScan(code));
+    } else {
+      onRegisterScanHandler(null);
+    }
+    return () => { onRegisterScanHandler(null); };
+  }, [prepTab]); // eslint-disable-line
+
+  // ── Groupes similaires state ──
+  const [suggestedGroups, setSuggestedGroups] = useState<any[][]>([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [groupsComputed, setGroupsComputed] = useState(false);
+
+  const computeGroups = async () => {
+    if (!session || pickings.length < 2) return;
+    setGroupsLoading(true);
+    try {
+      const ids = pickings.map((p: any) => p.id);
+      const moves = await odoo.searchRead(session, "stock.move",
+        [["picking_id", "in", ids], ["state", "in", ["assigned", "partially_available"]]],
+        ["picking_id", "product_id"], Math.min(ids.length * 20, 2000)
+      );
+      // Build product sets per picking
+      const prodSets: Record<number, Set<number>> = {};
+      for (const m of moves) {
+        const pid = Array.isArray(m.picking_id) ? m.picking_id[0] : m.picking_id;
+        const prodId = Array.isArray(m.product_id) ? m.product_id[0] : m.product_id;
+        if (!prodSets[pid]) prodSets[pid] = new Set<number>();
+        prodSets[pid].add(prodId);
+      }
+      const pickingIds = ids.filter((id: number) => prodSets[id] && prodSets[id].size > 0);
+      const used = new Set<number>();
+      const groups: any[][] = [];
+
+      for (const id of pickingIds) {
+        if (used.has(id)) continue;
+        const a = prodSets[id];
+        const aArr = Array.from(a);
+        let bestScore = 0; let bestMatch: number | null = null;
+        for (const id2 of pickingIds) {
+          if (id2 === id || used.has(id2)) continue;
+          const b = prodSets[id2];
+          const inter = aArr.filter((x: number) => b.has(x)).length;
+          const unionSet = new Set<number>(aArr);
+          Array.from(b).forEach((x: number) => unionSet.add(x));
+          const score = unionSet.size > 0 ? inter / unionSet.size : 0;
+          if (score > bestScore) { bestScore = score; bestMatch = id2; }
+        }
+        if (bestMatch !== null && bestScore >= 0.15) {
+          const group = [id, bestMatch];
+          used.add(id); used.add(bestMatch);
+          const groupSet = new Set<number>(Array.from(prodSets[id]));
+          Array.from(prodSets[bestMatch]).forEach((x: number) => groupSet.add(x));
+          for (const id3 of pickingIds) {
+            if (used.has(id3) || group.length >= 6) continue;
+            const c = prodSets[id3];
+            const cArr = Array.from(c);
+            const inter = cArr.filter((x: number) => groupSet.has(x)).length;
+            const score = c.size > 0 ? inter / c.size : 0;
+            if (score >= 0.25) { group.push(id3); used.add(id3); cArr.forEach((x: number) => groupSet.add(x)); }
+          }
+          const pickObjs = group.map((gid: number) => pickings.find((p: any) => p.id === gid)).filter(Boolean);
+          if (pickObjs.length > 1) groups.push(pickObjs);
+        }
+      }
+      setSuggestedGroups(groups);
+      setGroupsComputed(true);
+    } catch {}
+    setGroupsLoading(false);
+  };
+
   // Group by shipping_date (date d'expédition prévue), fallback date_deadline, then scheduled_date
   const grouped: Record<string, any[]> = {};
   for (const p of pickings) {
@@ -8532,7 +8637,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Préparation</h2>
           <p style={{ fontSize: 12, color: C.textMuted }}>{pickings.length} commande(s) prête(s)</p>
@@ -8541,6 +8646,136 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
         </button>
       </div>
+
+      {/* Onglets */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, background: C.bg, borderRadius: 12, padding: 4 }}>
+        {([["list","📋 Par date"],["multiscan","🔀 Multi-scan"],["groups","✨ Groupes"]] as [string,string][]).map(([key, label]) => (
+          <button key={key} onClick={() => setPrepTab(key as any)}
+            style={{ flex: 1, padding: "9px 4px", border: "none", borderRadius: 9, fontFamily: "inherit", fontSize: 12, fontWeight: 700, cursor: "pointer",
+              background: prepTab === key ? C.white : "transparent",
+              color: prepTab === key ? C.blue : C.textMuted,
+              boxShadow: prepTab === key ? C.shadow : "none" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── ONGLET MULTI-SCAN ── */}
+      {prepTab === "multiscan" && (
+        <div>
+          <div style={{ background: C.white, borderRadius: 14, border: `2px solid ${C.blue}`, padding: "14px 14px", marginBottom: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.blue, marginBottom: 10 }}>🔍 Scanner les numéros de picking à grouper</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                ref={multiScanRef}
+                value={multiScanInput}
+                onChange={e => setMultiScanInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { addToMultiScan(multiScanInput); } }}
+                disabled={multiScanLoading}
+                placeholder="WH/PICK/00123 — scan ou saisie"
+                autoFocus
+                style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.bg, color: C.text, fontWeight: 600 }}
+              />
+              <button onClick={() => addToMultiScan(multiScanInput)} disabled={multiScanLoading || !multiScanInput.trim()}
+                style={{ padding: "11px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 9, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: multiScanLoading ? 0.6 : 1 }}>
+                {multiScanLoading ? "…" : "+"}
+              </button>
+            </div>
+          </div>
+
+          {multiScanList.length === 0 && (
+            <div style={{ textAlign: "center", color: C.textMuted, fontSize: 14, padding: "30px 0", fontStyle: "italic" }}>
+              Scanne des pickings pour les ajouter au groupe
+            </div>
+          )}
+
+          {multiScanList.map((p: any, i: number) => {
+            const colors = ["#2563eb","#16a34a","#d97706","#dc2626","#7c3aed","#0891b2"];
+            const col = colors[i % colors.length];
+            return (
+              <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, borderRadius: 10, border: `2px solid ${col}`, padding: "10px 12px", marginBottom: 8 }}>
+                <div style={{ width: 28, height: 28, borderRadius: "50%", background: col, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800, flexShrink: 0 }}>{i + 1}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{p.name}</div>
+                  {p.partner_id && <div style={{ fontSize: 12, color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{p.partner_id[1]}</div>}
+                  {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>{p.origin}</div>}
+                </div>
+                <button onClick={() => setMultiScanList(prev => prev.filter((_: any, j: number) => j !== i))}
+                  style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: C.textMuted, padding: 4, flexShrink: 0 }}>✕</button>
+              </div>
+            );
+          })}
+
+          {multiScanList.length >= 2 && (
+            <button onClick={() => { onOpenGroup(multiScanList); setMultiScanList([]); }}
+              style={{ width: "100%", marginTop: 8, padding: "14px 0", background: "#16a34a", color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(22,163,74,0.3)" }}>
+              🚀 Démarrer la prépa — {multiScanList.length} pickings
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── ONGLET GROUPES SIMILAIRES ── */}
+      {prepTab === "groups" && (
+        <div>
+          {!groupsComputed && !groupsLoading && (
+            <div style={{ textAlign: "center", padding: "30px 0" }}>
+              <div style={{ fontSize: 14, color: C.textMuted, marginBottom: 16 }}>
+                Analyse les {pickings.length} pickings prêts pour trouver les meilleurs groupes à préparer ensemble (même produits).
+              </div>
+              <button onClick={computeGroups}
+                style={{ padding: "13px 28px", background: C.blue, color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+                ✨ Calculer les groupes
+              </button>
+            </div>
+          )}
+          {groupsLoading && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Analyse en cours…</div>}
+          {groupsComputed && !groupsLoading && suggestedGroups.length === 0 && (
+            <div style={{ textAlign: "center", color: C.textMuted, fontSize: 14, padding: "30px 0", fontStyle: "italic" }}>
+              Aucun groupe similaire trouvé — les commandes n'ont pas assez de produits en commun.
+            </div>
+          )}
+          {groupsComputed && suggestedGroups.map((group: any[], gi: number) => {
+            // Compute overlap stats
+            const allProds = group.map((p: any) => new Set<number>());
+            // just show the group
+            return (
+              <div key={gi} style={{ background: C.white, borderRadius: 12, border: `2px solid ${C.blueBorder}`, padding: 14, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: C.blue }}>Groupe {gi + 1} — {group.length} pickings</div>
+                  <button onClick={() => { onOpenGroup(group); }}
+                    style={{ padding: "8px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                    🚀 Préparer
+                  </button>
+                </div>
+                {group.map((p: any, i: number) => {
+                  const colors = ["#2563eb","#16a34a","#d97706","#dc2626","#7c3aed","#0891b2"];
+                  const col = colors[i % colors.length];
+                  return (
+                    <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < group.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                      <div style={{ width: 22, height: 22, borderRadius: "50%", background: col, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, flexShrink: 0 }}>{i + 1}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{p.name}</span>
+                        {p.partner_id && <span style={{ fontSize: 11, color: C.textMuted, marginLeft: 6 }}>{p.partner_id[1]}</span>}
+                        {p.origin && <span style={{ fontSize: 11, color: C.textMuted, marginLeft: 6 }}>{p.origin}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+          {groupsComputed && (
+            <button onClick={() => { setGroupsComputed(false); setSuggestedGroups([]); computeGroups(); }}
+              style={{ width: "100%", marginTop: 8, padding: "11px 0", background: C.bg, color: C.blue, border: `1.5px solid ${C.blueBorder}`, borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+              🔄 Recalculer
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── ONGLET PAR DATE (existant) ── */}
+      {prepTab === "list" && (<>
 
       {/* Scan direct par nom WH/PICK/xxxxx */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -8698,6 +8933,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
           </div>
         );
       })}
+      </>)}
     </>
   );
 }
@@ -8830,7 +9066,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         odooPackageId: pkg.id,
         name: pkg.name,
         lines: pkg.lines.map((l: any) => l.id),
-        weight: pkg.shipping_weight || pkg.pack_weight || null,
+        weight: pkg.shipping_weight || null,
         closed: true,
       }));
       setColis(loaded);
@@ -9071,6 +9307,21 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b", marginBottom: 6, lineHeight: 1.3 }}>
             {activeLine?.product_id[1]}
           </div>
+
+          {/* Colis destination — affiché uniquement en mode multi-pick */}
+          {picking._groupIds && picking._groupIds.length > 1 && activeLine && (() => {
+            const pickIdx = (picking._groupIds as number[]).indexOf(activeLine.picking_id?.[0]);
+            const srcPicking = picking._groupPickings?.[pickIdx];
+            const colisNum = pickIdx >= 0 ? pickIdx + 1 : "?";
+            const colisLabel = srcPicking?.origin || srcPicking?.name || `Colis ${colisNum}`;
+            const colors = ["#2563eb","#16a34a","#d97706","#dc2626","#7c3aed","#0891b2"];
+            const bg = colors[(pickIdx >= 0 ? pickIdx : 0) % colors.length];
+            return (
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: bg, color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: 13, fontWeight: 800, marginBottom: 10 }}>
+                📦 Colis {colisNum} — {colisLabel}
+              </div>
+            );
+          })()}
 
           {/* Lot */}
           {activeLine?.lot_id && (
