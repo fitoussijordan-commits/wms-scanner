@@ -764,6 +764,37 @@ export async function validatePicking(session: OdooSession, pickingId: number) {
   return result;
 }
 
+// Comme validatePicking mais REFUSE de créer un reliquat.
+// Lève une erreur avec la liste des articles manquants si Odoo veut un backorder.
+export async function validatePickingStrict(session: OdooSession, pickingId: number): Promise<void> {
+  const result = await callMethod(session, "stock.picking", "button_validate", [[pickingId]]);
+
+  if (result && typeof result === "object" && result.res_model) {
+    const wizardModel = result.res_model;
+    const wizardId = result.res_id;
+    const ctx = result.context || {};
+
+    if (wizardModel === "stock.immediate.transfer") {
+      // Qtés non renseignées → OK, on force avec les qtés réservées
+      await call(session, "/web/dataset/call_kw", {
+        model: "stock.immediate.transfer", method: "process", args: [[wizardId]], kwargs: { context: ctx },
+      });
+    } else if (wizardModel === "stock.backorder.confirmation") {
+      // Récupérer les lignes incomplètes pour afficher un message utile
+      const missing = await searchRead(session, "stock.move.line",
+        [["picking_id", "=", pickingId], ["state", "not in", ["done", "cancel"]]],
+        ["product_id", "qty_done", "reserved_uom_qty"], 10
+      );
+      const names = missing
+        .filter((l: any) => (l.qty_done || 0) < (l.reserved_uom_qty || 0))
+        .slice(0, 3)
+        .map((l: any) => `${l.product_id?.[1] || "?"} (${l.qty_done || 0}/${l.reserved_uom_qty})`)
+        .join(", ");
+      throw new Error(`Reliquat détecté — articles incomplets : ${names || "vérifiez le picking"}`);
+    }
+  }
+}
+
 // ============================================
 // PACKING LIST — Match supplier refs to internal products
 // ============================================

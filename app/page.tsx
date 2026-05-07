@@ -2054,48 +2054,42 @@ export default function Page() {
     setLoading(true); setError("");
     try {
       // ── 0. Vider les timers de debounce en attente ──────────────────────
-      // Les debounces des scans récents pourraient se déclencher APRÈS la
-      // validation et écraser les valeurs correctes. On les annule, puis
-      // on fait une resync manuelle pour écrire les valeurs locales.
       Object.keys(debounceTimers.current).forEach(k => {
         clearTimeout(debounceTimers.current[Number(k)]);
         delete debounceTimers.current[Number(k)];
       });
 
       // ── 1. Resync forcée avant validation ───────────────────────────────
-      // On écrit TOUTES les quantités locales > 0 vers Odoo sans condition de
-      // comparaison — on ne fait pas confiance à l'état Odoo courant car des
-      // scans peuvent ne pas être arrivés à temps.
       showToast("Synchronisation...");
       const ids: number[] = selectedPicking._groupIds || [selectedPicking.id];
       const localLines = pickingMoveLinesRef.current;
 
-      // Construire la liste des écritures depuis l'état local
-      const forceWrites: Promise<void>[] = [];
-      for (const local of localLines) {
+      // Écrire toutes les qtés locales > 0 — collecter les erreurs sans les avaler
+      const writeErrors: string[] = [];
+      await Promise.all(localLines.map(async (local: any) => {
         const localQty = qtyOverridesRef.current?.[local.id] ?? local.qty_done ?? 0;
         if (localQty > 0) {
           const localLotId = local.lot_id?.[0] || null;
-          forceWrites.push(
-            odoo.setMoveLineQtyDone(session, local.id, localQty, localLotId)
-              .catch(() => {}) // une erreur sur une ligne n'arrête pas les autres
-          );
+          try {
+            await odoo.setMoveLineQtyDone(session, local.id, localQty, localLotId);
+          } catch (e: any) {
+            writeErrors.push(`${local.product_id?.[1] || local.id}: ${e.message}`);
+          }
         }
-      }
-      if (forceWrites.length > 0) {
-        await Promise.all(forceWrites);
+      }));
+      if (writeErrors.length > 0) {
+        setError(`Erreur sync avant validation — ${writeErrors[0]}${writeErrors.length > 1 ? ` (+${writeErrors.length - 1})` : ""}`);
+        showToast(`⚠️ Erreur sync — validation annulée`);
+        setLoading(false);
+        return;
       }
 
       // ── 1b. Vérifier l'état réel dans Odoo après resync ─────────────────
-      // On recharge une 2ème fois pour avoir les vraies valeurs après écriture.
-      // Si des lignes sont encore incomplètes, on met à jour l'affichage et
-      // on bloque la validation pour que l'utilisateur confirme via la modale.
       let verifiedLines: any[] = [];
       for (const pickId of ids) {
         const verified = await odoo.getPickingMoveLines(session, pickId);
         verifiedLines = verifiedLines.concat(verified);
       }
-      // Mettre à jour l'état local avec les vraies valeurs Odoo
       const mergedVerified = verifiedLines.map((vl: any) => {
         const override = qtyOverridesRef.current?.[vl.id];
         return override !== undefined ? { ...vl, qty_done: override } : vl;
@@ -2107,19 +2101,18 @@ export default function Page() {
         (vl.reserved_uom_qty || 0) > 0 && (vl.qty_done || 0) < (vl.reserved_uom_qty || 0)
       );
       if (incompleteLines.length > 0) {
-        // Des articles manquent côté Odoo — on bloque et on laisse l'utilisateur décider
         const names = incompleteLines.slice(0, 3).map((l: any) =>
           `${l.product_id?.[1] || "?"} (${l.qty_done || 0}/${l.reserved_uom_qty})`
         ).join(", ");
-        showToast(`⚠️ ${incompleteLines.length} article(s) incomplet(s) côté Odoo — confirmez avant de valider`);
-        setError(`Articles incomplets : ${names}`);
+        showToast(`⚠️ ${incompleteLines.length} article(s) incomplet(s) — validation bloquée`);
+        setError(`Articles incomplets côté Odoo : ${names}`);
         setLoading(false);
-        return; // La modale backorder apparaîtra car allDone = false maintenant
+        return;
       }
 
-      // ── 2. Valider ────────────────────────────────────────────────────────
+      // ── 2. Valider — bloque si Odoo veut créer un reliquat ─────────────
       for (const id of ids) {
-        await odoo.validatePicking(session, id);
+        await odoo.validatePickingStrict(session, id);
       }
       vibrateSuccess();
       showToast(`✅ ${selectedPicking.name} validé`);
