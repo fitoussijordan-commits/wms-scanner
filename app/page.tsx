@@ -1373,7 +1373,7 @@ export default function Page() {
           odoo.getOutgoingPickings(session).catch(() => []),
           odoo.searchRead(session, "stock.picking",
             [["picking_type_code","=","outgoing"],
-             ["state","in",["assigned","partially_available","confirmed","waiting"]],
+             ["state","=","assigned"],
              ["x_studio_date_dexpdition_prvue","<=",todayStr],
              ["x_studio_date_dexpdition_prvue","!=",false]],
             ["id","name","origin","x_studio_date_dexpdition_prvue"], 500
