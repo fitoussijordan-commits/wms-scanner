@@ -1408,7 +1408,7 @@ export default function Page() {
           outToPackToday: (() => {
             const filtered = (outToPack as any[]).filter((p: any) => {
               const d: string = p.shipping_date || p.scheduled_date || p.date_deadline || "";
-              return d.startsWith(todayStr);
+              return d ? d.slice(0, 10) <= todayStr : false;
             });
             return { count: filtered.length, names: filtered.slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) };
           })(),
