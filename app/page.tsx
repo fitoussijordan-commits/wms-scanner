@@ -1373,10 +1373,8 @@ export default function Page() {
           odoo.getOutgoingPickings(session).catch(() => []),
           odoo.searchRead(session, "stock.picking",
             [["picking_type_code","=","outgoing"],
-             ["state","in",["assigned","partially_available","confirmed","waiting"]],
-             ["scheduled_date",">=",`${todayStr} 00:00:00`],
-             ["scheduled_date","<",`${tomorrow} 00:00:00`]],
-            ["id","name","origin"], 200
+             ["state","in",["assigned","partially_available","confirmed","waiting"]]],
+            ["id","name","origin","shipping_date","scheduled_date","date_deadline"], 500
           ).catch(() => []),
         ]);
         const waitingToday = (allWaiting as any[]).filter((p: any) => {
@@ -1407,7 +1405,13 @@ export default function Page() {
           waitingToday: { count: waitingToday.length, names: (waitingToday as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           inPrep: { count: (inPrepList as any[]).length, names: (inPrepList as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           eshopWaiting: { count: eshopOrders.length, names: eshopOrders.slice(0, 6).map((o: any) => o.order_number || `#${o.order_id || o.id}`) },
-          outToPackToday: { count: (outToPack as any[]).length, names: (outToPack as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
+          outToPackToday: (() => {
+            const filtered = (outToPack as any[]).filter((p: any) => {
+              const d: string = p.shipping_date || p.scheduled_date || p.date_deadline || "";
+              return d.startsWith(todayStr);
+            });
+            return { count: filtered.length, names: filtered.slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) };
+          })(),
           lastUpdate: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
         });
       } catch {} finally { setCcLoading(false); }
@@ -2704,7 +2708,7 @@ export default function Page() {
                   count={ccData?.inPrep.count ?? 0}
                   names={ccData?.inPrep.names ?? []}
                   onClick={() => { loadPickings(); setScreen("prep"); }} />
-                <CcCard color="#0ea5e9" bg="#e0f2fe" icon="🎁" label="À emballer aujourd'hui"
+                <CcCard color="#0ea5e9" bg="#e0f2fe" icon="📤" label="À emballer aujourd'hui"
                   count={ccData?.outToPackToday.count ?? 0}
                   names={ccData?.outToPackToday.names ?? []}
                   onClick={() => { loadPickings(); setScreen("prep"); }} />
