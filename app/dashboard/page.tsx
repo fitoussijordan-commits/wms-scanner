@@ -1870,18 +1870,74 @@ export default function Dashboard() {
     return opts;
   },[]);
 
-  // Export Excel des lignes sélectionnées (ou toutes si rien sélectionné)
-  const smExportExcel = async () => {
-    const XLSX = await import("xlsx");
-    const toExport = smFiltered.filter(r=> smSelected.size===0 || smSelected.has(r.ref));
-    const wsData = [
-      ["Référence","Nom","Stock","Conso/mois","Attendu","Seuil min","Jours restants","Prochaine livraison","Statut","Date rupture fourn."],
-      ...toExport.map(r=>[r.ref,r.name,r.stock,r.conso,r.expected_qty||"",r.threshold,r.daysLeft>=999?"∞":r.daysLeft,r.delivLabel,{ok:"OK",alert:"Alerte",critical:"Critique",no_data:"Pas de données",not_found:"Introuvable"}[r.status],r.supplierDate||""])
-    ];
-    const ws=XLSX.utils.aoa_to_sheet(wsData);
-    const wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb,ws,"Suivi Stock");
-    XLSX.writeFile(wb,`suivi_stock_${new Date().toISOString().slice(0,10)}.xlsx`);
+  // Export Excel stylé des lignes sélectionnées (ou toutes si rien sélectionné)
+  const smExportExcel = () => {
+    const toExport = smFiltered.filter(r => smSelected.size === 0 || smSelected.has(r.ref));
+    const statusLabel: Record<string,string> = { ok:"OK", alert:"Alerte", critical:"Critique", no_data:"Pas de données", not_found:"Introuvable" };
+    const statusRowStyle: Record<string,string> = {
+      ok:       "background:#f0fdf4;",
+      alert:    "background:#fffbeb;",
+      critical: "background:#fef2f2;",
+      no_data:  "background:#f3f4f6;",
+      not_found:"background:#f3f4f6;",
+    };
+    const statusTextStyle: Record<string,string> = {
+      ok:       "color:#16a34a;font-weight:700;",
+      alert:    "color:#d97706;font-weight:700;",
+      critical: "color:#dc2626;font-weight:700;",
+      no_data:  "color:#6b7280;",
+      not_found:"color:#6b7280;",
+    };
+    const headers = ["Référence","Nom","Stock","Conso/mois","Attendu","Seuil min","Jours restants","Prochaine livraison","Statut","Date rupture fourn."];
+    const today = new Date().toLocaleDateString("fr-FR",{day:"2-digit",month:"long",year:"numeric"});
+
+    const th = (txt: string) =>
+      `<th style="background:#1e3a5f;color:#ffffff;font-weight:700;font-size:12px;padding:8px 10px;border:1px solid #1e3a5f;white-space:nowrap;">${txt}</th>`;
+
+    const td = (txt: string|number, extra="") =>
+      `<td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:11px;${extra}">${txt ?? ""}</td>`;
+
+    const rows = toExport.map(r => {
+      const rs = statusRowStyle[r.status] || "";
+      return `<tr style="${rs}">
+        ${td(r.ref, "font-weight:700;font-size:12px;")}
+        ${td(r.name, "font-weight:600;")}
+        ${td(r.stock)}
+        ${td(r.conso)}
+        ${td(r.expected_qty || "")}
+        ${td(r.threshold)}
+        ${td(r.daysLeft >= 999 ? "∞" : r.daysLeft)}
+        ${td(r.delivLabel || "")}
+        ${td(statusLabel[r.status] || r.status, statusTextStyle[r.status] || "")}
+        ${td(r.supplierDate || "")}
+      </tr>`;
+    }).join("\n");
+
+    const html = `
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="UTF-8">
+<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
+<x:Name>Suivi Stock</x:Name>
+<x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+</head>
+<body>
+<table style="border-collapse:collapse;font-family:Arial,sans-serif;">
+  <tr><td colspan="${headers.length}" style="background:#1e3a5f;color:#ffffff;font-size:14px;font-weight:700;padding:10px 14px;border:none;">
+    📦 Suivi de Stock — Exporté le ${today}
+  </td></tr>
+  <tr>${headers.map(th).join("")}</tr>
+  ${rows}
+</table>
+</body></html>`;
+
+    const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `suivi_stock_${new Date().toISOString().slice(0,10)}.xls`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   // ── Computed ──
