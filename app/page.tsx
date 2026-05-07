@@ -6166,9 +6166,11 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                                   <span style={{ fontSize: 9, fontWeight: 700, color: "#7c3aed", background: "#ede9fe", padding: "1px 6px", borderRadius: 5, letterSpacing: "0.04em" }}>VRAC</span>
                                 )}
                               </div>
-                              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
-                                Réf fourn: {prod.supplierRef}
-                                {match?.default_code && <span> · Réf interne: {match.default_code}</span>}
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, flexWrap: "wrap" as const }}>
+                                {match?.default_code && (
+                                  <span style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{match.default_code}</span>
+                                )}
+                                <span style={{ fontSize: 11, color: C.textMuted }}>Réf fourn: {prod.supplierRef}</span>
                               </div>
                             </div>
                             <div style={{ textAlign: "right", flexShrink: 0 }}>
@@ -6199,8 +6201,8 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                               </span>
                             )}
                             {loc && (
-                              <span style={{ fontSize: 11, fontWeight: 600, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 6, border: "1px solid #059669", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
-                                📍 {loc.location_name} ({loc.quantity} en stock)
+                              <span style={{ fontSize: 13, fontWeight: 700, color: "#059669", background: "#ecfdf5", padding: "3px 10px", borderRadius: 6, border: "1px solid #059669", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                                📍 {loc.location_name.split("/").pop()} ({loc.quantity} en stock)
                               </span>
                             )}
                             {isMatched && !loc && (
