@@ -461,6 +461,43 @@ export default function Dashboard() {
   const [alertsOverstockOpen, setAlertsOverstockOpen] = useState(true);
   const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
 
+  // ── Commandes à emballer du jour ─────────────────────────────────────────
+  const [todayOutPending, setTodayOutPending] = useState<number | null>(null);
+  const [todayOutDone, setTodayOutDone]       = useState<number | null>(null);
+
+  const loadTodayOut = useCallback(async () => {
+    if (!session) return;
+    try {
+      const today = new Date().toISOString().split("T")[0];
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+      const [pending, done] = await Promise.all([
+        odoo.searchRead(session, "stock.picking",
+          [["picking_type_code","=","outgoing"],
+           ["state","in",["assigned","partially_available","confirmed","waiting"]],
+           ["scheduled_date",">=",`${today} 00:00:00`],
+           ["scheduled_date","<",`${tomorrow} 00:00:00`]],
+          ["id"], 500
+        ),
+        odoo.searchRead(session, "stock.picking",
+          [["picking_type_code","=","outgoing"],
+           ["state","=","done"],
+           ["date_done",">=",`${today} 00:00:00`],
+           ["date_done","<",`${tomorrow} 00:00:00`]],
+          ["id"], 500
+        ),
+      ]);
+      setTodayOutPending(pending.length);
+      setTodayOutDone(done.length);
+    } catch {}
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+    loadTodayOut();
+    const t = setInterval(loadTodayOut, 2 * 60 * 1000); // refresh toutes les 2 min
+    return () => clearInterval(t);
+  }, [session, loadTodayOut]);
+
   // Mode Libre
   type LibreRefType = "product" | "lot" | "so" | "picking" | "unknown";
   type LibreRef = { raw: string; type: LibreRefType; id?: number; resolved?: any };
@@ -2134,6 +2171,49 @@ export default function Dashboard() {
       <nav style={{ background: "var(--bg-raised)", borderBottom: "1px solid var(--border)", padding: "0 28px", display: "flex", gap: 2, overflowX: "auto" }} className="wms-scrollbar">
         {TABS.map((t) => <button key={t.key} className="wms-tab" data-active={tab === t.key} onClick={() => setTab(t.key)}><span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>{t.icon} {t.label}</span></button>)}
       </nav>
+
+      {/* BANDEAU COMMANDES DU JOUR */}
+      {todayOutPending !== null && (
+        <div style={{ background: "var(--bg-raised)", borderBottom: "1px solid var(--border)", padding: "10px 28px", display: "flex", alignItems: "center", gap: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              background: todayOutPending === 0 ? "var(--success-soft)" : todayOutPending <= 5 ? "var(--warning-soft)" : "var(--danger-soft)",
+              border: `1px solid ${todayOutPending === 0 ? "var(--success-border)" : todayOutPending <= 5 ? "var(--warning-border)" : "var(--danger-border)"}`,
+              borderRadius: 10, padding: "6px 16px", display: "flex", alignItems: "center", gap: 10,
+            }}>
+              <span style={{ fontSize: 18 }}>{todayOutPending === 0 ? "✅" : "📦"}</span>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: .5 }}>À emballer aujourd'hui</div>
+                <div style={{ fontSize: 22, fontWeight: 900, lineHeight: 1.1, color: todayOutPending === 0 ? "var(--success)" : todayOutPending <= 5 ? "var(--warning)" : "var(--danger)" }}>
+                  {todayOutPending} <span style={{ fontSize: 13, fontWeight: 500 }}>commande{todayOutPending !== 1 ? "s" : ""}</span>
+                </div>
+              </div>
+            </div>
+            {todayOutDone !== null && todayOutDone > 0 && (
+              <div style={{ background: "var(--success-soft)", border: "1px solid var(--success-border)", borderRadius: 10, padding: "6px 16px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: .5 }}>Expédiées aujourd'hui</div>
+                <div style={{ fontSize: 22, fontWeight: 900, lineHeight: 1.1, color: "var(--success)" }}>
+                  {todayOutDone} <span style={{ fontSize: 13, fontWeight: 500 }}>expédiée{todayOutDone !== 1 ? "s" : ""}</span>
+                </div>
+              </div>
+            )}
+            {/* Barre de progression */}
+            {todayOutDone !== null && (todayOutPending + todayOutDone) > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 160 }}>
+                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  {todayOutDone} / {todayOutDone + todayOutPending} traitées
+                </div>
+                <div style={{ height: 8, background: "var(--border)", borderRadius: 4, overflow: "hidden", width: 160 }}>
+                  <div style={{ height: "100%", width: `${Math.round((todayOutDone / (todayOutDone + todayOutPending)) * 100)}%`, background: "var(--success)", borderRadius: 4, transition: "width .4s ease" }} />
+                </div>
+              </div>
+            )}
+          </div>
+          <button onClick={loadTodayOut} title="Rafraîchir" style={{ marginLeft: "auto", background: "none", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 10px", cursor: "pointer", color: "var(--text-muted)", fontSize: 13, fontFamily: "inherit" }}>
+            🔄
+          </button>
+        </div>
+      )}
 
       {/* CONTENT */}
       <main style={{ maxWidth: 1260, margin: "0 auto", padding: "28px 28px 60px" }}>
