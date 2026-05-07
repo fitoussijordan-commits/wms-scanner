@@ -634,6 +634,7 @@ export async function createInternalTransfer(
   const pickingTypes = await searchRead(session, "stock.picking.type", [["code", "=", "internal"]], ["id"], 1);
   if (!pickingTypes.length) throw new Error("Aucun type d'opération interne trouvé");
 
+  // Create picking + moves
   const pickingId = await create(session, "stock.picking", {
     picking_type_id: pickingTypes[0].id,
     location_id: sourceLocationId,
@@ -648,27 +649,38 @@ export async function createInternalTransfer(
     }]),
   });
 
+  // Confirm moves (state: draft → confirmed)
   await callMethod(session, "stock.picking", "action_confirm", [[pickingId]]);
-  await callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
 
-  // Read move lines — include reserved_uom_qty so we set the correct portion per line
-  // (Odoo may split one product across multiple move lines when stock is in different locations)
-  const moveLines = await searchRead(session, "stock.move.line",
+  // IMPORTANT: Do NOT call action_assign — it would reserve stock from wherever
+  // Odoo finds it (e.g. RKE8) and override the source location on move lines,
+  // resulting in a no-op transfer (source = destination).
+  // Instead, create move lines manually with explicit location_id.
+
+  const moves = await searchRead(session, "stock.move",
     [["picking_id", "=", pickingId]],
-    ["id", "product_id", "lot_id", "qty_done", "reserved_uom_qty"]
+    ["id", "product_id", "product_uom"],
+    200
   );
 
-  // Write qty_done per line using reserved_uom_qty (not the full requested qty)
-  // so that when Odoo splits a product across multiple lines each gets its own portion
-  for (const ml of moveLines) {
-    const matchingLine = lines.find(l => l.productId === ml.product_id[0]);
-    if (matchingLine) {
-      const lineQty = (ml.reserved_uom_qty as number) || 0;
-      const updates: any = { qty_done: lineQty > 0 ? lineQty : matchingLine.qty };
-      // Only set lot if the user specified one and Odoo hasn't already assigned one
-      if (matchingLine.lotId && !ml.lot_id) updates.lot_id = matchingLine.lotId;
-      await write(session, "stock.move.line", [ml.id], updates);
-    }
+  for (const move of moves) {
+    const matchingLine = lines.find(l => l.productId === (Array.isArray(move.product_id) ? move.product_id[0] : move.product_id));
+    if (!matchingLine) continue;
+
+    const uomId = Array.isArray(move.product_uom) ? move.product_uom[0] : move.product_uom;
+    const mlData: any = {
+      picking_id:       pickingId,
+      move_id:          move.id,
+      product_id:       matchingLine.productId,
+      product_uom_id:   uomId || matchingLine.uomId,
+      location_id:      sourceLocationId,      // ← source explicite, jamais écrasé
+      location_dest_id: destLocationId,
+      qty_done:         matchingLine.qty,
+      reserved_uom_qty: 0,
+    };
+    if (matchingLine.lotId) mlData.lot_id = matchingLine.lotId;
+
+    await create(session, "stock.move.line", mlData);
   }
 
   return pickingId;
