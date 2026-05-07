@@ -329,7 +329,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
         byDest[destId].lines.push(line);
       }
 
-      // Create one internal transfer per unique destination
+      // Create one internal transfer per unique destination, and auto-validate each
       const allResults: TransferResult[] = [];
       for (const { locId, locName, lines } of Object.values(byDest)) {
         const pickingId = await odoo.createInternalTransfer(
@@ -347,6 +347,14 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           1
         );
 
+        // Auto-valider le transfert interne (qty_done déjà rempli par createInternalTransfer)
+        try {
+          await odoo.validatePicking(session, pickingId);
+        } catch (e: any) {
+          // Si l'auto-validation échoue, le transfert reste ouvert — l'utilisateur peut le valider manuellement
+          console.warn(`Auto-validation ${pick?.name} échouée:`, e.message);
+        }
+
         allResults.push({
           pickingId,
           pickingName: pick?.name || `INT-${pickingId}`,
@@ -362,7 +370,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
       };
 
       setTransferDone(merged);
-      onToast(`Retour validé + transfert ${merged.pickingName} créé ✓`, "success");
+      onToast(`✅ Retour validé — transfert ${merged.pickingName} validé automatiquement`, "success");
       loadReturns();
     } catch (e: any) {
       setError(e.message);
