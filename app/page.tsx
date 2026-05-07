@@ -5880,6 +5880,10 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
   const [locationData, setLocationData] = useState<Record<number, any>>({});
   const [openPallets, setOpenPallets] = useState<Record<string, boolean>>({});
   const [savedList, setSavedList] = useState<any[]>([]);
+  // Refs marquées comme "rangées" — disparaissent de la carte
+  const [rangedRefs, setRangedRefs] = useState<Set<string>>(new Set());
+  const toggleRanged = (key: string) =>
+    setRangedRefs(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s; });
 
   // Load saved packing lists on mount
   useEffect(() => { loadSavedList(); }, []);
@@ -6106,38 +6110,78 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
             <PalletRefSearch packingData={packingData} matchData={matchData} />
           )}
 
+          {/* Compteur global rangement */}
+          {(() => {
+            let totalProds = 0;
+            let rangedCount = 0;
+            for (const pallet of packingData.pallets) {
+              const keys = new Set<string>();
+              for (const c of pallet.cartons) {
+                const arts: any[] = c.articles?.length > 0 ? c.articles : [{ supplierRef: c.supplierRef, lot: c.lot }];
+                arts.forEach((art: any) => keys.add(`${pallet.palletNo}_${art.supplierRef}_${art.lot || ""}`));
+              }
+              totalProds += keys.size;
+              rangedCount += Array.from(keys).filter(k => rangedRefs.has(k)).length;
+            }
+            if (totalProds === 0) return null;
+            const pct = Math.round((rangedCount / totalProds) * 100);
+            const allDone = rangedCount === totalProds;
+            return (
+              <div style={{ marginBottom: 12, padding: "10px 14px", background: allDone ? "#ecfdf5" : "#f8fafc", border: `1px solid ${allDone ? "#059669" : C.border}`, borderRadius: 10, display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: allDone ? "#059669" : C.text, marginBottom: 4 }}>
+                    {allDone ? "✅ Tout rangé !" : `Rangement : ${rangedCount} / ${totalProds} réf(s)`}
+                  </div>
+                  <div style={{ height: 6, background: "#e5e7eb", borderRadius: 3, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${pct}%`, background: allDone ? "#059669" : "#3b82f6", borderRadius: 3, transition: "width .3s ease" }} />
+                  </div>
+                </div>
+                {rangedCount > 0 && !allDone && (
+                  <button onClick={() => setRangedRefs(new Set())} style={{ fontSize: 10, color: C.textMuted, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>
+                    Reset
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Palettes */}
           {packingData.pallets.map((pallet: any, pi: number) => {
             const isOpen = !!openPallets[pallet.palletNo];
             // Aggregate products on this pallet — supporte les cartons vrac (multi-articles)
-            const prodSummary: Record<string, { supplierRef: string; desc: string; lot: string; expiry: string; totalQty: number; cartonCount: number; hasVrac: boolean }> = {};
+            const prodSummary: Record<string, { supplierRef: string; desc: string; lot: string; expiry: string; totalQty: number; cartonCount: number; hasVrac: boolean; rangeKey: string }> = {};
             for (const c of pallet.cartons) {
               const arts: any[] = c.articles?.length > 0 ? c.articles : [{ supplierRef: c.supplierRef, productDesc: c.productDesc, lot: c.lot, expiry: c.expiry, qtyProduct: c.qtyProduct }];
               arts.forEach((art: any, artIdx: number) => {
                 const key = `${art.supplierRef}_${art.lot}`;
+                const rangeKey = `${pallet.palletNo}_${art.supplierRef}_${art.lot || ""}`;
                 if (!prodSummary[key]) {
-                  prodSummary[key] = { supplierRef: art.supplierRef, desc: art.productDesc, lot: art.lot, expiry: art.expiry, totalQty: 0, cartonCount: 0, hasVrac: false };
+                  prodSummary[key] = { supplierRef: art.supplierRef, desc: art.productDesc, lot: art.lot, expiry: art.expiry, totalQty: 0, cartonCount: 0, hasVrac: false, rangeKey };
                 }
                 prodSummary[key].totalQty += art.qtyProduct;
-                // Pour le vrac : 1 carton partagé → on l'attribue uniquement au 1er article pour éviter le doublon
                 if (!c.isVrac || artIdx === 0) prodSummary[key].cartonCount += 1;
                 if (c.isVrac) prodSummary[key].hasVrac = true;
               });
             }
             const products = Object.values(prodSummary);
+            const rangedOnPallet = products.filter(p => rangedRefs.has(p.rangeKey)).length;
+            const palletDone = rangedOnPallet === products.length;
 
             return (
               <div key={pi} style={{ marginBottom: 10 }}>
                 <button onClick={() => togglePallet(pallet.palletNo)} style={{
                   width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "12px 14px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10,
+                  padding: "12px 14px", background: palletDone ? "#ecfdf5" : C.white, border: `1px solid ${palletDone ? "#059669" : C.border}`, borderRadius: 10,
                   cursor: "pointer", fontFamily: "inherit", boxShadow: C.shadow,
                 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 16 }}>🔷</span>
+                    <span style={{ fontSize: 16 }}>{palletDone ? "✅" : "🔷"}</span>
                     <div style={{ textAlign: "left" }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Palette {pallet.palletNo}</div>
-                      <div style={{ fontSize: 11, color: C.textMuted }}><span style={{ fontWeight: 700, color: C.text }}>{pallet.cartons.length} colis</span> · {products.length} réf(s){pallet.dimensions ? ` · ${pallet.dimensions}` : ""}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: palletDone ? "#059669" : C.text }}>Palette {pallet.palletNo}</div>
+                      <div style={{ fontSize: 11, color: C.textMuted }}>
+                        <span style={{ fontWeight: 700, color: C.text }}>{pallet.cartons.length} colis</span> · {products.length} réf(s){pallet.dimensions ? ` · ${pallet.dimensions}` : ""}
+                        {rangedOnPallet > 0 && <span style={{ color: "#059669", fontWeight: 700 }}> · {rangedOnPallet}/{products.length} rangés</span>}
+                      </div>
                     </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -6152,19 +6196,27 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                       const match = getMatch(prod.supplierRef);
                       const loc = getLocation(prod.supplierRef);
                       const isMatched = !!match;
+                      const isRanged = rangedRefs.has(prod.rangeKey);
                       return (
-                        <div key={j} style={{ ...cardStyle, marginBottom: 6, borderLeft: `3px solid ${isMatched ? C.green : C.orange}` }}>
+                        <div key={j} style={{
+                          ...cardStyle, marginBottom: 6,
+                          borderLeft: `3px solid ${isRanged ? "#059669" : isMatched ? C.green : C.orange}`,
+                          opacity: isRanged ? 0.55 : 1,
+                          transition: "opacity .2s",
+                          background: isRanged ? "#f0fdf4" : C.white,
+                        }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                             <div style={{ flex: 1 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" as const }}>
                                 {isMatched ? (
-                                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{match.product_name}</div>
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: isRanged ? "#059669" : C.text }}>{match.product_name}</div>
                                 ) : (
                                   <div style={{ fontSize: 13, fontWeight: 700, color: C.orange }}>{prod.desc} <span style={{ fontSize: 10, fontWeight: 400 }}>(non trouvé)</span></div>
                                 )}
                                 {prod.hasVrac && (
                                   <span style={{ fontSize: 9, fontWeight: 700, color: "#7c3aed", background: "#ede9fe", padding: "1px 6px", borderRadius: 5, letterSpacing: "0.04em" }}>VRAC</span>
                                 )}
+                                {isRanged && <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#dcfce7", padding: "1px 7px", borderRadius: 5 }}>✓ Rangé</span>}
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, flexWrap: "wrap" as const }}>
                                 {match?.default_code && (
@@ -6173,44 +6225,61 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                                 <span style={{ fontSize: 11, color: C.textMuted }}>Réf fourn: {prod.supplierRef}</span>
                               </div>
                             </div>
-                            <div style={{ textAlign: "right", flexShrink: 0 }}>
-                              <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{prod.cartonCount} <span style={{ fontSize: 11, fontWeight: 500 }}>crt</span></div>
-                              <div style={{ fontSize: 11, color: C.textMuted }}>{prod.totalQty} unités</div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                              <div style={{ textAlign: "right" }}>
+                                <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{prod.cartonCount} <span style={{ fontSize: 11, fontWeight: 500 }}>crt</span></div>
+                                <div style={{ fontSize: 11, color: C.textMuted }}>{prod.totalQty} unités</div>
+                              </div>
+                              {/* Case à cocher "Rangé" */}
+                              <button
+                                onClick={(e) => { e.stopPropagation(); toggleRanged(prod.rangeKey); }}
+                                title={isRanged ? "Marquer comme non rangé" : "Marquer comme rangé"}
+                                style={{
+                                  width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                                  border: `2px solid ${isRanged ? "#059669" : "#d1d5db"}`,
+                                  background: isRanged ? "#059669" : "#ffffff",
+                                  cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                                  fontSize: 16, transition: "all .15s",
+                                }}>
+                                {isRanged ? <span style={{ color: "#fff", fontWeight: 900, fontSize: 18 }}>✓</span> : <span style={{ color: "#d1d5db", fontSize: 18 }}>□</span>}
+                              </button>
                             </div>
                           </div>
-                          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" as const, alignItems: "center" }}>
-                            {prod.lot && (
-                              <button
-                                onClick={() => requestPrint({ type: "lot", title: prod.lot, barcode: prod.lot, lotName: prod.lot, productName: match?.product_name || prod.desc, expiryDate: prod.expiry })}
-                                title="Imprimer étiquette lot"
-                                style={{ fontSize: 11, fontWeight: 600, color: C.blue, background: C.blueSoft, padding: "2px 8px", borderRadius: 6, border: `1px solid ${C.blue}`, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
-                                🖨 Lot {prod.lot}
-                              </button>
-                            )}
-                            {match?.default_code && (
-                              <button
-                                onClick={() => requestPrint({ type: "product", title: match.product_name || prod.desc, barcode: match.barcode || match.default_code, ref: match.default_code, productName: match.product_name || prod.desc })}
-                                title="Imprimer étiquette produit"
-                                style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f5f3ff", padding: "2px 8px", borderRadius: 6, border: "1px solid #7c3aed", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
-                                🖨 {match.default_code}
-                              </button>
-                            )}
-                            {prod.expiry && (
-                              <span style={{ fontSize: 11, color: C.textMuted, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>
-                                Exp: {prod.expiry}
-                              </span>
-                            )}
-                            {loc && (
-                              <span style={{ fontSize: 13, fontWeight: 700, color: "#059669", background: "#ecfdf5", padding: "3px 10px", borderRadius: 6, border: "1px solid #059669", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
-                                📍 {loc.location_name.split("/").pop()} ({loc.quantity} en stock)
-                              </span>
-                            )}
-                            {isMatched && !loc && (
-                              <span style={{ fontSize: 11, color: C.orange, background: C.orangeSoft, padding: "2px 8px", borderRadius: 6 }}>
-                                📍 Nouveau produit — pas d'emplacement
-                              </span>
-                            )}
-                          </div>
+                          {!isRanged && (
+                            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" as const, alignItems: "center" }}>
+                              {prod.lot && (
+                                <button
+                                  onClick={() => requestPrint({ type: "lot", title: prod.lot, barcode: prod.lot, lotName: prod.lot, productName: match?.product_name || prod.desc, expiryDate: prod.expiry })}
+                                  title="Imprimer étiquette lot"
+                                  style={{ fontSize: 11, fontWeight: 600, color: C.blue, background: C.blueSoft, padding: "2px 8px", borderRadius: 6, border: `1px solid ${C.blue}`, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                                  🖨 Lot {prod.lot}
+                                </button>
+                              )}
+                              {match?.default_code && (
+                                <button
+                                  onClick={() => requestPrint({ type: "product", title: match.product_name || prod.desc, barcode: match.barcode || match.default_code, ref: match.default_code, productName: match.product_name || prod.desc })}
+                                  title="Imprimer étiquette produit"
+                                  style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f5f3ff", padding: "2px 8px", borderRadius: 6, border: "1px solid #7c3aed", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                                  🖨 {match.default_code}
+                                </button>
+                              )}
+                              {prod.expiry && (
+                                <span style={{ fontSize: 11, color: C.textMuted, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>
+                                  Exp: {prod.expiry}
+                                </span>
+                              )}
+                              {loc && (
+                                <span style={{ fontSize: 13, fontWeight: 700, color: "#059669", background: "#ecfdf5", padding: "3px 10px", borderRadius: 6, border: "1px solid #059669", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                                  📍 {loc.location_name.split("/").pop()} ({loc.quantity} en stock)
+                                </span>
+                              )}
+                              {isMatched && !loc && (
+                                <span style={{ fontSize: 11, color: C.orange, background: C.orangeSoft, padding: "2px 8px", borderRadius: 6 }}>
+                                  📍 Nouveau produit — pas d'emplacement
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
