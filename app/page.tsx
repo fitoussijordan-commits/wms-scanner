@@ -1094,6 +1094,7 @@ export default function Page() {
     waitingToday: { count: number; names: string[] };
     inPrep: { count: number; names: string[] };
     eshopWaiting: { count: number; names: string[] };
+    outToPackToday: { count: number; names: string[] };
     lastUpdate: string;
   } | null>(null);
   const [ccLoading, setCcLoading] = useState(false);
@@ -1366,9 +1367,17 @@ export default function Page() {
       setCcLoading(true);
       try {
         const todayStr = new Date().toISOString().slice(0, 10);
-        const [allWaiting, inPrepList] = await Promise.all([
+        const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+        const [allWaiting, inPrepList, outToPack] = await Promise.all([
           odoo.getWaitingPickings(session).catch(() => []),
           odoo.getOutgoingPickings(session).catch(() => []),
+          odoo.searchRead(session, "stock.picking",
+            [["picking_type_code","=","outgoing"],
+             ["state","in",["assigned","partially_available","confirmed","waiting"]],
+             ["scheduled_date",">=",`${todayStr} 00:00:00`],
+             ["scheduled_date","<",`${tomorrow} 00:00:00`]],
+            ["id","name","origin"], 200
+          ).catch(() => []),
         ]);
         const waitingToday = (allWaiting as any[]).filter((p: any) => {
           const d: string = p.shipping_date || p.scheduled_date || p.date_deadline || "";
@@ -1398,6 +1407,7 @@ export default function Page() {
           waitingToday: { count: waitingToday.length, names: (waitingToday as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           inPrep: { count: (inPrepList as any[]).length, names: (inPrepList as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           eshopWaiting: { count: eshopOrders.length, names: eshopOrders.slice(0, 6).map((o: any) => o.order_number || `#${o.order_id || o.id}`) },
+          outToPackToday: { count: (outToPack as any[]).length, names: (outToPack as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           lastUpdate: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
         });
       } catch {} finally { setCcLoading(false); }
@@ -2693,6 +2703,10 @@ export default function Page() {
                 <CcCard color="#7c3aed" bg="#ede9fe" icon="📦" label="En préparation"
                   count={ccData?.inPrep.count ?? 0}
                   names={ccData?.inPrep.names ?? []}
+                  onClick={() => { loadPickings(); setScreen("prep"); }} />
+                <CcCard color="#0ea5e9" bg="#e0f2fe" icon="🎁" label="À emballer aujourd'hui"
+                  count={ccData?.outToPackToday.count ?? 0}
+                  names={ccData?.outToPackToday.names ?? []}
                   onClick={() => { loadPickings(); setScreen("prep"); }} />
                 <CcCard color="#db2777" bg="#fce7f3" icon="🛒" label="E-shop en attente"
                   count={ccData?.eshopWaiting.count ?? 0}
