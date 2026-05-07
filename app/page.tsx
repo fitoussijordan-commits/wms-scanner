@@ -6034,9 +6034,14 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
     setLoading(false);
   };
 
-  const deleteSaved = async (id: number) => {
+  const deleteSaved = async (id: number, attachmentName?: string) => {
     try {
       await odoo.deletePackingList(session, id);
+      // Supprimer aussi l'état de rangement associé
+      if (attachmentName) {
+        const packName = attachmentName.replace("packing_", "").replace(".json", "");
+        try { await odoo.deleteRangedState(session, packName); } catch {}
+      }
       setSavedList(prev => prev.filter(a => a.id !== id));
       onToast("✓ Supprimé");
     } catch {}
@@ -6103,7 +6108,7 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                       <div style={{ fontSize: 13, fontWeight: 600, color: C.blue }}>{name}</div>
                       <div style={{ fontSize: 11, color: C.textMuted }}>{dateStr}</div>
                     </button>
-                    <button onClick={() => deleteSaved(a.id)} style={{ ...iconBtn, background: C.bg, borderRadius: 6, padding: "4px 8px", fontSize: 11, color: C.red }}>
+                    <button onClick={() => deleteSaved(a.id, a.name)} style={{ ...iconBtn, background: C.bg, borderRadius: 6, padding: "4px 8px", fontSize: 11, color: C.red }}>
                       ✕
                     </button>
                   </div>

@@ -1094,6 +1094,12 @@ export async function loadRangedState(session: OdooSession, packingName: string)
   } catch { return []; }
 }
 
+export async function deleteRangedState(session: OdooSession, packingName: string): Promise<void> {
+  const fileName = `arrivage_ranged_${packingName}.json`;
+  const existing = await searchRead(session, "ir.attachment", [["name", "=", fileName]], ["id"], 1);
+  if (existing.length) await callMethod(session, "ir.attachment", "unlink", [[existing[0].id]]);
+}
+
 // ESHOP CHARIOT SKUS — shared list via ir.attachment
 // ============================================
 
