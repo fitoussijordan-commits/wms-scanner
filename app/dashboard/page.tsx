@@ -1873,65 +1873,101 @@ export default function Dashboard() {
   // Export Excel stylé des lignes sélectionnées (ou toutes si rien sélectionné)
   const smExportExcel = () => {
     const toExport = smFiltered.filter(r => smSelected.size === 0 || smSelected.has(r.ref));
-    const statusLabel: Record<string,string> = { ok:"OK", alert:"Alerte", critical:"Critique", no_data:"Pas de données", not_found:"Introuvable" };
-    const statusRowStyle: Record<string,string> = {
-      ok:       "background:#f0fdf4;",
-      alert:    "background:#fffbeb;",
-      critical: "background:#fef2f2;",
-      no_data:  "background:#f3f4f6;",
-      not_found:"background:#f3f4f6;",
-    };
-    const statusTextStyle: Record<string,string> = {
-      ok:       "color:#16a34a;font-weight:700;",
-      alert:    "color:#d97706;font-weight:700;",
-      critical: "color:#dc2626;font-weight:700;",
-      no_data:  "color:#6b7280;",
-      not_found:"color:#6b7280;",
-    };
-    const headers = ["Référence","Nom","Stock","Conso/mois","Attendu","Seuil min","Jours restants","Prochaine livraison","Statut","Date rupture fourn."];
     const today = new Date().toLocaleDateString("fr-FR",{day:"2-digit",month:"long",year:"numeric"});
 
-    const th = (txt: string) =>
-      `<th style="background:#1e3a5f;color:#ffffff;font-weight:700;font-size:12px;padding:8px 10px;border:1px solid #1e3a5f;white-space:nowrap;">${txt}</th>`;
+    // Couleurs par statut — appliquées sur chaque <td> individuellement pour compatibilité Excel
+    const BG: Record<string,string> = {
+      ok:        "#d1fae5",
+      alert:     "#fef3c7",
+      critical:  "#fee2e2",
+      no_data:   "#f1f5f9",
+      not_found: "#f1f5f9",
+    };
+    const FG: Record<string,string> = {
+      ok:        "#065f46",
+      alert:     "#92400e",
+      critical:  "#991b1b",
+      no_data:   "#64748b",
+      not_found: "#64748b",
+    };
+    const LABEL: Record<string,string> = {
+      ok:"✅ OK", alert:"⚠️ Alerte", critical:"🔴 Critique", no_data:"— Sans données", not_found:"Introuvable"
+    };
 
-    const td = (txt: string|number, extra="") =>
-      `<td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:11px;${extra}">${txt ?? ""}</td>`;
+    // Widths en pixels pour les colonnes (hint Excel)
+    const colWidths = [90, 240, 60, 80, 70, 70, 90, 160, 90, 130];
 
-    const rows = toExport.map(r => {
-      const rs = statusRowStyle[r.status] || "";
-      return `<tr style="${rs}">
-        ${td(r.ref, "font-weight:700;font-size:12px;")}
-        ${td(r.name, "font-weight:600;")}
-        ${td(r.stock)}
-        ${td(r.conso)}
-        ${td(r.expected_qty || "")}
-        ${td(r.threshold)}
-        ${td(r.daysLeft >= 999 ? "∞" : r.daysLeft)}
-        ${td(r.delivLabel || "")}
-        ${td(statusLabel[r.status] || r.status, statusTextStyle[r.status] || "")}
-        ${td(r.supplierDate || "")}
+    const BASE_TD  = "font-family:Arial,sans-serif;font-size:11px;padding:6px 10px;border:1px solid #d1d5db;vertical-align:middle;";
+    const HEADER_TD = "font-family:Arial,sans-serif;font-size:11px;font-weight:700;color:#ffffff;background:#1e3a5f;padding:8px 10px;border:1px solid #1e3a5f;white-space:nowrap;vertical-align:middle;";
+
+    const headers = ["Référence","Nom","Stock","Conso/mois","Attendu","Seuil min","Jours restants","Prochaine livraison","Statut","Date rupture fourn."];
+
+    const colgroup = colWidths.map(w => `<col style="width:${w}px">`).join("");
+
+    const headerRow = headers.map((h,i) =>
+      `<td style="${HEADER_TD}width:${colWidths[i]}px;">${h}</td>`
+    ).join("");
+
+    const dataRows = toExport.map((r, idx) => {
+      const bg  = BG[r.status]  || "#ffffff";
+      const fg  = FG[r.status]  || "#111827";
+      const alt = idx % 2 === 1 && !BG[r.status] ? "#f8fafc" : bg; // léger zébrage si pas de couleur statut
+      const cellBg = BG[r.status] ? bg : (idx % 2 === 1 ? "#f8fafc" : "#ffffff");
+
+      const cell = (val: string|number, extra="") =>
+        `<td style="${BASE_TD}background:${cellBg};${extra}">${val ?? ""}</td>`;
+
+      const daysLeft = r.daysLeft >= 999 ? "∞" : String(r.daysLeft);
+      const daysColor = r.daysLeft <= 7 ? "color:#991b1b;font-weight:700;" :
+                        r.daysLeft <= 30 ? "color:#92400e;font-weight:700;" : "";
+
+      return `<tr>
+        ${cell(r.ref,  "font-weight:700;font-size:12px;color:#1e3a5f;")}
+        ${cell(r.name, "font-weight:600;")}
+        ${cell(r.stock, "text-align:center;")}
+        ${cell(r.conso, "text-align:center;")}
+        ${cell(r.expected_qty || "", "text-align:center;")}
+        ${cell(r.threshold, "text-align:center;")}
+        ${cell(daysLeft, `text-align:center;${daysColor}`)}
+        ${cell(r.delivLabel || "")}
+        <td style="${BASE_TD}background:${bg};color:${fg};font-weight:700;text-align:center;">${LABEL[r.status] || r.status}</td>
+        ${cell(r.supplierDate || "", "text-align:center;")}
       </tr>`;
     }).join("\n");
 
-    const html = `
-<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+    // Ligne résumé comptages
+    const nCritical = toExport.filter(r=>r.status==="critical").length;
+    const nAlert    = toExport.filter(r=>r.status==="alert").length;
+    const nOk       = toExport.filter(r=>r.status==="ok").length;
+    const summaryRow = `<tr>
+      <td colspan="10" style="${BASE_TD}background:#f8fafc;font-style:italic;color:#475569;font-size:10px;border-top:2px solid #94a3b8;">
+        ${toExport.length} produits — 🔴 ${nCritical} critique(s) · ⚠️ ${nAlert} alerte(s) · ✅ ${nOk} OK
+      </td>
+    </tr>`;
+
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
 <head><meta charset="UTF-8">
 <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
 <x:Name>Suivi Stock</x:Name>
-<x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+<x:WorksheetOptions><x:FreezePanes/><x:SplitHorizontal>2</x:SplitHorizontal><x:TopRowBottomPane>2</x:TopRowBottomPane></x:WorksheetOptions>
 </x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+<style>td,th{mso-number-format:"\@";}</style>
 </head>
 <body>
-<table style="border-collapse:collapse;font-family:Arial,sans-serif;">
-  <tr><td colspan="${headers.length}" style="background:#1e3a5f;color:#ffffff;font-size:14px;font-weight:700;padding:10px 14px;border:none;">
-    📦 Suivi de Stock — Exporté le ${today}
-  </td></tr>
-  <tr>${headers.map(th).join("")}</tr>
-  ${rows}
+<table style="border-collapse:collapse;">
+  <colgroup>${colgroup}</colgroup>
+  <tr>
+    <td colspan="10" style="background:#1e3a5f;color:#ffffff;font-family:Arial,sans-serif;font-size:15px;font-weight:700;padding:12px 16px;border:none;letter-spacing:0.5px;">
+      📦 Suivi de Stock — Exporté le ${today}
+    </td>
+  </tr>
+  <tr>${headerRow}</tr>
+  ${dataRows}
+  ${summaryRow}
 </table>
 </body></html>`;
 
-    const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+    const blob = new Blob(["﻿" + html], { type: "application/vnd.ms-excel;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
