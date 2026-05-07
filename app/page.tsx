@@ -1373,8 +1373,10 @@ export default function Page() {
           odoo.getOutgoingPickings(session).catch(() => []),
           odoo.searchRead(session, "stock.picking",
             [["picking_type_code","=","outgoing"],
-             ["state","in",["assigned","partially_available","confirmed","waiting"]]],
-            ["id","name","origin","x_studio_date_dexpdition_prvue","shipping_date","scheduled_date","date_deadline"], 500
+             ["state","in",["assigned","partially_available","confirmed","waiting"]],
+             ["x_studio_date_dexpdition_prvue","<=",todayStr],
+             ["x_studio_date_dexpdition_prvue","!=",false]],
+            ["id","name","origin","x_studio_date_dexpdition_prvue"], 500
           ).catch(() => []),
         ]);
         const waitingToday = (allWaiting as any[]).filter((p: any) => {
@@ -1405,13 +1407,7 @@ export default function Page() {
           waitingToday: { count: waitingToday.length, names: (waitingToday as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           inPrep: { count: (inPrepList as any[]).length, names: (inPrepList as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           eshopWaiting: { count: eshopOrders.length, names: eshopOrders.slice(0, 6).map((o: any) => o.order_number || `#${o.order_id || o.id}`) },
-          outToPackToday: (() => {
-            const filtered = (outToPack as any[]).filter((p: any) => {
-              const d: string = p.x_studio_date_dexpdition_prvue || p.shipping_date || p.scheduled_date || p.date_deadline || "";
-              return d ? d.slice(0, 10) <= todayStr : false;
-            });
-            return { count: filtered.length, names: filtered.slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) };
-          })(),
+          outToPackToday: { count: (outToPack as any[]).length, names: (outToPack as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           lastUpdate: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
         });
       } catch {} finally { setCcLoading(false); }
