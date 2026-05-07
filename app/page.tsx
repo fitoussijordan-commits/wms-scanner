@@ -5880,10 +5880,28 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
   const [locationData, setLocationData] = useState<Record<number, any>>({});
   const [openPallets, setOpenPallets] = useState<Record<string, boolean>>({});
   const [savedList, setSavedList] = useState<any[]>([]);
-  // Refs marquées comme "rangées" — disparaissent de la carte
+  // Refs marquées comme "rangées" — persistées sur Odoo (partagé entre postes)
   const [rangedRefs, setRangedRefs] = useState<Set<string>>(new Set());
-  const toggleRanged = (key: string) =>
-    setRangedRefs(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s; });
+  const [currentPackingName, setCurrentPackingName] = useState<string>("");
+
+  const saveRanged = async (newSet: Set<string>, packName: string) => {
+    if (!packName || !session) return;
+    try { await odoo.saveRangedState(session, packName, Array.from(newSet)); } catch {}
+  };
+
+  const toggleRanged = (key: string) => {
+    setRangedRefs(prev => {
+      const s = new Set(prev);
+      s.has(key) ? s.delete(key) : s.add(key);
+      saveRanged(s, currentPackingName);
+      return s;
+    });
+  };
+
+  const resetRanged = () => {
+    setRangedRefs(new Set());
+    saveRanged(new Set(), currentPackingName);
+  };
 
   // Load saved packing lists on mount
   useEffect(() => { loadSavedList(); }, []);
@@ -5971,7 +5989,14 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 
       // Save to Odoo for sharing (non-blocking)
       const saveName = data.transportNr || `import_${Date.now()}`;
+      setCurrentPackingName(saveName);
       try { await odoo.savePackingList(session, saveName, data); } catch (saveErr: any) { console.warn("Sauvegarde packing list:", saveErr.message); }
+
+      // Load rangement state for this packing list
+      try {
+        const savedRanged = await odoo.loadRangedState(session, saveName);
+        if (savedRanged.length) setRangedRefs(new Set(savedRanged));
+      } catch {}
 
       await enrichWithOdoo(data);
 
@@ -5992,6 +6017,14 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
       const data = await odoo.loadPackingList(session, name);
       if (!data) throw new Error("Données introuvables");
       setPackingData(data);
+      setCurrentPackingName(name);
+
+      // Load rangement state for this packing list
+      try {
+        const savedRanged = await odoo.loadRangedState(session, name);
+        setRangedRefs(savedRanged.length ? new Set(savedRanged) : new Set());
+      } catch { setRangedRefs(new Set()); }
+
       await enrichWithOdoo(data);
       if (data.pallets?.length > 0) {
         setOpenPallets({ [data.pallets[0].palletNo]: true });
@@ -6137,7 +6170,7 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                   </div>
                 </div>
                 {rangedCount > 0 && !allDone && (
-                  <button onClick={() => setRangedRefs(new Set())} style={{ fontSize: 10, color: C.textMuted, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>
+                  <button onClick={resetRanged} style={{ fontSize: 10, color: C.textMuted, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>
                     Reset
                   </button>
                 )}
