@@ -652,33 +652,52 @@ export async function createInternalTransfer(
   // Confirm moves (state: draft → confirmed)
   await callMethod(session, "stock.picking", "action_confirm", [[pickingId]]);
 
-  // IMPORTANT: Do NOT call action_assign — it would reserve stock from wherever
-  // Odoo finds it (e.g. RKE8) and override the source location on move lines,
-  // resulting in a no-op transfer (source = destination).
-  // Instead, create move lines manually with explicit location_id.
+  // Odoo auto-creates move lines after action_confirm (splits by lot/location from available stock).
+  // Delete them all — we'll create the correct ones manually with explicit source + lot.
+  const autoMoveLines = await searchRead(session, "stock.move.line",
+    [["picking_id", "=", pickingId]],
+    ["id"], 500
+  );
+  if (autoMoveLines.length) {
+    await callMethod(session, "stock.move.line", "unlink", [autoMoveLines.map((ml: any) => ml.id)]);
+  }
 
+  // Get moves (one per product, or multiple if same product appears twice with different lots)
   const moves = await searchRead(session, "stock.move",
     [["picking_id", "=", pickingId]],
     ["id", "product_id", "product_uom"],
     200
   );
 
+  // Build ordered list of moves per product (to handle same product + multiple lots)
+  const movesByProduct: Record<number, any[]> = {};
   for (const move of moves) {
-    const matchingLine = lines.find(l => l.productId === (Array.isArray(move.product_id) ? move.product_id[0] : move.product_id));
-    if (!matchingLine) continue;
+    const pid = Array.isArray(move.product_id) ? move.product_id[0] : move.product_id;
+    if (!movesByProduct[pid]) movesByProduct[pid] = [];
+    movesByProduct[pid].push(move);
+  }
+
+  // Create one move line per entry in lines — handles multiple lots for same product
+  const usedMoveIdx: Record<number, number> = {};
+  for (const line of lines) {
+    const movesForProduct = movesByProduct[line.productId] || [];
+    const idx = usedMoveIdx[line.productId] || 0;
+    const move = movesForProduct[idx] || movesForProduct[0];
+    if (!move) continue;
+    usedMoveIdx[line.productId] = idx + 1;
 
     const uomId = Array.isArray(move.product_uom) ? move.product_uom[0] : move.product_uom;
     const mlData: any = {
       picking_id:       pickingId,
       move_id:          move.id,
-      product_id:       matchingLine.productId,
-      product_uom_id:   uomId || matchingLine.uomId,
-      location_id:      sourceLocationId,      // ← source explicite, jamais écrasé
+      product_id:       line.productId,
+      product_uom_id:   uomId || line.uomId,
+      location_id:      sourceLocationId,   // ← source forcée, jamais écrasée par Odoo
       location_dest_id: destLocationId,
-      qty_done:         matchingLine.qty,
+      qty_done:         line.qty,
       reserved_uom_qty: 0,
     };
-    if (matchingLine.lotId) mlData.lot_id = matchingLine.lotId;
+    if (line.lotId) mlData.lot_id = line.lotId;
 
     await create(session, "stock.move.line", mlData);
   }
