@@ -5,6 +5,7 @@ export const maxDuration = 30;
 
 const V2 = "https://panel.sendcloud.sc/api/v2";
 const V3 = "https://panel.sendcloud.sc/api/v3";
+const INTEGRATION_ID = 527093; // Dr. Hauschka Shop FR-FR
 
 function getAuth(): string {
   const pub = process.env.SENDCLOUD_PUBLIC_KEY || "";
@@ -26,6 +27,156 @@ async function scJson(url: string, auth: string, options?: RequestInit) {
   return res.json();
 }
 
+// ─── Helpers négatifs / V2 direct ─────────────────────────────────────────────
+
+function hasNegativeItems(raw: any): boolean {
+  if (!raw) return false;
+  const items: any[] = raw.order_details?.order_items || raw.order_items || [];
+  return items.some((i: any) => {
+    const v = parseFloat(String(i.unit_price?.value ?? i.product_value ?? i.price ?? i.value ?? "0"));
+    return v < 0;
+  });
+}
+
+const hasLabel = (p: any) => !!(p?.label?.label_printer || p?.label?.normal_printer?.[0]);
+
+/**
+ * Poll V2 /parcels/{id} jusqu'à ce que l'étiquette soit prête.
+ */
+async function pollLabel(auth: string, parcelId: number, attempts = 15, delayMs = 2500): Promise<any | null> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const d = await scJson(`${V2}/parcels/${parcelId}`, auth);
+      const c = d.parcel || d;
+      if (hasLabel(c)) return c;
+    } catch {}
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+  return null;
+}
+
+/**
+ * Crée un colis directement via V2 /parcels avec `request_label: true`.
+ *
+ * Pourquoi : V3 `create-labels-async` rejette en 422 toute commande contenant
+ * une ligne à prix négatif (remise/avoir). V2 est plus permissif — on lui passe
+ * les parcel_items à prix positifs uniquement, et on absorbe les remises dans
+ * `total_order_value` (= net total). C'est ce que les transporteurs/douane
+ * attendent de toute façon.
+ */
+async function createParcelV2Direct(
+  auth: string,
+  orderId: string,
+  orderNumber: string,
+  raw: any,
+  clientShipmentId?: number | null
+): Promise<any> {
+  // Si raw absent ou incomplet, refetch V3
+  let order = raw;
+  if (!order || (!order.order_details && !order.order_items)) {
+    const d = await scJson(`${V3}/orders/${orderId}`, auth);
+    order = d.data || d;
+  }
+  const details = order.order_details || {};
+  const rawItems: any[] = details.order_items || order.order_items || [];
+  const addr = order.shipping_address || details.shipping_address || order.address || {};
+
+  // Net total (somme algébrique avec négatifs) — borné à 0 min pour la douane
+  const netTotal = rawItems.reduce((sum: number, i: any) => {
+    const v = parseFloat(String(i.unit_price?.value ?? i.product_value ?? i.price ?? i.value ?? "0"));
+    const q = Math.max(1, parseInt(String(i.quantity || 1)));
+    return sum + v * q;
+  }, 0);
+
+  // On ne garde que les lignes à prix >= 0 (les remises sont absorbées dans le total)
+  const parcelItems = rawItems
+    .filter((item: any) => {
+      if (!item) return false;
+      const v = parseFloat(String(item.unit_price?.value ?? item.product_value ?? item.price ?? item.value ?? "0"));
+      if (v < 0) return false;
+      return !!(item.description || item.name || item.title || item.sku);
+    })
+    .map((item: any) => {
+      const rawVal = item.unit_price?.value ?? item.product_value ?? item.price ?? item.value ?? "0";
+      return {
+        description: String(item.description || item.name || item.title || item.sku || "Article").substring(0, 100),
+        quantity: Math.max(1, parseInt(String(item.quantity || 1))),
+        weight: String(Math.max(0.001, parseFloat(String(item.weight || "0.1"))).toFixed(3)),
+        value: String(Math.max(0, parseFloat(String(rawVal))).toFixed(2)),
+        hs_code: item.harmonized_system_code || item.hs_code || "",
+        origin_country: item.origin_country || "DE",
+        sku: item.sku || "",
+      };
+    });
+
+  // Shipment ID : client → V3 → emprunt à un colis récent
+  let shipmentId: number | null =
+    clientShipmentId ||
+    details.shipping_method_id ||
+    order.shipping_details?.shipping_method_id ||
+    order.sendcloud_shipping_method_id ||
+    order.shipment?.id ||
+    order.shipping_method?.id ||
+    null;
+
+  if (!shipmentId) {
+    try {
+      const recent = await scJson(`${V2}/parcels?integration_id=${INTEGRATION_ID}&limit=10`, auth);
+      const rp = (recent.parcels || []).find((p: any) => p.shipment?.id);
+      if (rp?.shipment?.id) shipmentId = rp.shipment.id;
+    } catch {}
+  }
+
+  const name =
+    [addr.first_name, addr.last_name].filter(Boolean).join(" ") ||
+    addr.company_name || addr.name || "Client";
+  const street =
+    [addr.street, addr.house_number].filter(Boolean).join(" ") ||
+    addr.address_line_1 || addr.address_1 || addr.address || "";
+
+  // Poids total (somme items × qty, fallback 1 kg)
+  const totalWeight = Math.max(
+    0.1,
+    rawItems.reduce((s: number, i: any) => {
+      const w = parseFloat(String(i.weight || "0"));
+      const q = Math.max(1, parseInt(String(i.quantity || 1)));
+      return s + (isFinite(w) ? w : 0) * q;
+    }, 0)
+  ).toFixed(3);
+
+  const v2Payload: any = {
+    parcel: {
+      name,
+      company_name: addr.company_name || "",
+      address: street,
+      address_2: addr.address_2 || addr.address_divided?.house_number_addition || "",
+      city: addr.city || "",
+      postal_code: addr.postal_code || "",
+      country: addr.country || addr.country_code || addr.country_iso_2 || "FR",
+      email: order.email || addr.email || "",
+      telephone: order.telephone || addr.phone || addr.telephone || "",
+      weight: totalWeight,
+      order_number: orderNumber,
+      external_order_id: String(orderId),
+      total_order_value: Math.max(0, netTotal).toFixed(2),
+      total_order_value_currency: order.currency || "EUR",
+      request_label: true,
+      ...(parcelItems.length > 0 && { parcel_items: parcelItems }),
+      ...(shipmentId ? { shipment: { id: shipmentId } } : {}),
+    },
+  };
+
+  console.log("[V2 direct]", orderNumber, "| net:", netTotal.toFixed(2), "| items+:", parcelItems.length, "| shipment:", shipmentId, "| weight:", totalWeight);
+
+  const result = await scJson(`${V2}/parcels`, auth, {
+    method: "POST",
+    body: JSON.stringify(v2Payload),
+  });
+  return result.parcel || null;
+}
+
+// ─── GET ──────────────────────────────────────────────────────────────────────
+
 export async function GET(req: NextRequest) {
   const auth = getAuth();
   if (!auth) return NextResponse.json({ error: "SENDCLOUD_PUBLIC_KEY / SENDCLOUD_SECRET_KEY non configurées" }, { status: 500 });
@@ -37,8 +188,7 @@ export async function GET(req: NextRequest) {
     // List parcels with optional status filter
     if (action === "parcels") {
       const statusFilter = searchParams.get("status") || "";
-      // Filter by integration 527093 (Dr. Hauschka Shop FR-FR)
-      const data = await scJson(`${V2}/parcels?limit=500&integration_id=527093`, auth);
+      const data = await scJson(`${V2}/parcels?limit=500&integration_id=${INTEGRATION_ID}`, auth);
       let parcels = data.parcels || [];
       if (statusFilter) {
         const ids = statusFilter.split(",").map((s: string) => parseInt(s.trim()));
@@ -49,9 +199,8 @@ export async function GET(req: NextRequest) {
 
     // V3 orders — open orders not yet converted to parcels
     if (action === "orders") {
-      const data = await scJson(`${V3}/orders?integration_id=527093&page_size=100`, auth);
+      const data = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=100`, auth);
       let orders = data.data || data.results || data.orders || [];
-      // If order_items not in list response, fetch each order individually
       const sample = orders[0] || {};
       if (!sample.order_items && !sample.order_details?.order_items) {
         orders = await Promise.all(
@@ -75,9 +224,9 @@ export async function GET(req: NextRequest) {
 
     // Debug V3 orders structure
     if (action === "probe") {
-      const data = await scJson(`${V3}/orders?integration_id=527093&page_size=3`, auth);
-      return NextResponse.json({ 
-        keys: Object.keys(data), 
+      const data = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=3`, auth);
+      return NextResponse.json({
+        keys: Object.keys(data),
         count: data.count ?? data.total ?? "?",
         sample: (data.data || data.results || data.orders || []).slice(0, 2),
         first_order_keys: Object.keys((data.data || data.results || data.orders || [])[0] || {}),
@@ -86,77 +235,153 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Debug : prix négatifs détectés sur une commande
+    if (action === "label_debug") {
+      const oid = searchParams.get("order_id");
+      const on = searchParams.get("order_number");
+      if (!oid && !on) return NextResponse.json({ error: "order_id ou order_number requis" }, { status: 400 });
+      const out: any = {};
+      if (oid) {
+        try {
+          const d = await scJson(`${V3}/orders/${oid}`, auth);
+          const o = d.data || d;
+          out.order_keys = Object.keys(o);
+          out.details_keys = Object.keys(o.order_details || {});
+          out.has_negative_prices = hasNegativeItems(o);
+          out.shipping_method_id = o.order_details?.shipping_method_id || o.shipping_details?.shipping_method_id || o.sendcloud_shipping_method_id;
+          const items = o.order_details?.order_items || o.order_items || [];
+          out.items_summary = items.map((i: any) => ({
+            description: i.description || i.name,
+            qty: i.quantity,
+            unit_price: i.unit_price?.value ?? i.price,
+          }));
+        } catch (e: any) { out.v3_error = e.message; }
+      }
+      if (on) {
+        try {
+          const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(on)}`, auth);
+          out.v2_parcels_found = (d.parcels || []).length;
+          out.v2_parcel_sample = (d.parcels || []).slice(0, 1);
+        } catch (e: any) { out.v2_error = e.message; }
+      }
+      return NextResponse.json(out);
+    }
+
     // Get label PDF for a parcel
     if (action === "label") {
       const orderId = searchParams.get("order_id");
       const orderNumber = searchParams.get("order_number");
+      const clientShipmentId = searchParams.get("shipment_id") ? Number(searchParams.get("shipment_id")) : null;
       if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
 
-      // Helper: find a parcel for this order via multiple strategies
-      // IMPORTANT: always verify exact order_number match to avoid returning a wrong parcel
+      // Cherche un colis existant (par order_number puis par external_order_id)
       const findParcel = async (): Promise<any | null> => {
-        // 1. By order_number — verify exact match in response
         try {
           const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber!)}`, auth);
-          const list: any[] = d.parcels || [];
-          // SendCloud may do partial/fuzzy search — filter strictly
-          const exact = list.find((p: any) => String(p.order_number) === String(orderNumber));
+          const exact = (d.parcels || []).find((p: any) => String(p.order_number) === String(orderNumber));
           if (exact) return exact;
         } catch {}
-        // 2. By order_id — verify exact match
         try {
           const d = await scJson(`${V2}/parcels?external_order_id=${encodeURIComponent(orderId!)}`, auth);
-          const list: any[] = d.parcels || [];
-          const exact = list.find((p: any) =>
+          const exact = (d.parcels || []).find((p: any) =>
             String(p.order_number) === String(orderNumber) ||
             String(p.external_order_id) === String(orderId)
           );
           if (exact) return exact;
         } catch {}
         return null;
-      }
+      };
 
-      // Step 1: check if parcel already exists with a label
+      // Step 1 : déjà un colis avec label ?
       let parcel: any = await findParcel();
-      if (parcel && !(parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0])) {
-        // Parcel exists but no label yet — fall through to create
-        parcel = null;
+      if (parcel && !hasLabel(parcel)) {
+        const polled = await pollLabel(auth, parcel.id, 4, 2000);
+        parcel = polled || null;
       }
 
-      // Step 2: create label if not already found with a label URL
+      // Step 1.5 : refetch V3 pour détecter les négatifs en amont
+      let rawV3: any = null;
+      try {
+        const d = await scJson(`${V3}/orders/${orderId}`, auth);
+        rawV3 = d.data || d;
+      } catch {}
+      const negativeDetected = hasNegativeItems(rawV3);
+      if (negativeDetected) console.log("[label GET]", orderNumber, "→ prix négatifs, bypass V3 → V2 direct");
+
+      // Step 2 : création
       if (!parcel) {
-        try {
-          await scJson(`${V3}/orders/create-labels-async`, auth, {
-            method: "POST",
-            body: JSON.stringify({
-              integration_id: 527093,
-              orders: [{ order_number: orderNumber }],
-            }),
-          });
-        } catch (createErr: any) {
-          // 422 = parcel already exists or validation failed — still poll for existing label
-          console.warn("[label] create-labels-async error:", createErr.message);
-        }
-        // Poll V2 max 4x with 2s gap
-        for (let i = 0; i < 4; i++) {
-          await new Promise(r => setTimeout(r, 2000));
-          const candidate = await findParcel();
-          if (candidate && (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0])) {
-            parcel = candidate;
-            break;
+        let v3Failed = negativeDetected; // skip V3 si négatifs détectés
+        let asyncParcelId: number | null = null;
+        let createErrMsg = "";
+
+        // Voie A : V3 create-labels-async
+        if (!negativeDetected) {
+          try {
+            const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
+              method: "POST",
+              body: JSON.stringify({ integration_id: INTEGRATION_ID, orders: [{ order_number: orderNumber }] }),
+            });
+            asyncParcelId = createRes?.data?.[0]?.parcel_id || null;
+          } catch (e: any) {
+            console.warn("[label GET] V3 create-labels-async échoué:", e.message);
+            v3Failed = true;
+            createErrMsg = e.message;
+          }
+          // Poll V3
+          if (!v3Failed) {
+            if (asyncParcelId) {
+              parcel = await pollLabel(auth, asyncParcelId, 10, 2500);
+            } else {
+              for (let i = 0; i < 6; i++) {
+                await new Promise(r => setTimeout(r, 2500));
+                const c = await findParcel();
+                if (c && hasLabel(c)) { parcel = c; break; }
+              }
+            }
           }
         }
-        // Last resort: return whatever parcel we find even without a label (client can retry)
-        if (!parcel) {
-          parcel = await findParcel();
+
+        // Voie B : V2 direct (fallback OU bypass négatifs)
+        if (!parcel && v3Failed) {
+          try {
+            const v2Parcel = await createParcelV2Direct(auth, orderId!, orderNumber!, rawV3, clientShipmentId);
+            if (v2Parcel && hasLabel(v2Parcel)) {
+              parcel = v2Parcel;
+            } else if (v2Parcel?.id) {
+              parcel = await pollLabel(auth, v2Parcel.id, 15, 2500);
+              if (!parcel) {
+                return NextResponse.json({
+                  parcelId: v2Parcel.id,
+                  tracking: v2Parcel.tracking_number || "",
+                  carrier: v2Parcel.carrier?.code || "",
+                  labelBase64: null,
+                  labelPending: true,
+                  error: "Étiquette en cours — réessaie dans 10s",
+                }, { status: 202 });
+              }
+            }
+          } catch (fallbackErr: any) {
+            console.error("[label GET] V2 direct échoué:", fallbackErr.message);
+            return NextResponse.json({
+              error: `Impossible de créer l'étiquette : ${createErrMsg || fallbackErr.message}`,
+              hint: fallbackErr.message,
+            }, { status: 422 });
+          }
         }
+
+        // 202 si V3 OK mais pas encore prête
+        if (!parcel && !v3Failed) {
+          return NextResponse.json({ parcelId: asyncParcelId, labelPending: true, error: "Étiquette en cours — réessaie dans 10s" }, { status: 202 });
+        }
+
+        // Last resort
+        if (!parcel) parcel = await findParcel();
       }
 
       if (!parcel) return NextResponse.json({ error: "Colis non trouvé après création étiquette" }, { status: 404 });
 
       const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
       if (!labelUrl) {
-        // Return parcel info so client knows it exists but label isn't ready
         return NextResponse.json({
           parcelId: parcel.id,
           tracking: parcel.tracking_number || "",
@@ -184,12 +409,10 @@ export async function GET(req: NextRequest) {
       const orderNumber = searchParams.get("order_number");
       if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
 
-      // Get parcel to find its id
       const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
       const parcel = (parcelsData.parcels || [])[0];
       if (!parcel) return NextResponse.json({ error: `Aucun colis trouvé — imprime d'abord l'étiquette` }, { status: 404 });
 
-      // Packing slip endpoint: GET /api/v2/packing-slips?parcel_id=XXX
       const psRes = await scFetch(`${V2}/packing-slips?parcel_id=${parcel.id}`, auth);
       if (!psRes.ok) {
         const errText = await psRes.text().catch(() => "");
@@ -200,7 +423,6 @@ export async function GET(req: NextRequest) {
         const pdfBuffer = Buffer.from(await psRes.arrayBuffer());
         return NextResponse.json({ pdfBase64: pdfBuffer.toString("base64") });
       }
-      // JSON response — log it to understand structure
       const psJson = await psRes.json().catch(() => null);
       return NextResponse.json({ debug: psJson, parcelId: parcel.id });
     }
@@ -212,17 +434,14 @@ export async function GET(req: NextRequest) {
       const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
       const parcel = (parcelsData.parcels || [])[0];
       if (!parcel) return NextResponse.json({ error: "Pas de colis" }, { status: 404 });
-      // Return full parcel to see all fields including label URLs
       return NextResponse.json({ parcel });
     }
 
     // Debug — show all distinct statuses and try multiple endpoints
     if (action === "debug") {
       const results: any = {};
-
-      // 1. Parcels endpoint — get all statuses
       try {
-        const data = await scJson(`${V2}/parcels?limit=500&integration_id=527093`, auth);
+        const data = await scJson(`${V2}/parcels?limit=500&integration_id=${INTEGRATION_ID}`, auth);
         const parcels = data.parcels || [];
         const statusMap: Record<string, number> = {};
         for (const p of parcels) {
@@ -236,26 +455,20 @@ export async function GET(req: NextRequest) {
           tracking: p.tracking_number, has_label: !!p.label?.label_printer,
         }));
       } catch (e: any) { results.parcels_error = e.message; }
-
-      // 2. Try V3 orders
       try {
-        const data = await scJson(`${V3}/shipping/orders?integration_id=527093&page_size=5`, auth);
+        const data = await scJson(`${V3}/shipping/orders?integration_id=${INTEGRATION_ID}&page_size=5`, auth);
         results.v3_orders_count = data.count || 0;
         results.v3_orders_sample = (data.results || []).slice(0, 2).map((o: any) => ({
           id: o.id, order_number: o.order_number, status: o.status, items: (o.lines || []).length
         }));
       } catch (e: any) { results.v3_orders_error = e.message; }
-
-      // 3. Try /integrations endpoint (for open orders)
       try {
         const data = await scJson(`${V2}/integrations`, auth);
         const integrations = data.integrations || data;
-        results.integrations = Array.isArray(integrations) 
+        results.integrations = Array.isArray(integrations)
           ? integrations.map((i: any) => ({ id: i.id, name: i.shop_name, system: i.system }))
           : integrations;
       } catch (e: any) { results.integrations_error = e.message; }
-
-      // 3. Try /parcels with specific statuses
       for (const sid of [999, 1000, 1, 2, 12, 1999]) {
         try {
           const data = await scJson(`${V2}/parcels?limit=3&status=${sid}`, auth);
@@ -263,7 +476,6 @@ export async function GET(req: NextRequest) {
           if (count > 0) results[`status_${sid}_count`] = count;
         } catch {}
       }
-
       return NextResponse.json(results);
     }
 
@@ -273,6 +485,134 @@ export async function GET(req: NextRequest) {
   }
 }
 
+// ─── POST ─────────────────────────────────────────────────────────────────────
+// Le client peut envoyer le `order_raw` (objet V3 complet) directement dans le
+// body → on évite un refetch V3 et on détecte les prix négatifs en amont.
+
 export async function POST(req: NextRequest) {
-  return NextResponse.json({ error: "POST non supporté" }, { status: 405 });
+  const auth = getAuth();
+  if (!auth) return NextResponse.json({ error: "Clés SendCloud manquantes" }, { status: 500 });
+
+  const { searchParams } = new URL(req.url);
+  const action = searchParams.get("action");
+
+  if (action === "label") {
+    try {
+      const body = await req.json();
+      const { order_id: orderId, order_number: orderNumber, order_raw: raw, shipment_id: clientShipmentId } = body;
+      if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
+
+      const findParcel = async (): Promise<any | null> => {
+        try {
+          const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber)}`, auth);
+          const exact = (d.parcels || []).find((p: any) => String(p.order_number) === String(orderNumber));
+          if (exact) return exact;
+        } catch {}
+        return null;
+      };
+
+      // Step 1 : déjà un colis avec label ?
+      let parcel: any = await findParcel();
+      if (parcel && !hasLabel(parcel)) {
+        const polled = await pollLabel(auth, parcel.id, 6, 2500);
+        parcel = polled || null;
+      }
+
+      // Step 2 : détection des négatifs en amont
+      const negativeDetected = hasNegativeItems(raw);
+      if (negativeDetected) console.log("[label POST]", orderNumber, "→ prix négatifs, bypass V3 → V2 direct");
+
+      // Step 3 : création
+      if (!parcel) {
+        let v3Failed = negativeDetected;
+        let asyncParcelId: number | null = null;
+
+        // Voie A : V3 create-labels-async
+        if (!negativeDetected) {
+          try {
+            const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
+              method: "POST",
+              body: JSON.stringify({ integration_id: INTEGRATION_ID, orders: [{ order_number: orderNumber }] }),
+            });
+            asyncParcelId = createRes?.data?.[0]?.parcel_id || null;
+            console.log("[label POST] V3 create-labels-async OK, parcel_id:", asyncParcelId);
+          } catch (e: any) {
+            console.warn("[label POST] V3 create-labels-async échoué:", e.message);
+            v3Failed = true;
+          }
+
+          if (!v3Failed) {
+            if (asyncParcelId) {
+              parcel = await pollLabel(auth, asyncParcelId, 20, 3000);
+            } else {
+              for (let i = 0; i < 20; i++) {
+                await new Promise(r => setTimeout(r, 3000));
+                const c = await findParcel();
+                if (c && hasLabel(c)) { parcel = c; break; }
+              }
+            }
+          }
+        }
+
+        // Voie B : V2 direct
+        if (!parcel && v3Failed) {
+          try {
+            const v2Parcel = await createParcelV2Direct(auth, orderId, orderNumber, raw, clientShipmentId);
+            if (v2Parcel && hasLabel(v2Parcel)) {
+              parcel = v2Parcel;
+            } else if (v2Parcel?.id) {
+              parcel = await pollLabel(auth, v2Parcel.id, 15, 2500);
+              if (!parcel) {
+                return NextResponse.json({
+                  parcelId: v2Parcel.id,
+                  tracking: v2Parcel.tracking_number || "",
+                  carrier: v2Parcel.carrier?.code || "",
+                  labelBase64: null,
+                  labelPending: true,
+                  error: "Étiquette en cours — réessaie dans 10s",
+                }, { status: 202 });
+              }
+            }
+          } catch (v2Err: any) {
+            console.error("[label POST] V2 direct échoué:", v2Err.message);
+            return NextResponse.json({
+              error: negativeDetected
+                ? `Impossible de créer l'étiquette malgré le bypass V2 : ${v2Err.message}`
+                : `V3 et V2 ont échoué : ${v2Err.message}`,
+            }, { status: 422 });
+          }
+        }
+
+        if (!parcel && !v3Failed) {
+          return NextResponse.json({ parcelId: asyncParcelId, labelPending: true, error: "Étiquette en cours — réessaie dans 10s" }, { status: 202 });
+        }
+
+        if (!parcel) {
+          return NextResponse.json({ error: "Impossible de créer l'étiquette. Crée-la manuellement sur SendCloud puis réessaie." }, { status: 422 });
+        }
+      }
+
+      if (!parcel) return NextResponse.json({ error: "Colis introuvable" }, { status: 404 });
+
+      const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
+      if (!labelUrl) {
+        return NextResponse.json({ parcelId: parcel.id, labelPending: true, error: "Étiquette en cours — réessaie dans quelques secondes" }, { status: 202 });
+      }
+
+      const labelRes = await scFetch(labelUrl, auth);
+      if (!labelRes.ok) return NextResponse.json({ error: `Erreur PDF: ${labelRes.status}` }, { status: labelRes.status });
+
+      const pdfBuffer = Buffer.from(await labelRes.arrayBuffer());
+      return NextResponse.json({
+        parcelId: parcel.id,
+        tracking: parcel.tracking_number || "",
+        carrier: parcel.carrier?.code || "",
+        labelBase64: pdfBuffer.toString("base64"),
+      });
+    } catch (e: any) {
+      return NextResponse.json({ error: e.message }, { status: 500 });
+    }
+  }
+
+  return NextResponse.json({ error: "POST: action non supportée" }, { status: 405 });
 }
