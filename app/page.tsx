@@ -1373,9 +1373,7 @@ export default function Page() {
           odoo.getOutgoingPickings(session).catch(() => []),
           odoo.searchRead(session, "stock.picking",
             [["picking_type_code","=","outgoing"],
-             ["state","=","assigned"],
-             ["x_studio_date_dexpdition_prvue","<=",todayStr],
-             ["x_studio_date_dexpdition_prvue","!=",false]],
+             ["state","=","assigned"]],
             ["id","name","origin","x_studio_date_dexpdition_prvue"], 500
           ).catch(() => []),
         ]);
@@ -1408,9 +1406,14 @@ export default function Page() {
           inPrep: { count: (inPrepList as any[]).length, names: (inPrepList as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           eshopWaiting: { count: eshopOrders.length, names: eshopOrders.slice(0, 6).map((o: any) => o.order_number || `#${o.order_id || o.id}`) },
           outToPackToday: (() => {
+            // Filtrer client-side par date d'expédition <= aujourd'hui
+            const filtered = (outToPack as any[]).filter((p: any) => {
+              const d: string = p.x_studio_date_dexpdition_prvue || "";
+              return d ? d.slice(0, 10) <= todayStr : false;
+            });
             // Grouper par origin — plusieurs OUT pour la même commande = 1 ligne "OUT1 + OUT2"
             const byOrigin: Record<string, string[]> = {};
-            for (const p of outToPack as any[]) {
+            for (const p of filtered) {
               const key = p.origin || p.name || `#${p.id}`;
               if (!byOrigin[key]) byOrigin[key] = [];
               byOrigin[key].push(p.name);
