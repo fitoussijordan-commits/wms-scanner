@@ -41,33 +41,6 @@ function hasNegativeItems(raw: any): boolean {
 const hasLabel = (p: any) => !!(p?.label?.label_printer || p?.label?.normal_printer?.[0]);
 
 /**
- * Marque la commande V3 comme traitée (via cancel) après qu'on a créé le colis
- * V2 directement (bypass create-labels-async). Évite que la commande reste
- * en statut "Ouvert" dans la liste SendCloud. Non bloquant.
- */
-async function consumeV3Order(auth: string, orderNumber: string): Promise<void> {
-  // 1ère tentative : cancel endpoint (le plus standard)
-  try {
-    await scJson(`${V3}/orders/cancel`, auth, {
-      method: "POST",
-      body: JSON.stringify({ orders: [{ order_number: orderNumber }] }),
-    });
-    console.log("[consume V3] commande", orderNumber, "annulée OK (étiquette via V2)");
-    return;
-  } catch (e: any) {
-    console.warn("[consume V3] cancel échoué pour", orderNumber, ":", e.message);
-  }
-  // Tentative 2 : DELETE par order_number (certaines intégrations le permettent)
-  try {
-    await scJson(`${V3}/orders/${encodeURIComponent(orderNumber)}`, auth, { method: "DELETE" });
-    console.log("[consume V3] commande", orderNumber, "supprimée OK");
-    return;
-  } catch (e: any) {
-    console.warn("[consume V3] DELETE échoué pour", orderNumber, ":", e.message);
-  }
-}
-
-/**
  * Poll V2 /parcels/{id} jusqu'à ce que l'étiquette soit prête.
  */
 async function pollLabel(auth: string, parcelId: number, attempts = 15, delayMs = 2500): Promise<any | null> {
@@ -301,12 +274,6 @@ async function createParcelV2Direct(
         body: JSON.stringify(v2Payload),
       });
       if (attempt > 0) console.log("[V2 direct] succès après ajustement poids → ", currentWeight);
-      // Marquer la commande V3 comme traitée (non bloquant)
-      if (result.parcel) {
-        consumeV3Order(auth, orderNumber).catch((e: any) =>
-          console.warn("[V2 direct] consumeV3Order échoué (non bloquant):", e.message)
-        );
-      }
       return result.parcel || null;
     } catch (err: any) {
       const msg = err.message || "";
