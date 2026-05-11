@@ -71,11 +71,28 @@ async function createParcelV2Direct(
   raw: any,
   clientShipmentId?: number | null
 ): Promise<any> {
-  // Si raw absent ou incomplet, refetch V3
+  // Si raw absent ou incomplet, refetch V3 — avec fallback sur la liste si 404
   let order = raw;
   if (!order || (!order.order_details && !order.order_items)) {
-    const d = await scJson(`${V3}/orders/${orderId}`, auth);
-    order = d.data || d;
+    try {
+      const d = await scJson(`${V3}/orders/${orderId}`, auth);
+      order = d.data || d;
+    } catch (e: any) {
+      console.warn("[V2 direct] GET /v3/orders/" + orderId + " échoué (" + e.message + "), fallback sur la liste");
+      const lst = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=200`, auth);
+      const arr = lst.data || lst.results || lst.orders || [];
+      const m = arr.find((o: any) =>
+        String(o.order_id) === String(orderId) ||
+        String(o.id) === String(orderId) ||
+        String(o.order_number) === String(orderNumber)
+      );
+      if (m) {
+        order = m;
+        console.log("[V2 direct] order trouvé dans la liste, clés:", Object.keys(m));
+      } else {
+        throw new Error(`Commande ${orderNumber} introuvable (404 sur GET et absent de la liste)`);
+      }
+    }
   }
   const details = order.order_details || {};
   const rawItems: any[] = details.order_items || order.order_items || [];
@@ -270,13 +287,28 @@ export async function GET(req: NextRequest) {
       if (!oid && !on) return NextResponse.json({ error: "order_id ou order_number requis" }, { status: 400 });
       const out: any = {};
       // Si seulement order_number fourni → chercher l'order_id en parcourant la liste V3
+      let listMatch: any = null;
       if (!oid && on) {
         try {
           const lst = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=200`, auth);
           const arr = lst.data || lst.results || lst.orders || [];
-          const match = arr.find((o: any) => String(o.order_number) === String(on));
-          if (match) { oid = String(match.order_id || match.id); out.resolved_order_id = oid; }
-          else { out.list_search = `Pas trouvé sur ${arr.length} commandes V3 (page 1) — vérifie que la commande n'est pas déjà convertie en colis`; }
+          listMatch = arr.find((o: any) => String(o.order_number) === String(on)) || null;
+          if (listMatch) {
+            oid = String(listMatch.order_id || listMatch.id);
+            out.resolved_order_id = oid;
+            out.list_match_all_keys = Object.keys(listMatch);
+            out.list_match_id_candidates = {
+              order_id: listMatch.order_id,
+              id: listMatch.id,
+              external_order_id: listMatch.external_order_id,
+              external_id: listMatch.external_id,
+              shop_order_id: listMatch.shop_order_id,
+              uuid: listMatch.uuid,
+            };
+            out.list_match_raw = listMatch; // dump complet
+          } else {
+            out.list_search = `Pas trouvé sur ${arr.length} commandes V3 (page 1)`;
+          }
         } catch (e: any) { out.list_search_error = e.message; }
       }
       if (oid) {
