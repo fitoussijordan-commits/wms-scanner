@@ -134,15 +134,33 @@ async function createParcelV2Direct(
     [addr.street, addr.house_number].filter(Boolean).join(" ") ||
     addr.address_line_1 || addr.address_1 || addr.address || "";
 
-  // Poids total (somme items × qty, fallback 1 kg)
+  // Poids total (somme items × qty, plancher 0.501 kg = minimum SendCloud)
   const totalWeight = Math.max(
-    0.1,
+    0.501,
     rawItems.reduce((s: number, i: any) => {
       const w = parseFloat(String(i.weight || "0"));
       const q = Math.max(1, parseInt(String(i.quantity || 1)));
       return s + (isFinite(w) ? w : 0) * q;
     }, 0)
   ).toFixed(3);
+
+  // Service point (Mondial Relay / autres méthodes en point relais)
+  // SendCloud V3 expose l'ID sur différents chemins selon l'intégration
+  const servicePointId: number | null =
+    parseInt(String(
+      details.to_service_point ??
+      details.service_point_id ??
+      details.service_point?.id ??
+      order.to_service_point ??
+      order.service_point_id ??
+      order.service_point?.id ??
+      order.shipping_details?.to_service_point ??
+      order.shipping_details?.service_point_id ??
+      order.shipping_details?.service_point?.id ??
+      ""
+    )) || null;
+
+  if (servicePointId) console.log("[V2 direct]", orderNumber, "→ service point:", servicePointId);
 
   const v2Payload: any = {
     parcel: {
@@ -163,10 +181,11 @@ async function createParcelV2Direct(
       request_label: true,
       ...(parcelItems.length > 0 && { parcel_items: parcelItems }),
       ...(shipmentId ? { shipment: { id: shipmentId } } : {}),
+      ...(servicePointId ? { to_service_point: servicePointId } : {}),
     },
   };
 
-  console.log("[V2 direct]", orderNumber, "| net:", netTotal.toFixed(2), "| items+:", parcelItems.length, "| shipment:", shipmentId, "| weight:", totalWeight);
+  console.log("[V2 direct]", orderNumber, "| net:", netTotal.toFixed(2), "| items+:", parcelItems.length, "| shipment:", shipmentId, "| weight:", totalWeight, "| service_point:", servicePointId);
 
   const result = await scJson(`${V2}/parcels`, auth, {
     method: "POST",
@@ -249,6 +268,17 @@ export async function GET(req: NextRequest) {
           out.details_keys = Object.keys(o.order_details || {});
           out.has_negative_prices = hasNegativeItems(o);
           out.shipping_method_id = o.order_details?.shipping_method_id || o.shipping_details?.shipping_method_id || o.sendcloud_shipping_method_id;
+          out.service_point_candidates = {
+            details_to_service_point: o.order_details?.to_service_point,
+            details_service_point_id: o.order_details?.service_point_id,
+            details_service_point: o.order_details?.service_point,
+            order_to_service_point: o.to_service_point,
+            order_service_point_id: o.service_point_id,
+            order_service_point: o.service_point,
+            shipping_details_to_service_point: o.shipping_details?.to_service_point,
+            shipping_details_service_point_id: o.shipping_details?.service_point_id,
+            shipping_details_service_point: o.shipping_details?.service_point,
+          };
           const items = o.order_details?.order_items || o.order_items || [];
           out.items_summary = items.map((i: any) => ({
             description: i.description || i.name,
