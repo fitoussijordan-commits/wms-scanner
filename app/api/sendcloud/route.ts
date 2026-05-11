@@ -121,6 +121,32 @@ async function createParcelV2Direct(
     return sum + v * q;
   }, 0);
 
+  // Poids — chemins V3 :
+  //  1) order.shipping_details.measurement.weight.value (= total déjà calculé)
+  //  2) somme items × qty (i.measurement.weight.value puis i.weight)
+  //  3) fallback 0.1 kg — pas de plancher haut, certaines méthodes ont MAX 0.501
+  const itemWeightOf = (i: any): number => {
+    const v =
+      i?.measurement?.weight?.value ??
+      i?.weight?.value ??
+      i?.weight ?? 0;
+    const f = parseFloat(String(v));
+    return isFinite(f) ? f : 0;
+  };
+  const itemsWeight = rawItems.reduce((s: number, i: any) => {
+    const q = Math.max(1, parseInt(String(i.quantity || 1)));
+    return s + itemWeightOf(i) * q;
+  }, 0);
+  const shippingMeasurementWeight = parseFloat(String(
+    order.shipping_details?.measurement?.weight?.value ??
+    details.shipping_details?.measurement?.weight?.value ??
+    details.total_weight ?? order.total_weight ?? details.weight ?? order.weight ?? "0"
+  ));
+  const rawTotalWeight = shippingMeasurementWeight > 0
+    ? shippingMeasurementWeight
+    : (itemsWeight > 0 ? itemsWeight : 0.1);
+  const totalWeight = Math.max(0.001, rawTotalWeight).toFixed(3);
+
   // On ne garde que les lignes à prix >= 0 (les remises sont absorbées dans le total)
   const parcelItems = rawItems
     .filter((item: any) => {
@@ -209,31 +235,6 @@ async function createParcelV2Direct(
     [addr.street, addr.house_number].filter(Boolean).join(" ") ||
     addr.address_line_1 || addr.address_1 || addr.address || "";
 
-  // Poids — chemins V3 :
-  //  1) order.shipping_details.measurement.weight.value (= total déjà calculé)
-  //  2) somme items × qty (i.measurement.weight.value puis i.weight)
-  //  3) fallback 0.1 kg — pas de plancher haut, certaines méthodes ont MAX 0.501
-  const itemWeightOf = (i: any): number => {
-    const v =
-      i?.measurement?.weight?.value ??
-      i?.weight?.value ??
-      i?.weight ?? 0;
-    const f = parseFloat(String(v));
-    return isFinite(f) ? f : 0;
-  };
-  const itemsWeight = rawItems.reduce((s: number, i: any) => {
-    const q = Math.max(1, parseInt(String(i.quantity || 1)));
-    return s + itemWeightOf(i) * q;
-  }, 0);
-  const shippingMeasurementWeight = parseFloat(String(
-    order.shipping_details?.measurement?.weight?.value ??
-    details.shipping_details?.measurement?.weight?.value ??
-    details.total_weight ?? order.total_weight ?? details.weight ?? order.weight ?? "0"
-  ));
-  const rawTotalWeight = shippingMeasurementWeight > 0
-    ? shippingMeasurementWeight
-    : (itemsWeight > 0 ? itemsWeight : 0.1);
-  const totalWeight = Math.max(0.001, rawTotalWeight).toFixed(3);
 
 
   const v2Payload: any = {
