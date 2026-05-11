@@ -1407,7 +1407,16 @@ export default function Page() {
           waitingToday: { count: waitingToday.length, names: (waitingToday as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           inPrep: { count: (inPrepList as any[]).length, names: (inPrepList as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           eshopWaiting: { count: eshopOrders.length, names: eshopOrders.slice(0, 6).map((o: any) => o.order_number || `#${o.order_id || o.id}`) },
-          outToPackToday: { count: (outToPack as any[]).length, names: (outToPack as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
+          outToPackToday: (() => {
+            // Grouper par origin (nom commande) — plusieurs OUT pour la même commande = 1 seule
+            const byOrigin: Record<string, string> = {};
+            for (const p of outToPack as any[]) {
+              const key = p.origin || p.name || `#${p.id}`;
+              if (!byOrigin[key]) byOrigin[key] = p.name;
+            }
+            const uniq = Object.keys(byOrigin);
+            return { count: uniq.length, names: uniq.slice(0, 6) };
+          })(),
           lastUpdate: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
         });
       } catch {} finally { setCcLoading(false); }
