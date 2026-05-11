@@ -71,14 +71,30 @@ async function createParcelV2Direct(
   raw: any,
   clientShipmentId?: number | null
 ): Promise<any> {
-  // Si raw absent ou incomplet, refetch V3 — avec fallback sur la liste si 404
+  // Si raw absent ou incomplet, refetch V3 — essayer l'ID interne 'id' avant 'order_id',
+  // puis fallback sur la liste si tout 404
   let order = raw;
   if (!order || (!order.order_details && !order.order_items)) {
-    try {
-      const d = await scJson(`${V3}/orders/${orderId}`, auth);
-      order = d.data || d;
-    } catch (e: any) {
-      console.warn("[V2 direct] GET /v3/orders/" + orderId + " échoué (" + e.message + "), fallback sur la liste");
+    // Si raw fournit déjà 'id' on le préfère à orderId (qui est souvent l'ID externe)
+    const idCandidates = [raw?.id, raw?.order_id, orderId].filter(Boolean).map(String);
+    const seen = new Set<string>();
+    let fetched: any = null;
+    for (const candidate of idCandidates) {
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      try {
+        const d = await scJson(`${V3}/orders/${candidate}`, auth);
+        fetched = d.data || d;
+        console.log("[V2 direct] GET /v3/orders/" + candidate + " OK");
+        break;
+      } catch (e: any) {
+        console.warn("[V2 direct] GET /v3/orders/" + candidate + " échoué:", e.message);
+      }
+    }
+    if (fetched) {
+      order = fetched;
+    } else {
+      console.warn("[V2 direct] tous les GET 404 → fallback sur la liste");
       const lst = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=200`, auth);
       const arr = lst.data || lst.results || lst.orders || [];
       const m = arr.find((o: any) =>
@@ -90,7 +106,7 @@ async function createParcelV2Direct(
         order = m;
         console.log("[V2 direct] order trouvé dans la liste, clés:", Object.keys(m));
       } else {
-        throw new Error(`Commande ${orderNumber} introuvable (404 sur GET et absent de la liste)`);
+        throw new Error(`Commande ${orderNumber} introuvable (404 sur GET et absente de la liste)`);
       }
     }
   }
@@ -115,16 +131,41 @@ async function createParcelV2Direct(
     })
     .map((item: any) => {
       const rawVal = item.unit_price?.value ?? item.product_value ?? item.price ?? item.value ?? "0";
+      const itemWeight = itemWeightOf(item);
       return {
-        description: String(item.description || item.name || item.title || item.sku || "Article").substring(0, 100),
+        description: String(item.name || item.description || item.title || item.sku || "Article").substring(0, 100),
         quantity: Math.max(1, parseInt(String(item.quantity || 1))),
-        weight: String(Math.max(0.001, parseFloat(String(item.weight || "0.1"))).toFixed(3)),
+        weight: String(Math.max(0.001, itemWeight || 0.1).toFixed(3)),
         value: String(Math.max(0, parseFloat(String(rawVal))).toFixed(2)),
-        hs_code: item.harmonized_system_code || item.hs_code || "",
-        origin_country: item.origin_country || "DE",
+        hs_code: item.hs_code || item.harmonized_system_code || "",
+        origin_country: item.country_of_origin || item.origin_country || "DE",
         sku: item.sku || "",
       };
     });
+
+  // Service point (Mondial Relay / autres points relais)
+  const extractSP = (obj: any): number | null => {
+    if (!obj || typeof obj !== "object") return null;
+    const candidates = [
+      obj.service_point_details?.id, // ← le bon chemin pour intégrations Shopware/Mondial Relay
+      obj.service_point_details?.code,
+      obj.to_service_point, obj.service_point_id, obj.service_point?.id, obj.service_point?.code,
+      obj.servicepoint_id, obj.parcel_shop_id, obj.pickup_point_id, obj.pickup_point?.id,
+      obj.relay_id, obj.relay?.id, obj.delivery_point?.id, obj.collection_point?.id,
+    ];
+    for (const c of candidates) {
+      const n = parseInt(String(c ?? ""));
+      if (n > 0) return n;
+    }
+    return null;
+  };
+  const servicePointId: number | null =
+    extractSP(order) ?? extractSP(details) ?? extractSP(order.shipping_details) ??
+    extractSP(order.shipping_address) ?? extractSP(details.shipping_address) ??
+    extractSP(order.delivery) ?? null;
+
+  if (servicePointId) console.log("[V2 direct]", orderNumber, "→ service point:", servicePointId);
+  else console.log("[V2 direct]", orderNumber, "→ AUCUN service point trouvé");
 
   // Shipment ID : client → V3 → emprunt à un colis récent
   let shipmentId: number | null =
@@ -138,10 +179,27 @@ async function createParcelV2Direct(
 
   if (!shipmentId) {
     try {
-      const recent = await scJson(`${V2}/parcels?integration_id=${INTEGRATION_ID}&limit=10`, auth);
-      const rp = (recent.parcels || []).find((p: any) => p.shipment?.id);
-      if (rp?.shipment?.id) shipmentId = rp.shipment.id;
-    } catch {}
+      const recent = await scJson(`${V2}/parcels?integration_id=${INTEGRATION_ID}&limit=50`, auth);
+      const parcels = recent.parcels || [];
+      // Si on a un service_point → emprunter à un colis qui en a un aussi (= Mondial Relay)
+      if (servicePointId) {
+        const mondialRelay = parcels.find((p: any) => p.shipment?.id && (p.to_service_point || p.service_point));
+        if (mondialRelay?.shipment?.id) {
+          shipmentId = mondialRelay.shipment.id;
+          console.log("[V2 direct] shipment_id emprunté (Mondial Relay/point relais):", shipmentId);
+        }
+      }
+      // Fallback : n'importe quel colis récent
+      if (!shipmentId) {
+        const any = parcels.find((p: any) => p.shipment?.id);
+        if (any?.shipment?.id) {
+          shipmentId = any.shipment.id;
+          console.log("[V2 direct] shipment_id emprunté (générique):", shipmentId);
+        }
+      }
+    } catch (e: any) {
+      console.warn("[V2 direct] emprunt shipment_id échoué:", e.message);
+    }
   }
 
   const name =
@@ -151,42 +209,32 @@ async function createParcelV2Direct(
     [addr.street, addr.house_number].filter(Boolean).join(" ") ||
     addr.address_line_1 || addr.address_1 || addr.address || "";
 
-  // Poids — pas de plancher artificiel (méthodes "lettre" ont MAX 0.501 kg) :
-  //  1) total_weight de la commande V3
-  //  2) somme items × qty
-  //  3) fallback 0.1 kg
+  // Poids — chemins V3 :
+  //  1) order.shipping_details.measurement.weight.value (= total déjà calculé)
+  //  2) somme items × qty (i.measurement.weight.value puis i.weight)
+  //  3) fallback 0.1 kg — pas de plancher haut, certaines méthodes ont MAX 0.501
+  const itemWeightOf = (i: any): number => {
+    const v =
+      i?.measurement?.weight?.value ??
+      i?.weight?.value ??
+      i?.weight ?? 0;
+    const f = parseFloat(String(v));
+    return isFinite(f) ? f : 0;
+  };
   const itemsWeight = rawItems.reduce((s: number, i: any) => {
-    const w = parseFloat(String(i.weight || "0"));
     const q = Math.max(1, parseInt(String(i.quantity || 1)));
-    return s + (isFinite(w) ? w : 0) * q;
+    return s + itemWeightOf(i) * q;
   }, 0);
-  const orderWeight = parseFloat(String(
+  const shippingMeasurementWeight = parseFloat(String(
+    order.shipping_details?.measurement?.weight?.value ??
+    details.shipping_details?.measurement?.weight?.value ??
     details.total_weight ?? order.total_weight ?? details.weight ?? order.weight ?? "0"
   ));
-  const rawTotalWeight = orderWeight > 0 ? orderWeight : (itemsWeight > 0 ? itemsWeight : 0.1);
+  const rawTotalWeight = shippingMeasurementWeight > 0
+    ? shippingMeasurementWeight
+    : (itemsWeight > 0 ? itemsWeight : 0.1);
   const totalWeight = Math.max(0.001, rawTotalWeight).toFixed(3);
 
-  // Service point (Mondial Relay / autres points relais)
-  const extractSP = (obj: any): number | null => {
-    if (!obj || typeof obj !== "object") return null;
-    const candidates = [
-      obj.to_service_point, obj.service_point_id, obj.service_point?.id, obj.service_point?.code,
-      obj.servicepoint_id, obj.parcel_shop_id, obj.pickup_point_id, obj.pickup_point?.id,
-      obj.relay_id, obj.relay?.id, obj.delivery_point?.id, obj.collection_point?.id,
-    ];
-    for (const c of candidates) {
-      const n = parseInt(String(c ?? ""));
-      if (n > 0) return n;
-    }
-    return null;
-  };
-  const servicePointId: number | null =
-    extractSP(details) ?? extractSP(order) ?? extractSP(order.shipping_details) ??
-    extractSP(order.shipping_address) ?? extractSP(details.shipping_address) ??
-    extractSP(order.delivery) ?? null;
-
-  if (servicePointId) console.log("[V2 direct]", orderNumber, "→ service point:", servicePointId);
-  else console.log("[V2 direct]", orderNumber, "→ AUCUN service point trouvé");
 
   const v2Payload: any = {
     parcel: {
@@ -202,7 +250,9 @@ async function createParcelV2Direct(
       weight: totalWeight,
       order_number: orderNumber,
       external_order_id: String(orderId),
-      total_order_value: Math.max(0, netTotal).toFixed(2),
+      total_order_value: String(Math.max(0, parseFloat(String(
+        order.payment_details?.total_price?.value ?? netTotal
+      ))).toFixed(2)),
       total_order_value_currency: order.currency || "EUR",
       request_label: true,
       ...(parcelItems.length > 0 && { parcel_items: parcelItems }),
