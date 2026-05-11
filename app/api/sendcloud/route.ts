@@ -134,33 +134,42 @@ async function createParcelV2Direct(
     [addr.street, addr.house_number].filter(Boolean).join(" ") ||
     addr.address_line_1 || addr.address_1 || addr.address || "";
 
-  // Poids total (somme items × qty, plancher 0.501 kg = minimum SendCloud)
-  const totalWeight = Math.max(
-    0.501,
-    rawItems.reduce((s: number, i: any) => {
-      const w = parseFloat(String(i.weight || "0"));
-      const q = Math.max(1, parseInt(String(i.quantity || 1)));
-      return s + (isFinite(w) ? w : 0) * q;
-    }, 0)
-  ).toFixed(3);
+  // Poids — pas de plancher artificiel (méthodes "lettre" ont MAX 0.501 kg) :
+  //  1) total_weight de la commande V3
+  //  2) somme items × qty
+  //  3) fallback 0.1 kg
+  const itemsWeight = rawItems.reduce((s: number, i: any) => {
+    const w = parseFloat(String(i.weight || "0"));
+    const q = Math.max(1, parseInt(String(i.quantity || 1)));
+    return s + (isFinite(w) ? w : 0) * q;
+  }, 0);
+  const orderWeight = parseFloat(String(
+    details.total_weight ?? order.total_weight ?? details.weight ?? order.weight ?? "0"
+  ));
+  const rawTotalWeight = orderWeight > 0 ? orderWeight : (itemsWeight > 0 ? itemsWeight : 0.1);
+  const totalWeight = Math.max(0.001, rawTotalWeight).toFixed(3);
 
-  // Service point (Mondial Relay / autres méthodes en point relais)
-  // SendCloud V3 expose l'ID sur différents chemins selon l'intégration
+  // Service point (Mondial Relay / autres points relais)
+  const extractSP = (obj: any): number | null => {
+    if (!obj || typeof obj !== "object") return null;
+    const candidates = [
+      obj.to_service_point, obj.service_point_id, obj.service_point?.id, obj.service_point?.code,
+      obj.servicepoint_id, obj.parcel_shop_id, obj.pickup_point_id, obj.pickup_point?.id,
+      obj.relay_id, obj.relay?.id, obj.delivery_point?.id, obj.collection_point?.id,
+    ];
+    for (const c of candidates) {
+      const n = parseInt(String(c ?? ""));
+      if (n > 0) return n;
+    }
+    return null;
+  };
   const servicePointId: number | null =
-    parseInt(String(
-      details.to_service_point ??
-      details.service_point_id ??
-      details.service_point?.id ??
-      order.to_service_point ??
-      order.service_point_id ??
-      order.service_point?.id ??
-      order.shipping_details?.to_service_point ??
-      order.shipping_details?.service_point_id ??
-      order.shipping_details?.service_point?.id ??
-      ""
-    )) || null;
+    extractSP(details) ?? extractSP(order) ?? extractSP(order.shipping_details) ??
+    extractSP(order.shipping_address) ?? extractSP(details.shipping_address) ??
+    extractSP(order.delivery) ?? null;
 
   if (servicePointId) console.log("[V2 direct]", orderNumber, "→ service point:", servicePointId);
+  else console.log("[V2 direct]", orderNumber, "→ AUCUN service point trouvé");
 
   const v2Payload: any = {
     parcel: {
@@ -256,10 +265,20 @@ export async function GET(req: NextRequest) {
 
     // Debug : prix négatifs détectés sur une commande
     if (action === "label_debug") {
-      const oid = searchParams.get("order_id");
+      let oid = searchParams.get("order_id");
       const on = searchParams.get("order_number");
       if (!oid && !on) return NextResponse.json({ error: "order_id ou order_number requis" }, { status: 400 });
       const out: any = {};
+      // Si seulement order_number fourni → chercher l'order_id en parcourant la liste V3
+      if (!oid && on) {
+        try {
+          const lst = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=200`, auth);
+          const arr = lst.data || lst.results || lst.orders || [];
+          const match = arr.find((o: any) => String(o.order_number) === String(on));
+          if (match) { oid = String(match.order_id || match.id); out.resolved_order_id = oid; }
+          else { out.list_search = `Pas trouvé sur ${arr.length} commandes V3 (page 1) — vérifie que la commande n'est pas déjà convertie en colis`; }
+        } catch (e: any) { out.list_search_error = e.message; }
+      }
       if (oid) {
         try {
           const d = await scJson(`${V3}/orders/${oid}`, auth);
@@ -272,12 +291,27 @@ export async function GET(req: NextRequest) {
             details_to_service_point: o.order_details?.to_service_point,
             details_service_point_id: o.order_details?.service_point_id,
             details_service_point: o.order_details?.service_point,
+            details_pickup_point: o.order_details?.pickup_point,
+            details_relay: o.order_details?.relay,
             order_to_service_point: o.to_service_point,
             order_service_point_id: o.service_point_id,
             order_service_point: o.service_point,
+            order_pickup_point: o.pickup_point,
             shipping_details_to_service_point: o.shipping_details?.to_service_point,
             shipping_details_service_point_id: o.shipping_details?.service_point_id,
             shipping_details_service_point: o.shipping_details?.service_point,
+            shipping_address_keys: Object.keys(o.shipping_address || {}),
+            shipping_address_service_point: o.shipping_address?.service_point,
+            shipping_address_pickup_point: o.shipping_address?.pickup_point,
+          };
+          out.suspicious_keys_in_order = Object.keys(o).filter(k => /point|relay|service/i.test(k));
+          out.suspicious_keys_in_details = Object.keys(o.order_details || {}).filter(k => /point|relay|service/i.test(k));
+          out.weight_info = {
+            details_total_weight: o.order_details?.total_weight,
+            details_weight: o.order_details?.weight,
+            order_total_weight: o.total_weight,
+            order_weight: o.weight,
+            items_weights: (o.order_details?.order_items || o.order_items || []).map((i: any) => ({ qty: i.quantity, weight: i.weight }))
           };
           const items = o.order_details?.order_items || o.order_items || [];
           out.items_summary = items.map((i: any) => ({
