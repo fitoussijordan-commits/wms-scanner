@@ -1408,14 +1408,15 @@ export default function Page() {
           inPrep: { count: (inPrepList as any[]).length, names: (inPrepList as any[]).slice(0, 6).map((p: any) => p.name || p.origin || `#${p.id}`) },
           eshopWaiting: { count: eshopOrders.length, names: eshopOrders.slice(0, 6).map((o: any) => o.order_number || `#${o.order_id || o.id}`) },
           outToPackToday: (() => {
-            // Grouper par origin (nom commande) — plusieurs OUT pour la même commande = 1 seule
-            const byOrigin: Record<string, string> = {};
+            // Grouper par origin — plusieurs OUT pour la même commande = 1 ligne "OUT1 + OUT2"
+            const byOrigin: Record<string, string[]> = {};
             for (const p of outToPack as any[]) {
               const key = p.origin || p.name || `#${p.id}`;
-              if (!byOrigin[key]) byOrigin[key] = p.name;
+              if (!byOrigin[key]) byOrigin[key] = [];
+              byOrigin[key].push(p.name);
             }
-            const uniq = Object.keys(byOrigin);
-            return { count: uniq.length, names: uniq.slice(0, 6) };
+            const groups = Object.values(byOrigin);
+            return { count: groups.length, names: groups.slice(0, 6).map(g => g.join(" + ")) };
           })(),
           lastUpdate: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
         });
