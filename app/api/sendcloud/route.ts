@@ -250,7 +250,7 @@ async function createParcelV2Direct(
       telephone: order.telephone || addr.phone || addr.telephone || "",
       weight: totalWeight,
       order_number: orderNumber,
-      external_order_id: String(orderId),
+      external_order_id: String(order.order_id || raw?.order_id || orderId),
       total_order_value: String(Math.max(0, parseFloat(String(
         order.payment_details?.total_price?.value ?? netTotal
       ))).toFixed(2)),
@@ -654,7 +654,50 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(results);
     }
 
-    return NextResponse.json({ error: "Actions: parcels, label, debug" }, { status: 400 });
+    // Réparer le external_order_id d'un colis V2 existant pour qu'il se lie à sa commande V3
+    if (action === "relink") {
+      const orderNumber = searchParams.get("order_number");
+      if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
+      const out: any = { order_number: orderNumber };
+      // 1) trouver l'order V3 via la liste
+      const lst = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=200`, auth);
+      const arr = lst.data || lst.results || lst.orders || [];
+      const v3 = arr.find((o: any) => String(o.order_number) === String(orderNumber));
+      if (!v3) return NextResponse.json({ error: "Commande V3 introuvable dans la liste page 1" }, { status: 404 });
+      out.v3_order_id = v3.order_id;
+      out.v3_status_before = v3.order_details?.status;
+      // 2) trouver le colis V2 par order_number
+      const p2 = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber)}`, auth);
+      const parcel = (p2.parcels || []).find((p: any) => String(p.order_number) === String(orderNumber));
+      if (!parcel) return NextResponse.json({ error: "Colis V2 introuvable" }, { status: 404 });
+      out.parcel_id = parcel.id;
+      out.parcel_external_order_id_before = parcel.external_order_id;
+      // 3) PUT /v2/parcels/{id} pour réinjecter le external_order_id correct
+      try {
+        const upd = await scJson(`${V2}/parcels/${parcel.id}`, auth, {
+          method: "PUT",
+          body: JSON.stringify({ parcel: { external_order_id: String(v3.order_id) } }),
+        });
+        out.update_ok = true;
+        out.parcel_external_order_id_after = upd?.parcel?.external_order_id;
+      } catch (e: any) {
+        out.update_ok = false;
+        out.update_error = e.message;
+        // Fallback: essayer PATCH
+        try {
+          const upd2 = await scJson(`${V2}/parcels/${parcel.id}`, auth, {
+            method: "PATCH",
+            body: JSON.stringify({ parcel: { external_order_id: String(v3.order_id) } }),
+          });
+          out.update_ok = true;
+          out.patch_used = true;
+          out.parcel_external_order_id_after = upd2?.parcel?.external_order_id;
+        } catch (e2: any) { out.patch_error = e2.message; }
+      }
+      return NextResponse.json(out);
+    }
+
+    return NextResponse.json({ error: "Actions: parcels, label, debug, relink" }, { status: 400 });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
