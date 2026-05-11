@@ -264,11 +264,39 @@ async function createParcelV2Direct(
 
   console.log("[V2 direct]", orderNumber, "| net:", netTotal.toFixed(2), "| items+:", parcelItems.length, "| shipment:", shipmentId, "| weight:", totalWeight, "| service_point:", servicePointId);
 
-  const result = await scJson(`${V2}/parcels`, auth, {
-    method: "POST",
-    body: JSON.stringify(v2Payload),
-  });
-  return result.parcel || null;
+  // Retry avec ajustement automatique du poids si SendCloud nous donne un seuil
+  let currentWeight = totalWeight;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    v2Payload.parcel.weight = currentWeight;
+    try {
+      const result = await scJson(`${V2}/parcels`, auth, {
+        method: "POST",
+        body: JSON.stringify(v2Payload),
+      });
+      if (attempt > 0) console.log("[V2 direct] succès après ajustement poids → ", currentWeight);
+      return result.parcel || null;
+    } catch (err: any) {
+      const msg = err.message || "";
+      // "Minimum weight is 0.251 kg" → forcer à 0.251 (ou un peu au-dessus)
+      const minMatch = msg.match(/[Mm]inimum weight is ([\d.]+)\s*kg/);
+      // "must be less than 0.501 kg" → forcer juste sous 0.501
+      const maxMatch = msg.match(/must be less than ([\d.]+)\s*kg/i);
+      if (minMatch && attempt < 2) {
+        const minRequired = parseFloat(minMatch[1]);
+        currentWeight = (minRequired + 0.001).toFixed(3); // pile au-dessus du minimum
+        console.warn(`[V2 direct] retry attempt ${attempt + 1} — poids ajusté à ${currentWeight} (min requis: ${minRequired})`);
+        continue;
+      }
+      if (maxMatch && attempt < 2) {
+        const maxAllowed = parseFloat(maxMatch[1]);
+        currentWeight = Math.max(0.001, maxAllowed - 0.001).toFixed(3);
+        console.warn(`[V2 direct] retry attempt ${attempt + 1} — poids ajusté à ${currentWeight} (max autorisé: ${maxAllowed})`);
+        continue;
+      }
+      throw err; // erreur non liée au poids, on remonte
+    }
+  }
+  return null;
 }
 
 // ─── GET ──────────────────────────────────────────────────────────────────────
