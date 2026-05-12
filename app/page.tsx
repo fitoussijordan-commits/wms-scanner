@@ -4988,8 +4988,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
               <button
                 onClick={() => setLocConfirmed(true)}
                 style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, width: "100%", border: "none", cursor: "pointer", padding: 0, background: "none", fontFamily: "inherit" }}>
-                <div style={{ background: locConfirmed ? C.greenSoft : C.blueSoft, border: `1px solid ${locConfirmed ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 20, fontWeight: 900, color: locConfirmed ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center" }}>
-                  📍 {shortLoc(currentLocName) || "Emplacement inconnu"}
+                <div style={{ background: locConfirmed ? C.greenSoft : C.blueSoft, border: `1px solid ${locConfirmed ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 20, fontWeight: 900, color: locConfirmed ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+                  <span>{shortLoc(currentLocName) || "Emplacement inconnu"}</span>
                 </div>
                 {locConfirmed && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
@@ -9470,8 +9471,9 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 
           {/* Emplacement */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-            <div style={{ background: locOk ? C.greenSoft : C.blueSoft, border: `1px solid ${locOk ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "6px 12px", fontSize: 18, fontWeight: 900, color: locOk ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center" }}>
-              📍 {locOk && prepStep ? shortLoc(prepStep.locName) : shortLoc(currentLine.location_id?.[1] || "—")}
+            <div style={{ background: locOk ? C.greenSoft : C.blueSoft, border: `1px solid ${locOk ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "6px 12px", fontSize: 18, fontWeight: 900, color: locOk ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: "middle", flexShrink: 0 }}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+              <span>{locOk && prepStep ? shortLoc(prepStep.locName) : shortLoc(currentLine.location_id?.[1] || "—")}</span>
             </div>
             {locOk && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
@@ -9503,7 +9505,8 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           {/* Lot */}
           {activeLine?.lot_id && (
             <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 700, color: "#475569", marginBottom: 10 }}>
-              🏷️ Lot {activeLine.lot_id[1]}
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+              <span>Lot {activeLine.lot_id[1]}</span>
             </div>
           )}
 
@@ -9624,6 +9627,25 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
               <div style={{ fontSize: 11, fontWeight: 700, color: C.textSec }}>{getQty(ml)}/{ml.reserved_uom_qty || 0}</div>
             </div>
           ))}
+          {/* Items complétés (en bas, strikethrough + ✓) */}
+          {(() => {
+            const doneList = displayLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0) && (ml.reserved_uom_qty || 0) > 0).slice(0, 8);
+            if (doneList.length === 0) return null;
+            return (
+              <>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.green, marginTop: 12, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  Préparés ({doneList.length})
+                </div>
+                {doneList.map((ml: any, i: number) => (
+                  <div key={`done-${i}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: `1px solid ${C.border}`, opacity: 0.6 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="20 6 9 17 4 12"/></svg>
+                    <div style={{ flex: 1, fontSize: 12, color: C.textMuted, fontWeight: 400, textDecoration: "line-through" as const }}>{ml.product_id[1]}</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: C.green }}>{getQty(ml)}/{ml.reserved_uom_qty || 0}</div>
+                  </div>
+                ))}
+              </>
+            );
+          })()}
         </div>
       )}
 
