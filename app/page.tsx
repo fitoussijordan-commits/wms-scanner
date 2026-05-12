@@ -7668,7 +7668,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
           if (r.type === "location") {
             return { kind: "location", locationName: r.data.complete_name || r.data.name, id: r.data.id };
           } else if (r.type === "product") {
-            return { kind: "product", productName: r.data.name, ref: r.data.default_code, id: r.data.id, barcode: r.data.barcode, matchedBy: r.matchedBy };
+            return { kind: "product", productName: r.data.name, ref: r.data.default_code, id: r.data.id, barcode: r.data.barcode, matchedBy: r.matchedBy, supplierRef: (r as any).supplierRef || null };
           } else if (r.type === "lot") {
             const prod = r.data.product;
             return { kind: "product", productName: prod?.name || r.data.lot.product_id[1], ref: prod?.default_code, id: prod?.id || r.data.lot.product_id[0], lotName: r.data.lot.name };

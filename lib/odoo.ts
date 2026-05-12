@@ -170,41 +170,59 @@ export async function globalSearch(session: OdooSession, query: string): Promise
     }
   }
 
-  // 3. Supplier refs → resolve to products (only ones not already in results)
-  const supplierProductIds = new Set<number>();
-  const supplierRefMap: Record<number, string> = {};
+  // 3. Supplier refs → resolve product IDs from supplierinfos
+  const supplierRefMap: Record<number, string> = {}; // productId → product_code
 
-  // Resolve template-only matches to product.product
+  // Fetch template → variant mapping (product_tmpl_id MUST be in fields for the match to work)
   const tmplIds = supplierInfos
     .filter((si: any) => !si.product_id && si.product_tmpl_id)
     .map((si: any) => si.product_tmpl_id[0]);
   let tmplProducts: any[] = [];
   if (tmplIds.length > 0) {
     tmplProducts = await searchRead(session, "product.product",
-      [["product_tmpl_id", "in", tmplIds]], PRODUCT_FIELDS, tmplIds.length * 2);
+      [["product_tmpl_id", "in", tmplIds]],
+      [...PRODUCT_FIELDS, "product_tmpl_id"],   // ← include product_tmpl_id for matching
+      tmplIds.length * 3);
   }
 
   for (const si of supplierInfos) {
+    if (!si.product_code) continue;
     let productId: number | null = null;
     if (si.product_id) {
       productId = si.product_id[0];
     } else if (si.product_tmpl_id) {
+      const tmplId = si.product_tmpl_id[0];
       const found = tmplProducts.find((p: any) => {
-        const tmpl = Array.isArray(p.product_tmpl_id) ? p.product_tmpl_id[0] : p.product_tmpl_id;
-        return tmpl === si.product_tmpl_id[0];
+        const t = Array.isArray(p.product_tmpl_id) ? p.product_tmpl_id[0] : p.product_tmpl_id;
+        return t === tmplId;
       });
       if (found) productId = found.id;
     }
-    if (productId && !seenProductIds.has(productId)) {
-      supplierProductIds.add(productId);
-      if (!supplierRefMap[productId]) supplierRefMap[productId] = si.product_code;
+    if (productId && !supplierRefMap[productId]) {
+      supplierRefMap[productId] = si.product_code;
     }
   }
 
-  if (supplierProductIds.size > 0) {
-    const supplierProducts = await searchRead(session, "product.product",
-      [["id", "in", Array.from(supplierProductIds)]], PRODUCT_FIELDS, supplierProductIds.size);
-    for (const p of supplierProducts) {
+  // Annotate already-found products with supplier ref badge, add new ones as supplier_ref type
+  const newSupplierIds = new Set<number>();
+  for (const [pidStr, ref] of Object.entries(supplierRefMap)) {
+    const pid = Number(pidStr);
+    if (seenProductIds.has(pid)) {
+      // Product already in results → add supplierRef to it
+      for (const r of results) {
+        if (r.type === "product" && r.data.id === pid) {
+          (r as any).supplierRef = ref;
+        }
+      }
+    } else {
+      newSupplierIds.add(pid);
+    }
+  }
+
+  if (newSupplierIds.size > 0) {
+    const newProds = await searchRead(session, "product.product",
+      [["id", "in", Array.from(newSupplierIds)]], PRODUCT_FIELDS, newSupplierIds.size);
+    for (const p of newProds) {
       seenProductIds.add(p.id);
       results.push({ type: "supplier_ref", data: p, supplierRef: supplierRefMap[p.id] || "" });
     }
