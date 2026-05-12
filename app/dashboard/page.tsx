@@ -479,7 +479,7 @@ export default function Dashboard() {
       const resp = await fetch("/api/ai-odoo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q, odooUrl: session.config.url, sessionId: session.sessionId }),
+        body: JSON.stringify({ question: q, odooUrl: session.config.url, sessionId: session.sessionId, history: aiMessages }),
       });
       const data = await resp.json();
       if (data.error) throw new Error(data.error);

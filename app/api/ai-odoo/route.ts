@@ -79,30 +79,51 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "ANTHROPIC_API_KEY non configurée dans les variables d'environnement Vercel." }, { status: 500 });
   }
 
-  const { question, odooUrl, sessionId } = await req.json();
+  const { question, odooUrl, sessionId, history } = await req.json();
   if (!question || !odooUrl || !sessionId) {
     return NextResponse.json({ error: "Paramètres manquants (question, odooUrl, sessionId)" }, { status: 400 });
   }
 
+  // Contexte conversationnel : si l'IA a déjà répondu, on inclut la dernière réponse
+  const lastAssistantMsg = (history as { role: string; text: string }[] | undefined)?.filter(m => m.role === "assistant").slice(-1)[0]?.text || "";
+
+  const contextualQuestion = lastAssistantMsg
+    ? `Contexte — ma réponse précédente était:\n"""\n${lastAssistantMsg}\n"""\n\nNouvelle demande de l'utilisateur: ${question}`
+    : question;
+
   try {
-    // Étape 1 : Claude génère le plan de requêtes Odoo
+    // Étape 1 : Claude génère le plan de requêtes Odoo (ou détecte que c'est une reformatisation)
     const planText = await callClaude(
-      [{ role: "user", content: question }],
+      [{ role: "user", content: contextualQuestion }],
       SYSTEM_PROMPT,
       1024
     );
 
     let queryPlan: { queries: any[] };
     try {
-      // Nettoyer au cas où Claude ajoute du markdown
       const cleaned = planText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
       queryPlan = JSON.parse(cleaned);
     } catch {
-      return NextResponse.json({ error: "Impossible de parser le plan de requête Claude.", raw: planText }, { status: 500 });
+      // Échec de parsing = probablement une demande de reformatisation ou hors-sujet Odoo
+      // On laisse Claude répondre directement avec le contexte
+      const directAnswer = await callClaude([{
+        role: "user",
+        content: lastAssistantMsg
+          ? `Voici les données que j'ai déjà affichées:\n"""\n${lastAssistantMsg}\n"""\n\nL'utilisateur demande maintenant: "${question}"\n\nRéponds en français, reformate ou complète selon la demande. Si c'est un tableau, utilise du texte formaté avec des séparateurs clairs (pas de HTML).`
+          : `L'utilisateur demande: "${question}"\n\nRéponds en français. Si tu ne peux pas répondre sans données Odoo, dis-le clairement.`
+      }], undefined, 2048);
+      return NextResponse.json({ answer: directAnswer, queriesRun: 0, model: "claude-haiku-4-5" });
     }
 
     if (!queryPlan.queries || queryPlan.queries.length === 0) {
-      return NextResponse.json({ answer: "Je n'ai pas réussi à identifier les données à chercher pour cette question. Pouvez-vous reformuler ?" });
+      // Pas de requêtes → reformatisation ou réponse directe
+      const directAnswer = await callClaude([{
+        role: "user",
+        content: lastAssistantMsg
+          ? `Voici les données affichées précédemment:\n"""\n${lastAssistantMsg}\n"""\n\nL'utilisateur demande: "${question}"\n\nRéponds en français.`
+          : `L'utilisateur demande: "${question}". Réponds en français.`
+      }], undefined, 2048);
+      return NextResponse.json({ answer: directAnswer, queriesRun: 0, model: "claude-haiku-4-5" });
     }
 
     // Étape 2 : Exécuter les requêtes Odoo
