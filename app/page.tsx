@@ -2663,8 +2663,8 @@ export default function Page() {
       {/* ── Control Center — desktop + home only ── */}
       {screen === "home" && session && (
         <div style={{
-          position: "fixed", top: 60, right: 20, width: 290,
-          display: "none",
+          position: "fixed", top: 60, right: 20, width: 270,
+          display: "none", maxHeight: "calc(100vh - 80px)", overflowY: "auto",
         }}
           className="cc-panel"
         >
@@ -2681,32 +2681,36 @@ export default function Page() {
 
           {/* card helper */}
           {(() => {
-            const CcCard = ({ color, bg, icon, label, count, names, onClick }: { color: string; bg: string; icon: string; label: string; count: number; names: string[]; onClick: () => void }) => (
-              <button onClick={onClick} style={{
-                width: "100%", textAlign: "left" as const, background: C.white,
-                border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "14px 16px",
-                marginBottom: 10, cursor: "pointer", fontFamily: "inherit",
-                boxShadow: "0 1px 6px rgba(0,0,0,0.06)", transition: "box-shadow .15s",
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: count > 0 ? 10 : 0 }}>
-                  <div style={{ width: 38, height: 38, borderRadius: 10, background: bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>{icon}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{label}</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: count > 0 ? color : C.textMuted, lineHeight: 1.1 }}>{ccData ? count : "—"}</div>
+            const CcCard = ({ color, bg, icon, label, count, names, onClick }: { color: string; bg: string; icon: string; label: string; count: number; names: string[]; onClick: () => void }) => {
+              const shown = names.slice(0, 3);
+              const rest = count - shown.length;
+              return (
+                <button onClick={onClick} style={{
+                  width: "100%", textAlign: "left" as const, background: C.white,
+                  border: `1.5px solid ${C.border}`, borderRadius: 12, padding: "10px 12px",
+                  marginBottom: 8, cursor: "pointer", fontFamily: "inherit",
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.05)", transition: "box-shadow .15s",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: count > 0 ? 7 : 0 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>{icon}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{label}</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: count > 0 ? color : C.textMuted, lineHeight: 1.1 }}>{ccData ? count : "—"}</div>
+                    </div>
                   </div>
-                </div>
-                {count > 0 && names.length > 0 && (
-                  <div style={{ display: "flex", flexDirection: "column" as const, gap: 3 }}>
-                    {names.map((n, i) => (
-                      <div key={i} style={{ fontSize: 11, color: C.textSec, background: C.bg, borderRadius: 6, padding: "3px 8px", fontWeight: 600 }}>{n}</div>
-                    ))}
-                    {count > names.length && (
-                      <div style={{ fontSize: 11, color: C.textMuted, padding: "2px 8px" }}>+{count - names.length} autre{count - names.length > 1 ? "s" : ""}</div>
-                    )}
-                  </div>
-                )}
-              </button>
-            );
+                  {count > 0 && shown.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column" as const, gap: 2 }}>
+                      {shown.map((n, i) => (
+                        <div key={i} style={{ fontSize: 10, color: C.textSec, background: C.bg, borderRadius: 5, padding: "2px 7px", fontWeight: 600 }}>{n}</div>
+                      ))}
+                      {rest > 0 && (
+                        <div style={{ fontSize: 10, color: C.textMuted, padding: "1px 7px" }}>+{rest} autre{rest > 1 ? "s" : ""}</div>
+                      )}
+                    </div>
+                  )}
+                </button>
+              );
+            };
             return (
               <>
                 <CcCard color="#f59e0b" bg="#fef3c7" icon="⏳" label="En attente aujourd'hui"
