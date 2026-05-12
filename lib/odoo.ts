@@ -211,9 +211,9 @@ export async function globalSearch(session: OdooSession, query: string): Promise
   }
 
   // 4. Lots — fetch product details only for product IDs not already loaded
-  const lotProductIdsToFetch = [...new Set(
+  const lotProductIdsToFetch = Array.from(new Set<number>(
     lots.map((l: any) => l.product_id[0]).filter((id: number) => !seenProductIds.has(id))
-  )] as number[];
+  ));
 
   const lotProductMap: Record<number, any> = {};
   // Add already-fetched products to map
