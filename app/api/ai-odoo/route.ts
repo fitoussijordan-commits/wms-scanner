@@ -131,7 +131,7 @@ export async function POST(req: NextRequest) {
       2048
     );
 
-    return NextResponse.json({ answer, queriesRun: results.length });
+    return NextResponse.json({ answer, queriesRun: results.length, model: "claude-haiku-4-5" });
   } catch (e: any) {
     return NextResponse.json({ error: e.message || "Erreur interne" }, { status: 500 });
   }

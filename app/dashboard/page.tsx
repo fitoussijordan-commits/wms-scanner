@@ -463,7 +463,7 @@ export default function Dashboard() {
   const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
 
   // ── Assistant IA Odoo ────────────────────────────────────────────────────
-  type AiMessage = { role: "user" | "assistant"; text: string };
+  type AiMessage = { role: "user" | "assistant"; text: string; model?: string; queriesRun?: number };
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
   const [aiInput, setAiInput] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -483,7 +483,7 @@ export default function Dashboard() {
       });
       const data = await resp.json();
       if (data.error) throw new Error(data.error);
-      setAiMessages(prev => [...prev, { role: "assistant", text: data.answer }]);
+      setAiMessages(prev => [...prev, { role: "assistant", text: data.answer, model: data.model, queriesRun: data.queriesRun }]);
     } catch (e: any) {
       setAiMessages(prev => [...prev, { role: "assistant", text: `❌ Erreur : ${e.message}` }]);
     }
@@ -3242,19 +3242,25 @@ export default function Dashboard() {
                   {msg.role === "assistant" && (
                     <div style={{ width: 28, height: 28, borderRadius: 8, background: "var(--accent-soft)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0, marginTop: 2 }}>🤖</div>
                   )}
-                  <div style={{
-                    maxWidth: "80%",
-                    padding: "10px 14px",
-                    borderRadius: msg.role === "user" ? "16px 16px 4px 16px" : "4px 16px 16px 16px",
-                    background: msg.role === "user" ? "var(--accent)" : "var(--bg-raised)",
-                    color: msg.role === "user" ? "#fff" : "var(--text-primary)",
-                    fontSize: 13,
-                    lineHeight: 1.6,
-                    border: msg.role === "assistant" ? "1px solid var(--border)" : "none",
-                    whiteSpace: "pre-wrap",
-                    boxShadow: "0 1px 3px rgba(0,0,0,.06)",
-                  }}>
-                    {msg.text}
+                  <div style={{ maxWidth: "80%", display: "flex", flexDirection: "column", gap: 3 }}>
+                    <div style={{
+                      padding: "10px 14px",
+                      borderRadius: msg.role === "user" ? "16px 16px 4px 16px" : "4px 16px 16px 16px",
+                      background: msg.role === "user" ? "var(--accent)" : "var(--bg-raised)",
+                      color: msg.role === "user" ? "#fff" : "var(--text-primary)",
+                      fontSize: 13,
+                      lineHeight: 1.6,
+                      border: msg.role === "assistant" ? "1px solid var(--border)" : "none",
+                      whiteSpace: "pre-wrap",
+                      boxShadow: "0 1px 3px rgba(0,0,0,.06)",
+                    }}>
+                      {msg.text}
+                    </div>
+                    {msg.role === "assistant" && msg.model && (
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", paddingLeft: 4 }}>
+                        ⚡ {msg.model} · {msg.queriesRun} requête{(msg.queriesRun ?? 0) > 1 ? "s" : ""} Odoo
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
