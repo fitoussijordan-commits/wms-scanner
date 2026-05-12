@@ -2670,7 +2670,7 @@ export default function Page() {
 
       {/* ── Control Center — desktop + home only ── */}
       {screen === "home" && session && (
-        <div style={{ position: "fixed", top: 60, left: "52%", right: 20, display: "none", padding: "14px 0 0 0" }}
+        <div style={{ position: "fixed", top: 60, right: 12, width: 340, display: "none", padding: "14px 0 0 0", maxHeight: "calc(100vh - 72px)", overflowY: "auto" as const }}
           className="cc-panel"
         >
           {/* header */}
@@ -2725,6 +2725,10 @@ export default function Page() {
                   names={ccData?.inPrep.names ?? []}
                   onClick={() => { loadPickings(); setScreen("prep"); }} />
 
+                <CcCard color="#0ea5e9" bg="#e0f2fe" icon="📤" label="À emballer"
+                  count={ccData?.outToPackToday.count ?? 0}
+                  names={ccData?.outToPackToday.names ?? []}
+                  onClick={() => { loadPickings(); setScreen("prep"); }} />
                 <CcCard color="#db2777" bg="#fce7f3" icon="🛒" label="E-shop"
                   count={ccData?.eshopWaiting.count ?? 0}
                   names={ccData?.eshopWaiting.names ?? []}
