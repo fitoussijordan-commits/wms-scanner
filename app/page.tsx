@@ -4465,7 +4465,12 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [matchData, setMatchData] = useState<Record<string, any>>({});
   const [locationData, setLocationData] = useState<Record<number, any>>({});
   const [preparedIds, setPreparedIds] = useState<Set<string>>(new Set());
-  const [printing, setPrinting] = useState(false);
+  // Record keyed by order_number → permet plusieurs impressions en parallèle
+  const [printing, setPrinting] = useState<Record<string, boolean>>({});
+  const setPrintingFor = (key: string, val: boolean) => setPrinting(prev => {
+    if (val) return { ...prev, [key]: true };
+    const r = { ...prev }; delete r[key]; return r;
+  });
   const [chariotSkus, setChariotSkus] = useState<string[]>([]);
   const [chariotLoaded, setChariotLoaded] = useState(false);
 
@@ -4478,7 +4483,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [packOrder, setPackOrder] = useState<any>(null);
   const [packInput, setPackInput] = useState("");
   const [packInputErr, setPackInputErr] = useState("");
-  const [packPrinting, setPackPrinting] = useState(false);
+  const [packPrinting, setPackPrinting] = useState<Record<string, boolean>>({});
+  const setPackPrintingFor = (key: string, val: boolean) => setPackPrinting(prev => {
+    if (val) return { ...prev, [key]: true };
+    const r = { ...prev }; delete r[key]; return r;
+  });
 
   const savePrepared = async (ids: Set<string>) => {
     setPreparedIds(ids);
@@ -4572,6 +4581,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
   // BL : tente le vrai PDF SendCloud, sinon génère le BL local en fallback
   const printPackingSlip = async (p: any) => {
+    const _ordNum = p.order_number;
+    setPrintingFor(_ordNum, true);
     const psCfg = pn.getLabelTypeConfig("packingslip_eshop");
     const printerId = psCfg.printerId || pn.getSavedPrinterId();
 
@@ -4634,13 +4645,14 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       console.warn("[BL] Exception:", e.message, "→ fallback local");
       try { await fallbackLocal(); } catch (e2: any) { onToast(`⚠ BL: ${e2.message}`); }
     }
+    setPrintingFor(_ordNum, false);
   };
 
   const printLabel = async (p: any) => {
-    setPrinting(true);
+    const orderNumber = p.order_number;
+    setPrintingFor(orderNumber, true);
     try {
       const orderId = p._raw?.order_id || p.id;
-      const orderNumber = p.order_number;
       // POST pour passer tout le _raw au serveur → pas besoin de refetch V3
       const res = await fetch("/api/sendcloud?action=label", {
         method: "POST",
@@ -4706,7 +4718,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         onToast("PDF ouvert dans un nouvel onglet");
       }
     } catch (e: any) { onToast(`⚠ Étiquette: ${e.message}`); vibrateError(); }
-    setPrinting(false);
+    setPrintingFor(orderNumber, false);
   };
 
   const markPrepared = async (parcelId: string) => {
@@ -4922,11 +4934,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{p.order_number || `#${p.id}`}</div>
             <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
           </div>
-          <button onClick={() => printLabel(p)} disabled={printing} title="Étiquette"
+          <button onClick={() => printLabel(p)} disabled={!!printing[p.order_number]} title="Étiquette"
             style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><rect x="6" y="9" width="12" height="8" rx="1"/><path d="M6 9V5a1 1 0 011-1h10a1 1 0 011 1v4"/></svg>
           </button>
-          <button onClick={() => printPackingSlip(p)} disabled={printing} title="BL"
+          <button onClick={() => printPackingSlip(p)} disabled={!!printing[p.order_number]} title="BL"
             style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
           </button>
@@ -5133,7 +5145,12 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         <div style={{ display: "flex", gap: 6 }}>
           {parcels.length > 0 && (
             <button
-              onClick={async () => { for (const p of parcels) await doPrintOrderBarcode(p); }}
+              onClick={async () => {
+                // Parallèle avec concurrence max 4 pour ne pas saturer SendCloud
+                const queue = [...parcels];
+                const worker = async () => { while (queue.length) { const p = queue.shift(); if (p) await doPrintOrderBarcode(p); } };
+                await Promise.all([worker(), worker(), worker(), worker()]);
+              }}
               style={{ ...iconBtn, background: "#fef3c7", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700, color: "#92400e", border: `1px solid #f59e0b` }}>
               🖨️ Tout imprimer
             </button>
@@ -5240,24 +5257,24 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           </div>
           <div style={{ display: "flex", flexDirection: "column" as const, gap: 10 }}>
             <button
-              disabled={packPrinting}
-              onClick={async () => { setPackPrinting(true); await printPackingSlip(packOrder); setPackPrinting(false); }}
+              disabled={!!packPrinting[packOrder.order_number]}
+              onClick={async () => { setPackPrintingFor(packOrder.order_number, true); await printPackingSlip(packOrder); setPackPrintingFor(packOrder.order_number, false); }}
               style={{ padding: "16px 0", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(59,130,246,0.3)" }}>
               📄 Imprimer le BL
             </button>
             <button
-              disabled={packPrinting}
-              onClick={async () => { setPackPrinting(true); await printLabel(packOrder); setPackPrinting(false); }}
+              disabled={!!packPrinting[packOrder.order_number]}
+              onClick={async () => { setPackPrintingFor(packOrder.order_number, true); await printLabel(packOrder); setPackPrintingFor(packOrder.order_number, false); }}
               style={{ padding: "16px 0", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(124,58,237,0.3)" }}>
               🚚 Imprimer l'étiquette transport
             </button>
             <button
-              disabled={packPrinting}
+              disabled={!!packPrinting[packOrder.order_number]}
               onClick={async () => {
-                setPackPrinting(true);
+                setPackPrintingFor(packOrder.order_number, true);
                 await printPackingSlip(packOrder);
                 await printLabel(packOrder);
-                setPackPrinting(false);
+                setPackPrintingFor(packOrder.order_number, false);
                 onToast(`✓ BL + étiquette pour ${packOrder.order_number}`);
               }}
               style={{ padding: "16px 0", background: C.green, color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(22,163,74,0.3)" }}>

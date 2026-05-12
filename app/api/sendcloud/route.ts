@@ -43,7 +43,7 @@ const hasLabel = (p: any) => !!(p?.label?.label_printer || p?.label?.normal_prin
 /**
  * Poll V2 /parcels/{id} jusqu'à ce que l'étiquette soit prête.
  */
-async function pollLabel(auth: string, parcelId: number, attempts = 15, delayMs = 2500): Promise<any | null> {
+async function pollLabel(auth: string, parcelId: number, attempts = 18, delayMs = 800): Promise<any | null> {
   for (let i = 0; i < attempts; i++) {
     try {
       const d = await scJson(`${V2}/parcels/${parcelId}`, auth);
@@ -505,10 +505,10 @@ export async function GET(req: NextRequest) {
           // Poll V3
           if (!v3Failed) {
             if (asyncParcelId) {
-              parcel = await pollLabel(auth, asyncParcelId, 10, 2500);
+              parcel = await pollLabel(auth, asyncParcelId);
             } else {
-              for (let i = 0; i < 6; i++) {
-                await new Promise(r => setTimeout(r, 2500));
+              for (let i = 0; i < 12; i++) {
+                await new Promise(r => setTimeout(r, 800));
                 const c = await findParcel();
                 if (c && hasLabel(c)) { parcel = c; break; }
               }
@@ -761,10 +761,10 @@ export async function POST(req: NextRequest) {
 
           if (!v3Failed) {
             if (asyncParcelId) {
-              parcel = await pollLabel(auth, asyncParcelId, 20, 3000);
+              parcel = await pollLabel(auth, asyncParcelId);
             } else {
-              for (let i = 0; i < 20; i++) {
-                await new Promise(r => setTimeout(r, 3000));
+              for (let i = 0; i < 18; i++) {
+                await new Promise(r => setTimeout(r, 800));
                 const c = await findParcel();
                 if (c && hasLabel(c)) { parcel = c; break; }
               }
