@@ -3,37 +3,33 @@ import { NextRequest, NextResponse } from "next/server";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
-const SYSTEM_PROMPT = `Tu es un assistant expert Odoo qui analyse des questions en français et génère des requêtes JSON-RPC Odoo.
+const SYSTEM_PROMPT = `Tu es un générateur de requêtes Odoo JSON-RPC. Tu reçois une question et tu retournes UNIQUEMENT du JSON, rien d'autre.
 
-Modèles disponibles:
-- product.template: produits (name, default_code, list_price, standard_price, type, categ_id, active, barcode, description_sale, weight, volume)
-- product.product: variantes produit (name, default_code, list_price, standard_price, barcode, product_tmpl_id, active)
-- stock.quant: quantités en stock (product_id, location_id, quantity, reserved_quantity, lot_id)
-- stock.location: emplacements (name, complete_name, usage, active, barcode)
-- stock.picking: bons de transfert (name, state, picking_type_code, date, partner_id, origin, scheduled_date, x_studio_date_dexpdition_prvue)
-- stock.move.line: lignes de mouvement (product_id, lot_id, qty_done, quantity, location_id, location_dest_id, picking_id, state)
-- stock.lot: lots/numéros de série (name, product_id, expiration_date, product_qty)
-- purchase.order: commandes fournisseur (name, state, partner_id, amount_total, date_order, date_planned)
-- purchase.order.line: lignes commande fournisseur (product_id, product_qty, price_unit, order_id, date_planned)
+RÈGLE ABSOLUE: Ta réponse doit commencer par { et finir par }. Pas de texte avant, pas de texte après, pas de markdown, pas d'explication.
+
+Modèles Odoo disponibles:
+- product.template: produits (name, default_code, list_price, standard_price, type, categ_id, active, barcode)
+- product.product: variantes (name, default_code, list_price, standard_price, barcode)
+- stock.quant: stock (product_id, location_id, quantity, reserved_quantity, lot_id) — filtre location_id.usage="internal"
+- stock.location: emplacements (name, complete_name, usage, active)
+- stock.picking: bons transfert (name, state, picking_type_code, date, partner_id, origin)
+- stock.move.line: lignes mouvement (product_id, lot_id, qty_done, quantity, location_id, location_dest_id, picking_id)
+- stock.lot: lots (name, product_id, expiration_date, product_qty)
+- purchase.order: commandes fournisseur (name, state, partner_id, amount_total, date_order)
 - sale.order: commandes client (name, state, partner_id, amount_total, date_order)
-- res.partner: partenaires/fournisseurs/clients (name, email, phone, supplier_rank, customer_rank)
-- product.category: catégories produit (name, complete_name)
-- stock.warehouse: entrepôts (name, code)
+- res.partner: partenaires (name, email, phone, supplier_rank, customer_rank)
+- product.category: catégories (name, complete_name)
 
-Valeurs state de stock.picking: draft, waiting, confirmed, assigned (prêt), done (validé), cancel
-Valeurs picking_type_code: incoming (réception), outgoing (livraison/OUT), internal (transfert interne)
-Pour le stock, usage="internal" pour les emplacements de stockage.
+Règles:
+- Recherche texte: opérateur "ilike" (insensible casse, partiel)
+- Échantillons: domain [["name","ilike","echantillon"]] sur stock.quant avec location_id.usage="internal"
+- Stock dispo = quantity - reserved_quantity
+- picking_type_code: incoming=réception, outgoing=livraison OUT, internal=transfert
+- state picking: draft, waiting, confirmed, assigned=prêt, done=validé, cancel
+- Si demande reformatage/tableau des données précédentes: retourne {"queries":[],"reformat":true}
 
-Règles importantes:
-- Pour chercher un produit par nom, utilise "ilike" (insensible à la casse, recherche partielle)
-- Pour les échantillons, cherche ilike "echantillon" OU ilike "sample" OU dans la catégorie
-- Pour les prix, ils sont dans list_price (prix de vente) et standard_price (prix de revient)
-- Pour le stock disponible, quantity - reserved_quantity dans stock.quant
-- Filtre toujours location_id.usage = "internal" pour le stock (domain: [["location_id.usage","=","internal"]])
-- Limites raisonnables: 20-100 résultats selon le contexte
-
-Réponds UNIQUEMENT avec un JSON valide (sans markdown ni backticks) au format exact:
-{"queries":[{"model":"nom.modele","domain":[...],"fields":["champ1","champ2"],"limit":50,"order":"champ desc","description":"explication"}]}`;
+Format JSON obligatoire:
+{"queries":[{"model":"stock.quant","domain":[["product_id.name","ilike","echantillon"],["location_id.usage","=","internal"]],"fields":["product_id","quantity","reserved_quantity","location_id"],"limit":100,"description":"stock echantillons"}]}`;
 
 async function callOdoo(odooUrl: string, sessionId: string, model: string, domain: any[], fields: string[], limit = 80, order?: string) {
   const url = `${odooUrl.replace(/\/$/, "")}/web/dataset/call_kw`;
@@ -99,29 +95,44 @@ export async function POST(req: NextRequest) {
       1024
     );
 
-    let queryPlan: { queries: any[] };
+    let queryPlan: { queries: any[]; reformat?: boolean };
+
+    const tryParseJson = (text: string) => {
+      // Extraire le JSON même si Claude a ajouté du texte autour
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("No JSON found");
+      return JSON.parse(match[0]);
+    };
+
     try {
-      const cleaned = planText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      queryPlan = JSON.parse(cleaned);
+      queryPlan = tryParseJson(planText);
     } catch {
-      // Échec de parsing = probablement une demande de reformatisation ou hors-sujet Odoo
-      // On laisse Claude répondre directement avec le contexte
-      const directAnswer = await callClaude([{
+      // Retry avec un prompt encore plus strict
+      const retryText = await callClaude([{
         role: "user",
-        content: lastAssistantMsg
-          ? `Voici les données que j'ai déjà affichées:\n"""\n${lastAssistantMsg}\n"""\n\nL'utilisateur demande maintenant: "${question}"\n\nRéponds en français, reformate ou complète selon la demande. Si c'est un tableau, utilise du texte formaté avec des séparateurs clairs (pas de HTML).`
-          : `L'utilisateur demande: "${question}"\n\nRéponds en français. Si tu ne peux pas répondre sans données Odoo, dis-le clairement.`
-      }], undefined, 2048);
-      return NextResponse.json({ answer: directAnswer, queriesRun: 0, model: "claude-haiku-4-5" });
+        content: `Réponds UNIQUEMENT avec du JSON valide, sans aucun texte avant ou après.\n\nQuestion: ${contextualQuestion}\n\nJSON:`
+      }], SYSTEM_PROMPT, 1024);
+      try {
+        queryPlan = tryParseJson(retryText);
+      } catch {
+        // Vraiment pas du JSON → reformatisation ou réponse directe
+        const directAnswer = await callClaude([{
+          role: "user",
+          content: lastAssistantMsg
+            ? `Données précédentes:\n"""\n${lastAssistantMsg}\n"""\n\nDemande: "${question}"\n\nRéponds en français, reformate si demandé.`
+            : `Demande: "${question}"\nRéponds en français.`
+        }], undefined, 2048);
+        return NextResponse.json({ answer: directAnswer, queriesRun: 0, model: "claude-haiku-4-5" });
+      }
     }
 
-    if (!queryPlan.queries || queryPlan.queries.length === 0) {
-      // Pas de requêtes → reformatisation ou réponse directe
+    // Reformatisation explicite (reformat: true) ou requêtes vides
+    if (queryPlan.reformat || !queryPlan.queries || queryPlan.queries.length === 0) {
       const directAnswer = await callClaude([{
         role: "user",
         content: lastAssistantMsg
-          ? `Voici les données affichées précédemment:\n"""\n${lastAssistantMsg}\n"""\n\nL'utilisateur demande: "${question}"\n\nRéponds en français.`
-          : `L'utilisateur demande: "${question}". Réponds en français.`
+          ? `Données précédentes:\n"""\n${lastAssistantMsg}\n"""\n\nDemande: "${question}"\n\nRéponds en français, reformate si demandé (tableau avec | pour les colonnes).`
+          : `Demande: "${question}". Réponds en français.`
       }], undefined, 2048);
       return NextResponse.json({ answer: directAnswer, queriesRun: 0, model: "claude-haiku-4-5" });
     }
