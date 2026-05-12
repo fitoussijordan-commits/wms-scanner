@@ -251,6 +251,7 @@ const TABS = [
   { key: "stock-tracking", label: "Suivi stock", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
   { key: "catalogue", label: "Catalogue", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> },
   { key: "libre", label: "Mode Libre", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> },
+  { key: "assistant", label: "Assistant IA", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><circle cx="18" cy="6" r="4" fill="currentColor" stroke="none" opacity=".3"/><path d="M16 6h4M18 4v4" stroke="currentColor" strokeWidth="1.5"/></svg> },
 ] as const;
 
 // ─── CATALOGUE — définition des colonnes disponibles ────────────────────────
@@ -460,6 +461,36 @@ export default function Dashboard() {
   const [alertsUnderstockOpen, setAlertsUnderstockOpen] = useState(true);
   const [alertsOverstockOpen, setAlertsOverstockOpen] = useState(true);
   const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
+
+  // ── Assistant IA Odoo ────────────────────────────────────────────────────
+  type AiMessage = { role: "user" | "assistant"; text: string };
+  const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
+  const [aiInput, setAiInput] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const aiBottomRef = useRef<HTMLDivElement>(null);
+
+  const aiSend = async (question?: string) => {
+    const q = (question ?? aiInput).trim();
+    if (!q || aiLoading || !session) return;
+    setAiInput("");
+    setAiMessages(prev => [...prev, { role: "user", text: q }]);
+    setAiLoading(true);
+    try {
+      const resp = await fetch("/api/ai-odoo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q, odooUrl: session.config.url, sessionId: session.sessionId }),
+      });
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+      setAiMessages(prev => [...prev, { role: "assistant", text: data.answer }]);
+    } catch (e: any) {
+      setAiMessages(prev => [...prev, { role: "assistant", text: `❌ Erreur : ${e.message}` }]);
+    }
+    setAiLoading(false);
+  };
+
+  useEffect(() => { aiBottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [aiMessages, aiLoading]);
 
   // ── Commandes à emballer du jour ─────────────────────────────────────────
   const [todayOutPending, setTodayOutPending] = useState<number | null>(null);
@@ -3165,6 +3196,105 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ══════════════════ ASSISTANT IA ODOO ══════════════════ */}
+        {tab === "assistant" && (
+          <div style={{ maxWidth: 780, margin: "0 auto", display: "flex", flexDirection: "column", height: "calc(100vh - 160px)" }}>
+            {/* Header */}
+            <div style={{ padding: "20px 0 12px", display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: "var(--accent-soft)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🤖</div>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 16, color: "var(--text-primary)" }}>Assistant IA Odoo</div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Pose une question en français — l&apos;IA cherche dans ta base Odoo</div>
+              </div>
+            </div>
+
+            {/* Messages */}
+            <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12, padding: "4px 0 16px" }}>
+              {aiMessages.length === 0 && !aiLoading && (
+                <div style={{ textAlign: "center", paddingTop: 40 }}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>🤖</div>
+                  <div style={{ fontSize: 14, color: "var(--text-secondary)", marginBottom: 20 }}>Exemples de questions :</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+                    {[
+                      "Quel est le prix du coffret Noël 2024 ?",
+                      "Donne-moi tous les échantillons en stock",
+                      "Quels OUT sont en attente de validation ?",
+                      "Stock disponible de la crème solaire",
+                      "Liste des lots qui expirent dans 3 mois",
+                      "Combien de commandes fournisseur en cours ?",
+                    ].map(ex => (
+                      <button key={ex} onClick={() => aiSend(ex)}
+                        style={{ padding: "6px 12px", border: "1.5px solid var(--border)", borderRadius: 20, background: "var(--bg-raised)", cursor: "pointer", fontSize: 12, color: "var(--text-secondary)", fontFamily: "inherit", transition: "all .15s" }}
+                        onMouseEnter={e => { (e.target as HTMLElement).style.borderColor = "var(--accent)"; (e.target as HTMLElement).style.color = "var(--accent)"; }}
+                        onMouseLeave={e => { (e.target as HTMLElement).style.borderColor = "var(--border)"; (e.target as HTMLElement).style.color = "var(--text-secondary)"; }}>
+                        {ex}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {aiMessages.map((msg, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", gap: 8 }}>
+                  {msg.role === "assistant" && (
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: "var(--accent-soft)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0, marginTop: 2 }}>🤖</div>
+                  )}
+                  <div style={{
+                    maxWidth: "80%",
+                    padding: "10px 14px",
+                    borderRadius: msg.role === "user" ? "16px 16px 4px 16px" : "4px 16px 16px 16px",
+                    background: msg.role === "user" ? "var(--accent)" : "var(--bg-raised)",
+                    color: msg.role === "user" ? "#fff" : "var(--text-primary)",
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                    border: msg.role === "assistant" ? "1px solid var(--border)" : "none",
+                    whiteSpace: "pre-wrap",
+                    boxShadow: "0 1px 3px rgba(0,0,0,.06)",
+                  }}>
+                    {msg.text}
+                  </div>
+                </div>
+              ))}
+
+              {aiLoading && (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 8, background: "var(--accent-soft)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>🤖</div>
+                  <div style={{ padding: "10px 14px", borderRadius: "4px 16px 16px 16px", background: "var(--bg-raised)", border: "1px solid var(--border)", display: "flex", gap: 4, alignItems: "center" }}>
+                    {[0, 1, 2].map(j => (
+                      <div key={j} style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", opacity: 0.6, animation: `pulse 1.2s ease-in-out ${j * 0.2}s infinite` }} />
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div ref={aiBottomRef} />
+            </div>
+
+            {/* Input */}
+            <div style={{ flexShrink: 0, paddingBottom: 16 }}>
+              <form onSubmit={e => { e.preventDefault(); aiSend(); }} style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={aiInput}
+                  onChange={e => setAiInput(e.target.value)}
+                  placeholder="Ex: Quel est le stock des échantillons ?"
+                  disabled={aiLoading}
+                  style={{ flex: 1, padding: "10px 14px", border: "1.5px solid var(--border)", borderRadius: 12, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)", outline: "none", transition: "border-color .15s" }}
+                  onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                  onBlur={e => (e.target.style.borderColor = "var(--border)")}
+                />
+                <button type="submit" disabled={aiLoading || !aiInput.trim()}
+                  style={{ padding: "10px 18px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 12, fontWeight: 700, fontSize: 13, cursor: aiLoading || !aiInput.trim() ? "not-allowed" : "pointer", opacity: aiLoading || !aiInput.trim() ? 0.5 : 1, fontFamily: "inherit", transition: "opacity .15s" }}>
+                  Envoyer
+                </button>
+              </form>
+              {!process.env.NEXT_PUBLIC_HAS_AI && aiMessages.length === 0 && (
+                <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-muted)", textAlign: "center" }}>
+                  ⚙️ Nécessite la variable d&apos;environnement <code>ANTHROPIC_API_KEY</code> dans Vercel
+                </div>
+              )}
+            </div>
           </div>
         )}
       </main>
