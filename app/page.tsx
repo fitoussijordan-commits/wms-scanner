@@ -2716,10 +2716,7 @@ export default function Page() {
                   count={ccData?.inPrep.count ?? 0}
                   names={ccData?.inPrep.names ?? []}
                   onClick={() => { loadPickings(); setScreen("prep"); }} />
-                <CcCard color="#0ea5e9" bg="#e0f2fe" icon="📤" label="À emballer"
-                  count={ccData?.outToPackToday.count ?? 0}
-                  names={ccData?.outToPackToday.names ?? []}
-                  onClick={() => { loadPickings(); setScreen("prep"); }} />
+
                 <CcCard color="#db2777" bg="#fce7f3" icon="🛒" label="E-shop"
                   count={ccData?.eshopWaiting.count ?? 0}
                   names={ccData?.eshopWaiting.names ?? []}
