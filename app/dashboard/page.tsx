@@ -463,7 +463,7 @@ export default function Dashboard() {
   const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
 
   // ── Assistant IA Odoo ────────────────────────────────────────────────────
-  type AiMessage = { role: "user" | "assistant"; text: string; model?: string; queriesRun?: number };
+  type AiMessage = { role: "user" | "assistant"; text: string; model?: string; queriesRun?: number; rawData?: { description: string; model: string; rows: any[] }[] };
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
   const [aiInput, setAiInput] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -483,7 +483,7 @@ export default function Dashboard() {
       });
       const data = await resp.json();
       if (data.error) throw new Error(data.error);
-      setAiMessages(prev => [...prev, { role: "assistant", text: data.answer, model: data.model, queriesRun: data.queriesRun }]);
+      setAiMessages(prev => [...prev, { role: "assistant", text: data.answer, model: data.model, queriesRun: data.queriesRun, rawData: data.rawData }]);
     } catch (e: any) {
       setAiMessages(prev => [...prev, { role: "assistant", text: `❌ Erreur : ${e.message}` }]);
     }
@@ -491,6 +491,30 @@ export default function Dashboard() {
   };
 
   useEffect(() => { aiBottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [aiMessages, aiLoading]);
+
+  const aiExportExcel = (rawData: { description: string; model: string; rows: any[] }[]) => {
+    const allRows = rawData.flatMap(r => r.rows);
+    if (!allRows.length) return;
+    // Récupérer toutes les colonnes (union de toutes les clés)
+    const keys = Array.from(new Set(allRows.flatMap(r => Object.keys(r)))).filter(k => k !== "id");
+    const thStyle = "background:#1e3a5f;color:#fff;font-weight:bold;padding:6px 10px;border:1px solid #ccc;";
+    const tdStyle = "padding:5px 10px;border:1px solid #ddd;";
+    const formatVal = (v: any): string => {
+      if (v === null || v === undefined || v === false) return "";
+      if (Array.isArray(v)) return v[1] ?? v[0] ?? "";
+      return String(v);
+    };
+    const headers = keys.map(k => `<th style="${thStyle}">${k}</th>`).join("");
+    const rows = allRows.map(row =>
+      `<tr>${keys.map(k => `<td style="${tdStyle}">${formatVal(row[k])}</td>`).join("")}</tr>`
+    ).join("");
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"></head><body><table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></body></html>`;
+    const blob = new Blob(["﻿" + html], { type: "application/vnd.ms-excel;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url;
+    a.download = `assistant_ia_${new Date().toISOString().split("T")[0]}.xls`;
+    a.click(); URL.revokeObjectURL(url);
+  };
 
   // ── Commandes à emballer du jour ─────────────────────────────────────────
   const [todayOutPending, setTodayOutPending] = useState<number | null>(null);
@@ -3257,8 +3281,14 @@ export default function Dashboard() {
                       {msg.text}
                     </div>
                     {msg.role === "assistant" && msg.model && (
-                      <div style={{ fontSize: 10, color: "var(--text-muted)", paddingLeft: 4 }}>
-                        ⚡ {msg.model} · {msg.queriesRun} requête{(msg.queriesRun ?? 0) > 1 ? "s" : ""} Odoo
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", paddingLeft: 4, display: "flex", alignItems: "center", gap: 8 }}>
+                        <span>⚡ {msg.model} · {msg.queriesRun} requête{(msg.queriesRun ?? 0) > 1 ? "s" : ""} Odoo</span>
+                        {msg.rawData && msg.rawData.some(r => r.rows?.length > 0) && (
+                          <button onClick={() => aiExportExcel(msg.rawData!)}
+                            style={{ padding: "2px 8px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 5, fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                            ⬇ Excel
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
