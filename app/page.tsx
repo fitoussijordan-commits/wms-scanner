@@ -2662,24 +2662,21 @@ export default function Page() {
 
       {/* ── Control Center — desktop + home only ── */}
       {screen === "home" && session && (
-        <div style={{
-          position: "fixed", top: 60, right: 20, width: 270,
-          display: "none", maxHeight: "calc(100vh - 80px)", overflowY: "auto",
-        }}
+        <div style={{ position: "fixed", top: 60, left: 20, width: 280, display: "none", padding: "14px 0 0 0" }}
           className="cc-panel"
         >
           {/* header */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, padding: "0 4px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 8, height: 8, borderRadius: 4, background: ccLoading ? "#f59e0b" : "#10b981", boxShadow: ccLoading ? "0 0 6px #f59e0b" : "0 0 6px #10b981" }} />
-              <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1 }}>Centre de contrôle</span>
+              <div style={{ width: 7, height: 7, borderRadius: 4, background: ccLoading ? "#f59e0b" : "#10b981", boxShadow: ccLoading ? "0 0 6px #f59e0b" : "0 0 6px #10b981" }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1 }}>Centre de contrôle</span>
             </div>
             <button onClick={() => ccRefreshRef.current && ccRefreshRef.current()}
-              style={{ background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 16, lineHeight: 1, padding: 4 }}
+              style={{ background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 14, lineHeight: 1, padding: 4 }}
               title="Actualiser">↻</button>
           </div>
 
-          {/* card helper */}
+          {/* grille 2×2 */}
           {(() => {
             const CcCard = ({ color, bg, icon, label, count, names, onClick }: { color: string; bg: string; icon: string; label: string; count: number; names: string[]; onClick: () => void }) => {
               const shown = names.slice(0, 3);
@@ -2687,33 +2684,31 @@ export default function Page() {
               return (
                 <button onClick={onClick} style={{
                   width: "100%", textAlign: "left" as const, background: C.white,
-                  border: `1.5px solid ${C.border}`, borderRadius: 12, padding: "10px 12px",
-                  marginBottom: 8, cursor: "pointer", fontFamily: "inherit",
-                  boxShadow: "0 1px 4px rgba(0,0,0,0.05)", transition: "box-shadow .15s",
+                  border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "12px 14px",
+                  cursor: "pointer", fontFamily: "inherit",
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.06)", transition: "box-shadow .15s",
                 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: count > 0 ? 7 : 0 }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>{icon}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: shown.length > 0 && count > 0 ? 8 : 0 }}>
+                    <div style={{ width: 30, height: 30, borderRadius: 8, background: bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{icon}</div>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{label}</div>
-                      <div style={{ fontSize: 22, fontWeight: 800, color: count > 0 ? color : C.textMuted, lineHeight: 1.1 }}>{ccData ? count : "—"}</div>
+                      <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.4 }}>{label}</div>
+                      <div style={{ fontSize: 24, fontWeight: 900, color: count > 0 ? color : C.textMuted, lineHeight: 1.1 }}>{ccData ? count : "—"}</div>
                     </div>
                   </div>
                   {count > 0 && shown.length > 0 && (
                     <div style={{ display: "flex", flexDirection: "column" as const, gap: 2 }}>
                       {shown.map((n, i) => (
-                        <div key={i} style={{ fontSize: 10, color: C.textSec, background: C.bg, borderRadius: 5, padding: "2px 7px", fontWeight: 600 }}>{n}</div>
+                        <div key={i} style={{ fontSize: 10, color: C.textSec, background: C.bg, borderRadius: 5, padding: "2px 7px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{n}</div>
                       ))}
-                      {rest > 0 && (
-                        <div style={{ fontSize: 10, color: C.textMuted, padding: "1px 7px" }}>+{rest} autre{rest > 1 ? "s" : ""}</div>
-                      )}
+                      {rest > 0 && <div style={{ fontSize: 10, color: C.textMuted, padding: "1px 7px" }}>+{rest} autre{rest > 1 ? "s" : ""}</div>}
                     </div>
                   )}
                 </button>
               );
             };
             return (
-              <>
-                <CcCard color="#f59e0b" bg="#fef3c7" icon="⏳" label="En attente aujourd'hui"
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <CcCard color="#f59e0b" bg="#fef3c7" icon="⏳" label="En attente"
                   count={ccData?.waitingToday.count ?? 0}
                   names={ccData?.waitingToday.names ?? []}
                   onClick={() => setScreen("waitingOrders")} />
@@ -2721,20 +2716,20 @@ export default function Page() {
                   count={ccData?.inPrep.count ?? 0}
                   names={ccData?.inPrep.names ?? []}
                   onClick={() => { loadPickings(); setScreen("prep"); }} />
-                <CcCard color="#0ea5e9" bg="#e0f2fe" icon="📤" label="À emballer aujourd'hui"
+                <CcCard color="#0ea5e9" bg="#e0f2fe" icon="📤" label="À emballer"
                   count={ccData?.outToPackToday.count ?? 0}
                   names={ccData?.outToPackToday.names ?? []}
                   onClick={() => { loadPickings(); setScreen("prep"); }} />
-                <CcCard color="#db2777" bg="#fce7f3" icon="🛒" label="E-shop en attente"
+                <CcCard color="#db2777" bg="#fce7f3" icon="🛒" label="E-shop"
                   count={ccData?.eshopWaiting.count ?? 0}
                   names={ccData?.eshopWaiting.names ?? []}
                   onClick={() => setScreen("eshop")} />
-              </>
+              </div>
             );
           })()}
 
           {ccData && (
-            <div style={{ textAlign: "center" as const, fontSize: 10, color: C.textMuted, marginTop: 4 }}>
+            <div style={{ textAlign: "center" as const, fontSize: 10, color: C.textMuted, marginTop: 8 }}>
               Mis à jour à {ccData.lastUpdate} · actualise auto toutes les 60s
             </div>
           )}
