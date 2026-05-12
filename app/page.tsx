@@ -7554,6 +7554,14 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
   const [newStockLot, setNewStockLot] = useState("");
   const [newStockSearching, setNewStockSearching] = useState(false);
 
+  // Affiche uniquement le dernier segment de l'emplacement (ex: "A12-RKC1" au lieu du chemin complet)
+  // Pour les emplacements de haut niveau (≤2 segments comme WH/Sortie), conserve le nom complet
+  const shortLocName = (completeName: string) => {
+    const parts = (completeName || "").split("/");
+    if (parts.length <= 2) return completeName;
+    return parts[parts.length - 1];
+  };
+
   // ── Mise à jour en chaîne (desktop uniquement) ──────────────────────────
   const isDesktop = typeof window !== "undefined" && window.innerWidth >= 1024;
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -7907,7 +7915,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
                 style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, marginBottom: 4 }}>
                 <div>
                   {r.kind === "location" ? (
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>📍 {r.locationName}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>📍 {shortLocName(r.locationName)}</div>
                   ) : (
                     <>
                       <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.productName}</div>
@@ -7931,7 +7939,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
               <div>
                 {selectedLocation ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <div style={{ fontSize: 15, fontWeight: 800, color: "#059669" }}>📍 {selectedLocation.locationName}</div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: "#059669" }}>📍 {shortLocName(selectedLocation.locationName)}</div>
                     <button onClick={() => { const newName = prompt("Renommer l'emplacement:", selectedLocation.locationName); if (newName && newName.trim()) { odoo.renameLocation(session, selectedLocation.id, newName.trim()).then(() => onToast("Emplacement renommé")).catch(() => onToast("Erreur renommage")); } }}
                       style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "inline-flex", opacity: 0.5 }}
                       title="Renommer l'emplacement">
@@ -8052,7 +8060,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                         <div>
                           <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-                            {selectedLocation ? (q.product_id?.[1] || "Produit") : q.location_id[1]}
+                            {selectedLocation ? (q.product_id?.[1] || "Produit") : shortLocName(q.location_id[1])}
                           </div>
                           {selectedLocation && q.product_ref && <div style={{ fontSize: 11, color: C.textMuted }}>Réf: {q.product_ref}</div>}
                           {q.lot_id && <div style={{ fontSize: 11, color: C.blue }}>Lot: {q.lot_id[1]}{q.expiry || q.expiration_date ? ` · Exp: ${new Date(q.expiry || q.expiration_date).toLocaleDateString("fr-FR")}` : ""}</div>}
@@ -8106,7 +8114,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
                   const diff = newQty - q.quantity;
                   return (
                     <div key={q.id} style={{ padding: "6px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
-                      <span style={{ fontWeight: 700 }}>{selectedLocation ? (q.product_id?.[1] || "Produit") : q.location_id[1]}</span>
+                      <span style={{ fontWeight: 700 }}>{selectedLocation ? (q.product_id?.[1] || "Produit") : shortLocName(q.location_id[1])}</span>
                       {q.lot_id && <span style={{ color: C.blue }}> · Lot {q.lot_id[1]}</span>}
                       <span style={{ color: C.textMuted }}> : {q.quantity} → </span>
                       <span style={{ fontWeight: 700, color: diff > 0 ? C.green : C.red }}>{newQty} ({diff > 0 ? "+" : ""}{diff})</span>
