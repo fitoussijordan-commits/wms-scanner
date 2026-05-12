@@ -723,6 +723,14 @@ let C: typeof C_LIGHT = { ...C_LIGHT };
 // ============================================
 // HAPTICS
 // ============================================
+// Affiche uniquement le dernier segment d'un emplacement Odoo (ex: "A12-RKC1" au lieu du chemin complet)
+// Conserve le nom complet pour les emplacements de haut niveau (≤2 segments comme WH/Sortie)
+function shortLocName(completeName: string): string {
+  const parts = (completeName || "").split("/");
+  if (parts.length <= 2) return completeName;
+  return parts[parts.length - 1];
+}
+
 function vibrate(pattern: number | number[] = 30) {
   try { navigator?.vibrate?.(pattern); } catch {}
 }
@@ -4049,7 +4057,7 @@ function ProductResult({ product, stock, onRename }: { product: any; stock: any[
                 </form>
               ) : (
                 <>
-                  <span style={{ fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.location_id[1]}</span>
+                  <span style={{ fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{shortLocName(q.location_id[1])}</span>
 
                   {onRename && (
                     <button onClick={() => { setEditingLocId(q.location_id[0]); setEditLocName(q.location_id[1].split("/").pop() || ""); }}
@@ -4111,7 +4119,7 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
       {stock.map((q, i) => (
         <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ fontWeight: 600 }}>{q.location_id[1]}</span>
+            <span style={{ fontWeight: 600 }}>{shortLocName(q.location_id[1])}</span>
 
           </div>
           <div style={{ textAlign: "right" as const }}>
@@ -7550,14 +7558,6 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
   const [newStockQty, setNewStockQty] = useState("1");
   const [newStockLot, setNewStockLot] = useState("");
   const [newStockSearching, setNewStockSearching] = useState(false);
-
-  // Affiche uniquement le dernier segment de l'emplacement (ex: "A12-RKC1" au lieu du chemin complet)
-  // Pour les emplacements de haut niveau (≤2 segments comme WH/Sortie), conserve le nom complet
-  const shortLocName = (completeName: string) => {
-    const parts = (completeName || "").split("/");
-    if (parts.length <= 2) return completeName;
-    return parts[parts.length - 1];
-  };
 
   // ── Mise à jour en chaîne (desktop uniquement) ──────────────────────────
   const isDesktop = typeof window !== "undefined" && window.innerWidth >= 1024;
