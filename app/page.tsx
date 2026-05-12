@@ -2670,7 +2670,7 @@ export default function Page() {
 
       {/* ── Control Center — desktop + home only ── */}
       {screen === "home" && session && (
-        <div style={{ position: "fixed", top: 60, left: 12, width: 380, display: "none", padding: "14px 0 0 0", maxHeight: "calc(100vh - 72px)", overflowY: "auto" as const }}
+        <div style={{ position: "fixed", top: 60, right: 12, width: 380, display: "none", padding: "14px 0 0 0", maxHeight: "calc(100vh - 72px)", overflowY: "auto" as const }}
           className="cc-panel"
         >
           {/* header */}
@@ -2689,28 +2689,29 @@ export default function Page() {
             const CcCard = ({ color, bg, icon, label, count, names, onClick }: { color: string; bg: string; icon: string; label: string; count: number; names: string[]; onClick: () => void }) => {
               const shown = names.slice(0, 3);
               const rest = count - shown.length;
+              // Always reserve 3 slots for names so all cards have equal height
+              const slots = [shown[0] || "", shown[1] || "", shown[2] || ""];
               return (
                 <button onClick={onClick} style={{
                   width: "100%", textAlign: "left" as const, background: C.white,
                   border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "16px 18px",
                   cursor: "pointer", fontFamily: "inherit",
                   boxShadow: "0 1px 4px rgba(0,0,0,0.06)", transition: "box-shadow .15s",
+                  display: "flex", flexDirection: "column" as const, minHeight: 168,
                 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: shown.length > 0 && count > 0 ? 10 : 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
                     <div style={{ width: 36, height: 36, borderRadius: 10, background: bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>{icon}</div>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{label}</div>
                       <div style={{ fontSize: 30, fontWeight: 900, color: count > 0 ? color : C.textMuted, lineHeight: 1.1 }}>{ccData ? count : "—"}</div>
                     </div>
                   </div>
-                  {count > 0 && shown.length > 0 && (
-                    <div style={{ display: "flex", flexDirection: "column" as const, gap: 2 }}>
-                      {shown.map((n, i) => (
-                        <div key={i} style={{ fontSize: 11, color: C.textSec, background: C.bg, borderRadius: 6, padding: "3px 8px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{n}</div>
-                      ))}
-                      {rest > 0 && <div style={{ fontSize: 11, color: C.textMuted, padding: "2px 8px" }}>+{rest} autre{rest > 1 ? "s" : ""}</div>}
-                    </div>
-                  )}
+                  <div style={{ display: "flex", flexDirection: "column" as const, gap: 3, flex: 1 }}>
+                    {slots.map((n, i) => (
+                      <div key={i} style={{ fontSize: 11, color: n ? C.textSec : "transparent", background: n ? C.bg : "transparent", borderRadius: 6, padding: "3px 8px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, minHeight: 19 }}>{n || "·"}</div>
+                    ))}
+                    {rest > 0 && <div style={{ fontSize: 11, color: C.textMuted, padding: "2px 8px" }}>+{rest} autre{rest > 1 ? "s" : ""}</div>}
+                  </div>
                 </button>
               );
             };
