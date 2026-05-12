@@ -2662,7 +2662,7 @@ export default function Page() {
 
       {/* ── Control Center — desktop + home only ── */}
       {screen === "home" && session && (
-        <div style={{ position: "fixed", top: 60, left: 20, width: 280, display: "none", padding: "14px 0 0 0" }}
+        <div style={{ position: "fixed", top: 60, right: 20, width: 340, display: "none", padding: "14px 0 0 0" }}
           className="cc-panel"
         >
           {/* header */}
