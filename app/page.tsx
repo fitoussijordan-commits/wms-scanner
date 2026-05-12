@@ -2670,7 +2670,7 @@ export default function Page() {
 
       {/* ── Control Center — desktop + home only ── */}
       {screen === "home" && session && (
-        <div style={{ position: "fixed", top: 60, right: 12, width: 380, display: "none", padding: "14px 0 0 0", maxHeight: "calc(100vh - 72px)", overflowY: "auto" as const }}
+        <div style={{ position: "fixed", top: 60, right: 12, width: 340, display: "none", padding: "14px 0 0 0", maxHeight: "calc(100vh - 72px)", overflowY: "auto" as const }}
           className="cc-panel"
         >
           {/* header */}
@@ -2689,34 +2689,33 @@ export default function Page() {
             const CcCard = ({ color, bg, icon, label, count, names, onClick }: { color: string; bg: string; icon: string; label: string; count: number; names: string[]; onClick: () => void }) => {
               const shown = names.slice(0, 3);
               const rest = count - shown.length;
-              // Always reserve 3 slots for names so all cards have equal height
-              const slots = [shown[0] || "", shown[1] || "", shown[2] || ""];
               return (
                 <button onClick={onClick} style={{
                   width: "100%", textAlign: "left" as const, background: C.white,
-                  border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "16px 18px",
+                  border: `1.5px solid ${C.border}`, borderRadius: 14, padding: "12px 14px",
                   cursor: "pointer", fontFamily: "inherit",
                   boxShadow: "0 1px 4px rgba(0,0,0,0.06)", transition: "box-shadow .15s",
-                  display: "flex", flexDirection: "column" as const, minHeight: 168,
                 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 10, background: bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>{icon}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: shown.length > 0 && count > 0 ? 8 : 0 }}>
+                    <div style={{ width: 30, height: 30, borderRadius: 8, background: bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{icon}</div>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{label}</div>
-                      <div style={{ fontSize: 30, fontWeight: 900, color: count > 0 ? color : C.textMuted, lineHeight: 1.1 }}>{ccData ? count : "—"}</div>
+                      <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.4 }}>{label}</div>
+                      <div style={{ fontSize: 24, fontWeight: 900, color: count > 0 ? color : C.textMuted, lineHeight: 1.1 }}>{ccData ? count : "—"}</div>
                     </div>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column" as const, gap: 3, flex: 1 }}>
-                    {slots.map((n, i) => (
-                      <div key={i} style={{ fontSize: 11, color: n ? C.textSec : "transparent", background: n ? C.bg : "transparent", borderRadius: 6, padding: "3px 8px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, minHeight: 19 }}>{n || "·"}</div>
-                    ))}
-                    {rest > 0 && <div style={{ fontSize: 11, color: C.textMuted, padding: "2px 8px" }}>+{rest} autre{rest > 1 ? "s" : ""}</div>}
-                  </div>
+                  {count > 0 && shown.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column" as const, gap: 2 }}>
+                      {shown.map((n, i) => (
+                        <div key={i} style={{ fontSize: 10, color: C.textSec, background: C.bg, borderRadius: 5, padding: "2px 7px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{n}</div>
+                      ))}
+                      {rest > 0 && <div style={{ fontSize: 10, color: C.textMuted, padding: "1px 7px" }}>+{rest} autre{rest > 1 ? "s" : ""}</div>}
+                    </div>
+                  )}
                 </button>
               );
             };
             return (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <CcCard color="#f59e0b" bg="#fef3c7" icon="⏳" label="En attente"
                   count={ccData?.waitingToday.count ?? 0}
                   names={ccData?.waitingToday.names ?? []}
@@ -2739,7 +2738,7 @@ export default function Page() {
           })()}
 
           {ccData && (
-            <div style={{ textAlign: "center" as const, fontSize: 11, color: C.textMuted, marginTop: 10 }}>
+            <div style={{ textAlign: "center" as const, fontSize: 10, color: C.textMuted, marginTop: 8 }}>
               Mis à jour à {ccData.lastUpdate} · actualise auto toutes les 60s
             </div>
           )}
@@ -4466,12 +4465,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [matchData, setMatchData] = useState<Record<string, any>>({});
   const [locationData, setLocationData] = useState<Record<number, any>>({});
   const [preparedIds, setPreparedIds] = useState<Set<string>>(new Set());
-  // Record keyed by order_number → permet plusieurs impressions en parallèle
-  const [printing, setPrinting] = useState<Record<string, boolean>>({});
-  const setPrintingFor = (key: string, val: boolean) => setPrinting(prev => {
-    if (val) return { ...prev, [key]: true };
-    const r = { ...prev }; delete r[key]; return r;
-  });
+  const [printing, setPrinting] = useState(false);
   const [chariotSkus, setChariotSkus] = useState<string[]>([]);
   const [chariotLoaded, setChariotLoaded] = useState(false);
 
@@ -4484,11 +4478,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [packOrder, setPackOrder] = useState<any>(null);
   const [packInput, setPackInput] = useState("");
   const [packInputErr, setPackInputErr] = useState("");
-  const [packPrinting, setPackPrinting] = useState<Record<string, boolean>>({});
-  const setPackPrintingFor = (key: string, val: boolean) => setPackPrinting(prev => {
-    if (val) return { ...prev, [key]: true };
-    const r = { ...prev }; delete r[key]; return r;
-  });
+  const [packPrinting, setPackPrinting] = useState(false);
 
   const savePrepared = async (ids: Set<string>) => {
     setPreparedIds(ids);
@@ -4582,8 +4572,6 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
   // BL : tente le vrai PDF SendCloud, sinon génère le BL local en fallback
   const printPackingSlip = async (p: any) => {
-    const _ordNum = p.order_number;
-    setPrintingFor(_ordNum, true);
     const psCfg = pn.getLabelTypeConfig("packingslip_eshop");
     const printerId = psCfg.printerId || pn.getSavedPrinterId();
 
@@ -4646,14 +4634,13 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       console.warn("[BL] Exception:", e.message, "→ fallback local");
       try { await fallbackLocal(); } catch (e2: any) { onToast(`⚠ BL: ${e2.message}`); }
     }
-    setPrintingFor(_ordNum, false);
   };
 
   const printLabel = async (p: any) => {
-    const orderNumber = p.order_number;
-    setPrintingFor(orderNumber, true);
+    setPrinting(true);
     try {
       const orderId = p._raw?.order_id || p.id;
+      const orderNumber = p.order_number;
       // POST pour passer tout le _raw au serveur → pas besoin de refetch V3
       const res = await fetch("/api/sendcloud?action=label", {
         method: "POST",
@@ -4719,7 +4706,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         onToast("PDF ouvert dans un nouvel onglet");
       }
     } catch (e: any) { onToast(`⚠ Étiquette: ${e.message}`); vibrateError(); }
-    setPrintingFor(orderNumber, false);
+    setPrinting(false);
   };
 
   const markPrepared = async (parcelId: string) => {
@@ -4935,11 +4922,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{p.order_number || `#${p.id}`}</div>
             <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
           </div>
-          <button onClick={() => printLabel(p)} disabled={!!printing[p.order_number]} title="Étiquette"
+          <button onClick={() => printLabel(p)} disabled={printing} title="Étiquette"
             style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><rect x="6" y="9" width="12" height="8" rx="1"/><path d="M6 9V5a1 1 0 011-1h10a1 1 0 011 1v4"/></svg>
           </button>
-          <button onClick={() => printPackingSlip(p)} disabled={!!printing[p.order_number]} title="BL"
+          <button onClick={() => printPackingSlip(p)} disabled={printing} title="BL"
             style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
           </button>
@@ -4988,9 +4975,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
               <button
                 onClick={() => setLocConfirmed(true)}
                 style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, width: "100%", border: "none", cursor: "pointer", padding: 0, background: "none", fontFamily: "inherit" }}>
-                <div style={{ background: locConfirmed ? C.greenSoft : C.blueSoft, border: `1px solid ${locConfirmed ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 20, fontWeight: 900, color: locConfirmed ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
-                  <span>{shortLoc(currentLocName) || "Emplacement inconnu"}</span>
+                <div style={{ background: locConfirmed ? C.greenSoft : C.blueSoft, border: `1px solid ${locConfirmed ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 20, fontWeight: 900, color: locConfirmed ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center" }}>
+                  📍 {shortLoc(currentLocName) || "Emplacement inconnu"}
                 </div>
                 {locConfirmed && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
@@ -5147,12 +5133,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         <div style={{ display: "flex", gap: 6 }}>
           {parcels.length > 0 && (
             <button
-              onClick={async () => {
-                // Parallèle avec concurrence max 4 pour ne pas saturer SendCloud
-                const queue = [...parcels];
-                const worker = async () => { while (queue.length) { const p = queue.shift(); if (p) await doPrintOrderBarcode(p); } };
-                await Promise.all([worker(), worker(), worker(), worker()]);
-              }}
+              onClick={async () => { for (const p of parcels) await doPrintOrderBarcode(p); }}
               style={{ ...iconBtn, background: "#fef3c7", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700, color: "#92400e", border: `1px solid #f59e0b` }}>
               🖨️ Tout imprimer
             </button>
@@ -5259,24 +5240,24 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           </div>
           <div style={{ display: "flex", flexDirection: "column" as const, gap: 10 }}>
             <button
-              disabled={!!packPrinting[packOrder.order_number]}
-              onClick={async () => { setPackPrintingFor(packOrder.order_number, true); await printPackingSlip(packOrder); setPackPrintingFor(packOrder.order_number, false); }}
+              disabled={packPrinting}
+              onClick={async () => { setPackPrinting(true); await printPackingSlip(packOrder); setPackPrinting(false); }}
               style={{ padding: "16px 0", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(59,130,246,0.3)" }}>
               📄 Imprimer le BL
             </button>
             <button
-              disabled={!!packPrinting[packOrder.order_number]}
-              onClick={async () => { setPackPrintingFor(packOrder.order_number, true); await printLabel(packOrder); setPackPrintingFor(packOrder.order_number, false); }}
+              disabled={packPrinting}
+              onClick={async () => { setPackPrinting(true); await printLabel(packOrder); setPackPrinting(false); }}
               style={{ padding: "16px 0", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(124,58,237,0.3)" }}>
               🚚 Imprimer l'étiquette transport
             </button>
             <button
-              disabled={!!packPrinting[packOrder.order_number]}
+              disabled={packPrinting}
               onClick={async () => {
-                setPackPrintingFor(packOrder.order_number, true);
+                setPackPrinting(true);
                 await printPackingSlip(packOrder);
                 await printLabel(packOrder);
-                setPackPrintingFor(packOrder.order_number, false);
+                setPackPrinting(false);
                 onToast(`✓ BL + étiquette pour ${packOrder.order_number}`);
               }}
               style={{ padding: "16px 0", background: C.green, color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(22,163,74,0.3)" }}>
@@ -7677,17 +7658,32 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
     if (!val) return;
     setSearching(true);
     try {
-      const result = await odoo.smartScan(session, val);
-      if (result.type === "product") {
-        setSearchResults([{ kind: "product", productName: result.data.name, ref: result.data.default_code, id: result.data.id, barcode: result.data.barcode }]);
-      } else if (result.type === "lot") {
-        const prod = result.data.product;
-        setSearchResults([{ kind: "product", productName: prod?.name || result.data.lot.product_id[1], ref: prod?.default_code, id: prod?.id || result.data.lot.product_id[0], lotName: result.data.lot.name }]);
-      } else if (result.type === "location") {
-        setSearchResults([{ kind: "location", locationName: result.data.complete_name || result.data.name, id: result.data.id }]);
-      } else {
+      const results = await odoo.globalSearch(session, val);
+      if (results.length === 0) {
         setSearchResults([]);
         onToast("Aucun résultat trouvé");
+      } else {
+        // Map GlobalSearchResult → selectItem format
+        const items = results.map((r: odoo.GlobalSearchResult) => {
+          if (r.type === "location") {
+            return { kind: "location", locationName: r.data.complete_name || r.data.name, id: r.data.id };
+          } else if (r.type === "product") {
+            return { kind: "product", productName: r.data.name, ref: r.data.default_code, id: r.data.id, barcode: r.data.barcode, matchedBy: r.matchedBy };
+          } else if (r.type === "lot") {
+            const prod = r.data.product;
+            return { kind: "product", productName: prod?.name || r.data.lot.product_id[1], ref: prod?.default_code, id: prod?.id || r.data.lot.product_id[0], lotName: r.data.lot.name };
+          } else if (r.type === "supplier_ref") {
+            return { kind: "product", productName: r.data.name, ref: r.data.default_code, id: r.data.id, barcode: r.data.barcode, supplierRef: r.supplierRef };
+          }
+          return null;
+        }).filter(Boolean);
+
+        if (items.length === 1) {
+          // Single result → auto-select (keeps scanner UX smooth)
+          selectItem(items[0]);
+        } else {
+          setSearchResults(items);
+        }
       }
     } catch (e: any) { onToast("Erreur: " + e.message); }
     setSearching(false);
@@ -7930,7 +7926,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
         {/* Results dropdown */}
         {searchResults.length > 0 && (
           <div style={{ marginTop: 8 }}>
-            {searchResults.map((r, i) => (
+            {searchResults.map((r: any, i: number) => (
               <button key={i} onClick={() => selectItem(r)}
                 style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, marginBottom: 4 }}>
                 <div>
@@ -7940,7 +7936,8 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
                     <>
                       <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.productName}</div>
                       {r.ref && <div style={{ fontSize: 11, color: C.textMuted }}>Réf: {r.ref}</div>}
-                      {r.lotName && <div style={{ fontSize: 11, color: C.blue }}>Lot: {r.lotName}</div>}
+                      {r.lotName && <div style={{ fontSize: 11, color: C.blue }}>🏷 Lot: {r.lotName}</div>}
+                      {r.supplierRef && <div style={{ fontSize: 11, color: "#7c3aed" }}>🏭 Réf. four: {r.supplierRef}</div>}
                     </>
                   )}
                 </div>
@@ -9471,9 +9468,8 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 
           {/* Emplacement */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-            <div style={{ background: locOk ? C.greenSoft : C.blueSoft, border: `1px solid ${locOk ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "6px 12px", fontSize: 18, fontWeight: 900, color: locOk ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: "middle", flexShrink: 0 }}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
-              <span>{locOk && prepStep ? shortLoc(prepStep.locName) : shortLoc(currentLine.location_id?.[1] || "—")}</span>
+            <div style={{ background: locOk ? C.greenSoft : C.blueSoft, border: `1px solid ${locOk ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "6px 12px", fontSize: 18, fontWeight: 900, color: locOk ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center" }}>
+              📍 {locOk && prepStep ? shortLoc(prepStep.locName) : shortLoc(currentLine.location_id?.[1] || "—")}
             </div>
             {locOk && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
@@ -9505,8 +9501,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           {/* Lot */}
           {activeLine?.lot_id && (
             <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 700, color: "#475569", marginBottom: 10 }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-              <span>Lot {activeLine.lot_id[1]}</span>
+              🏷️ Lot {activeLine.lot_id[1]}
             </div>
           )}
 
@@ -9627,25 +9622,6 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
               <div style={{ fontSize: 11, fontWeight: 700, color: C.textSec }}>{getQty(ml)}/{ml.reserved_uom_qty || 0}</div>
             </div>
           ))}
-          {/* Items complétés (en bas, strikethrough + ✓) */}
-          {(() => {
-            const doneList = displayLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0) && (ml.reserved_uom_qty || 0) > 0).slice(0, 8);
-            if (doneList.length === 0) return null;
-            return (
-              <>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.green, marginTop: 12, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                  Préparés ({doneList.length})
-                </div>
-                {doneList.map((ml: any, i: number) => (
-                  <div key={`done-${i}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: `1px solid ${C.border}`, opacity: 0.6 }}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="20 6 9 17 4 12"/></svg>
-                    <div style={{ flex: 1, fontSize: 12, color: C.textMuted, fontWeight: 400, textDecoration: "line-through" as const }}>{ml.product_id[1]}</div>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: C.green }}>{getQty(ml)}/{ml.reserved_uom_qty || 0}</div>
-                  </div>
-                ))}
-              </>
-            );
-          })()}
         </div>
       )}
 

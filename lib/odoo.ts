@@ -113,6 +113,127 @@ export async function smartScan(session: OdooSession, code: string): Promise<Sca
 }
 
 // ============================================
+// GLOBAL SEARCH — all categories in parallel
+// ============================================
+
+export type GlobalSearchResult =
+  | { type: "location"; data: any }
+  | { type: "product"; data: any; matchedBy: "ref" | "name" | "barcode" }
+  | { type: "lot"; data: { lot: any; product: any } }
+  | { type: "supplier_ref"; data: any; supplierRef: string };
+
+export async function globalSearch(session: OdooSession, query: string): Promise<GlobalSearchResult[]> {
+  const trimmed = query.trim();
+  if (!trimmed || trimmed.length < 2) return [];
+
+  // Fire all searches in parallel
+  const [locs, productsByRefOrName, productsByBarcode, lots, supplierInfos] = await Promise.all([
+    // Locations by complete_name (internal + transit)
+    searchRead(session, "stock.location",
+      [["complete_name", "ilike", trimmed], ["usage", "in", ["internal", "transit"]]],
+      ["id", "name", "complete_name", "barcode", "usage"], 8),
+    // Products by internal ref OR name
+    searchRead(session, "product.product",
+      ["|", ["default_code", "ilike", trimmed], ["name", "ilike", trimmed]],
+      PRODUCT_FIELDS, 12),
+    // Products by barcode (exact)
+    searchRead(session, "product.product",
+      [["barcode", "=", trimmed]],
+      PRODUCT_FIELDS, 3),
+    // Lots by name
+    searchRead(session, "stock.lot",
+      [["name", "ilike", trimmed]],
+      ["id", "name", "product_id", "expiration_date"], 8),
+    // Supplier refs
+    searchRead(session, "product.supplierinfo",
+      [["product_code", "ilike", trimmed]],
+      ["id", "product_code", "product_id", "product_tmpl_id"], 10),
+  ]);
+
+  const results: GlobalSearchResult[] = [];
+  const seenProductIds = new Set<number>();
+
+  // 1. Locations
+  for (const loc of locs) {
+    results.push({ type: "location", data: loc });
+  }
+
+  // 2. Products (barcode first for priority, then ref/name, dedup by id)
+  for (const p of [...productsByBarcode, ...productsByRefOrName]) {
+    if (!seenProductIds.has(p.id)) {
+      seenProductIds.add(p.id);
+      const matchedBy: "ref" | "name" | "barcode" =
+        productsByBarcode.some((x: any) => x.id === p.id) ? "barcode"
+        : (p.default_code || "").toLowerCase().includes(trimmed.toLowerCase()) ? "ref"
+        : "name";
+      results.push({ type: "product", data: p, matchedBy });
+    }
+  }
+
+  // 3. Supplier refs → resolve to products (only ones not already in results)
+  const supplierProductIds = new Set<number>();
+  const supplierRefMap: Record<number, string> = {};
+
+  // Resolve template-only matches to product.product
+  const tmplIds = supplierInfos
+    .filter((si: any) => !si.product_id && si.product_tmpl_id)
+    .map((si: any) => si.product_tmpl_id[0]);
+  let tmplProducts: any[] = [];
+  if (tmplIds.length > 0) {
+    tmplProducts = await searchRead(session, "product.product",
+      [["product_tmpl_id", "in", tmplIds]], PRODUCT_FIELDS, tmplIds.length * 2);
+  }
+
+  for (const si of supplierInfos) {
+    let productId: number | null = null;
+    if (si.product_id) {
+      productId = si.product_id[0];
+    } else if (si.product_tmpl_id) {
+      const found = tmplProducts.find((p: any) => {
+        const tmpl = Array.isArray(p.product_tmpl_id) ? p.product_tmpl_id[0] : p.product_tmpl_id;
+        return tmpl === si.product_tmpl_id[0];
+      });
+      if (found) productId = found.id;
+    }
+    if (productId && !seenProductIds.has(productId)) {
+      supplierProductIds.add(productId);
+      if (!supplierRefMap[productId]) supplierRefMap[productId] = si.product_code;
+    }
+  }
+
+  if (supplierProductIds.size > 0) {
+    const supplierProducts = await searchRead(session, "product.product",
+      [["id", "in", Array.from(supplierProductIds)]], PRODUCT_FIELDS, supplierProductIds.size);
+    for (const p of supplierProducts) {
+      seenProductIds.add(p.id);
+      results.push({ type: "supplier_ref", data: p, supplierRef: supplierRefMap[p.id] || "" });
+    }
+  }
+
+  // 4. Lots — fetch product details only for product IDs not already loaded
+  const lotProductIdsToFetch = [...new Set(
+    lots.map((l: any) => l.product_id[0]).filter((id: number) => !seenProductIds.has(id))
+  )] as number[];
+
+  const lotProductMap: Record<number, any> = {};
+  // Add already-fetched products to map
+  for (const p of [...productsByBarcode, ...productsByRefOrName]) lotProductMap[p.id] = p;
+
+  if (lotProductIdsToFetch.length > 0) {
+    const prods = await searchRead(session, "product.product",
+      [["id", "in", lotProductIdsToFetch]], PRODUCT_FIELDS, lotProductIdsToFetch.length);
+    for (const p of prods) lotProductMap[p.id] = p;
+  }
+
+  for (const lot of lots) {
+    const productId = lot.product_id[0];
+    results.push({ type: "lot", data: { lot, product: lotProductMap[productId] || null } });
+  }
+
+  return results;
+}
+
+// ============================================
 // STOCK QUERIES — INTERNAL LOCATIONS ONLY
 // ============================================
 
