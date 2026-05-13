@@ -9504,8 +9504,20 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           </div>
 
           {/* Produit */}
-          <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b", marginBottom: 6, lineHeight: 1.3 }}>
-            {activeLine?.product_id[1]}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+            {activeLine && (
+              <img
+                key={activeLine.product_id[0]}
+                src={`/api/odoo/image?odooUrl=${encodeURIComponent(session.config.url)}&id=${activeLine.product_id[0]}&s=${session.sessionId}`}
+                loading="lazy"
+                alt=""
+                style={{ width: 64, height: 64, objectFit: "contain", borderRadius: 10, background: "#f1f5f9", flexShrink: 0, border: "1px solid #e2e8f0" }}
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+            )}
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b", lineHeight: 1.3 }}>
+              {activeLine?.product_id[1]}
+            </div>
           </div>
 
           {/* Colis destination — affiché uniquement en mode multi-pick */}
