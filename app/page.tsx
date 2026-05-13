@@ -4032,8 +4032,8 @@ function ProductResult({ product, stock, onRename }: { product: any; stock: any[
     <Section>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 2 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{product.name}{product.active === false && <Chip color={C.orange}>archivé</Chip>}</div>
-          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{product.default_code || ""} {product.barcode ? `· ${product.barcode}` : ""}</div>
+              {product.default_code && <div style={{ fontSize: 16, fontWeight: 800, color: C.text, letterSpacing: "-0.01em" }}>{product.default_code}{product.barcode ? <span style={{ fontWeight: 500, fontSize: 13, color: C.textMuted }}> · {product.barcode}</span> : ""}{product.active === false && <Chip color={C.orange}>archivé</Chip>}</div>}
+          <div style={{ fontSize: 13, fontWeight: 500, color: C.textSec, marginBottom: 12 }}>{product.name}</div>
         </div>
         {(product.barcode || product.default_code) && (
           <button onClick={() => requestPrint({ type: "product", title: product.name, barcode: product.barcode || product.default_code, ref: product.default_code, productName: product.name })}
@@ -4048,20 +4048,24 @@ function ProductResult({ product, stock, onRename }: { product: any; stock: any[
         <StatBox value={tQ} label="STOCK" color={C.textSec} />
       </div>
       <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Par emplacement</div>
-      {stock.map((q, i) => (
-        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+      {[...stock].sort((a, b) => {
+        const aOut = /sortie|output/i.test(a.location_id[1] || "");
+        const bOut = /sortie|output/i.test(b.location_id[1] || "");
+        return aOut === bOut ? 0 : aOut ? 1 : -1;
+      }).map((q, i) => (
+        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 13 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
               {editingLocId === q.location_id[0] ? (
                 <form onSubmit={(e) => { e.preventDefault(); if (onRename && editLocName.trim()) { onRename(q.location_id[0], editLocName.trim()); setEditingLocId(null); } }} style={{ display: "flex", gap: 4, flex: 1 }}>
                   <input value={editLocName} onChange={e => setEditLocName(e.target.value)} autoFocus
-                    style={{ flex: 1, padding: "4px 8px", border: `1.5px solid ${C.blue}`, borderRadius: 6, fontSize: 12, fontFamily: "inherit", outline: "none" }} />
+                    style={{ flex: 1, padding: "4px 8px", border: `1.5px solid ${C.blue}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", outline: "none" }} />
                   <button type="submit" style={{ padding: "4px 8px", background: C.blue, color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>OK</button>
                   <button type="button" onClick={() => setEditingLocId(null)} style={{ padding: "4px 8px", background: C.bg, color: C.textMuted, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, cursor: "pointer" }}>✕</button>
                 </form>
               ) : (
                 <>
-                  <span style={{ fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{shortLocName(q.location_id[1])}</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: /sortie|output/i.test(q.location_id[1] || "") ? C.textMuted : C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{shortLocName(q.location_id[1])}</span>
 
                   {onRename && (
                     <button onClick={() => { setEditingLocId(q.location_id[0]); setEditLocName(q.location_id[1].split("/").pop() || ""); }}
@@ -4120,11 +4124,14 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
         <StatBox value={tQ - tR} label="DISPO" color={C.green} />
         <StatBox value={tQ} label="STOCK" color={C.textSec} />
       </div>
-      {stock.map((q, i) => (
-        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+      {[...stock].sort((a, b) => {
+        const aOut = /sortie|output/i.test(a.location_id[1] || "");
+        const bOut = /sortie|output/i.test(b.location_id[1] || "");
+        return aOut === bOut ? 0 : aOut ? 1 : -1;
+      }).map((q, i) => (
+        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 13 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ fontWeight: 600 }}>{shortLocName(q.location_id[1])}</span>
-
+            <span style={{ fontSize: 14, fontWeight: 700, color: /sortie|output/i.test(q.location_id[1] || "") ? C.textMuted : C.text }}>{shortLocName(q.location_id[1])}</span>
           </div>
           <div style={{ textAlign: "right" as const }}>
             <div style={{ fontWeight: 700, color: (q.quantity - (q.reserved_quantity||0)) > 0 ? C.green : C.orange }}>{q.quantity - (q.reserved_quantity||0)} dispo</div>
