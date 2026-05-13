@@ -37,14 +37,16 @@ interface ReturnLine {
 }
 
 interface ReturnPicking {
-  id:          number;
-  name:        string;
-  state:       string;
-  origin:      string;
-  partnerId:   number | null;
-  partnerName: string;
-  date:        string;
-  lines:       ReturnLine[];
+  id:               number;
+  name:             string;
+  state:            string;
+  origin:           string;
+  partnerId:        number | null;
+  partnerName:      string;
+  date:             string;
+  locationDestId:   number;    // où les produits atterrissent après validation du retour
+  locationDestName: string;
+  lines:            ReturnLine[];
 }
 
 interface TransferResult {
@@ -113,7 +115,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           ["picking_type_id", "in", typeIds],
           ["state", "in", ["confirmed", "assigned", "waiting", "partially_available"]],
         ],
-        ["id", "name", "state", "origin", "partner_id", "scheduled_date", "date", "move_ids_without_package"],
+        ["id", "name", "state", "origin", "partner_id", "scheduled_date", "date", "move_ids_without_package", "location_id", "location_dest_id"],
         100,
         "scheduled_date asc, id desc"
       );
@@ -215,13 +217,15 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
         }
 
         return {
-          id:          p.id,
-          name:        p.name,
-          state:       p.state,
-          origin:      p.origin || "",
-          partnerId:   p.partner_id ? p.partner_id[0] : null,
-          partnerName: p.partner_id ? p.partner_id[1] : "",
-          date:        p.scheduled_date || p.date || "",
+          id:               p.id,
+          name:             p.name,
+          state:            p.state,
+          origin:           p.origin || "",
+          partnerId:        p.partner_id ? p.partner_id[0] : null,
+          partnerName:      p.partner_id ? p.partner_id[1] : "",
+          date:             p.scheduled_date || p.date || "",
+          locationDestId:   Array.isArray(p.location_dest_id) ? p.location_dest_id[0] : (p.location_dest_id || 0),
+          locationDestName: Array.isArray(p.location_dest_id) ? (p.location_dest_id[1] || "") : "",
           lines,
         };
       });
@@ -273,28 +277,29 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
       // 2. Validate the return picking
       await odoo.validatePicking(session, selected.id);
 
-      // 3. Build transfer lines from validated qty
+      // 3. Batch-fetch UOM for all moves (single request — no per-line loop)
+      const allMoveIds = Array.from(new Set(selected.lines.map(l => l.moveId)));
+      const movesForUom = allMoveIds.length
+        ? await odoo.searchRead(session, "stock.move", [["id", "in", allMoveIds]], ["id", "product_uom"], allMoveIds.length)
+        : [];
+      const uomByMoveId: Record<number, number> = {};
+      for (const m of movesForUom) {
+        uomByMoveId[m.id] = Array.isArray(m.product_uom) ? m.product_uom[0] : (m.product_uom || 1);
+      }
+
+      // Build transfer lines
       const transferLines: { productId: number; productName: string; qty: number; uomId: number; lotId?: number | null }[] = [];
       for (const line of selected.lines) {
-        const key   = line.moveLineId ?? line.moveId;
-        const qty   = parseFloat(qtyEdits[key] ?? String(line.demandQty));
+        const key     = line.moveLineId ?? line.moveId;
+        const qty     = parseFloat(qtyEdits[key] ?? String(line.demandQty));
         const safeQty = isNaN(qty) ? line.demandQty : qty;
         if (safeQty <= 0) continue;
-
-        // Get uom id
-        const moves = await odoo.searchRead(
-          session, "stock.move",
-          [["id", "=", line.moveId]],
-          ["product_uom"],
-          1
-        );
-        const uomId = moves.length ? (Array.isArray(moves[0].product_uom) ? moves[0].product_uom[0] : moves[0].product_uom) : 1;
 
         transferLines.push({
           productId:   line.productId,
           productName: line.productName,
           qty:         safeQty,
-          uomId,
+          uomId:       uomByMoveId[line.moveId] ?? 1,
           lotId:       line.lotId || null,
         });
       }
@@ -307,24 +312,31 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
         return;
       }
 
-      // 4. Find Output/Sortie location (source of the internal transfer)
-      const outputLoc = await findOutputLocation();
+      // 4. Source = location_dest_id of the return picking itself (the sortie/output zone
+      //    where products land after the customer return is validated)
+      const sourceLocId   = selected.locationDestId;
+      const sourceLocName = selected.locationDestName;
+      if (!sourceLocId) throw new Error("Emplacement source du retour introuvable (location_dest_id manquant).");
 
-      // 5. Find destination location per product (where the product normally lives)
+      // 5. Find original storage locations per product (from the original order's PICK picking)
       const productIds = Array.from(new Set(transferLines.map(l => l.productId)));
-      const prodLocMap = await odoo.getProductLocations(session, productIds);
+      const origLocMap = await findOriginalLocations(selected.origin, productIds);
 
-      // 6. Find default internal stock location (fallback)
+      // 6. Fallback: where the product currently has the most stock (excluding sortie zones)
+      const currentLocMap = Object.keys(origLocMap).length < productIds.length
+        ? await odoo.getProductLocations(session, productIds)
+        : {};
+
+      // 7. Default fallback location (WH/Stock)
       const stockLoc = await findDefaultStockLocation();
 
-      // 7. Group lines by destination (create one picking per destination or one picking with all)
-      // Strategy: one internal transfer per product that has its own location; everything else → stock
+      // 8. Group lines by destination
       const byDest: Record<number, { locId: number; locName: string; lines: typeof transferLines }> = {};
-
       for (const line of transferLines) {
-        const loc    = prodLocMap[line.productId];
-        const destId = loc?.location_id ?? stockLoc.id;
-        const destNm = loc?.location_name ?? stockLoc.name;
+        const orig    = origLocMap[line.productId];
+        const current = currentLocMap[line.productId];
+        const destId  = orig?.location_id   ?? current?.location_id   ?? stockLoc.id;
+        const destNm  = orig?.location_name ?? current?.location_name ?? stockLoc.name;
         if (!byDest[destId]) byDest[destId] = { locId: destId, locName: destNm, lines: [] };
         byDest[destId].lines.push(line);
       }
@@ -334,7 +346,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
       for (const { locId, locName, lines } of Object.values(byDest)) {
         const pickingId = await odoo.createInternalTransfer(
           session,
-          outputLoc.id,
+          sourceLocId,
           locId,
           lines
         );
@@ -380,7 +392,69 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
     }
   };
 
-  // ── Find Output/Sortie location ─────────────────────────────────────────────
+  // ── Find original storage locations from the originating order ─────────────
+  // Traces: RET origin → OUT picking → group_id → done PICK pickings → move lines → source location per product
+  const findOriginalLocations = async (
+    origin: string,
+    productIds: number[]
+  ): Promise<Record<number, { location_id: number; location_name: string }>> => {
+    const result: Record<number, { location_id: number; location_name: string }> = {};
+    if (!origin || !productIds.length) return result;
+
+    // Strip "Return of " prefix (Odoo sets origin = "Return of WH/OUT/XXXXX")
+    const outName = origin.replace(/^Return\s+of\s+/i, "").trim();
+    if (!outName) return result;
+
+    // Find the OUT picking by name
+    const outPickings = await odoo.searchRead(
+      session, "stock.picking",
+      [["name", "=", outName]],
+      ["id", "name", "group_id"],
+      1
+    );
+    if (!outPickings.length) return result;
+
+    const groupIdVal = outPickings[0].group_id;
+    const groupId: number | null = Array.isArray(groupIdVal) ? groupIdVal[0] : (groupIdVal || null);
+    if (!groupId) return result;
+
+    // Find done PICK (internal) pickings in the same procurement group
+    const pickPickings = await odoo.searchRead(
+      session, "stock.picking",
+      [["group_id", "=", groupId], ["state", "=", "done"], ["picking_type_code", "=", "internal"]],
+      ["id"],
+      20
+    );
+    if (!pickPickings.length) return result;
+
+    const pickPickingIds = pickPickings.map((p: any) => p.id);
+
+    // Get done move lines — location_id = where the product was picked FROM (the bin/rack)
+    const moveLines = await odoo.searchRead(
+      session, "stock.move.line",
+      [
+        ["picking_id", "in", pickPickingIds],
+        ["state", "=", "done"],
+        ["product_id", "in", productIds],
+      ],
+      ["product_id", "location_id"],
+      500
+    );
+
+    for (const ml of moveLines) {
+      const pid = ml.product_id[0];
+      if (!result[pid]) {
+        result[pid] = {
+          location_id:   ml.location_id[0],
+          location_name: ml.location_id[1] || "",
+        };
+      }
+    }
+
+    return result;
+  };
+
+  // ── Find Output/Sortie location (kept as fallback helper) ───────────────────
   const findOutputLocation = async (): Promise<{ id: number; name: string }> => {
     // Try common names
     const candidates = await odoo.searchRead(
