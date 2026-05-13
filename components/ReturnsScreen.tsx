@@ -359,13 +359,8 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           1
         );
 
-        // Auto-valider le transfert interne (qty_done déjà rempli par createInternalTransfer)
-        try {
-          await odoo.validatePicking(session, pickingId);
-        } catch (e: any) {
-          // Si l'auto-validation échoue, le transfert reste ouvert — l'utilisateur peut le valider manuellement
-          console.warn(`Auto-validation ${pick?.name} échouée:`, e.message);
-        }
+        // Ne PAS auto-valider : laisser le staff confirmer physiquement le rangement
+        // avant de valider dans Odoo (évite les quants négatifs si stock en colis ou décalage)
 
         allResults.push({
           pickingId,
@@ -382,7 +377,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
       };
 
       setTransferDone(merged);
-      onToast(`✅ Retour validé — transfert ${merged.pickingName} validé automatiquement`, "success");
+      onToast(`✅ Retour validé — transfert ${merged.pickingName} créé, à valider dans Odoo`, "success");
       loadReturns();
     } catch (e: any) {
       setError(e.message);
@@ -602,7 +597,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           <div style={{ background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 12, padding: 18, marginBottom: 16, textAlign: "center" }}>
             <div style={{ fontSize: 36, marginBottom: 8 }}>✅</div>
             <div style={{ fontWeight: 700, fontSize: 16, color: C.success, marginBottom: 4 }}>Retour {selected.name} validé</div>
-            <div style={{ fontSize: 13, color: "#065f46" }}>Transfert interne créé automatiquement</div>
+            <div style={{ fontSize: 13, color: "#065f46" }}>Transfert interne créé — à valider dans Odoo</div>
           </div>
 
           {/* Transfer info */}
@@ -621,7 +616,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           </div>
 
           <div style={{ fontSize: 12, color: C.textMuted, textAlign: "center", marginBottom: 20 }}>
-            Le transfert est en attente dans Odoo — confirmez la réception physique si nécessaire.
+            Rangez physiquement les produits, puis validez le transfert dans Odoo.
           </div>
 
           <button
