@@ -7556,6 +7556,8 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchIdRef = useRef(0); // cancel stale searches
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [selectedLocation, setSelectedLocation] = useState<any>(null);
   const [quants, setQuants] = useState<any[]>([]);
@@ -7662,10 +7664,12 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
 
   const searchProducts = async (forceVal?: string) => {
     const val = (forceVal ?? query).trim();
-    if (!val) return;
+    if (!val || val.length < 2) return;
+    const searchId = ++searchIdRef.current;
     setSearching(true);
     try {
       const results = await odoo.globalSearch(session, val);
+      if (searchId !== searchIdRef.current) return; // stale — a newer search is in flight
       if (results.length === 0) {
         setSearchResults([]);
         onToast("Aucun résultat trouvé");
@@ -7919,8 +7923,24 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
           <input
             ref={searchInputRef}
             autoFocus
-            value={query} onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") { const val = (e.target as HTMLInputElement).value.trim(); if (val) searchProducts(val); } }}
+            value={query}
+            onChange={e => {
+              const val = e.target.value;
+              setQuery(val);
+              if (debounceRef.current) clearTimeout(debounceRef.current);
+              if (val.trim().length >= 2) {
+                debounceRef.current = setTimeout(() => searchProducts(val.trim()), 380);
+              } else {
+                setSearchResults([]);
+              }
+            }}
+            onKeyDown={e => {
+              if (e.key === "Enter") {
+                if (debounceRef.current) clearTimeout(debounceRef.current);
+                const val = (e.target as HTMLInputElement).value.trim();
+                if (val) searchProducts(val);
+              }
+            }}
             placeholder="Scanner ou taper Réf, lot, code-barres..."
             style={{ flex: 1, padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", outline: "none" }}
           />

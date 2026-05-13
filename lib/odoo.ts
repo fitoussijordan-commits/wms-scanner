@@ -126,28 +126,27 @@ export async function globalSearch(session: OdooSession, query: string): Promise
   const trimmed = query.trim();
   if (!trimmed || trimmed.length < 2) return [];
 
-  // Fire all searches in parallel
+  // Fire all searches in parallel — limits kept small to reduce Odoo response time
   const [locs, productsByRefOrName, productsByBarcode, lots, supplierInfos] = await Promise.all([
     // Locations by complete_name (internal + transit)
     searchRead(session, "stock.location",
       [["complete_name", "ilike", trimmed], ["usage", "in", ["internal", "transit"]]],
-      ["id", "name", "complete_name", "barcode", "usage"], 8),
+      ["id", "name", "complete_name", "barcode", "usage"], 6),
     // Products by internal ref OR name
     searchRead(session, "product.product",
       ["|", ["default_code", "ilike", trimmed], ["name", "ilike", trimmed]],
-      PRODUCT_FIELDS, 12),
-    // Products by barcode (exact)
-    searchRead(session, "product.product",
-      [["barcode", "=", trimmed]],
-      PRODUCT_FIELDS, 3),
+      PRODUCT_FIELDS, 8),
+    // Products by barcode (exact — only if query looks like a barcode)
+    trimmed.length >= 6 ? searchRead(session, "product.product",
+      [["barcode", "=", trimmed]], PRODUCT_FIELDS, 2) : Promise.resolve([]),
     // Lots by name
     searchRead(session, "stock.lot",
       [["name", "ilike", trimmed]],
-      ["id", "name", "product_id", "expiration_date"], 8),
+      ["id", "name", "product_id", "expiration_date"], 6),
     // Supplier refs
     searchRead(session, "product.supplierinfo",
       [["product_code", "ilike", trimmed]],
-      ["id", "product_code", "product_id", "product_tmpl_id"], 10),
+      ["id", "product_code", "product_id", "product_tmpl_id"], 8),
   ]);
 
   const results: GlobalSearchResult[] = [];
@@ -228,24 +227,9 @@ export async function globalSearch(session: OdooSession, query: string): Promise
     }
   }
 
-  // 4. Lots — fetch product details only for product IDs not already loaded
-  const lotProductIdsToFetch = Array.from(new Set<number>(
-    lots.map((l: any) => l.product_id[0]).filter((id: number) => !seenProductIds.has(id))
-  ));
-
-  const lotProductMap: Record<number, any> = {};
-  // Add already-fetched products to map
-  for (const p of [...productsByBarcode, ...productsByRefOrName]) lotProductMap[p.id] = p;
-
-  if (lotProductIdsToFetch.length > 0) {
-    const prods = await searchRead(session, "product.product",
-      [["id", "in", lotProductIdsToFetch]], PRODUCT_FIELDS, lotProductIdsToFetch.length);
-    for (const p of prods) lotProductMap[p.id] = p;
-  }
-
+  // 4. Lots — product name/id comes from lot.product_id many2one, no extra fetch needed
   for (const lot of lots) {
-    const productId = lot.product_id[0];
-    results.push({ type: "lot", data: { lot, product: lotProductMap[productId] || null } });
+    results.push({ type: "lot", data: { lot, product: null } });
   }
 
   return results;
