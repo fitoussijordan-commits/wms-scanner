@@ -828,6 +828,84 @@ export async function createInternalTransfer(
   return pickingId;
 }
 
+// Variante : un seul picking interne avec une destination différente par ligne.
+// Chaque stock.move a son propre location_dest_id → Odoo gère ça nativement.
+// Utilisé pour les retours : tous les produits partent de WH/Sortie mais
+// vont chacun à leur emplacement d'origine (un seul transfert au lieu de N).
+export async function createMultiDestTransfer(
+  session: OdooSession,
+  sourceLocationId: number,
+  fallbackDestLocationId: number,
+  lines: { productId: number; productName: string; qty: number; uomId: number; lotId?: number | null; destLocationId: number }[]
+): Promise<number> {
+  const pickingTypes = await searchRead(session, "stock.picking.type", [["code", "=", "internal"]], ["id"], 1);
+  if (!pickingTypes.length) throw new Error("Aucun type d'opération interne trouvé");
+
+  // Un seul picking — location_dest_id = fallback (écrasé au niveau move/move_line)
+  const pickingId = await create(session, "stock.picking", {
+    picking_type_id: pickingTypes[0].id,
+    location_id: sourceLocationId,
+    location_dest_id: fallbackDestLocationId,
+    move_ids_without_package: lines.map((line) => [0, 0, {
+      name: line.productName,
+      product_id: line.productId,
+      product_uom_qty: line.qty,
+      product_uom: line.uomId,
+      location_id: sourceLocationId,
+      location_dest_id: line.destLocationId,  // destination spécifique par produit
+    }]),
+  });
+
+  await callMethod(session, "stock.picking", "action_confirm", [[pickingId]]);
+
+  // Supprimer les lignes auto-créées par Odoo (mauvaises sources/lots)
+  const autoMoveLines = await searchRead(session, "stock.move.line",
+    [["picking_id", "=", pickingId]], ["id"], 500);
+  if (autoMoveLines.length) {
+    await callMethod(session, "stock.move.line", "unlink", [autoMoveLines.map((ml: any) => ml.id)]);
+  }
+
+  // Récupérer les moves créés (un par ligne, dans l'ordre d'insertion)
+  const moves = await searchRead(session, "stock.move",
+    [["picking_id", "=", pickingId]],
+    ["id", "product_id", "product_uom", "location_dest_id"],
+    200
+  );
+
+  // Associer chaque ligne à son move (même produit → plusieurs moves possibles)
+  const movesByProduct: Record<number, any[]> = {};
+  for (const move of moves) {
+    const pid = Array.isArray(move.product_id) ? move.product_id[0] : move.product_id;
+    if (!movesByProduct[pid]) movesByProduct[pid] = [];
+    movesByProduct[pid].push(move);
+  }
+
+  const usedMoveIdx: Record<number, number> = {};
+  for (const line of lines) {
+    const movesForProduct = movesByProduct[line.productId] || [];
+    const idx = usedMoveIdx[line.productId] || 0;
+    const move = movesForProduct[idx] || movesForProduct[0];
+    if (!move) continue;
+    usedMoveIdx[line.productId] = idx + 1;
+
+    const uomId = Array.isArray(move.product_uom) ? move.product_uom[0] : move.product_uom;
+    const mlData: any = {
+      picking_id:       pickingId,
+      move_id:          move.id,
+      product_id:       line.productId,
+      product_uom_id:   uomId || line.uomId,
+      location_id:      sourceLocationId,
+      location_dest_id: line.destLocationId,
+      qty_done:         line.qty,
+      reserved_uom_qty: 0,
+    };
+    if (line.lotId) mlData.lot_id = line.lotId;
+    await create(session, "stock.move.line", mlData);
+  }
+
+  return pickingId;
+}
+
 // Recherche les OUT validés (state=done) par nom/origine/partenaire
 export async function searchDoneOutPickings(session: OdooSession, query: string): Promise<any[]> {
   const domain: any[] = [["state", "=", "done"], ["picking_type_code", "=", "outgoing"]];

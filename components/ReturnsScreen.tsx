@@ -330,54 +330,47 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
       // 7. Default fallback location (WH/Stock)
       const stockLoc = await findDefaultStockLocation();
 
-      // 8. Group lines by destination
-      const byDest: Record<number, { locId: number; locName: string; lines: typeof transferLines }> = {};
-      for (const line of transferLines) {
+      // 8. Build enriched lines with per-product destination
+      const enrichedLines = transferLines.map(line => {
         const orig    = origLocMap[line.productId];
         const current = currentLocMap[line.productId];
         const destId  = orig?.location_id   ?? current?.location_id   ?? stockLoc.id;
         const destNm  = orig?.location_name ?? current?.location_name ?? stockLoc.name;
-        if (!byDest[destId]) byDest[destId] = { locId: destId, locName: destNm, lines: [] };
-        byDest[destId].lines.push(line);
+        return { ...line, destLocationId: destId, destLocationName: destNm };
+      });
+
+      // 9. Un seul transfert interne pour tous les produits (destinations différentes par move)
+      const pickingId = await odoo.createMultiDestTransfer(
+        session,
+        sourceLocId,
+        stockLoc.id,
+        enrichedLines
+      );
+
+      // Get picking name
+      const [pick] = await odoo.searchRead(
+        session, "stock.picking",
+        [["id", "=", pickingId]],
+        ["name"],
+        1
+      );
+      const pickingName = pick?.name || `INT-${pickingId}`;
+
+      // Auto-valider le transfert interne
+      try {
+        await odoo.validatePicking(session, pickingId);
+      } catch (e: any) {
+        console.warn(`Auto-validation ${pickingName} échouée:`, e.message);
       }
 
-      // Create one internal transfer per unique destination, and auto-validate each
-      const allResults: TransferResult[] = [];
-      for (const { locId, locName, lines } of Object.values(byDest)) {
-        const pickingId = await odoo.createInternalTransfer(
-          session,
-          sourceLocId,
-          locId,
-          lines
-        );
-
-        // Get picking name
-        const [pick] = await odoo.searchRead(
-          session, "stock.picking",
-          [["id", "=", pickingId]],
-          ["name"],
-          1
-        );
-
-        // Ne PAS auto-valider : laisser le staff confirmer physiquement le rangement
-        // avant de valider dans Odoo (évite les quants négatifs si stock en colis ou décalage)
-
-        allResults.push({
-          pickingId,
-          pickingName: pick?.name || `INT-${pickingId}`,
-          lines: lines.map(l => ({ productName: l.productName, qty: l.qty, destLoc: locName })),
-        });
-      }
-
-      // Merge results for display
       const merged: TransferResult = {
-        pickingId:   allResults[0]?.pickingId ?? 0,
-        pickingName: allResults.map(r => r.pickingName).join(", "),
-        lines:       allResults.flatMap(r => r.lines),
+        pickingId,
+        pickingName,
+        lines: enrichedLines.map(l => ({ productName: l.productName, qty: l.qty, destLoc: l.destLocationName })),
       };
 
       setTransferDone(merged);
-      onToast(`✅ Retour validé — transfert ${merged.pickingName} créé, à valider dans Odoo`, "success");
+      onToast(`✅ Retour validé — ${merged.pickingName} validé automatiquement`, "success");
       loadReturns();
     } catch (e: any) {
       setError(e.message);
@@ -597,7 +590,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           <div style={{ background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 12, padding: 18, marginBottom: 16, textAlign: "center" }}>
             <div style={{ fontSize: 36, marginBottom: 8 }}>✅</div>
             <div style={{ fontWeight: 700, fontSize: 16, color: C.success, marginBottom: 4 }}>Retour {selected.name} validé</div>
-            <div style={{ fontSize: 13, color: "#065f46" }}>Transfert interne créé — à valider dans Odoo</div>
+            <div style={{ fontSize: 13, color: "#065f46" }}>Transfert interne créé et validé automatiquement</div>
           </div>
 
           {/* Transfer info */}
@@ -616,7 +609,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           </div>
 
           <div style={{ fontSize: 12, color: C.textMuted, textAlign: "center", marginBottom: 20 }}>
-            Rangez physiquement les produits, puis validez le transfert dans Odoo.
+            Le stock a été remis à jour automatiquement dans Odoo.
           </div>
 
           <button
