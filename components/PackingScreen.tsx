@@ -65,6 +65,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   const [packing,        setPacking]        = useState(false);
   const [done,           setDone]           = useState<DoneResult | null>(null);
   const [error,          setError]          = useState("");
+  const [showAllLines,   setShowAllLines]   = useState(false);
   const [selectedName,   setSelectedName]   = useState("");
   const [selectedPartner,setSelectedPartner]= useState("");
   const [selectedOrigin, setSelectedOrigin] = useState("");
@@ -423,10 +424,19 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           <div style={{ textAlign: "center", padding: 30, color: C.textMuted }}>Chargement des articles…</div>
         ) : (
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              Articles ({lines.length})
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                Articles ({lines.length})
+              </div>
+              {lines.length > 8 && (
+                <button
+                  onClick={() => setShowAllLines(v => !v)}
+                  style={{ fontSize: 12, fontWeight: 600, color: C.primary, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                  {showAllLines ? "Réduire ▲" : `Voir tout (${lines.length}) ▼`}
+                </button>
+              )}
             </div>
-            {lines.slice(0, 8).map((l, i) => (
+            {(showAllLines ? lines : lines.slice(0, 8)).map((l, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
                 <div style={{ flex: 1, paddingRight: 8 }}>
                   {l.productRef && <div style={{ fontSize: 11, fontWeight: 700, color: C.primary }}>{l.productRef}</div>}
@@ -438,10 +448,12 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
                 </div>
               </div>
             ))}
-            {lines.length > 8 && (
-              <div style={{ fontSize: 12, color: C.textMuted, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
-                +{lines.length - 8} article{lines.length - 8 > 1 ? "s" : ""} supplémentaires
-              </div>
+            {!showAllLines && lines.length > 8 && (
+              <button
+                onClick={() => setShowAllLines(true)}
+                style={{ width: "100%", marginTop: 8, paddingTop: 8, paddingBottom: 2, fontSize: 12, color: C.primary, fontWeight: 600, background: "none", border: "none", borderTop: `1px solid ${C.border}`, cursor: "pointer", textAlign: "center" as const }}>
+                +{lines.length - 8} article{lines.length - 8 > 1 ? "s" : ""} — Voir tout ▼
+              </button>
             )}
           </div>
         )}
