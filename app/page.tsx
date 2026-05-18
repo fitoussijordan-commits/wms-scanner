@@ -1043,6 +1043,7 @@ export default function Page() {
   const [badgeEshop,    setBadgeEshop]    = useState<number | null>(null);
   const [badgeReturns,  setBadgeReturns]  = useState<number | null>(null);
   const [badgeNegStock, setBadgeNegStock] = useState<number | null>(null);
+  const [badgePacking,  setBadgePacking]  = useState<number | null>(null);
 
   // Preparation state
   const [pickings, setPickings] = useState<any[]>([]);
@@ -1209,7 +1210,7 @@ export default function Page() {
     if (!session) return;
     const todayStr = new Date().toISOString().slice(0, 10);
 
-    const [waiting, eshop, returns, negStock] = await Promise.allSettled([
+    const [waiting, eshop, returns, negStock, packing] = await Promise.allSettled([
       // 1. En attente — commandes du jour
       (async () => {
         const all = await odoo.getWaitingPickings(session);
@@ -1256,12 +1257,18 @@ export default function Page() {
         ], ["product_id"], 500);
         return new Set(quants.map((q: any) => q.product_id[0])).size;
       })(),
+      // 5. Emballage — OUT pickings prêts à emballer
+      (async () => {
+        const picks = await odoo.getPackablePickings(session);
+        return picks.length;
+      })(),
     ]);
 
     if (waiting.status  === "fulfilled") setBadgeWaiting(waiting.value   > 0 ? waiting.value   : null);
     if (eshop.status    === "fulfilled") setBadgeEshop(eshop.value       > 0 ? eshop.value       : null);
     if (returns.status  === "fulfilled") setBadgeReturns(returns.value   > 0 ? returns.value   : null);
     if (negStock.status === "fulfilled") setBadgeNegStock(negStock.value > 0 ? negStock.value : null);
+    if (packing.status  === "fulfilled") setBadgePacking(packing.value   > 0 ? packing.value   : null);
   }, [session]);
 
   useEffect(() => {
@@ -2288,7 +2295,7 @@ export default function Page() {
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Transfert", color: "#2563eb", onClick: () => { resetTransfer(); setScreen("transfer"); }, badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>, label: "Préparation", color: "#7c3aed", onClick: () => { loadPickings(); setScreen("prep"); }, badge: pickings.length > 0 ? pickings.length : null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>, label: "En attente", color: "#f59e0b", onClick: () => setScreen("waitingOrders"), badge: badgeWaiting },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Emballage", color: "#0d9488", onClick: () => { setPackingPickingId(null); setScreen("packing"); }, badge: null },
+                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Emballage", color: "#0d9488", onClick: () => { setPackingPickingId(null); setScreen("packing"); }, badge: badgePacking },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Arrivage", color: "#059669", onClick: () => setScreen("arrival"), badge: null },
                 // { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>, label: "Palettes WMS", color: "#0f766e", onClick: () => setScreen("palettes"), badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>, label: "E-shop", color: "#db2777", onClick: () => setScreen("eshop"), badge: badgeEshop },

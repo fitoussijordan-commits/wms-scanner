@@ -68,6 +68,8 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   const [selectedName,   setSelectedName]   = useState("");
   const [selectedPartner,setSelectedPartner]= useState("");
   const [selectedOrigin, setSelectedOrigin] = useState("");
+  const [scanCode,       setScanCode]       = useState("");
+  const [scanError,      setScanError]      = useState("");
 
   // ── Sync weights array length to nPackages ──────────────────────────────────
   useEffect(() => {
@@ -214,6 +216,33 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     } finally { setPacking(false); }
   };
 
+  // ── Scan by name ─────────────────────────────────────────────────────────────
+  const handleScan = useCallback(async (code: string) => {
+    const trimmed = code.trim().toUpperCase();
+    if (!trimmed) return;
+    setScanError("");
+    // Search in loaded list first
+    const found = pickings.find(p => p.name.toUpperCase() === trimmed);
+    if (found) {
+      openDetail(found.id, found.name, found.partnerName, found.origin);
+      setScanCode("");
+      return;
+    }
+    // Search Odoo directly
+    try {
+      const results = await odoo.searchRead(session, "stock.picking",
+        [["name", "=", trimmed], ["state", "=", "assigned"]],
+        ["id", "name", "origin", "partner_id", "carrier_id", "move_ids_without_package", "date_deadline", "scheduled_date"], 1);
+      if (results.length) {
+        const p = results[0];
+        openDetail(p.id, p.name, p.partner_id ? p.partner_id[1] : "", p.origin || "");
+        setScanCode("");
+      } else {
+        setScanError(`"${trimmed}" introuvable ou non prêt à emballer`);
+      }
+    } catch (e: any) { setScanError(e.message); }
+  }, [pickings, session, openDetail]);
+
   const totalWeight = weights.reduce((s, w) => s + (parseFloat(w) || 0), 0);
   const allWeightsFilled = weights.every(w => parseFloat(w) > 0);
 
@@ -229,15 +258,34 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
           <div style={{ flex: 1 }}>
-            <h1 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: C.text }}>Emballage</h1>
-            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>Commandes prêtes à expédier</div>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: C.text }}>Emballage</h2>
+            <p style={{ margin: 0, fontSize: 12, color: C.textMuted, marginTop: 2 }}>{pickings.length} commande{pickings.length > 1 ? "s" : ""} prête{pickings.length > 1 ? "s" : ""} à expédier</p>
           </div>
-          <button onClick={loadList} style={{ background: "none", border: "none", cursor: "pointer", padding: 6, color: C.primary }}>
+          <button onClick={loadList} disabled={loadingList} style={{ background: "none", border: "none", cursor: "pointer", padding: 6, color: C.primary }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
           </button>
         </div>
 
         <div style={{ padding: "12px 14px" }}>
+          {/* Scan bar */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <input
+              style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.card, color: C.text, fontWeight: 600, outline: "none" }}
+              value={scanCode}
+              onChange={e => { setScanCode(e.target.value); if (scanError) setScanError(""); }}
+              onKeyDown={e => { if (e.key === "Enter" && scanCode.trim()) handleScan(scanCode); }}
+              placeholder="Scanner WH/OUT/... pour ouvrir directement"
+            />
+            <button
+              onClick={() => { if (scanCode.trim()) handleScan(scanCode); }}
+              style={{ padding: "11px 16px", background: C.text, color: "#fff", border: "none", borderRadius: 9, fontWeight: 700, fontSize: 14, cursor: "pointer", whiteSpace: "nowrap" as const }}>
+              →
+            </button>
+          </div>
+          {scanError && (
+            <div style={{ marginBottom: 10, padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 13, color: C.danger, fontWeight: 600 }}>{scanError}</div>
+          )}
+
           {loadingList && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement…</div>}
           {!loadingList && error && (
             <div style={{ background: "#fef2f2", border: `1px solid #fecaca`, borderRadius: 10, padding: 14, color: C.danger, fontSize: 14 }}>{error}</div>
@@ -250,19 +298,32 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           )}
           {!loadingList && pickings.map(p => (
             <div key={p.id}
-              onClick={() => openDetail(p.id, p.name, p.partnerName, p.origin)}
-              style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px", marginBottom: 10, cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                <span style={{ fontWeight: 700, fontSize: 15, color: C.text }}>{p.name}</span>
-                <span style={{ fontSize: 11, fontWeight: 600, color: C.teal, background: C.teal + "18", borderRadius: 6, padding: "2px 8px" }}>Prêt</span>
+              style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 10, boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+              {/* Row 1: name + status */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: C.text, letterSpacing: -0.3 }}>{p.name}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.teal, background: C.teal + "18", borderRadius: 6, padding: "2px 8px" }}>Prêt</span>
               </div>
-              {p.partnerName && <div style={{ fontSize: 13, fontWeight: 500, color: C.text, marginBottom: 3 }}>{p.partnerName}</div>}
-              {p.origin && <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 3 }}>Réf : {p.origin}</div>}
-              {p.carrierId && <div style={{ fontSize: 12, color: C.primary, marginBottom: 3 }}>🚚 {p.carrierId}</div>}
-              <div style={{ display: "flex", gap: 10, fontSize: 12, color: C.textMuted, marginTop: 4 }}>
-                <span>{p.lineCount} article{p.lineCount > 1 ? "s" : ""}</span>
-                {p.date && <><span>•</span><span>{new Date(p.date).toLocaleDateString("fr-FR")}</span></>}
+              {/* Row 2: client */}
+              {p.partnerName && <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 4 }}>{p.partnerName}</div>}
+              {/* Row 3: origin + carrier chip */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" as const }}>
+                {p.origin && <span style={{ fontSize: 11, color: C.textMuted }}>{p.origin}</span>}
+                {p.carrierId && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", padding: "1px 7px", borderRadius: 5 }}>{p.carrierId}</span>
+                )}
               </div>
+              {/* Row 4: articles count + date */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <span style={{ fontSize: 11, color: C.textMuted }}>{p.lineCount} article{p.lineCount > 1 ? "s" : ""}</span>
+                {p.date && <span style={{ fontSize: 11, color: C.textMuted }}>{new Date(p.date).toLocaleDateString("fr-FR")}</span>}
+              </div>
+              {/* Action button */}
+              <button
+                onClick={() => openDetail(p.id, p.name, p.partnerName, p.origin)}
+                style={{ width: "100%", padding: "11px 0", background: C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                Emballer
+              </button>
             </div>
           ))}
         </div>

@@ -73,9 +73,11 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
   const [validating,   setValidating]   = useState(false);
   const [transferDone, setTransferDone] = useState<TransferResult | null>(null);
   const [error,        setError]        = useState("");
+  const [scanCode,     setScanCode]     = useState("");
+  const [scanError,    setScanError]    = useState("");
 
   // ── Load returns ────────────────────────────────────────────────────────────
-  const loadReturns = useCallback(async () => {
+  const loadReturns = useCallback(async (): Promise<ReturnPicking[]> => {
     setLoading(true);
     setError("");
     try {
@@ -231,8 +233,10 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
       });
 
       setReturns(result);
+      return result;
     } catch (e: any) {
       setError(e.message);
+      return [];
     } finally {
       setLoading(false);
     }
@@ -490,6 +494,27 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
     throw new Error("Emplacement stock par défaut introuvable.");
   };
 
+  // ── Scan by name ────────────────────────────────────────────────────────────
+  const handleScan = async (code: string) => {
+    const trimmed = code.trim().toUpperCase();
+    if (!trimmed) return;
+    setScanError("");
+    // Search in already-loaded list first
+    const found = returns.find(r => r.name.toUpperCase() === trimmed);
+    if (found) { openReturn(found); setScanCode(""); return; }
+    // Not in list — reload and search fresh data
+    try {
+      const fresh = await loadReturns();
+      const foundFresh = fresh.find(r => r.name.toUpperCase() === trimmed);
+      if (foundFresh) {
+        openReturn(foundFresh);
+        setScanCode("");
+      } else {
+        setScanError(`"${trimmed}" introuvable ou déjà traité`);
+      }
+    } catch (e: any) { setScanError((e as Error).message); }
+  };
+
   // ── State label ─────────────────────────────────────────────────────────────
   const stateLabel = (s: string) => {
     if (s === "assigned") return { label: "Prêt", color: C.success };
@@ -511,24 +536,41 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
           <div style={{ flex: 1 }}>
-            <h1 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: C.text }}>Retours clients</h1>
-            <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>WH/RET/ — bons de retour à traiter</div>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: C.text }}>Retours clients</h2>
+            <p style={{ margin: 0, fontSize: 12, color: C.textMuted, marginTop: 2 }}>{returns.length} retour{returns.length > 1 ? "s" : ""} en attente</p>
           </div>
-          <button onClick={loadReturns} style={{ background: "none", border: "none", cursor: "pointer", padding: 6, color: C.primary }}>
+          <button onClick={() => loadReturns()} disabled={loading} style={{ background: "none", border: "none", cursor: "pointer", padding: 6, color: C.primary }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
           </button>
         </div>
 
         <div style={{ padding: "12px 14px" }}>
-          {loading && (
-            <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement…</div>
+          {/* Scan bar */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <input
+              style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.card, color: C.text, fontWeight: 600, outline: "none" }}
+              value={scanCode}
+              onChange={e => { setScanCode(e.target.value); if (scanError) setScanError(""); }}
+              onKeyDown={e => { if (e.key === "Enter" && scanCode.trim()) handleScan(scanCode); }}
+              placeholder="Scanner WH/RET/... pour ouvrir directement"
+            />
+            <button
+              onClick={() => { if (scanCode.trim()) handleScan(scanCode); }}
+              style={{ padding: "11px 16px", background: C.text, color: "#fff", border: "none", borderRadius: 9, fontWeight: 700, fontSize: 14, cursor: "pointer", whiteSpace: "nowrap" as const }}>
+              →
+            </button>
+          </div>
+          {scanError && (
+            <div style={{ marginBottom: 10, padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 13, color: C.danger, fontWeight: 600 }}>{scanError}</div>
           )}
+
+          {loading && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement…</div>}
           {!loading && error && (
             <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, color: C.danger, fontSize: 14 }}>{error}</div>
           )}
           {!loading && !error && returns.length === 0 && (
             <div style={{ textAlign: "center", padding: 50 }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>↩️</div>
               <div style={{ color: C.textMuted, fontSize: 15 }}>Aucun retour en attente</div>
             </div>
           )}
@@ -538,26 +580,29 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
             const totalQty = ret.lines.reduce((s, l) => s + l.demandQty, 0);
             return (
               <div key={ret.id}
-                onClick={() => openReturn(ret)}
-                style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px", marginBottom: 10, cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                  <span style={{ fontWeight: 700, fontSize: 15, color: C.text }}>{ret.name}</span>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: st.color, background: st.color + "18", borderRadius: 6, padding: "2px 8px" }}>{st.label}</span>
+                style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 10, boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+                {/* Row 1: name + state badge */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ fontSize: 18, fontWeight: 800, color: C.text, letterSpacing: -0.3 }}>{ret.name}</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: st.color, background: st.color + "18", borderRadius: 6, padding: "2px 8px" }}>{st.label}</span>
                 </div>
-                {ret.partnerName && (
-                  <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 4 }}>
-                    <span style={{ fontWeight: 500, color: C.text }}>{ret.partnerName}</span>
-                  </div>
-                )}
-                {ret.origin && (
-                  <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 4 }}>Origine : {ret.origin}</div>
-                )}
-                <div style={{ display: "flex", gap: 12, fontSize: 12, color: C.textMuted, marginTop: 6 }}>
-                  <span>{totalLines} article{totalLines > 1 ? "s" : ""}</span>
-                  <span>•</span>
-                  <span>{totalQty} unité{totalQty > 1 ? "s" : ""} attendues</span>
-                  {ret.date && <><span>•</span><span>{new Date(ret.date).toLocaleDateString("fr-FR")}</span></>}
+                {/* Row 2: client */}
+                {ret.partnerName && <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 4 }}>{ret.partnerName}</div>}
+                {/* Row 3: origin chip */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" as const }}>
+                  {ret.origin && <span style={{ fontSize: 11, color: C.textMuted }}>{ret.origin}</span>}
                 </div>
+                {/* Row 4: articles + date */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <span style={{ fontSize: 11, color: C.textMuted }}>{totalLines} article{totalLines > 1 ? "s" : ""} · {totalQty} unité{totalQty > 1 ? "s" : ""}</span>
+                  {ret.date && <span style={{ fontSize: 11, color: C.textMuted }}>{new Date(ret.date).toLocaleDateString("fr-FR")}</span>}
+                </div>
+                {/* Action button */}
+                <button
+                  onClick={() => openReturn(ret)}
+                  style={{ width: "100%", padding: "11px 0", background: C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                  Traiter
+                </button>
               </div>
             );
           })}
