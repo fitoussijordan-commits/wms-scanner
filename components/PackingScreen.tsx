@@ -655,7 +655,13 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, fontWeight: 600, outline: "none" }}
           value={scanCode}
           onChange={e => { setScanCode(e.target.value); if (scanError) setScanError(""); }}
-          onKeyDown={e => { if (e.key === "Enter" && scanCode.trim()) handleScan(scanCode); }}
+          onKeyDown={e => {
+            if (e.key === "Enter") {
+              // Lire la valeur DOM directement (évite la closure périmée quand le scanner tape vite)
+              const val = (e.currentTarget as HTMLInputElement).value;
+              if (val.trim()) { setScanCode(val); handleScan(val); }
+            }
+          }}
           placeholder="Scanner WH/OUT/... ou numéro S (ex: S66191)"
         />
         <button onClick={() => { if (scanCode.trim()) handleScan(scanCode); }}
