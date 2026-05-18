@@ -11,6 +11,7 @@ import SupplierImportScreen from "@/components/SupplierImportScreen";
 import ArticleCreatorScreen from "@/components/ArticleCreatorScreen";
 import FreeScanScreen from "@/components/FreeScanScreen";
 import ReturnsScreen from "@/components/ReturnsScreen";
+import PackingScreen from "@/components/PackingScreen";
 
 
 // ── Helpers PDF ─────────────────────────────────────────────────────────────────
@@ -999,7 +1000,8 @@ export default function Page() {
     setIsDark(val);
   };
 
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing">("login");
+  const [packingPickingId, setPackingPickingId] = useState<number | null>(null);
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -2154,6 +2156,53 @@ export default function Page() {
     setLoading(false);
   };
 
+  // Valide la préparation PUIS ouvre l'écran emballage sur le OUT lié
+  const validateAndPack = async () => {
+    if (!session || !selectedPicking) return;
+    setLoading(true); setError("");
+    try {
+      Object.keys(debounceTimers.current).forEach(k => {
+        clearTimeout(debounceTimers.current[Number(k)]);
+        delete debounceTimers.current[Number(k)];
+      });
+      showToast("Synchronisation...");
+      const ids: number[] = selectedPicking._groupIds || [selectedPicking.id];
+      const localLines = pickingMoveLinesRef.current;
+      const writeErrors: string[] = [];
+      await Promise.all(localLines.map(async (local: any) => {
+        const localQty   = qtyOverridesRef.current?.[local.id] ?? local.qty_done ?? 0;
+        const localLotId = local.lot_id?.[0] || null;
+        if (localQty > 0) {
+          try { await odoo.setMoveLineQtyDone(session, local.id, localQty, localLotId); }
+          catch (e: any) { writeErrors.push(`${local.product_id?.[1] || local.id}: ${e.message}`); }
+        }
+      }));
+      if (writeErrors.length > 0) {
+        setError(`Erreur sync — ${writeErrors[0]}`); showToast("⚠️ Erreur sync — validation annulée"); setLoading(false); return;
+      }
+      for (const id of ids) { await odoo.validatePickingStrict(session, id); }
+      vibrateSuccess();
+      showToast(`✅ ${selectedPicking.name} validé — ouverture emballage...`);
+
+      // Trouver le OUT picking lié via group_id
+      const groupId = selectedPicking.group_id?.[0] ?? null;
+      let outPickingId: number | null = null;
+      if (groupId) {
+        const outs = await odoo.searchRead(session, "stock.picking",
+          [["group_id", "=", groupId], ["picking_type_code", "=", "outgoing"],
+           ["state", "in", ["assigned", "confirmed", "waiting", "partially_available"]]],
+          ["id"], 1);
+        if (outs.length) outPickingId = outs[0].id;
+      }
+
+      setSelectedPicking(null);
+      await loadPickings();
+      setPackingPickingId(outPickingId);
+      setScreen("packing");
+    } catch (e: any) { setError(e.message); vibrateError(); }
+    setLoading(false);
+  };
+
   const checkPickingAvailability = async (pickingId: number) => {
     if (!session) return;
     setLoading(true);
@@ -2239,6 +2288,7 @@ export default function Page() {
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Transfert", color: "#2563eb", onClick: () => { resetTransfer(); setScreen("transfer"); }, badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>, label: "Préparation", color: "#7c3aed", onClick: () => { loadPickings(); setScreen("prep"); }, badge: pickings.length > 0 ? pickings.length : null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>, label: "En attente", color: "#f59e0b", onClick: () => setScreen("waitingOrders"), badge: badgeWaiting },
+                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Emballage", color: "#0d9488", onClick: () => { setPackingPickingId(null); setScreen("packing"); }, badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Arrivage", color: "#059669", onClick: () => setScreen("arrival"), badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>, label: "Palettes WMS", color: "#0f766e", onClick: () => setScreen("palettes"), badge: null },
                 { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>, label: "E-shop", color: "#db2777", onClick: () => setScreen("eshop"), badge: badgeEshop },
@@ -2595,6 +2645,7 @@ export default function Page() {
             onAdjustQty={adjustMoveLineQty}
             qtyOverrides={qtyOverrides}
             onValidate={validatePrepPicking}
+            onValidateAndPack={validateAndPack}
             onBack={() => {
               // Sauvegarder la progression dans le cache avant de quitter
               const lines = pickingMoveLinesRef.current.filter((ml: any) => (ml.reserved_uom_qty || 0) > 0);
@@ -2647,6 +2698,14 @@ export default function Page() {
         )}
         {screen === "returns" && session && (
           <ReturnsScreen session={session} onBack={goHome} onToast={showToast} />
+        )}
+        {screen === "packing" && session && (
+          <PackingScreen
+            session={session}
+            onBack={() => { setPackingPickingId(null); goHome(); }}
+            onToast={showToast}
+            initialPickingId={packingPickingId ?? undefined}
+          />
         )}
         {screen === "reprintLabel" && session && (
           <ReprintLabelScreen session={session} onBack={goHome} onToast={showToast} />
@@ -9141,7 +9200,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
 // ============================================
 // PREPARATION DETAIL SCREEN
 // ============================================
-function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, qtyOverrides, onValidate, onBack, onReport, session }: any) {
+function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, qtyOverrides, onValidate, onValidateAndPack, onBack, onReport, session }: any) {
   // ── qty helper: overrides take priority over moveLines data ──
   const getQty = (ml: any) => qtyOverrides?.[ml.id] !== undefined ? qtyOverrides[ml.id] : (ml.qty_done || 0);
 
@@ -9390,6 +9449,16 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         }}
         disabled={loading || doneLines === 0}
       />
+      {onValidateAndPack && allDone && (
+        <BigButton
+          icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>}
+          label={loading ? "Envoi..." : "Valider + Emballer"}
+          sub="Valide la prépa et ouvre l'emballage"
+          color="#0d9488"
+          onClick={() => { if (allDone) { onValidateAndPack(); return; } }}
+          disabled={loading}
+        />
+      )}
     </>
   );
 
@@ -9675,6 +9744,16 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         }}
         disabled={loading || doneLines === 0}
       />
+      {onValidateAndPack && allDone && (
+        <BigButton
+          icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>}
+          label={loading ? "Envoi..." : "Valider + Emballer"}
+          sub="Valide la prépa et ouvre l'emballage"
+          color="#0d9488"
+          onClick={() => { if (allDone) { onValidateAndPack(); return; } }}
+          disabled={loading}
+        />
+      )}
 
       {/* ── Modale backorder warning ── */}
       {showBackorderWarning && (() => {

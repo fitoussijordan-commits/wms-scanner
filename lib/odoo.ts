@@ -906,6 +906,129 @@ export async function createMultiDestTransfer(
   return pickingId;
 }
 
+// ============================================
+// EMBALLAGE — Pack & Ship
+// ============================================
+
+/** OUT pickings en état "assigned" prêts à emballer (stock disponible en Sortie) */
+export async function getPackablePickings(session: OdooSession): Promise<any[]> {
+  return searchRead(session, "stock.picking",
+    [["picking_type_code", "=", "outgoing"], ["state", "=", "assigned"]],
+    ["id", "name", "state", "origin", "partner_id", "scheduled_date", "date_deadline",
+     "move_ids_without_package", "carrier_id", "number_of_packages", "shipping_weight"],
+    200, "date_deadline asc, scheduled_date asc, id asc"
+  );
+}
+
+/** Trouve le OUT picking lié à un PICK picking via group_id */
+export async function findOutPickingFromPick(session: OdooSession, pickId: number): Promise<any | null> {
+  const [pick] = await searchRead(session, "stock.picking", [["id", "=", pickId]], ["group_id"], 1);
+  if (!pick?.group_id) return null;
+  const groupId = Array.isArray(pick.group_id) ? pick.group_id[0] : pick.group_id;
+  const outs = await searchRead(session, "stock.picking",
+    [["group_id", "=", groupId], ["picking_type_code", "=", "outgoing"],
+     ["state", "in", ["assigned", "confirmed", "waiting", "partially_available"]]],
+    ["id", "name", "state", "origin", "partner_id", "scheduled_date", "date_deadline",
+     "carrier_id", "move_ids_without_package"],
+    1
+  );
+  return outs[0] || null;
+}
+
+/** Workflow complet emballage + expédition pour un OUT picking.
+ *  1. action_assign  2. qty_done = réservé  3. crée N colis avec poids
+ *  4. valide  5. send_to_shipper  6. retourne les pièces jointes PDF (étiquettes)
+ */
+export async function packAndShipOut(
+  session: OdooSession,
+  outPickingId: number,
+  packageWeights: number[],
+  printOptions?: { blPrinterId?: number; labelPrinterId?: number; blReportName?: string }
+): Promise<{ pickingName: string; labelAttachments: { id: number; name: string; datas: string }[] }> {
+  const nPackages = packageWeights.length;
+  if (!nPackages) throw new Error("Au moins un colis requis");
+
+  // 1. Snapshot des pièces jointes existantes
+  const before = await searchRead(session, "ir.attachment",
+    [["res_model", "=", "stock.picking"], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
+    ["id"], 100);
+  const existingIds = new Set(before.map((a: any) => a.id));
+
+  // 2. S'assurer que le stock est réservé
+  await callMethod(session, "stock.picking", "action_assign", [[outPickingId]]);
+
+  // 3. Set qty_done = reserved sur toutes les move lines
+  const moveLines = await searchRead(session, "stock.move.line",
+    [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
+    ["id", "reserved_uom_qty"], 500);
+  await Promise.all(moveLines
+    .filter((ml: any) => ml.reserved_uom_qty > 0)
+    .map((ml: any) => write(session, "stock.move.line", [ml.id], { qty_done: ml.reserved_uom_qty }))
+  );
+
+  // 4. Créer N colis avec leurs poids individuels
+  const packageIds: number[] = [];
+  for (const weight of packageWeights) {
+    const pkgId = await create(session, "stock.quant.package", { shipping_weight: weight }) as number;
+    packageIds.push(pkgId);
+  }
+
+  // 5. Assigner toutes les move lines au colis 1 (result_package_id)
+  if (moveLines.length && packageIds[0]) {
+    const mlIds = moveLines.map((ml: any) => ml.id);
+    await call(session, "/web/dataset/call_kw", {
+      model: "stock.move.line", method: "write",
+      args: [mlIds, { result_package_id: packageIds[0] }], kwargs: {},
+    });
+  }
+
+  // 6. Colis 2..N → stock.package.level (lien picking sans créer de ligne fantôme)
+  for (let i = 1; i < packageIds.length; i++) {
+    try {
+      await create(session, "stock.package.level", {
+        package_id: packageIds[i], picking_id: outPickingId, is_done: true,
+      });
+    } catch { /* version Odoo sans stock.package.level — le number_of_packages suffit */ }
+  }
+
+  // 7. Mettre à jour nombre de colis + poids total sur le picking
+  const totalWeight = packageWeights.reduce((s, w) => s + w, 0);
+  await write(session, "stock.picking", [outPickingId], {
+    number_of_packages: nPackages,
+    shipping_weight: totalWeight,
+  });
+
+  // 8. Valider le picking OUT
+  await validatePicking(session, outPickingId);
+
+  // 9. Envoyer au transporteur (génère étiquettes TNT)
+  await callMethod(session, "stock.picking", "send_to_shipper", [[outPickingId]]);
+
+  // 10. Attendre la génération des pièces jointes
+  await new Promise(r => setTimeout(r, 2500));
+  const after = await searchRead(session, "ir.attachment",
+    [["res_model", "=", "stock.picking"], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
+    ["id", "name", "datas", "create_date"], 100);
+  const newAttachments = after.filter((a: any) => !existingIds.has(a.id));
+  const labels = newAttachments.length > 0 ? newAttachments : [];
+
+  // 11. Nom du picking
+  const [pick] = await searchRead(session, "stock.picking", [["id", "=", outPickingId]], ["name"], 1);
+  const pickingName = pick?.name || `OUT-${outPickingId}`;
+
+  // 12. Imprimer le BL si printerId fourni
+  if (printOptions?.blPrinterId) {
+    try {
+      await printPickingReportDirect(session, outPickingId, printOptions.blPrinterId, {
+        reportName: printOptions.blReportName || getSavedPrepReportName(),
+        title: `BL_${pickingName}.pdf`,
+      });
+    } catch (e) { console.warn("Impression BL échouée:", e); }
+  }
+
+  return { pickingName, labelAttachments: labels };
+}
+
 // Recherche les OUT validés (state=done) par nom/origine/partenaire
 export async function searchDoneOutPickings(session: OdooSession, query: string): Promise<any[]> {
   const domain: any[] = [["state", "=", "done"], ["picking_type_code", "=", "outgoing"]];
