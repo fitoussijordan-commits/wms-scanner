@@ -107,7 +107,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
       if (!typeIds.length) {
         setError("Aucun type d'opération retour (WH/RET/) trouvé dans Odoo.");
         setLoading(false);
-        return;
+        return [];
       }
 
       // 2. Load pickings
@@ -125,7 +125,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
       if (!pickings.length) {
         setReturns([]);
         setLoading(false);
-        return;
+        return [];
       }
 
       // 3. Load moves for all pickings
