@@ -9,6 +9,7 @@ import type { OdooSession } from "@/lib/odoo";
 // ── Clés localStorage session-only (jamais syncées Supabase) ──────────────────
 const LS_BL_PRINTER    = "wms_packing_bl_printer";
 const LS_LABEL_PRINTER = "wms_packing_label_printer";
+const LS_BL_REPORT     = "wms_packing_bl_report";   // template rapport BL (session-local)
 
 function readLocalPrinter(key: string): number | null {
   try { const v = localStorage.getItem(key); return v ? parseInt(v, 10) : null; } catch { return null; }
@@ -16,8 +17,18 @@ function readLocalPrinter(key: string): number | null {
 function saveLocalPrinter(key: string, id: number | null) {
   try { if (id === null) localStorage.removeItem(key); else localStorage.setItem(key, String(id)); } catch {}
 }
+function readLocalStr(key: string, fallback: string): string {
+  try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+}
+function saveLocalStr(key: string, val: string) {
+  try { localStorage.setItem(key, val); } catch {}
+}
 
-// Reprend exactement les variables CSS du thème global
+/** Convertit "4,6" ou "4.6" en nombre float */
+function parseWeight(s: string): number {
+  return parseFloat(s.replace(",", ".")) || 0;
+}
+
 const C = {
   bg:        "#f9fafb",
   card:      "#ffffff",
@@ -64,11 +75,23 @@ interface DoneResult {
   labelAttachments: { id: number; name: string; datas: string }[];
 }
 
+interface PickingReport { id: number; name: string; report_name: string; }
+
 interface Props {
   session:          OdooSession;
   onBack:           () => void;
   onToast:          (msg: string, type?: "success" | "error" | "info") => void;
   initialPickingId?: number;
+}
+
+/** Vérifie si un numéro S scanné correspond à un champ origin (qui peut contenir "S66191, S66192") */
+function matchOrigin(origin: string, query: string): boolean {
+  const up = origin.toUpperCase();
+  const q  = query.toUpperCase().trim();
+  if (!q) return false;
+  if (up === q) return true;
+  // Split sur virgule / espace pour gérer plusieurs SO
+  return up.split(/[,\s]+/).map(s => s.trim()).some(s => s === q);
 }
 
 export default function PackingScreen({ session, onBack, onToast, initialPickingId }: Props) {
@@ -90,11 +113,13 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   const [scanCode,       setScanCode]       = useState("");
   const [scanError,      setScanError]      = useState("");
 
-  // ── Imprimantes session-local ────────────────────────────────────────────────
+  // ── Imprimantes + template session-local ─────────────────────────────────────
   const [blPrinterId,      setBlPrinterId]      = useState<number | null>(() => readLocalPrinter(LS_BL_PRINTER));
   const [labelPrinterId,   setLabelPrinterId]   = useState<number | null>(() => readLocalPrinter(LS_LABEL_PRINTER));
+  const [blReportName,     setBlReportName]     = useState<string>(() => readLocalStr(LS_BL_REPORT, "stock.report_picking"));
   const [showPrinterModal, setShowPrinterModal] = useState(false);
   const [printerList,      setPrinterList]      = useState<pn.PrintNodePrinter[]>([]);
+  const [reportList,       setReportList]       = useState<PickingReport[]>([]);
   const [loadingPrinters,  setLoadingPrinters]  = useState(false);
   const [printerError,     setPrinterError]     = useState("");
 
@@ -123,7 +148,8 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         date:        p.date_deadline || p.scheduled_date || "",
       }));
       setPickings(mapped);
-    } catch (e: any) { setError(e.message); }
+      return mapped;
+    } catch (e: any) { setError(e.message); return []; }
     finally { setLoadingList(false); }
   }, [session]);
 
@@ -189,14 +215,20 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Charger imprimantes PrintNode ────────────────────────────────────────────
+  // ── Charger imprimantes + templates PrintNode ────────────────────────────────
   const openPrinterModal = async () => {
     setShowPrinterModal(true);
     setPrinterError("");
-    if (printerList.length) return;
+    if (printerList.length && reportList.length) return;   // déjà chargé
     setLoadingPrinters(true);
-    try { setPrinterList(await pn.listPrinters()); }
-    catch (e: any) { setPrinterError(e.message); }
+    try {
+      const [printers, reports] = await Promise.all([
+        pn.listPrinters(),
+        odoo.getPickingReportList(session),
+      ]);
+      setPrinterList(printers);
+      setReportList(reports);
+    } catch (e: any) { setPrinterError(e.message); }
     finally { setLoadingPrinters(false); }
   };
 
@@ -208,29 +240,37 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
 
     // 1. Cherche dans la liste déjà chargée (par nom exact)
     const foundByName = pickings.find(p => p.name.toUpperCase() === trimmed);
-    if (foundByName) { openDetail(foundByName.id, foundByName.name, foundByName.partnerName, foundByName.origin); setScanCode(""); return; }
+    if (foundByName) {
+      openDetail(foundByName.id, foundByName.name, foundByName.partnerName, foundByName.origin);
+      setScanCode(""); return;
+    }
 
-    // 2. Cherche dans la liste par origin (numéro S)
-    const foundByOrigin = pickings.find(p => p.origin.toUpperCase() === trimmed || p.origin.toUpperCase().includes(trimmed));
-    if (foundByOrigin) { openDetail(foundByOrigin.id, foundByOrigin.name, foundByOrigin.partnerName, foundByOrigin.origin); setScanCode(""); return; }
+    // 2. Cherche dans la liste par origin (numéro S — gère "S66191, S66192")
+    const foundByOrigin = pickings.find(p => matchOrigin(p.origin, trimmed));
+    if (foundByOrigin) {
+      openDetail(foundByOrigin.id, foundByOrigin.name, foundByOrigin.partnerName, foundByOrigin.origin);
+      setScanCode(""); return;
+    }
 
-    // 3. Recherche Odoo — par nom WH/OUT/...
+    // 3. Recherche Odoo — on évite picking_type_code (champ relaté, pas toujours filtrable)
     try {
-      // Par nom exact
-      let results = await odoo.searchRead(session, "stock.picking",
+      // 3a. Par nom exact
+      let results: any[] = await odoo.searchRead(session, "stock.picking",
         [["name", "=", trimmed], ["state", "=", "assigned"]],
         ["id", "name", "origin", "partner_id", "carrier_id", "move_ids_without_package", "date_deadline", "scheduled_date"], 1);
 
-      // Par origin (numéro S)
+      // 3b. Par origin (numéro S) — pas de filtre picking_type_code, on filtre sur le nom ensuite
       if (!results.length) {
-        results = await odoo.searchRead(session, "stock.picking",
-          [["origin", "ilike", trimmed], ["state", "=", "assigned"],
-           ["picking_type_code", "=", "outgoing"]],
-          ["id", "name", "origin", "partner_id", "carrier_id", "move_ids_without_package", "date_deadline", "scheduled_date"], 5);
-        // Prend le meilleur match (origin exact en priorité)
-        const exact = results.find((r: any) => (r.origin || "").toUpperCase() === trimmed);
-        if (exact) results = [exact];
-        else if (results.length > 1) results = [results[0]]; // premier résultat
+        const byOrigin: any[] = await odoo.searchRead(session, "stock.picking",
+          [["origin", "ilike", trimmed], ["state", "in", ["assigned", "partially_available"]]],
+          ["id", "name", "origin", "partner_id", "carrier_id", "move_ids_without_package", "date_deadline", "scheduled_date"], 20);
+
+        // Garder uniquement les OUT (nom contient /OUT/)
+        const outOnly = byOrigin.filter((r: any) => (r.name || "").includes("/OUT/"));
+
+        // Priorité : origin exact ou qui commence par le S scanné
+        const exact = outOnly.find((r: any) => matchOrigin(r.origin || "", trimmed));
+        results = exact ? [exact] : outOnly.slice(0, 1);
       }
 
       if (results.length) {
@@ -238,27 +278,30 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         openDetail(p.id, p.name, p.partner_id ? p.partner_id[1] : "", p.origin || "");
         setScanCode("");
       } else {
-        setScanError(`"${trimmed}" introuvable — scanne WH/OUT/... ou le numéro S`);
+        setScanError(`"${trimmed}" introuvable — scanne WH/OUT/... ou le numéro S (ex: S66191)`);
       }
-    } catch (e: any) { setScanError(e.message); }
+    } catch (e: any) { setScanError((e as Error).message); }
   }, [pickings, session, openDetail]);
 
   // ── Validate & Ship ──────────────────────────────────────────────────────────
   const validate = async () => {
     if (!selectedId) return;
-    const parsedWeights = weights.map(w => parseFloat(w) || 0);
+    // Accepte virgule française (4,6 → 4.6)
+    const parsedWeights = weights.map(w => parseWeight(w));
     if (parsedWeights.some(w => w <= 0)) { onToast("Renseignez le poids de chaque colis", "error"); return; }
     setPacking(true); setError("");
     try {
       const result = await odoo.packAndShipOut(session, selectedId, parsedWeights, {
         blPrinterId:    blPrinterId ?? undefined,
         labelPrinterId: labelPrinterId ?? undefined,
-        blReportName:   odoo.getSavedPrepReportName(),
+        blReportName:   blReportName,
       });
 
+      // Imprimer uniquement le bon nombre d'étiquettes (1 par colis)
       let labelPrinted = false;
       if (labelPrinterId && result.labelAttachments.length > 0) {
-        for (const att of result.labelAttachments) {
+        const toprint = result.labelAttachments.slice(0, nPackages);
+        for (const att of toprint) {
           if (att.datas) {
             const r = await pn.printPdfLabel(labelPrinterId, att.datas, att.name || "Étiquette TNT");
             if (r.success) labelPrinted = true;
@@ -280,14 +323,14 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     } finally { setPacking(false); }
   };
 
-  const totalWeight    = weights.reduce((s, w) => s + (parseFloat(w) || 0), 0);
-  const allWeightsFilled = weights.every(w => parseFloat(w) > 0);
+  const totalWeight      = weights.reduce((s, w) => s + parseWeight(w), 0);
+  const allWeightsFilled = weights.every(w => parseWeight(w) > 0);
 
-  // ── Modal sélection imprimante ───────────────────────────────────────────────
+  // ── Modal sélection imprimante + template ────────────────────────────────────
   const PrinterModal = () => (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: C.white, borderRadius: 16, padding: 24, width: "100%", maxWidth: 400 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+      <div style={{ background: C.white, borderRadius: 16, padding: 24, width: "100%", maxWidth: 420, maxHeight: "90vh", overflowY: "auto" as const }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>🖨️ Imprimantes Emballage</div>
           <button onClick={() => setShowPrinterModal(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.textMuted, lineHeight: 1 }}>✕</button>
         </div>
@@ -295,52 +338,84 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           Ces réglages sont <strong>propres à ce poste</strong> (stockés localement, non partagés).
         </div>
 
-        {loadingPrinters && <div style={{ textAlign: "center", padding: 20, color: C.textMuted }}>Chargement des imprimantes…</div>}
+        {loadingPrinters && <div style={{ textAlign: "center", padding: 20, color: C.textMuted }}>Chargement…</div>}
         {printerError && <div style={{ color: C.danger, fontSize: 13, marginBottom: 12 }}>{printerError}</div>}
 
-        {!loadingPrinters && printerList.length > 0 && (<>
-          {/* BL */}
+        {!loadingPrinters && (<>
+          {/* Template BL */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
-              Bon de livraison (BL)
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 6 }}>
+              Template bon de livraison (BL)
             </div>
-            <select
-              value={blPrinterId ?? ""}
-              onChange={e => {
-                const v = e.target.value ? parseInt(e.target.value, 10) : null;
-                setBlPrinterId(v); saveLocalPrinter(LS_BL_PRINTER, v);
-              }}
-              style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${blPrinterId ? C.teal : C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.bg, color: C.text, outline: "none" }}>
-              <option value="">— Aucune (pas d'impression BL) —</option>
-              {printerList.map(pr => (
-                <option key={pr.id} value={pr.id}>{pr.name} ({pr.computer.name})</option>
-              ))}
-            </select>
+            {reportList.length === 0 ? (
+              <div style={{ fontSize: 13, color: C.textMuted }}>Aucun rapport disponible</div>
+            ) : (
+              <select
+                value={blReportName}
+                onChange={e => { setBlReportName(e.target.value); saveLocalStr(LS_BL_REPORT, e.target.value); }}
+                style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${C.teal}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit", background: C.bg, color: C.text, outline: "none" }}>
+                <option value="stock.report_picking">Standard (stock.report_picking)</option>
+                {reportList.map(r => (
+                  <option key={r.id} value={r.report_name}>{r.name}</option>
+                ))}
+              </select>
+            )}
           </div>
 
-          {/* Étiquette TNT */}
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
-              Étiquette transporteur (TNT / Colissimo…)
+          {/* Imprimante BL */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 6 }}>
+              Imprimante BL
             </div>
-            <select
-              value={labelPrinterId ?? ""}
-              onChange={e => {
-                const v = e.target.value ? parseInt(e.target.value, 10) : null;
-                setLabelPrinterId(v); saveLocalPrinter(LS_LABEL_PRINTER, v);
-              }}
-              style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${labelPrinterId ? C.teal : C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.bg, color: C.text, outline: "none" }}>
-              <option value="">— Aucune (pas d'impression étiquette) —</option>
-              {printerList.map(pr => (
-                <option key={pr.id} value={pr.id}>{pr.name} ({pr.computer.name})</option>
-              ))}
-            </select>
+            {printerList.length === 0 ? (
+              <div style={{ fontSize: 13, color: C.textMuted }}>Aucune imprimante PrintNode</div>
+            ) : (
+              <select
+                value={blPrinterId ?? ""}
+                onChange={e => {
+                  const v = e.target.value ? parseInt(e.target.value, 10) : null;
+                  setBlPrinterId(v); saveLocalPrinter(LS_BL_PRINTER, v);
+                }}
+                style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${blPrinterId ? C.teal : C.border}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit", background: C.bg, color: C.text, outline: "none" }}>
+                <option value="">— Aucune (pas d'impression BL) —</option>
+                {printerList.map(pr => (
+                  <option key={pr.id} value={pr.id}>{pr.name} ({pr.computer.name})</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Imprimante étiquette TNT */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 6 }}>
+              Imprimante étiquette transporteur
+            </div>
+            {printerList.length === 0 ? (
+              <div style={{ fontSize: 13, color: C.textMuted }}>Aucune imprimante PrintNode</div>
+            ) : (
+              <select
+                value={labelPrinterId ?? ""}
+                onChange={e => {
+                  const v = e.target.value ? parseInt(e.target.value, 10) : null;
+                  setLabelPrinterId(v); saveLocalPrinter(LS_LABEL_PRINTER, v);
+                }}
+                style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${labelPrinterId ? C.teal : C.border}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit", background: C.bg, color: C.text, outline: "none" }}>
+                <option value="">— Aucune (pas d'impression étiquette) —</option>
+                {printerList.map(pr => (
+                  <option key={pr.id} value={pr.id}>{pr.name} ({pr.computer.name})</option>
+                ))}
+              </select>
+            )}
           </div>
 
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => { setBlPrinterId(null); saveLocalPrinter(LS_BL_PRINTER, null); setLabelPrinterId(null); saveLocalPrinter(LS_LABEL_PRINTER, null); }}
+            <button onClick={() => {
+              setBlPrinterId(null); saveLocalPrinter(LS_BL_PRINTER, null);
+              setLabelPrinterId(null); saveLocalPrinter(LS_LABEL_PRINTER, null);
+              setBlReportName("stock.report_picking"); saveLocalStr(LS_BL_REPORT, "stock.report_picking");
+            }}
               style={{ flex: 1, padding: "10px 0", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 13, fontWeight: 600, color: C.textMuted, cursor: "pointer", fontFamily: "inherit" }}>
-              Effacer tout
+              Effacer
             </button>
             <button onClick={() => setShowPrinterModal(false)}
               style={{ flex: 2, padding: "10px 0", background: C.teal, color: "#fff", border: "none", borderRadius: 9, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
@@ -348,10 +423,6 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
             </button>
           </div>
         </>)}
-
-        {!loadingPrinters && printerList.length === 0 && !printerError && (
-          <div style={{ textAlign: "center", color: C.textMuted, padding: 20, fontSize: 14 }}>Aucune imprimante disponible via PrintNode</div>
-        )}
       </div>
     </div>
   );
@@ -368,13 +439,13 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           </button>
           <span style={{ fontSize: 16, fontWeight: 800, color: C.text }}>Expédié ✓</span>
         </div>
-        <div style={{ background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 12, padding: 20, marginBottom: 16, textAlign: "center" }}>
+        <div style={{ background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 12, padding: 20, marginBottom: 16, textAlign: "center" as const }}>
           <div style={{ fontSize: 36, marginBottom: 8 }}>✅</div>
           <div style={{ fontWeight: 700, fontSize: 17, color: C.green, marginBottom: 4 }}>{done.pickingName}</div>
           <div style={{ fontSize: 13, color: "#065f46" }}>Commande expédiée et stock mis à jour</div>
         </div>
         <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }}>
-          <div style={{ fontSize: 13, color: C.textMuted, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ fontSize: 13, color: C.textMuted, display: "flex", flexDirection: "column" as const, gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 16 }}>{done.blPrinted ? "🖨️" : "⚠️"}</span>
               <span style={{ color: done.blPrinted ? C.green : C.warning }}>
@@ -385,7 +456,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
               <span style={{ fontSize: 16 }}>{done.labelPrinted ? "🖨️" : (done.labelCount > 0 ? "⚠️" : "ℹ️")}</span>
               <span style={{ color: done.labelPrinted ? C.green : (done.labelCount > 0 ? C.warning : C.textMuted) }}>
                 {done.labelCount > 0
-                  ? `${done.labelCount} étiquette${done.labelCount > 1 ? "s" : ""} ${done.labelPrinted ? "imprimée" + (done.labelCount > 1 ? "s" : "") : "disponible" + (done.labelCount > 1 ? "s" : "") + " (configurer imprimante)"}`
+                  ? `${Math.min(done.labelCount, nPackages)} étiquette${nPackages > 1 ? "s" : ""} ${done.labelPrinted ? "imprimée" + (nPackages > 1 ? "s" : "") : "disponible" + (nPackages > 1 ? "s" : "") + " (configurer imprimante)"}`
                   : "Aucune étiquette TNT (vérifier transporteur)"}
               </span>
             </div>
@@ -443,7 +514,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         ) : (
           <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 16, boxShadow: C.shadow }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.4 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.4 }}>
                 Articles ({lines.length})
               </div>
               {lines.length > 8 && (
@@ -460,7 +531,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
                   <div style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{l.productName}</div>
                   {l.lotName && <div style={{ fontSize: 11, color: C.textMuted }}>Lot {l.lotName}</div>}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, whiteSpace: "nowrap" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, whiteSpace: "nowrap" as const }}>
                   {l.qty} {l.uomName}
                 </div>
               </div>
@@ -482,7 +553,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <button onClick={() => setNPackages(n => Math.max(1, n - 1))}
                 style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, cursor: "pointer", fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center", color: C.text, fontWeight: 700 }}>−</button>
-              <span style={{ fontSize: 20, fontWeight: 800, color: C.text, minWidth: 32, textAlign: "center" }}>{nPackages}</span>
+              <span style={{ fontSize: 20, fontWeight: 800, color: C.text, minWidth: 32, textAlign: "center" as const }}>{nPackages}</span>
               <button onClick={() => setNPackages(n => Math.min(20, n + 1))}
                 style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, cursor: "pointer", fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center", color: C.text, fontWeight: 700 }}>+</button>
             </div>
@@ -493,9 +564,13 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
                 Colis {i + 1}{nPackages === 1 && <span style={{ fontSize: 12, color: C.textMuted }}> (poids total)</span>}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input type="number" inputMode="decimal" placeholder="0.00" value={w}
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={w}
                   onChange={e => setWeights(prev => { const next = [...prev]; next[i] = e.target.value; return next; })}
-                  style={{ width: 80, height: 38, textAlign: "right", fontSize: 15, fontWeight: 700, color: C.text, border: `2px solid ${w && parseFloat(w) > 0 ? C.teal : C.border}`, borderRadius: 8, outline: "none", fontFamily: "inherit", paddingRight: 8 }}
+                  style={{ width: 80, height: 38, textAlign: "right" as const, fontSize: 15, fontWeight: 700, color: C.text, border: `2px solid ${w && parseWeight(w) > 0 ? C.teal : C.border}`, borderRadius: 8, outline: "none", fontFamily: "inherit", paddingRight: 8 }}
                 />
                 <span style={{ fontSize: 13, color: C.textMuted, width: 24 }}>kg</span>
               </div>
@@ -538,7 +613,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
             )}
           </button>
           {!allWeightsFilled && !packing && (
-            <div style={{ fontSize: 12, color: C.textMuted, textAlign: "center", marginTop: 6 }}>Renseignez le poids de chaque colis</div>
+            <div style={{ fontSize: 12, color: C.textMuted, textAlign: "center" as const, marginTop: 6 }}>Renseignez le poids de chaque colis</div>
           )}
         </div>
 
@@ -548,11 +623,10 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   }
 
   // ────────────────────────────────────────────────────────────────────────────
-  // RENDER — List (style Préparation)
+  // RENDER — List
   // ────────────────────────────────────────────────────────────────────────────
   return (
     <>
-      {/* Titre + actions — comme PrepListScreen */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, margin: 0 }}>Emballage</h2>
@@ -582,7 +656,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           value={scanCode}
           onChange={e => { setScanCode(e.target.value); if (scanError) setScanError(""); }}
           onKeyDown={e => { if (e.key === "Enter" && scanCode.trim()) handleScan(scanCode); }}
-          placeholder="Scanner WH/OUT/... ou numéro S pour ouvrir directement"
+          placeholder="Scanner WH/OUT/... ou numéro S (ex: S66191)"
         />
         <button onClick={() => { if (scanCode.trim()) handleScan(scanCode); }}
           style={{ padding: "11px 16px", background: C.text, color: "#fff", border: "none", borderRadius: 9, fontWeight: 700, fontSize: 14, cursor: "pointer", whiteSpace: "nowrap" as const }}>
