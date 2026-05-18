@@ -1023,16 +1023,20 @@ export async function packAndShipOut(
   const pickingName = pick?.name || `OUT-${outPickingId}`;
 
   // 12. Imprimer le BL si printerId fourni
+  // printPickingReportDirect ne throw jamais — il retourne { success, error }
+  // On vérifie explicitement le résultat pour remonter l'erreur
+  let blPrinted = false;
+  let blError: string | undefined;
   if (printOptions?.blPrinterId) {
-    try {
-      await printPickingReportDirect(session, outPickingId, printOptions.blPrinterId, {
-        reportName: printOptions.blReportName || getSavedPrepReportName(),
-        title: `BL_${pickingName}.pdf`,
-      });
-    } catch (e) { console.warn("Impression BL échouée:", e); }
+    const blResult = await printPickingReportDirect(session, outPickingId, printOptions.blPrinterId, {
+      reportName: printOptions.blReportName || getSavedPrepReportName(),
+      title: `BL_${pickingName}.pdf`,
+    });
+    blPrinted = blResult.success;
+    if (!blResult.success) blError = blResult.error || "Échec impression BL (raison inconnue)";
   }
 
-  return { pickingName, labelAttachments: labels };
+  return { pickingName, labelAttachments: labels, blPrinted, blError };
 }
 
 // Recherche les OUT validés (state=done) par nom/origine/partenaire

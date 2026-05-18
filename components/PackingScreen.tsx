@@ -1,7 +1,7 @@
 "use client";
 // components/PackingScreen.tsx — Emballage + expédition automatique (pack & ship)
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import * as odoo from "@/lib/odoo";
 import * as pn from "@/lib/printnode";
 import type { OdooSession } from "@/lib/odoo";
@@ -112,6 +112,10 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   const [selectedOrigin, setSelectedOrigin] = useState("");
   const [scanCode,       setScanCode]       = useState("");
   const [scanError,      setScanError]      = useState("");
+  const [blError,        setBlError]        = useState("");
+
+  // Guard anti double-exécution (le bouton disabled ne suffit pas avant le re-render)
+  const packingInProgress = useRef(false);
 
   // ── Imprimantes + template session-local ─────────────────────────────────────
   const [blPrinterId,      setBlPrinterId]      = useState<number | null>(() => readLocalPrinter(LS_BL_PRINTER));
@@ -286,16 +290,26 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   // ── Validate & Ship ──────────────────────────────────────────────────────────
   const validate = async () => {
     if (!selectedId) return;
+    // Garde anti double-exécution
+    if (packingInProgress.current) return;
+    packingInProgress.current = true;
+
     // Accepte virgule française (4,6 → 4.6)
     const parsedWeights = weights.map(w => parseWeight(w));
-    if (parsedWeights.some(w => w <= 0)) { onToast("Renseignez le poids de chaque colis", "error"); return; }
-    setPacking(true); setError("");
+    if (parsedWeights.some(w => w <= 0)) {
+      onToast("Renseignez le poids de chaque colis", "error");
+      packingInProgress.current = false;
+      return;
+    }
+    setPacking(true); setError(""); setBlError("");
     try {
       const result = await odoo.packAndShipOut(session, selectedId, parsedWeights, {
         blPrinterId:    blPrinterId ?? undefined,
-        labelPrinterId: labelPrinterId ?? undefined,
         blReportName:   blReportName,
       });
+
+      // Remonter l'erreur BL si présente
+      if (result.blError) setBlError(result.blError);
 
       // Imprimer uniquement le bon nombre d'étiquettes (1 par colis)
       let labelPrinted = false;
@@ -312,7 +326,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
       setDone({
         pickingName:      result.pickingName,
         labelCount:       result.labelAttachments.length,
-        blPrinted:        !!blPrinterId,
+        blPrinted:        result.blPrinted ?? false,
         labelPrinted,
         labelAttachments: result.labelAttachments,
       });
@@ -320,7 +334,10 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     } catch (e: any) {
       setError(e.message);
       onToast("Erreur : " + e.message, "error");
-    } finally { setPacking(false); }
+    } finally {
+      setPacking(false);
+      packingInProgress.current = false;
+    }
   };
 
   const totalWeight      = weights.reduce((s, w) => s + parseWeight(w), 0);
@@ -449,7 +466,11 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 16 }}>{done.blPrinted ? "🖨️" : "⚠️"}</span>
               <span style={{ color: done.blPrinted ? C.green : C.warning }}>
-                Bon de livraison {done.blPrinted ? "imprimé" : "non imprimé (configurer imprimante BL)"}
+                {done.blPrinted
+                  ? "Bon de livraison imprimé"
+                  : blError
+                    ? `BL non imprimé — ${blError}`
+                    : "BL non imprimé (configurer imprimante)"}
               </span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -506,6 +527,11 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         )}
         {error && (
           <div style={{ background: "#fef2f2", border: `1px solid #fecaca`, borderRadius: 10, padding: 12, marginBottom: 12, color: C.danger, fontSize: 13 }}>{error}</div>
+        )}
+        {blError && (
+          <div style={{ background: "#fffbeb", border: `1px solid #fde68a`, borderRadius: 10, padding: 12, marginBottom: 12, color: "#92400e", fontSize: 13 }}>
+            ⚠️ BL non imprimé : {blError}
+          </div>
         )}
 
         {/* Articles */}
