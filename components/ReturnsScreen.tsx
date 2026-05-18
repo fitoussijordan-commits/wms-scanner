@@ -529,85 +529,85 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
 
   if (!selected) {
     return (
-      <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Inter', sans-serif" }}>
-        {/* Header */}
-        <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, position: "sticky", top: 0, zIndex: 10 }}>
-          <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, display: "flex", alignItems: "center", color: C.textMuted }}>
+      <>
+        {/* Title row */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+          <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: "4px 2px", display: "flex", alignItems: "center", color: C.textMuted }}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
           <div style={{ flex: 1 }}>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: C.text }}>Retours clients</h2>
-            <p style={{ margin: 0, fontSize: 12, color: C.textMuted, marginTop: 2 }}>{returns.length} retour{returns.length > 1 ? "s" : ""} en attente</p>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: C.text, letterSpacing: -0.5 }}>Retours</h2>
+            {!loading && <p style={{ margin: 0, fontSize: 12, color: C.textMuted }}>{returns.length} en attente</p>}
           </div>
-          <button onClick={() => loadReturns()} disabled={loading} style={{ background: "none", border: "none", cursor: "pointer", padding: 6, color: C.primary }}>
+          <button onClick={() => loadReturns()} disabled={loading} style={{ background: "none", border: "none", cursor: "pointer", padding: 6, color: C.textMuted }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
           </button>
         </div>
 
-        <div style={{ padding: "12px 14px" }}>
-          {/* Scan bar */}
-          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            <input
-              style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.card, color: C.text, fontWeight: 600, outline: "none" }}
-              value={scanCode}
-              onChange={e => { setScanCode(e.target.value); if (scanError) setScanError(""); }}
-              onKeyDown={e => { if (e.key === "Enter" && scanCode.trim()) handleScan(scanCode); }}
-              placeholder="Scanner WH/RET/... pour ouvrir directement"
-            />
-            <button
-              onClick={() => { if (scanCode.trim()) handleScan(scanCode); }}
-              style={{ padding: "11px 16px", background: C.text, color: "#fff", border: "none", borderRadius: 9, fontWeight: 700, fontSize: 14, cursor: "pointer", whiteSpace: "nowrap" as const }}>
-              →
-            </button>
-          </div>
-          {scanError && (
-            <div style={{ marginBottom: 10, padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 13, color: C.danger, fontWeight: 600 }}>{scanError}</div>
-          )}
-
-          {loading && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement…</div>}
-          {!loading && error && (
-            <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, color: C.danger, fontSize: 14 }}>{error}</div>
-          )}
-          {!loading && !error && returns.length === 0 && (
-            <div style={{ textAlign: "center", padding: 50 }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>↩️</div>
-              <div style={{ color: C.textMuted, fontSize: 15 }}>Aucun retour en attente</div>
-            </div>
-          )}
-          {!loading && returns.map(ret => {
-            const st = stateLabel(ret.state);
-            const totalLines = ret.lines.length;
-            const totalQty = ret.lines.reduce((s, l) => s + l.demandQty, 0);
-            return (
-              <div key={ret.id}
-                style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 10, boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
-                {/* Row 1: name + state badge */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ fontSize: 18, fontWeight: 800, color: C.text, letterSpacing: -0.3 }}>{ret.name}</span>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: st.color, background: st.color + "18", borderRadius: 6, padding: "2px 8px" }}>{st.label}</span>
-                </div>
-                {/* Row 2: client */}
-                {ret.partnerName && <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 4 }}>{ret.partnerName}</div>}
-                {/* Row 3: origin chip */}
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" as const }}>
-                  {ret.origin && <span style={{ fontSize: 11, color: C.textMuted }}>{ret.origin}</span>}
-                </div>
-                {/* Row 4: articles + date */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                  <span style={{ fontSize: 11, color: C.textMuted }}>{totalLines} article{totalLines > 1 ? "s" : ""} · {totalQty} unité{totalQty > 1 ? "s" : ""}</span>
-                  {ret.date && <span style={{ fontSize: 11, color: C.textMuted }}>{new Date(ret.date).toLocaleDateString("fr-FR")}</span>}
-                </div>
-                {/* Action button */}
-                <button
-                  onClick={() => openReturn(ret)}
-                  style={{ width: "100%", padding: "11px 0", background: C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                  Traiter
-                </button>
-              </div>
-            );
-          })}
+        {/* Scan bar */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <input
+            style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.card, color: C.text, fontWeight: 600, outline: "none" }}
+            value={scanCode}
+            onChange={e => { setScanCode(e.target.value); if (scanError) setScanError(""); }}
+            onKeyDown={e => { if (e.key === "Enter" && scanCode.trim()) handleScan(scanCode); }}
+            placeholder="Scanner WH/RET/... pour ouvrir directement"
+          />
+          <button
+            onClick={() => { if (scanCode.trim()) handleScan(scanCode); }}
+            style={{ padding: "11px 16px", background: C.text, color: "#fff", border: "none", borderRadius: 9, fontWeight: 700, fontSize: 14, cursor: "pointer", whiteSpace: "nowrap" as const }}>
+            →
+          </button>
         </div>
-      </div>
+        {scanError && (
+          <div style={{ marginBottom: 10, padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 13, color: C.danger, fontWeight: 600 }}>{scanError}</div>
+        )}
+
+        {loading && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement…</div>}
+        {!loading && error && (
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, color: C.danger, fontSize: 14 }}>{error}</div>
+        )}
+        {!loading && !error && returns.length === 0 && (
+          <div style={{ textAlign: "center", padding: 50 }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>↩️</div>
+            <div style={{ color: C.textMuted, fontSize: 15 }}>Aucun retour en attente</div>
+          </div>
+        )}
+        {!loading && returns.map(ret => {
+          const st = stateLabel(ret.state);
+          const totalLines = ret.lines.length;
+          const totalQty = ret.lines.reduce((s, l) => s + l.demandQty, 0);
+          return (
+            <div key={ret.id}
+              style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 10, boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+              {/* Row 1: name + state badge */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: C.text, letterSpacing: -0.3 }}>{ret.name}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: st.color, background: st.color + "18", borderRadius: 6, padding: "2px 8px" }}>{st.label}</span>
+              </div>
+              {/* Row 2: client */}
+              {ret.partnerName && <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 4 }}>{ret.partnerName}</div>}
+              {/* Row 3: origin */}
+              {ret.origin && (
+                <div style={{ marginBottom: 8 }}>
+                  <span style={{ fontSize: 11, color: C.textMuted }}>{ret.origin}</span>
+                </div>
+              )}
+              {/* Row 4: articles + date */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <span style={{ fontSize: 11, color: C.textMuted }}>{totalLines} article{totalLines > 1 ? "s" : ""} · {totalQty} unité{totalQty > 1 ? "s" : ""}</span>
+                {ret.date && <span style={{ fontSize: 11, color: C.textMuted }}>{new Date(ret.date).toLocaleDateString("fr-FR")}</span>}
+              </div>
+              {/* Action button */}
+              <button
+                onClick={() => openReturn(ret)}
+                style={{ width: "100%", padding: "11px 0", background: C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                Traiter
+              </button>
+            </div>
+          );
+        })}
+      </>
     );
   }
 
@@ -623,82 +623,82 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
 
   if (transferDone) {
     return (
-      <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Inter', sans-serif" }}>
-        <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12 }}>
-          <button onClick={() => { setSelected(null); setTransferDone(null); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted }}>
+      <>
+        {/* Back row */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <button onClick={() => { setSelected(null); setTransferDone(null); }} style={{ background: "none", border: "none", cursor: "pointer", padding: "4px 2px", display: "flex", alignItems: "center", color: C.textMuted }}>
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
-          <h1 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: C.text }}>Retour validé ✓</h1>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: C.success }}>Retour validé ✓</h2>
         </div>
-        <div style={{ padding: "20px 14px" }}>
-          {/* Success banner */}
-          <div style={{ background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 12, padding: 18, marginBottom: 16, textAlign: "center" }}>
-            <div style={{ fontSize: 36, marginBottom: 8 }}>✅</div>
-            <div style={{ fontWeight: 700, fontSize: 16, color: C.success, marginBottom: 4 }}>Retour {selected.name} validé</div>
-            <div style={{ fontSize: 13, color: "#065f46" }}>Transfert interne créé et validé automatiquement</div>
-          </div>
 
-          {/* Transfer info */}
-          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }}>
-            <div style={{ fontWeight: 700, fontSize: 14, color: C.text, marginBottom: 10 }}>
-              📋 {transferDone.pickingName}
-            </div>
-            {transferDone.lines.map((l, i) => (
-              <div key={i} style={{ fontSize: 13, color: C.textMuted, padding: "6px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
-                <div style={{ fontWeight: 600, color: C.text }}>{l.productName}</div>
-                <div style={{ marginTop: 2 }}>
-                  {l.qty} unité{l.qty > 1 ? "s" : ""} → <span style={{ color: C.primary }}>{l.destLoc}</span>
-                </div>
+        {/* Success banner */}
+        <div style={{ background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 12, padding: 18, marginBottom: 16, textAlign: "center" as const }}>
+          <div style={{ fontSize: 36, marginBottom: 8 }}>✅</div>
+          <div style={{ fontWeight: 700, fontSize: 16, color: C.success, marginBottom: 4 }}>Retour {selected.name} validé</div>
+          <div style={{ fontSize: 13, color: "#065f46" }}>Transfert interne créé et validé automatiquement</div>
+        </div>
+
+        {/* Transfer info */}
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: C.text, marginBottom: 10 }}>
+            📋 {transferDone.pickingName}
+          </div>
+          {transferDone.lines.map((l, i) => (
+            <div key={i} style={{ fontSize: 13, color: C.textMuted, padding: "6px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
+              <div style={{ fontWeight: 600, color: C.text }}>{l.productName}</div>
+              <div style={{ marginTop: 2 }}>
+                {l.qty} unité{l.qty > 1 ? "s" : ""} → <span style={{ color: C.primary }}>{l.destLoc}</span>
               </div>
-            ))}
-          </div>
-
-          <div style={{ fontSize: 12, color: C.textMuted, textAlign: "center", marginBottom: 20 }}>
-            Le stock a été remis à jour automatiquement dans Odoo.
-          </div>
-
-          <button
-            onClick={() => { setSelected(null); setTransferDone(null); }}
-            style={{ width: "100%", padding: "14px 0", background: C.primary, color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer" }}>
-            Retour à la liste
-          </button>
+            </div>
+          ))}
         </div>
-      </div>
+
+        <div style={{ fontSize: 12, color: C.textMuted, textAlign: "center" as const, marginBottom: 20 }}>
+          Le stock a été remis à jour automatiquement dans Odoo.
+        </div>
+
+        <button
+          onClick={() => { setSelected(null); setTransferDone(null); }}
+          style={{ width: "100%", padding: "14px 0", background: C.primary, color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer" }}>
+          Retour à la liste
+        </button>
+      </>
     );
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Inter', sans-serif" }}>
-      {/* Header */}
-      <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, position: "sticky", top: 0, zIndex: 10 }}>
-        <button onClick={() => setSelected(null)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted }}>
+    <>
+      {/* Back row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+        <button onClick={() => setSelected(null)} style={{ background: "none", border: "none", cursor: "pointer", padding: "4px 2px", display: "flex", alignItems: "center", color: C.textMuted }}>
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
         <div style={{ flex: 1 }}>
-          <h1 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: C.text }}>{selected.name}</h1>
-          {selected.partnerName && <div style={{ fontSize: 12, color: C.textMuted }}>{selected.partnerName}</div>}
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: C.text, letterSpacing: -0.5 }}>{selected.name}</h2>
+          {selected.partnerName && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 1 }}>{selected.partnerName}</div>}
         </div>
-        <span style={{ fontSize: 11, fontWeight: 600, color: stateLabel(selected.state).color, background: stateLabel(selected.state).color + "18", borderRadius: 6, padding: "3px 8px" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: stateLabel(selected.state).color, background: stateLabel(selected.state).color + "18", borderRadius: 6, padding: "3px 8px" }}>
           {stateLabel(selected.state).label}
         </span>
       </div>
 
-      <div style={{ padding: "12px 14px 100px" }}>
-        {/* Origin */}
-        {selected.origin && (
-          <div style={{ background: C.retBg, border: `1px solid #fde68a`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 13, color: C.retText }}>
-            <strong>Origine :</strong> {selected.origin}
-          </div>
-        )}
+      {/* Origin */}
+      {selected.origin && (
+        <div style={{ background: C.retBg, border: `1px solid #fde68a`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 13, color: C.retText }}>
+          <strong>Origine :</strong> {selected.origin}
+        </div>
+      )}
 
-        {error && (
-          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 12, marginBottom: 12, color: C.danger, fontSize: 13 }}>{error}</div>
-        )}
+      {error && (
+        <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 12, marginBottom: 12, color: C.danger, fontSize: 13 }}>{error}</div>
+      )}
 
-        {/* Lines */}
-        <div style={{ fontWeight: 600, fontSize: 13, color: C.textMuted, marginBottom: 8 }}>ARTICLES À RÉCEPTIONNER</div>
+      {/* Lines */}
+      <div style={{ fontWeight: 700, fontSize: 11, color: C.textMuted, marginBottom: 8, letterSpacing: 0.5 }}>ARTICLES À RÉCEPTIONNER</div>
 
-        {selected.lines.map((line, idx) => {
+      <div style={{ paddingBottom: 100 }}>
+        {selected.lines.map((line) => {
           const key = line.moveLineId ?? line.moveId;
           const currentVal = qtyEdits[key] ?? String(line.demandQty);
           return (
@@ -717,7 +717,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
                   )}
                 </div>
                 {/* Qty editor */}
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                <div style={{ display: "flex", flexDirection: "column" as const, alignItems: "flex-end", gap: 4 }}>
                   <div style={{ fontSize: 11, color: C.textMuted }}>Attendu : {line.demandQty}</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <button
@@ -732,7 +732,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
                       type="number"
                       value={currentVal}
                       onChange={e => setQtyEdits(q => ({ ...q, [key]: e.target.value }))}
-                      style={{ width: 56, height: 36, textAlign: "center", fontSize: 16, fontWeight: 700, color: C.text, border: `2px solid ${C.primary}`, borderRadius: 8, outline: "none", fontFamily: "inherit" }}
+                      style={{ width: 56, height: 36, textAlign: "center" as const, fontSize: 16, fontWeight: 700, color: C.text, border: `2px solid ${C.primary}`, borderRadius: 8, outline: "none", fontFamily: "inherit" }}
                     />
                     <button
                       onClick={() => {
@@ -760,9 +760,8 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
         })}
       </div>
 
-      {/* Bottom actions */}
+      {/* Bottom actions — fixed */}
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: C.card, borderTop: `1px solid ${C.border}`, padding: "12px 14px", display: "flex", gap: 10 }}>
-        {/* Fill all button */}
         <button
           onClick={() => {
             const edits: Record<number, string> = {};
@@ -791,6 +790,6 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           )}
         </button>
       </div>
-    </div>
+    </>
   );
 }

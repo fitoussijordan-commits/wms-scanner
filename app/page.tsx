@@ -2703,6 +2703,17 @@ export default function Page() {
         {screen === "freeScan" && session && (
           <FreeScanScreen session={session} onBack={goHome} onToast={showToast} />
         )}
+        {screen === "returns" && session && (
+          <ReturnsScreen session={session} onBack={goHome} onToast={showToast} />
+        )}
+        {screen === "packing" && session && (
+          <PackingScreen
+            session={session}
+            onBack={() => { setPackingPickingId(null); goHome(); }}
+            onToast={showToast}
+            initialPickingId={packingPickingId ?? undefined}
+          />
+        )}
         {screen === "reprintLabel" && session && (
           <ReprintLabelScreen session={session} onBack={goHome} onToast={showToast} />
         )}
@@ -2722,23 +2733,6 @@ export default function Page() {
           <EshopScreen session={session} onBack={goHome} onToast={showToast} />
         )}
       </main>
-
-      {/* ── Emballage & Retours — overlay plein écran (hors main pour éviter le padding/maxWidth) ── */}
-      {screen === "returns" && session && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "#f9fafb", overflowY: "auto" }}>
-          <ReturnsScreen session={session} onBack={goHome} onToast={showToast} />
-        </div>
-      )}
-      {screen === "packing" && session && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "#f9fafb", overflowY: "auto" }}>
-          <PackingScreen
-            session={session}
-            onBack={() => { setPackingPickingId(null); goHome(); }}
-            onToast={showToast}
-            initialPickingId={packingPickingId ?? undefined}
-          />
-        </div>
-      )}
 
       {/* ── Control Center — desktop + home only ── */}
       {screen === "home" && session && (
