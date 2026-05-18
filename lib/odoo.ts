@@ -915,7 +915,7 @@ export async function getPackablePickings(session: OdooSession): Promise<any[]> 
   return searchRead(session, "stock.picking",
     [["picking_type_code", "=", "outgoing"], ["state", "=", "assigned"]],
     ["id", "name", "state", "origin", "partner_id", "scheduled_date", "date_deadline",
-     "move_ids_without_package", "carrier_id", "number_of_packages", "shipping_weight"],
+     "move_ids_without_package", "carrier_id"],
     200, "date_deadline asc, scheduled_date asc, id asc"
   );
 }
@@ -992,11 +992,17 @@ export async function packAndShipOut(
   }
 
   // 7. Mettre à jour nombre de colis + poids total sur le picking
+  // (certains champs sont optionnels selon la version Odoo / module transporteur installé)
   const totalWeight = packageWeights.reduce((s, w) => s + w, 0);
-  await write(session, "stock.picking", [outPickingId], {
-    number_of_packages: nPackages,
-    shipping_weight: totalWeight,
-  });
+  try {
+    await write(session, "stock.picking", [outPickingId], {
+      number_of_packages: nPackages,
+      shipping_weight: totalWeight,
+    });
+  } catch {
+    // number_of_packages peut ne pas exister — on essaie juste le poids
+    try { await write(session, "stock.picking", [outPickingId], { shipping_weight: totalWeight }); } catch { /* champ absent, pas critique */ }
+  }
 
   // 8. Valider le picking OUT
   await validatePicking(session, outPickingId);
