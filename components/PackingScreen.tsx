@@ -277,14 +277,21 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         [["name", "=", trimmed], ["state", "in", STATE_FILTER]],
         FIELDS, 1);
 
-      // 3b. Par x_studio_cde_client (numéro S) — prioritaire sur origin
+      // 3b. Par x_studio_cde_client (numéro S) — recherche en 2 étapes (dot-notation instable sur champs Studio)
       if (!results.length) {
-        const byCde: any[] = await odoo.searchRead(session, "stock.picking",
-          [["x_studio_cde_client.name", "=", trimmed], ["state", "in", STATE_FILTER]],
-          FIELDS, 10);
-        // Préférer les OUT
-        const outPick = byCde.find((r: any) => /\/OUT\//i.test(r.name || ""));
-        results = outPick ? [outPick] : byCde.slice(0, 1);
+        // Étape 1 : trouver le sale.order par nom
+        const soList = await odoo.searchRead(session, "sale.order",
+          [["name", "=", trimmed]], ["id", "name"], 1);
+        if (soList.length) {
+          const soId = soList[0].id;
+          // Étape 2 : trouver le picking avec cet ID de SO
+          const byCde: any[] = await odoo.searchRead(session, "stock.picking",
+            [["x_studio_cde_client", "=", soId], ["state", "in", STATE_FILTER]],
+            FIELDS, 10);
+          // Préférer les OUT
+          const outPick = byCde.find((r: any) => /\/OUT\//i.test(r.name || ""));
+          results = outPick ? [outPick] : byCde.slice(0, 1);
+        }
       }
 
       // 3c. Par origin (fallback)
