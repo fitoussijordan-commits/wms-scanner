@@ -95,6 +95,13 @@ function matchOrigin(origin: string, query: string): boolean {
   return up.split(/[,\s]+/).map(s => s.trim()).some(s => s === q);
 }
 
+/** Normalise une valeur cdeClient (peut être un string, un tuple Many2one, ou false) pour comparaison */
+function normalizeCdeClient(val: any): string {
+  if (!val) return "";
+  if (Array.isArray(val)) return String(val[1] || "").trim().toUpperCase();
+  return String(val).trim().toUpperCase();
+}
+
 export default function PackingScreen({ session, onBack, onToast, initialPickingId }: Props) {
   const [view,           setView]           = useState<"list" | "detail">(initialPickingId ? "detail" : "list");
   const [loadingList,    setLoadingList]    = useState(true);
@@ -242,74 +249,95 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     finally { setLoadingPrinters(false); }
   };
 
-  // ── Scan par nom WH/OUT/... OU par numéro S (origin) ────────────────────────
+  // ── Scan par nom WH/OUT/... OU par numéro S (origin / x_studio_cde_client) ──
   const handleScan = useCallback(async (code: string) => {
     const trimmed = code.trim().toUpperCase();
     if (!trimmed) return;
     setScanError("");
 
     // 1. Cherche dans la liste déjà chargée (par nom exact)
-    const foundByName = pickings.find(p => p.name.toUpperCase() === trimmed);
+    const foundByName = pickings.find(p => p.name.trim().toUpperCase() === trimmed);
     if (foundByName) {
       openDetail(foundByName.id, foundByName.name, foundByName.partnerName, foundByName.origin);
       setScanCode("");
       return;
     }
 
-    // 2. Cherche dans la liste par x_studio_cde_client (numéro S) ou origin
-    const foundByClient = pickings.find(p =>
-      (p.cdeClient && p.cdeClient.toUpperCase() === trimmed) ||
-      matchOrigin(p.origin, trimmed)
-    );
+    // 2. Cherche dans la liste par cdeClient (S-number) ou origin — comparaison tolérante
+    const foundByClient = pickings.find(p => {
+      const cde = normalizeCdeClient(p.cdeClient);
+      if (cde && (cde === trimmed || cde.includes(trimmed) || trimmed.includes(cde))) return true;
+      return matchOrigin(p.origin || "", trimmed);
+    });
     if (foundByClient) {
       openDetail(foundByClient.id, foundByClient.name, foundByClient.partnerName, foundByClient.origin);
       setScanCode("");
       return;
     }
 
-    // 3. Recherche Odoo directe — sans filtre picking_type_code (champ relaté instable)
+    // 3. Recherche Odoo directe — UNE seule requête avec domaine OR multi-critères
+    //    Filtre picking_type_code = outgoing pour éviter de tomber sur un PICK/INTERNAL
     const STATE_FILTER = ["assigned", "partially_available", "confirmed", "waiting"];
     const FIELDS       = ["id", "name", "origin", "x_studio_cde_client", "partner_id", "carrier_id",
                           "move_ids_without_package", "date_deadline", "scheduled_date"];
     try {
-      // 3a. Par nom exact
-      let results: any[] = await odoo.searchRead(session, "stock.picking",
-        [["name", "=", trimmed], ["state", "in", STATE_FILTER]],
-        FIELDS, 1);
+      // 3a. Requête OUT directe : name=, origin=, x_studio_cde_client ilike (couvre Char et Many2one display name)
+      //    Préfix d'OR pour Odoo : "|" "|" "|" expr1 expr2 expr3 expr4 (3 "|" pour 4 expressions)
+      const domainOut: any[] = [
+        ["picking_type_code", "=", "outgoing"],
+        ["state", "in", STATE_FILTER],
+        "|", "|", "|",
+          ["name", "=", trimmed],
+          ["origin", "=", trimmed],
+          ["origin", "ilike", trimmed],
+          ["x_studio_cde_client", "ilike", trimmed],
+      ];
+      let results: any[] = await odoo.searchRead(session, "stock.picking", domainOut, FIELDS, 20);
 
-      // 3b. Par x_studio_cde_client (numéro S) — recherche en 2 étapes (dot-notation instable sur champs Studio)
+      // 3b. Fallback : si x_studio_cde_client pointe vers sale.order, recherche en 2 étapes
       if (!results.length) {
-        // Étape 1 : trouver le sale.order par nom
-        const soList = await odoo.searchRead(session, "sale.order",
-          [["name", "=", trimmed]], ["id", "name"], 1);
-        if (soList.length) {
-          const soId = soList[0].id;
-          // Étape 2 : trouver le picking avec cet ID de SO
-          const byCde: any[] = await odoo.searchRead(session, "stock.picking",
-            [["x_studio_cde_client", "=", soId], ["state", "in", STATE_FILTER]],
-            FIELDS, 10);
-          // Préférer les OUT
-          const outPick = byCde.find((r: any) => /\/OUT\//i.test(r.name || ""));
-          results = outPick ? [outPick] : byCde.slice(0, 1);
-        }
+        try {
+          const soList = await odoo.searchRead(session, "sale.order",
+            [["name", "=", trimmed]], ["id", "name"], 1);
+          if (soList.length) {
+            const soId = soList[0].id;
+            results = await odoo.searchRead(session, "stock.picking",
+              [["picking_type_code", "=", "outgoing"],
+               ["x_studio_cde_client", "=", soId],
+               ["state", "in", STATE_FILTER]],
+              FIELDS, 10);
+          }
+        } catch { /* sale.order pas accessible, on ignore */ }
       }
 
-      // 3c. Par origin (fallback)
+      // 3c. Dernier fallback : sans filtre picking_type_code (au cas où le champ relaté serait instable)
       if (!results.length) {
-        const byOrigin: any[] = await odoo.searchRead(session, "stock.picking",
-          [["origin", "ilike", trimmed], ["state", "in", STATE_FILTER]],
-          FIELDS, 20);
-        const exact   = byOrigin.find((r: any) => matchOrigin(r.origin || "", trimmed));
-        const outPick = byOrigin.find((r: any) => /\/OUT\//i.test(r.name || ""));
-        results = exact ? [exact] : outPick ? [outPick] : byOrigin.slice(0, 1);
+        const looseDomain: any[] = [
+          ["state", "in", STATE_FILTER],
+          "|", "|",
+            ["name", "=", trimmed],
+            ["origin", "ilike", trimmed],
+            ["x_studio_cde_client", "ilike", trimmed],
+        ];
+        const loose: any[] = await odoo.searchRead(session, "stock.picking", looseDomain, FIELDS, 20);
+        // Préférer un OUT
+        const outPick = loose.find((r: any) => /\/OUT\//i.test(r.name || ""));
+        results = outPick ? [outPick] : loose;
       }
 
       if (results.length) {
-        const p = results[0];
+        // Préférer match exact sur origin/cdeClient, puis OUT
+        const exact = results.find((r: any) =>
+          matchOrigin(r.origin || "", trimmed) ||
+          normalizeCdeClient(r.x_studio_cde_client) === trimmed ||
+          (r.name || "").toUpperCase() === trimmed
+        );
+        const outPick = results.find((r: any) => /\/OUT\//i.test(r.name || ""));
+        const p = exact || outPick || results[0];
         openDetail(p.id, p.name, p.partner_id ? p.partner_id[1] : "", p.origin || "");
         setScanCode("");
       } else {
-        setScanError(`"${trimmed}" introuvable (${pickings.length} commandes chargées)`);
+        setScanError(`"${trimmed}" introuvable (vérifié sur name / origin / cde client — ${pickings.length} OUT en attente)`);
       }
     } catch (e: any) {
       setScanError((e as Error).message);
@@ -323,10 +351,12 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     if (view !== "list") return;
 
     const onGlobalKey = (e: KeyboardEvent) => {
-      // Si le focus est sur un autre champ (ex: modale), on ignore
-      const tag = (e.target as HTMLElement)?.tagName ?? "";
-      if (tag === "TEXTAREA" || tag === "SELECT") return;
-      if (tag === "INPUT" && (e.target as HTMLInputElement).type !== "text" && (e.target as HTMLInputElement).type !== "search" && (e.target as HTMLInputElement).type !== "") return;
+      // Si le focus est sur un champ saisissable (input, textarea, select, contentEditable),
+      // on laisse les handlers locaux gérer (évite doublons quand le user tape dans la scan bar)
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName ?? "";
+      if (tag === "TEXTAREA" || tag === "SELECT" || tag === "INPUT") return;
+      if (target?.isContentEditable) return;
 
       if (e.key === "Enter") {
         const code = scanBufferRef.current.trim();
@@ -747,13 +777,25 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         </div>
       </div>
 
-      {/* Scan bar */}
+      {/* Scan bar — accepte scanner PDA (via listener global) OU saisie manuelle */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input
-          inputMode="none"
-          readOnly
+          type="text"
+          inputMode="text"
+          autoComplete="off"
+          spellCheck={false}
           style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, fontWeight: 600, outline: "none" }}
           value={scanCode}
+          onChange={e => { scanBufferRef.current = e.target.value; setScanCode(e.target.value); }}
+          onKeyDown={e => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              const v = scanCode.trim();
+              scanBufferRef.current = "";
+              clearTimeout(scanTimerRef.current);
+              if (v) handleScan(v);
+            }
+          }}
           placeholder="Scanner WH/OUT/... ou numéro S (ex: S66439)"
         />
         <button onClick={() => { if (scanCode.trim()) handleScan(scanCode); }}
@@ -782,6 +824,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           </div>
           {p.partnerName && <div style={{ fontSize: 13, fontWeight: 600, color: C.textSec, marginBottom: 4 }}>{p.partnerName}</div>}
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" as const }}>
+            {p.cdeClient && <span style={{ fontSize: 11, fontWeight: 700, color: C.blue, background: C.blueSoft, padding: "2px 8px", borderRadius: 5 }}>{p.cdeClient}</span>}
             {p.origin && <span style={{ fontSize: 11, color: C.textMuted }}>{p.origin}</span>}
             {p.carrierId && <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", padding: "1px 7px", borderRadius: 5 }}>{p.carrierId}</span>}
           </div>

@@ -5,7 +5,6 @@ export const maxDuration = 30;
 
 const V2 = "https://panel.sendcloud.sc/api/v2";
 const V3 = "https://panel.sendcloud.sc/api/v3";
-const INTEGRATION_ID = 527093; // Dr. Hauschka Shop FR-FR
 
 function getAuth(): string {
   const pub = process.env.SENDCLOUD_PUBLIC_KEY || "";
@@ -27,7 +26,8 @@ async function scJson(url: string, auth: string, options?: RequestInit) {
   return res.json();
 }
 
-// ─── Helpers négatifs / V2 direct ─────────────────────────────────────────────
+// ─── Helpers partagés (négatifs / V2 direct) ─────────────────────────────────
+const INTEGRATION_ID = 527093;
 
 function hasNegativeItems(raw: any): boolean {
   if (!raw) return false;
@@ -38,31 +38,12 @@ function hasNegativeItems(raw: any): boolean {
   });
 }
 
-const hasLabel = (p: any) => !!(p?.label?.label_printer || p?.label?.normal_printer?.[0]);
-
 /**
- * Poll V2 /parcels/{id} jusqu'à ce que l'étiquette soit prête.
- */
-async function pollLabel(auth: string, parcelId: number, attempts = 18, delayMs = 800): Promise<any | null> {
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const d = await scJson(`${V2}/parcels/${parcelId}`, auth);
-      const c = d.parcel || d;
-      if (hasLabel(c)) return c;
-    } catch {}
-    await new Promise(r => setTimeout(r, delayMs));
-  }
-  return null;
-}
-
-/**
- * Crée un colis directement via V2 /parcels avec `request_label: true`.
- *
- * Pourquoi : V3 `create-labels-async` rejette en 422 toute commande contenant
- * une ligne à prix négatif (remise/avoir). V2 est plus permissif — on lui passe
- * les parcel_items à prix positifs uniquement, et on absorbe les remises dans
- * `total_order_value` (= net total). C'est ce que les transporteurs/douane
- * attendent de toute façon.
+ * Crée un colis V2 directement avec `request_label: true`.
+ * Bypasse V3 create-labels-async (qui rejette les commandes avec prix négatifs).
+ * Stratégie : on calcule le NET total (somme algébrique incluant les remises),
+ * et on n'envoie que les parcel_items à prix positifs (les remises sont absorbées
+ * dans total_order_value, ce que les transporteurs/douane acceptent).
  */
 async function createParcelV2Direct(
   auth: string,
@@ -71,129 +52,45 @@ async function createParcelV2Direct(
   raw: any,
   clientShipmentId?: number | null
 ): Promise<any> {
-  // Si raw absent ou incomplet, refetch V3 — essayer l'ID interne 'id' avant 'order_id',
-  // puis fallback sur la liste si tout 404
+  // Si raw absent, on refetch
   let order = raw;
   if (!order || (!order.order_details && !order.order_items)) {
-    // Si raw fournit déjà 'id' on le préfère à orderId (qui est souvent l'ID externe)
-    const idCandidates = [raw?.id, raw?.order_id, orderId].filter(Boolean).map(String);
-    const seen = new Set<string>();
-    let fetched: any = null;
-    for (const candidate of idCandidates) {
-      if (seen.has(candidate)) continue;
-      seen.add(candidate);
-      try {
-        const d = await scJson(`${V3}/orders/${candidate}`, auth);
-        fetched = d.data || d;
-        console.log("[V2 direct] GET /v3/orders/" + candidate + " OK");
-        break;
-      } catch (e: any) {
-        console.warn("[V2 direct] GET /v3/orders/" + candidate + " échoué:", e.message);
-      }
-    }
-    if (fetched) {
-      order = fetched;
-    } else {
-      console.warn("[V2 direct] tous les GET 404 → fallback sur la liste");
-      const lst = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=200`, auth);
-      const arr = lst.data || lst.results || lst.orders || [];
-      const m = arr.find((o: any) =>
-        String(o.order_id) === String(orderId) ||
-        String(o.id) === String(orderId) ||
-        String(o.order_number) === String(orderNumber)
-      );
-      if (m) {
-        order = m;
-        console.log("[V2 direct] order trouvé dans la liste, clés:", Object.keys(m));
-      } else {
-        throw new Error(`Commande ${orderNumber} introuvable (404 sur GET et absente de la liste)`);
-      }
-    }
+    const d = await scJson(`${V3}/orders/${orderId}`, auth);
+    order = d.data || d;
   }
   const details = order.order_details || {};
   const rawItems: any[] = details.order_items || order.order_items || [];
   const addr = order.shipping_address || details.shipping_address || order.address || {};
 
-  // Net total (somme algébrique avec négatifs) — borné à 0 min pour la douane
+  // Net total (peut contenir des négatifs) — borné à 0 minimum pour la douane
   const netTotal = rawItems.reduce((sum: number, i: any) => {
     const v = parseFloat(String(i.unit_price?.value ?? i.product_value ?? i.price ?? i.value ?? "0"));
     const q = Math.max(1, parseInt(String(i.quantity || 1)));
     return sum + v * q;
   }, 0);
 
-  // Poids — chemins V3 :
-  //  1) order.shipping_details.measurement.weight.value (= total déjà calculé)
-  //  2) somme items × qty (i.measurement.weight.value puis i.weight)
-  //  3) fallback 0.1 kg — pas de plancher haut, certaines méthodes ont MAX 0.501
-  const itemWeightOf = (i: any): number => {
-    const v =
-      i?.measurement?.weight?.value ??
-      i?.weight?.value ??
-      i?.weight ?? 0;
-    const f = parseFloat(String(v));
-    return isFinite(f) ? f : 0;
-  };
-  const itemsWeight = rawItems.reduce((s: number, i: any) => {
-    const q = Math.max(1, parseInt(String(i.quantity || 1)));
-    return s + itemWeightOf(i) * q;
-  }, 0);
-  const shippingMeasurementWeight = parseFloat(String(
-    order.shipping_details?.measurement?.weight?.value ??
-    details.shipping_details?.measurement?.weight?.value ??
-    details.total_weight ?? order.total_weight ?? details.weight ?? order.weight ?? "0"
-  ));
-  const rawTotalWeight = shippingMeasurementWeight > 0
-    ? shippingMeasurementWeight
-    : (itemsWeight > 0 ? itemsWeight : 0.1);
-  const totalWeight = Math.max(0.001, rawTotalWeight).toFixed(3);
-
-  // On ne garde que les lignes à prix >= 0 (les remises sont absorbées dans le total)
+  // parcel_items : on ne garde que les positifs (les remises sont absorbées dans total_order_value)
   const parcelItems = rawItems
     .filter((item: any) => {
       if (!item) return false;
       const v = parseFloat(String(item.unit_price?.value ?? item.product_value ?? item.price ?? item.value ?? "0"));
-      if (v < 0) return false;
+      if (v < 0) return false; // ignore les lignes de remise
       return !!(item.description || item.name || item.title || item.sku);
     })
     .map((item: any) => {
       const rawVal = item.unit_price?.value ?? item.product_value ?? item.price ?? item.value ?? "0";
-      const itemWeight = itemWeightOf(item);
       return {
-        description: String(item.name || item.description || item.title || item.sku || "Article").substring(0, 100),
+        description: String(item.description || item.name || item.title || item.sku || "Article").substring(0, 100),
         quantity: Math.max(1, parseInt(String(item.quantity || 1))),
-        weight: String(Math.max(0.001, itemWeight || 0.1).toFixed(3)),
+        weight: String(Math.max(0.001, parseFloat(String(item.weight || "0.1"))).toFixed(3)),
         value: String(Math.max(0, parseFloat(String(rawVal))).toFixed(2)),
-        hs_code: item.hs_code || item.harmonized_system_code || "",
-        origin_country: item.country_of_origin || item.origin_country || "DE",
+        hs_code: item.harmonized_system_code || item.hs_code || "",
+        origin_country: item.origin_country || "DE",
         sku: item.sku || "",
       };
     });
 
-  // Service point (Mondial Relay / autres points relais)
-  const extractSP = (obj: any): number | null => {
-    if (!obj || typeof obj !== "object") return null;
-    const candidates = [
-      obj.service_point_details?.id, // ← le bon chemin pour intégrations Shopware/Mondial Relay
-      obj.service_point_details?.code,
-      obj.to_service_point, obj.service_point_id, obj.service_point?.id, obj.service_point?.code,
-      obj.servicepoint_id, obj.parcel_shop_id, obj.pickup_point_id, obj.pickup_point?.id,
-      obj.relay_id, obj.relay?.id, obj.delivery_point?.id, obj.collection_point?.id,
-    ];
-    for (const c of candidates) {
-      const n = parseInt(String(c ?? ""));
-      if (n > 0) return n;
-    }
-    return null;
-  };
-  const servicePointId: number | null =
-    extractSP(order) ?? extractSP(details) ?? extractSP(order.shipping_details) ??
-    extractSP(order.shipping_address) ?? extractSP(details.shipping_address) ??
-    extractSP(order.delivery) ?? null;
-
-  if (servicePointId) console.log("[V2 direct]", orderNumber, "→ service point:", servicePointId);
-  else console.log("[V2 direct]", orderNumber, "→ AUCUN service point trouvé");
-
-  // Shipment ID : client → V3 → emprunt à un colis récent
+  // Shipment ID : client → V3 → emprunt à un colis récent de la même intégration
   let shipmentId: number | null =
     clientShipmentId ||
     details.shipping_method_id ||
@@ -205,27 +102,10 @@ async function createParcelV2Direct(
 
   if (!shipmentId) {
     try {
-      const recent = await scJson(`${V2}/parcels?integration_id=${INTEGRATION_ID}&limit=50`, auth);
-      const parcels = recent.parcels || [];
-      // Si on a un service_point → emprunter à un colis qui en a un aussi (= Mondial Relay)
-      if (servicePointId) {
-        const mondialRelay = parcels.find((p: any) => p.shipment?.id && (p.to_service_point || p.service_point));
-        if (mondialRelay?.shipment?.id) {
-          shipmentId = mondialRelay.shipment.id;
-          console.log("[V2 direct] shipment_id emprunté (Mondial Relay/point relais):", shipmentId);
-        }
-      }
-      // Fallback : n'importe quel colis récent
-      if (!shipmentId) {
-        const any = parcels.find((p: any) => p.shipment?.id);
-        if (any?.shipment?.id) {
-          shipmentId = any.shipment.id;
-          console.log("[V2 direct] shipment_id emprunté (générique):", shipmentId);
-        }
-      }
-    } catch (e: any) {
-      console.warn("[V2 direct] emprunt shipment_id échoué:", e.message);
-    }
+      const recent = await scJson(`${V2}/parcels?integration_id=${INTEGRATION_ID}&limit=10`, auth);
+      const rp = (recent.parcels || []).find((p: any) => p.shipment?.id);
+      if (rp?.shipment?.id) shipmentId = rp.shipment.id;
+    } catch {}
   }
 
   const name =
@@ -235,7 +115,15 @@ async function createParcelV2Direct(
     [addr.street, addr.house_number].filter(Boolean).join(" ") ||
     addr.address_line_1 || addr.address_1 || addr.address || "";
 
-
+  // Poids total (somme des poids articles, fallback 1kg)
+  const totalWeight = Math.max(
+    0.1,
+    rawItems.reduce((s: number, i: any) => {
+      const w = parseFloat(String(i.weight || "0"));
+      const q = Math.max(1, parseInt(String(i.quantity || 1)));
+      return s + (isFinite(w) ? w : 0) * q;
+    }, 0)
+  ).toFixed(3);
 
   const v2Payload: any = {
     parcel: {
@@ -250,56 +138,38 @@ async function createParcelV2Direct(
       telephone: order.telephone || addr.phone || addr.telephone || "",
       weight: totalWeight,
       order_number: orderNumber,
-      external_order_id: String(order.order_id || raw?.order_id || orderId),
-      total_order_value: String(Math.max(0, parseFloat(String(
-        order.payment_details?.total_price?.value ?? netTotal
-      ))).toFixed(2)),
+      external_order_id: String(orderId),
+      total_order_value: Math.max(0, netTotal).toFixed(2),
       total_order_value_currency: order.currency || "EUR",
       request_label: true,
       ...(parcelItems.length > 0 && { parcel_items: parcelItems }),
       ...(shipmentId ? { shipment: { id: shipmentId } } : {}),
-      ...(servicePointId ? { to_service_point: servicePointId } : {}),
     },
   };
 
-  console.log("[V2 direct]", orderNumber, "| net:", netTotal.toFixed(2), "| items+:", parcelItems.length, "| shipment:", shipmentId, "| weight:", totalWeight, "| service_point:", servicePointId);
+  console.log("[V2 direct] order:", orderNumber, "| netTotal:", netTotal.toFixed(2), "| items+:", parcelItems.length, "| shipment:", shipmentId, "| weight:", totalWeight);
 
-  // Retry avec ajustement automatique du poids si SendCloud nous donne un seuil
-  let currentWeight = totalWeight;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    v2Payload.parcel.weight = currentWeight;
+  const result = await scJson(`${V2}/parcels`, auth, {
+    method: "POST",
+    body: JSON.stringify(v2Payload),
+  });
+  return result.parcel || null;
+}
+
+/**
+ * Poll un parcel par id jusqu'à ce que son étiquette soit prête.
+ */
+async function pollLabel(auth: string, parcelId: number, attempts = 15, delayMs = 2500): Promise<any | null> {
+  for (let i = 0; i < attempts; i++) {
     try {
-      const result = await scJson(`${V2}/parcels`, auth, {
-        method: "POST",
-        body: JSON.stringify(v2Payload),
-      });
-      if (attempt > 0) console.log("[V2 direct] succès après ajustement poids → ", currentWeight);
-      return result.parcel || null;
-    } catch (err: any) {
-      const msg = err.message || "";
-      // "Minimum weight is 0.251 kg" → forcer à 0.251 (ou un peu au-dessus)
-      const minMatch = msg.match(/[Mm]inimum weight is ([\d.]+)\s*kg/);
-      // "must be less than 0.501 kg" → forcer juste sous 0.501
-      const maxMatch = msg.match(/must be less than ([\d.]+)\s*kg/i);
-      if (minMatch && attempt < 2) {
-        const minRequired = parseFloat(minMatch[1]);
-        currentWeight = (minRequired + 0.001).toFixed(3); // pile au-dessus du minimum
-        console.warn(`[V2 direct] retry attempt ${attempt + 1} — poids ajusté à ${currentWeight} (min requis: ${minRequired})`);
-        continue;
-      }
-      if (maxMatch && attempt < 2) {
-        const maxAllowed = parseFloat(maxMatch[1]);
-        currentWeight = Math.max(0.001, maxAllowed - 0.001).toFixed(3);
-        console.warn(`[V2 direct] retry attempt ${attempt + 1} — poids ajusté à ${currentWeight} (max autorisé: ${maxAllowed})`);
-        continue;
-      }
-      throw err; // erreur non liée au poids, on remonte
-    }
+      const d = await scJson(`${V2}/parcels/${parcelId}`, auth);
+      const c = d.parcel || d;
+      if (c?.label?.label_printer || c?.label?.normal_printer?.[0]) return c;
+    } catch {}
+    await new Promise(r => setTimeout(r, delayMs));
   }
   return null;
 }
-
-// ─── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET(req: NextRequest) {
   const auth = getAuth();
@@ -312,7 +182,8 @@ export async function GET(req: NextRequest) {
     // List parcels with optional status filter
     if (action === "parcels") {
       const statusFilter = searchParams.get("status") || "";
-      const data = await scJson(`${V2}/parcels?limit=500&integration_id=${INTEGRATION_ID}`, auth);
+      // Filter by integration 527093 (Dr. Hauschka Shop FR-FR)
+      const data = await scJson(`${V2}/parcels?limit=500&integration_id=527093`, auth);
       let parcels = data.parcels || [];
       if (statusFilter) {
         const ids = statusFilter.split(",").map((s: string) => parseInt(s.trim()));
@@ -323,8 +194,9 @@ export async function GET(req: NextRequest) {
 
     // V3 orders — open orders not yet converted to parcels
     if (action === "orders") {
-      const data = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=100`, auth);
+      const data = await scJson(`${V3}/orders?integration_id=527093&page_size=100`, auth);
       let orders = data.data || data.results || data.orders || [];
+      // If order_items not in list response, fetch each order individually
       const sample = orders[0] || {};
       if (!sample.order_items && !sample.order_details?.order_items) {
         orders = await Promise.all(
@@ -348,98 +220,50 @@ export async function GET(req: NextRequest) {
 
     // Debug V3 orders structure
     if (action === "probe") {
-      const data = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=3`, auth);
-      return NextResponse.json({
-        keys: Object.keys(data),
-        count: data.count ?? data.total ?? "?",
-        sample: (data.data || data.results || data.orders || []).slice(0, 2),
-        first_order_keys: Object.keys((data.data || data.results || data.orders || [])[0] || {}),
-        order_details_keys: Object.keys((data.data || data.results || data.orders || [])[0]?.order_details || {}),
-        has_order_items_in_details: !!(data.data || data.results || data.orders || [])[0]?.order_details?.order_items
-      });
+      const on = searchParams.get("order_number");
+      const data = await scJson(`${V3}/orders?integration_id=527093&page_size=100`, auth);
+      const orders = data.data || data.results || data.orders || [];
+      const target = on ? orders.find((o: any) => String(o.order_number) === String(on)) : orders[0];
+      return NextResponse.json({ full_raw: target });
     }
 
-    // Debug : prix négatifs détectés sur une commande
+    // Debug complet d'une commande V3 par order_number
     if (action === "label_debug") {
-      let oid = searchParams.get("order_id");
       const on = searchParams.get("order_number");
-      if (!oid && !on) return NextResponse.json({ error: "order_id ou order_number requis" }, { status: 400 });
-      const out: any = {};
-      // Si seulement order_number fourni → chercher l'order_id en parcourant la liste V3
-      let listMatch: any = null;
-      if (!oid && on) {
-        try {
-          const lst = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=200`, auth);
-          const arr = lst.data || lst.results || lst.orders || [];
-          listMatch = arr.find((o: any) => String(o.order_number) === String(on)) || null;
-          if (listMatch) {
-            oid = String(listMatch.order_id || listMatch.id);
-            out.resolved_order_id = oid;
-            out.list_match_all_keys = Object.keys(listMatch);
-            out.list_match_id_candidates = {
-              order_id: listMatch.order_id,
-              id: listMatch.id,
-              external_order_id: listMatch.external_order_id,
-              external_id: listMatch.external_id,
-              shop_order_id: listMatch.shop_order_id,
-              uuid: listMatch.uuid,
-            };
-            out.list_match_raw = listMatch; // dump complet
-          } else {
-            out.list_search = `Pas trouvé sur ${arr.length} commandes V3 (page 1)`;
-          }
-        } catch (e: any) { out.list_search_error = e.message; }
-      }
+      const oid = searchParams.get("order_id");
+      if (!on && !oid) return NextResponse.json({ error: "order_number ou order_id requis" }, { status: 400 });
+      const results: any = {};
+      // V3 order by ID
       if (oid) {
         try {
           const d = await scJson(`${V3}/orders/${oid}`, auth);
           const o = d.data || d;
-          out.order_keys = Object.keys(o);
-          out.details_keys = Object.keys(o.order_details || {});
-          out.has_negative_prices = hasNegativeItems(o);
-          out.shipping_method_id = o.order_details?.shipping_method_id || o.shipping_details?.shipping_method_id || o.sendcloud_shipping_method_id;
-          out.service_point_candidates = {
-            details_to_service_point: o.order_details?.to_service_point,
-            details_service_point_id: o.order_details?.service_point_id,
-            details_service_point: o.order_details?.service_point,
-            details_pickup_point: o.order_details?.pickup_point,
-            details_relay: o.order_details?.relay,
-            order_to_service_point: o.to_service_point,
-            order_service_point_id: o.service_point_id,
-            order_service_point: o.service_point,
-            order_pickup_point: o.pickup_point,
-            shipping_details_to_service_point: o.shipping_details?.to_service_point,
-            shipping_details_service_point_id: o.shipping_details?.service_point_id,
-            shipping_details_service_point: o.shipping_details?.service_point,
-            shipping_address_keys: Object.keys(o.shipping_address || {}),
-            shipping_address_service_point: o.shipping_address?.service_point,
-            shipping_address_pickup_point: o.shipping_address?.pickup_point,
-          };
-          out.suspicious_keys_in_order = Object.keys(o).filter(k => /point|relay|service/i.test(k));
-          out.suspicious_keys_in_details = Object.keys(o.order_details || {}).filter(k => /point|relay|service/i.test(k));
-          out.weight_info = {
-            details_total_weight: o.order_details?.total_weight,
-            details_weight: o.order_details?.weight,
-            order_total_weight: o.total_weight,
-            order_weight: o.weight,
-            items_weights: (o.order_details?.order_items || o.order_items || []).map((i: any) => ({ qty: i.quantity, weight: i.weight }))
-          };
-          const items = o.order_details?.order_items || o.order_items || [];
-          out.items_summary = items.map((i: any) => ({
-            description: i.description || i.name,
-            qty: i.quantity,
-            unit_price: i.unit_price?.value ?? i.price,
-          }));
-        } catch (e: any) { out.v3_error = e.message; }
+          results.v3_order_keys = Object.keys(o);
+          results.v3_order_details_keys = Object.keys(o.order_details || {});
+          results.v3_shipping_keys = Object.keys(o.shipping_address || {});
+          results.sendcloud_shipping_method_id = o.sendcloud_shipping_method_id;
+          results.order_details_shipping_method_id = o.order_details?.shipping_method_id;
+          results.shipment = o.shipment;
+          results.shipping_method = o.shipping_method;
+          results.carrier = o.carrier;
+          results.order_details_carrier = o.order_details?.carrier;
+          results.order_items_count = (o.order_details?.order_items || o.order_items || []).length;
+          results.order_items_sample = (o.order_details?.order_items || o.order_items || []).slice(0, 2);
+          results.has_negative_prices = (o.order_details?.order_items || o.order_items || []).some(
+            (i: any) => parseFloat(i.unit_price?.value ?? i.price ?? 0) < 0
+          );
+          results.full_order = o; // full raw structure
+        } catch (e: any) { results.v3_order_error = e.message; }
       }
+      // V2 parcel search
       if (on) {
         try {
           const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(on)}`, auth);
-          out.v2_parcels_found = (d.parcels || []).length;
-          out.v2_parcel_sample = (d.parcels || []).slice(0, 1);
-        } catch (e: any) { out.v2_error = e.message; }
+          results.v2_parcels_found = (d.parcels || []).length;
+          results.v2_parcel_sample = (d.parcels || []).slice(0, 1);
+        } catch (e: any) { results.v2_error = e.message; }
       }
-      return NextResponse.json(out);
+      return NextResponse.json(results);
     }
 
     // Get label PDF for a parcel
@@ -449,78 +273,120 @@ export async function GET(req: NextRequest) {
       const clientShipmentId = searchParams.get("shipment_id") ? Number(searchParams.get("shipment_id")) : null;
       if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
 
-      // Cherche un colis existant (par order_number puis par external_order_id)
+      // Helper: find a parcel for this order via multiple strategies
+      // IMPORTANT: always verify exact order_number match to avoid returning a wrong parcel
       const findParcel = async (): Promise<any | null> => {
+        // 1. By order_number — verify exact match in response
         try {
           const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber!)}`, auth);
-          const exact = (d.parcels || []).find((p: any) => String(p.order_number) === String(orderNumber));
+          const list: any[] = d.parcels || [];
+          // SendCloud may do partial/fuzzy search — filter strictly
+          const exact = list.find((p: any) => String(p.order_number) === String(orderNumber));
           if (exact) return exact;
         } catch {}
+        // 2. By order_id — verify exact match
         try {
           const d = await scJson(`${V2}/parcels?external_order_id=${encodeURIComponent(orderId!)}`, auth);
-          const exact = (d.parcels || []).find((p: any) =>
+          const list: any[] = d.parcels || [];
+          const exact = list.find((p: any) =>
             String(p.order_number) === String(orderNumber) ||
             String(p.external_order_id) === String(orderId)
           );
           if (exact) return exact;
         } catch {}
         return null;
-      };
-
-      // Step 1 : déjà un colis avec label ?
-      let parcel: any = await findParcel();
-      if (parcel && !hasLabel(parcel)) {
-        const polled = await pollLabel(auth, parcel.id, 4, 2000);
-        parcel = polled || null;
       }
 
-      // Step 1.5 : refetch V3 pour détecter les négatifs en amont
+      // Step 1: check if parcel already exists with a label
+      let parcel: any = await findParcel();
+      if (parcel && !(parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0])) {
+        // Parcel exists but no label yet — fall through to create
+        parcel = null;
+      }
+
+      // Step 1.5: refetch V3 raw pour détecter les prix négatifs en amont
       let rawV3: any = null;
       try {
         const d = await scJson(`${V3}/orders/${orderId}`, auth);
         rawV3 = d.data || d;
       } catch {}
-      const negativeDetected = hasNegativeItems(rawV3);
-      if (negativeDetected) console.log("[label GET]", orderNumber, "→ prix négatifs, bypass V3 → V2 direct");
+      const negativeDetectedGET = hasNegativeItems(rawV3);
+      if (negativeDetectedGET) console.log("[label GET]", orderNumber, "→ prix négatifs détectés, bypass V3");
 
-      // Step 2 : création
+      // Step 2: create label if not already found with a label URL
       if (!parcel) {
-        let v3Failed = negativeDetected; // skip V3 si négatifs détectés
-        let asyncParcelId: number | null = null;
+        let createFailed = negativeDetectedGET; // skip V3 d'emblée si négatifs
         let createErrMsg = "";
+        let asyncParcelId: number | null = null;
 
-        // Voie A : V3 create-labels-async
-        if (!negativeDetected) {
+        if (!negativeDetectedGET) {
           try {
             const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
               method: "POST",
-              body: JSON.stringify({ integration_id: INTEGRATION_ID, orders: [{ order_number: orderNumber }] }),
+              body: JSON.stringify({
+                integration_id: INTEGRATION_ID,
+                orders: [{ order_number: orderNumber }],
+              }),
             });
-            asyncParcelId = createRes?.data?.[0]?.parcel_id || null;
-          } catch (e: any) {
-            console.warn("[label GET] V3 create-labels-async échoué:", e.message);
-            v3Failed = true;
-            createErrMsg = e.message;
-          }
-          // Poll V3
-          if (!v3Failed) {
-            if (asyncParcelId) {
-              parcel = await pollLabel(auth, asyncParcelId);
-            } else {
-              for (let i = 0; i < 12; i++) {
-                await new Promise(r => setTimeout(r, 800));
-                const c = await findParcel();
-                if (c && hasLabel(c)) { parcel = c; break; }
-              }
+            // La réponse contient le parcel_id → on l'utilise pour poll direct (plus fiable)
+            const dataArr = createRes?.data || [];
+            if (dataArr.length > 0 && dataArr[0].parcel_id) {
+              asyncParcelId = dataArr[0].parcel_id;
+              console.log("[label] create-labels-async parcel_id:", asyncParcelId);
             }
+          } catch (createErr: any) {
+            createFailed = true;
+            createErrMsg = createErr.message;
+            console.warn("[label] create-labels-async error:", createErr.message);
           }
         }
 
-        // Voie B : V2 direct (fallback OU bypass négatifs)
-        if (!parcel && v3Failed) {
+        // Poll si pas d'erreur — stratégie : poll direct par parcel_id si dispo, sinon par order_number
+        if (!createFailed) {
+          // Poll spécifique par parcel_id (beaucoup plus fiable)
+          if (asyncParcelId) {
+            for (let i = 0; i < 10; i++) {
+              await new Promise(r => setTimeout(r, 2500));
+              try {
+                const d = await scJson(`${V2}/parcels/${asyncParcelId}`, auth);
+                const candidate = d.parcel || d;
+                if (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0]) {
+                  parcel = candidate;
+                  console.log("[label] label prête via parcel_id direct:", asyncParcelId);
+                  break;
+                }
+              } catch {}
+            }
+          } else {
+            // Fallback : poll par order_number
+            for (let i = 0; i < 6; i++) {
+              await new Promise(r => setTimeout(r, 2500));
+              const candidate = await findParcel();
+              if (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0]) {
+                parcel = candidate;
+                break;
+              }
+            }
+          }
+          // create-labels-async a réussi mais colis pas encore prêt → 202 pending
+          if (!parcel) {
+            return NextResponse.json({
+              parcelId: asyncParcelId,
+              tracking: "",
+              carrier: "",
+              labelBase64: null,
+              labelPending: true,
+              error: "Étiquette en cours de génération — réessaie dans 10 secondes",
+            }, { status: 202 });
+          }
+        }
+
+        // ── Fallback V2 direct (prix négatifs, ou V3 KO pour autre raison) ──
+        if (!parcel && createFailed) {
+          console.log("[label] fallback V2 direct pour:", orderNumber, "| negatives:", negativeDetectedGET);
           try {
             const v2Parcel = await createParcelV2Direct(auth, orderId!, orderNumber!, rawV3, clientShipmentId);
-            if (v2Parcel && hasLabel(v2Parcel)) {
+            if (v2Parcel?.label?.label_printer || v2Parcel?.label?.normal_printer?.[0]) {
               parcel = v2Parcel;
             } else if (v2Parcel?.id) {
               parcel = await pollLabel(auth, v2Parcel.id, 15, 2500);
@@ -536,27 +402,25 @@ export async function GET(req: NextRequest) {
               }
             }
           } catch (fallbackErr: any) {
-            console.error("[label GET] V2 direct échoué:", fallbackErr.message);
+            console.error("[label] V2 fallback échoué:", fallbackErr.message);
             return NextResponse.json({
               error: `Impossible de créer l'étiquette : ${createErrMsg || fallbackErr.message}`,
               hint: fallbackErr.message,
             }, { status: 422 });
           }
-        }
+        } // fin if (!parcel && createFailed)
 
-        // 202 si V3 OK mais pas encore prête
-        if (!parcel && !v3Failed) {
-          return NextResponse.json({ parcelId: asyncParcelId, labelPending: true, error: "Étiquette en cours — réessaie dans 10s" }, { status: 202 });
+        // Last resort: return whatever parcel we find even without a label (client can retry)
+        if (!parcel) {
+          parcel = await findParcel();
         }
-
-        // Last resort
-        if (!parcel) parcel = await findParcel();
       }
 
       if (!parcel) return NextResponse.json({ error: "Colis non trouvé après création étiquette" }, { status: 404 });
 
       const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
       if (!labelUrl) {
+        // Return parcel info so client knows it exists but label isn't ready
         return NextResponse.json({
           parcelId: parcel.id,
           tracking: parcel.tracking_number || "",
@@ -584,10 +448,12 @@ export async function GET(req: NextRequest) {
       const orderNumber = searchParams.get("order_number");
       if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
 
+      // Get parcel to find its id
       const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
       const parcel = (parcelsData.parcels || [])[0];
       if (!parcel) return NextResponse.json({ error: `Aucun colis trouvé — imprime d'abord l'étiquette` }, { status: 404 });
 
+      // Packing slip endpoint: GET /api/v2/packing-slips?parcel_id=XXX
       const psRes = await scFetch(`${V2}/packing-slips?parcel_id=${parcel.id}`, auth);
       if (!psRes.ok) {
         const errText = await psRes.text().catch(() => "");
@@ -598,6 +464,7 @@ export async function GET(req: NextRequest) {
         const pdfBuffer = Buffer.from(await psRes.arrayBuffer());
         return NextResponse.json({ pdfBase64: pdfBuffer.toString("base64") });
       }
+      // JSON response — log it to understand structure
       const psJson = await psRes.json().catch(() => null);
       return NextResponse.json({ debug: psJson, parcelId: parcel.id });
     }
@@ -609,14 +476,17 @@ export async function GET(req: NextRequest) {
       const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
       const parcel = (parcelsData.parcels || [])[0];
       if (!parcel) return NextResponse.json({ error: "Pas de colis" }, { status: 404 });
+      // Return full parcel to see all fields including label URLs
       return NextResponse.json({ parcel });
     }
 
     // Debug — show all distinct statuses and try multiple endpoints
     if (action === "debug") {
       const results: any = {};
+
+      // 1. Parcels endpoint — get all statuses
       try {
-        const data = await scJson(`${V2}/parcels?limit=500&integration_id=${INTEGRATION_ID}`, auth);
+        const data = await scJson(`${V2}/parcels?limit=500&integration_id=527093`, auth);
         const parcels = data.parcels || [];
         const statusMap: Record<string, number> = {};
         for (const p of parcels) {
@@ -630,20 +500,26 @@ export async function GET(req: NextRequest) {
           tracking: p.tracking_number, has_label: !!p.label?.label_printer,
         }));
       } catch (e: any) { results.parcels_error = e.message; }
+
+      // 2. Try V3 orders
       try {
-        const data = await scJson(`${V3}/shipping/orders?integration_id=${INTEGRATION_ID}&page_size=5`, auth);
+        const data = await scJson(`${V3}/shipping/orders?integration_id=527093&page_size=5`, auth);
         results.v3_orders_count = data.count || 0;
         results.v3_orders_sample = (data.results || []).slice(0, 2).map((o: any) => ({
           id: o.id, order_number: o.order_number, status: o.status, items: (o.lines || []).length
         }));
       } catch (e: any) { results.v3_orders_error = e.message; }
+
+      // 3. Try /integrations endpoint (for open orders)
       try {
         const data = await scJson(`${V2}/integrations`, auth);
         const integrations = data.integrations || data;
-        results.integrations = Array.isArray(integrations)
+        results.integrations = Array.isArray(integrations) 
           ? integrations.map((i: any) => ({ id: i.id, name: i.shop_name, system: i.system }))
           : integrations;
       } catch (e: any) { results.integrations_error = e.message; }
+
+      // 3. Try /parcels with specific statuses
       for (const sid of [999, 1000, 1, 2, 12, 1999]) {
         try {
           const data = await scJson(`${V2}/parcels?limit=3&status=${sid}`, auth);
@@ -651,61 +527,15 @@ export async function GET(req: NextRequest) {
           if (count > 0) results[`status_${sid}_count`] = count;
         } catch {}
       }
+
       return NextResponse.json(results);
     }
 
-    // Réparer le external_order_id d'un colis V2 existant pour qu'il se lie à sa commande V3
-    if (action === "relink") {
-      const orderNumber = searchParams.get("order_number");
-      if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
-      const out: any = { order_number: orderNumber };
-      // 1) trouver l'order V3 via la liste
-      const lst = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&page_size=200`, auth);
-      const arr = lst.data || lst.results || lst.orders || [];
-      const v3 = arr.find((o: any) => String(o.order_number) === String(orderNumber));
-      if (!v3) return NextResponse.json({ error: "Commande V3 introuvable dans la liste page 1" }, { status: 404 });
-      out.v3_order_id = v3.order_id;
-      out.v3_status_before = v3.order_details?.status;
-      // 2) trouver le colis V2 par order_number
-      const p2 = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber)}`, auth);
-      const parcel = (p2.parcels || []).find((p: any) => String(p.order_number) === String(orderNumber));
-      if (!parcel) return NextResponse.json({ error: "Colis V2 introuvable" }, { status: 404 });
-      out.parcel_id = parcel.id;
-      out.parcel_external_order_id_before = parcel.external_order_id;
-      // 3) PUT /v2/parcels/{id} pour réinjecter le external_order_id correct
-      try {
-        const upd = await scJson(`${V2}/parcels/${parcel.id}`, auth, {
-          method: "PUT",
-          body: JSON.stringify({ parcel: { external_order_id: String(v3.order_id) } }),
-        });
-        out.update_ok = true;
-        out.parcel_external_order_id_after = upd?.parcel?.external_order_id;
-      } catch (e: any) {
-        out.update_ok = false;
-        out.update_error = e.message;
-        // Fallback: essayer PATCH
-        try {
-          const upd2 = await scJson(`${V2}/parcels/${parcel.id}`, auth, {
-            method: "PATCH",
-            body: JSON.stringify({ parcel: { external_order_id: String(v3.order_id) } }),
-          });
-          out.update_ok = true;
-          out.patch_used = true;
-          out.parcel_external_order_id_after = upd2?.parcel?.external_order_id;
-        } catch (e2: any) { out.patch_error = e2.message; }
-      }
-      return NextResponse.json(out);
-    }
-
-    return NextResponse.json({ error: "Actions: parcels, label, debug, relink" }, { status: 400 });
+    return NextResponse.json({ error: "Actions: parcels, label, debug" }, { status: 400 });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
-
-// ─── POST ─────────────────────────────────────────────────────────────────────
-// Le client peut envoyer le `order_raw` (objet V3 complet) directement dans le
-// body → on évite un refetch V3 et on détecte les prix négatifs en amont.
 
 export async function POST(req: NextRequest) {
   const auth = getAuth();
@@ -720,6 +550,7 @@ export async function POST(req: NextRequest) {
       const { order_id: orderId, order_number: orderNumber, order_raw: raw, shipment_id: clientShipmentId } = body;
       if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
 
+      // ── Helper: chercher un colis existant par order_number ──────────────
       const findParcel = async (): Promise<any | null> => {
         try {
           const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber)}`, auth);
@@ -729,23 +560,32 @@ export async function POST(req: NextRequest) {
         return null;
       };
 
-      // Step 1 : déjà un colis avec label ?
+      const hasLabel = (p: any) => p?.label?.label_printer || p?.label?.normal_printer?.[0];
+
+      // ── Étape 1 : colis déjà existant avec étiquette ? ───────────────────
       let parcel: any = await findParcel();
       if (parcel && !hasLabel(parcel)) {
+        // Colis existant mais sans label → on peut tenter de poll ou de recréer
+        // Si async_status = ready alors l'étiquette devrait apparaître bientôt
         const polled = await pollLabel(auth, parcel.id, 6, 2500);
-        parcel = polled || null;
+        if (polled) parcel = polled;
+        else parcel = null;
       }
 
-      // Step 2 : détection des négatifs en amont
+      // ── Étape 2 : détecter les prix négatifs AVANT d'appeler V3 ──────────
+      // C'est la clé : create-labels-async V3 rejette systématiquement les
+      // commandes avec des prix négatifs (lignes de remise). On bypass.
       const negativeDetected = hasNegativeItems(raw);
-      if (negativeDetected) console.log("[label POST]", orderNumber, "→ prix négatifs, bypass V3 → V2 direct");
+      if (negativeDetected) {
+        console.log("[label POST]", orderNumber, "→ prix négatifs détectés, bypass V3 → V2 direct");
+      }
 
-      // Step 3 : création
+      // ── Étape 3 : création ───────────────────────────────────────────────
       if (!parcel) {
-        let v3Failed = negativeDetected;
         let asyncParcelId: number | null = null;
+        let v3Failed = negativeDetected; // skip V3 d'emblée si négatifs
 
-        // Voie A : V3 create-labels-async
+        // ─── Voie A : V3 create-labels-async (seulement si pas de négatifs) ──
         if (!negativeDetected) {
           try {
             const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
@@ -759,12 +599,13 @@ export async function POST(req: NextRequest) {
             v3Failed = true;
           }
 
+          // Poll V3 si OK
           if (!v3Failed) {
             if (asyncParcelId) {
-              parcel = await pollLabel(auth, asyncParcelId);
+              parcel = await pollLabel(auth, asyncParcelId, 20, 3000);
             } else {
-              for (let i = 0; i < 18; i++) {
-                await new Promise(r => setTimeout(r, 800));
+              for (let i = 0; i < 20; i++) {
+                await new Promise(r => setTimeout(r, 3000));
                 const c = await findParcel();
                 if (c && hasLabel(c)) { parcel = c; break; }
               }
@@ -772,23 +613,29 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // Voie B : V2 direct
+        // ─── Voie B : V2 direct (fallback OU prix négatifs) ──────────────────
         if (!parcel && v3Failed) {
           try {
             const v2Parcel = await createParcelV2Direct(auth, orderId, orderNumber, raw, clientShipmentId);
-            if (v2Parcel && hasLabel(v2Parcel)) {
-              parcel = v2Parcel;
-            } else if (v2Parcel?.id) {
-              parcel = await pollLabel(auth, v2Parcel.id, 15, 2500);
-              if (!parcel) {
-                return NextResponse.json({
-                  parcelId: v2Parcel.id,
-                  tracking: v2Parcel.tracking_number || "",
-                  carrier: v2Parcel.carrier?.code || "",
-                  labelBase64: null,
-                  labelPending: true,
-                  error: "Étiquette en cours — réessaie dans 10s",
-                }, { status: 202 });
+            if (v2Parcel) {
+              console.log("[label POST] V2 direct parcel créé:", v2Parcel.id, "label?", !!hasLabel(v2Parcel));
+              // Si label déjà prêt dans la réponse → on prend
+              if (hasLabel(v2Parcel)) {
+                parcel = v2Parcel;
+              } else {
+                // sinon on poll par id
+                parcel = await pollLabel(auth, v2Parcel.id, 15, 2500);
+                if (!parcel) {
+                  // étiquette pas encore prête → 202 avec parcelId pour retry client
+                  return NextResponse.json({
+                    parcelId: v2Parcel.id,
+                    tracking: v2Parcel.tracking_number || "",
+                    carrier: v2Parcel.carrier?.code || "",
+                    labelBase64: null,
+                    labelPending: true,
+                    error: "Étiquette en cours — réessaie dans 10s",
+                  }, { status: 202 });
+                }
               }
             }
           } catch (v2Err: any) {
@@ -801,6 +648,7 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        // 202 si V3 OK mais pas encore prête
         if (!parcel && !v3Failed) {
           return NextResponse.json({ parcelId: asyncParcelId, labelPending: true, error: "Étiquette en cours — réessaie dans 10s" }, { status: 202 });
         }

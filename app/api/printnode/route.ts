@@ -18,7 +18,8 @@ function pnHeaders() {
 async function zplToPdfBase64(zpl: string, widthMM: number = 100, heightMM: number = 150): Promise<string> {
   const widthIn = (widthMM / 25.4).toFixed(3);
   const heightIn = (heightMM / 25.4).toFixed(3);
-  const url = `https://api.labelary.com/v1/printers/8dpmm/labels/${widthIn}x${heightIn}/0/`;
+  // Sans index de page → retourne toutes les étiquettes en PDF multi-pages
+  const url = `https://api.labelary.com/v1/printers/8dpmm/labels/${widthIn}x${heightIn}/`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/pdf" },
