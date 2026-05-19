@@ -117,6 +117,9 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   // Guard anti double-exécution (le bouton disabled ne suffit pas avant le re-render)
   const packingInProgress = useRef(false);
 
+  // Ref sur l'input de scan pour focus automatique
+  const scanInputRef = useRef<HTMLInputElement>(null);
+
   // ── Imprimantes + template session-local ─────────────────────────────────────
   const [blPrinterId,      setBlPrinterId]      = useState<number | null>(() => readLocalPrinter(LS_BL_PRINTER));
   const [labelPrinterId,   setLabelPrinterId]   = useState<number | null>(() => readLocalPrinter(LS_LABEL_PRINTER));
@@ -160,6 +163,25 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   useEffect(() => {
     if (view === "list") loadList();
   }, [view, loadList]);
+
+  // Auto-focus + listener global : le scanner peut taper sans cliquer sur le champ
+  useEffect(() => {
+    if (view !== "list") return;
+
+    // Focus immédiat sur le champ scan
+    const focusScan = () => { scanInputRef.current?.focus(); };
+    focusScan();
+
+    // Listener global : si on tape hors d'un input/select, rediriger vers le champ scan
+    const onGlobalKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName ?? "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      // Focalise l'input et laisse le navigateur y envoyer la frappe
+      scanInputRef.current?.focus();
+    };
+    document.addEventListener("keydown", onGlobalKey);
+    return () => document.removeEventListener("keydown", onGlobalKey);
+  }, [view]);
 
   // ── Open detail ──────────────────────────────────────────────────────────────
   const openDetail = useCallback(async (pickingId: number, name: string, partner: string, origin: string) => {
@@ -246,45 +268,57 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     const foundByName = pickings.find(p => p.name.toUpperCase() === trimmed);
     if (foundByName) {
       openDetail(foundByName.id, foundByName.name, foundByName.partnerName, foundByName.origin);
-      setScanCode(""); return;
+      setScanCode("");
+      setTimeout(() => scanInputRef.current?.focus(), 100);
+      return;
     }
 
     // 2. Cherche dans la liste par origin (numéro S — gère "S66191, S66192")
     const foundByOrigin = pickings.find(p => matchOrigin(p.origin, trimmed));
     if (foundByOrigin) {
       openDetail(foundByOrigin.id, foundByOrigin.name, foundByOrigin.partnerName, foundByOrigin.origin);
-      setScanCode(""); return;
+      setScanCode("");
+      setTimeout(() => scanInputRef.current?.focus(), 100);
+      return;
     }
 
-    // 3. Recherche Odoo — on évite picking_type_code (champ relaté, pas toujours filtrable)
+    // 3. Recherche Odoo directe — sans filtre picking_type_code (champ relaté instable)
     try {
       // 3a. Par nom exact
       let results: any[] = await odoo.searchRead(session, "stock.picking",
-        [["name", "=", trimmed], ["state", "=", "assigned"]],
+        [["name", "=", trimmed], ["state", "in", ["assigned", "partially_available", "confirmed", "waiting"]]],
         ["id", "name", "origin", "partner_id", "carrier_id", "move_ids_without_package", "date_deadline", "scheduled_date"], 1);
 
-      // 3b. Par origin (numéro S) — pas de filtre picking_type_code, on filtre sur le nom ensuite
+      // 3b. Par origin (numéro S) — tous les états pertinents, sans filtre nom
       if (!results.length) {
         const byOrigin: any[] = await odoo.searchRead(session, "stock.picking",
-          [["origin", "ilike", trimmed], ["state", "in", ["assigned", "partially_available"]]],
-          ["id", "name", "origin", "partner_id", "carrier_id", "move_ids_without_package", "date_deadline", "scheduled_date"], 20);
+          [["origin", "ilike", trimmed], ["state", "in", ["assigned", "partially_available", "confirmed", "waiting"]]],
+          ["id", "name", "origin", "partner_id", "carrier_id", "move_ids_without_package", "date_deadline", "scheduled_date"], 50);
 
-        // Garder uniquement les OUT (nom contient /OUT/)
-        const outOnly = byOrigin.filter((r: any) => (r.name || "").includes("/OUT/"));
-
-        // Priorité : origin exact ou qui commence par le S scanné
-        const exact = outOnly.find((r: any) => matchOrigin(r.origin || "", trimmed));
-        results = exact ? [exact] : outOnly.slice(0, 1);
+        // Priorité 1 : match exact de l'origin
+        const exact = byOrigin.find((r: any) => matchOrigin(r.origin || "", trimmed));
+        // Priorité 2 : picking dont le nom suggère un OUT (WH/OUT, OUT/)
+        const outPick = byOrigin.find((r: any) => /\/OUT\//i.test(r.name || "") || /^OUT\//i.test(r.name || ""));
+        results = exact ? [exact] : outPick ? [outPick] : byOrigin.slice(0, 1);
       }
 
       if (results.length) {
         const p = results[0];
         openDetail(p.id, p.name, p.partner_id ? p.partner_id[1] : "", p.origin || "");
         setScanCode("");
+        setTimeout(() => scanInputRef.current?.focus(), 100);
       } else {
-        setScanError(`"${trimmed}" introuvable — scanne WH/OUT/... ou le numéro S (ex: S66191)`);
+        // Message d'erreur informatif : montre combien de pickings sont chargés
+        const hint = pickings.length > 0
+          ? `(${pickings.length} commandes chargées, origines ex: "${pickings[0]?.origin || "?"}")`
+          : "(liste vide — rechargez)";
+        setScanError(`"${trimmed}" introuvable ${hint}`);
+        setTimeout(() => scanInputRef.current?.focus(), 100);
       }
-    } catch (e: any) { setScanError((e as Error).message); }
+    } catch (e: any) {
+      setScanError((e as Error).message);
+      setTimeout(() => scanInputRef.current?.focus(), 100);
+    }
   }, [pickings, session, openDetail]);
 
   // ── Validate & Ship ──────────────────────────────────────────────────────────
@@ -678,6 +712,8 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
       {/* Scan bar */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input
+          ref={scanInputRef}
+          autoFocus
           style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, fontWeight: 600, outline: "none" }}
           value={scanCode}
           onChange={e => { setScanCode(e.target.value); if (scanError) setScanError(""); }}
