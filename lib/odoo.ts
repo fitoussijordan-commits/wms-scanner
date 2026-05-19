@@ -948,11 +948,16 @@ export async function packAndShipOut(
   const nPackages = packageWeights.length;
   if (!nPackages) throw new Error("Au moins un colis requis");
 
-  // 1. Snapshot des pièces jointes existantes
-  const before = await searchRead(session, "ir.attachment",
-    [["res_model", "=", "stock.picking"], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
-    ["id"], 100);
+  // 1. Snapshot des pièces jointes existantes + lire info picking (carrier + nom) en parallèle
+  const [before, pickInfo] = await Promise.all([
+    searchRead(session, "ir.attachment",
+      [["res_model", "=", "stock.picking"], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
+      ["id"], 100),
+    searchRead(session, "stock.picking", [["id", "=", outPickingId]], ["name", "carrier_id"], 1),
+  ]);
   const existingIds = new Set(before.map((a: any) => a.id));
+  const pickingName = pickInfo[0]?.name || `OUT-${outPickingId}`;
+  const hasCarrier  = !!pickInfo[0]?.carrier_id;
 
   // 2. S'assurer que le stock est réservé
   await callMethod(session, "stock.picking", "action_assign", [[outPickingId]]);
@@ -961,66 +966,96 @@ export async function packAndShipOut(
   const moveLines = await searchRead(session, "stock.move.line",
     [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
     ["id", "reserved_uom_qty"], 500);
-  await Promise.all(moveLines
-    .filter((ml: any) => ml.reserved_uom_qty > 0)
-    .map((ml: any) => write(session, "stock.move.line", [ml.id], { qty_done: ml.reserved_uom_qty }))
+
+  // 4. Créer les N colis EN PARALLÈLE (avant ils étaient séquentiels)
+  const totalWeight = packageWeights.reduce((s, w) => s + w, 0);
+  const packageIds = await Promise.all(
+    packageWeights.map(weight =>
+      create(session, "stock.quant.package", { shipping_weight: weight }) as Promise<number>
+    )
   );
 
-  // 4. Créer N colis avec leurs poids individuels
-  const packageIds: number[] = [];
-  for (const weight of packageWeights) {
-    const pkgId = await create(session, "stock.quant.package", { shipping_weight: weight }) as number;
-    packageIds.push(pkgId);
+  // 5+6+7. Tout le reste en parallèle : qty_done sur move lines, result_package sur colis 1,
+  //         package.level pour colis 2..N, mise à jour nb colis + poids total
+  const tasks: Promise<any>[] = [];
+
+  // 5. qty_done = reserved (1 seul write batch au lieu d'un par ligne)
+  const mlsToFill = moveLines.filter((ml: any) => ml.reserved_uom_qty > 0);
+  if (mlsToFill.length) {
+    // On groupe par qté pour batcher quand possible
+    const byQty: Record<number, number[]> = {};
+    for (const ml of mlsToFill) {
+      const q = ml.reserved_uom_qty;
+      if (!byQty[q]) byQty[q] = [];
+      byQty[q].push(ml.id);
+    }
+    for (const [qtyStr, ids] of Object.entries(byQty)) {
+      tasks.push(write(session, "stock.move.line", ids, { qty_done: parseFloat(qtyStr) }));
+    }
   }
 
-  // 5. Assigner toutes les move lines au colis 1 (result_package_id)
+  // 6. Assigner toutes les move lines au colis 1
   if (moveLines.length && packageIds[0]) {
     const mlIds = moveLines.map((ml: any) => ml.id);
-    await call(session, "/web/dataset/call_kw", {
+    tasks.push(call(session, "/web/dataset/call_kw", {
       model: "stock.move.line", method: "write",
       args: [mlIds, { result_package_id: packageIds[0] }], kwargs: {},
-    });
+    }));
   }
 
-  // 6. Colis 2..N → stock.package.level (lien picking sans créer de ligne fantôme)
+  // 7. Colis 2..N → stock.package.level (en parallèle)
   for (let i = 1; i < packageIds.length; i++) {
-    try {
-      await create(session, "stock.package.level", {
+    tasks.push(
+      create(session, "stock.package.level", {
         package_id: packageIds[i], picking_id: outPickingId, is_done: true,
-      });
-    } catch { /* version Odoo sans stock.package.level — le number_of_packages suffit */ }
+      }).catch(() => null) // version Odoo sans stock.package.level — le number_of_packages suffit
+    );
   }
 
-  // 7. Mettre à jour nombre de colis + poids total sur le picking
-  // (certains champs sont optionnels selon la version Odoo / module transporteur installé)
-  const totalWeight = packageWeights.reduce((s, w) => s + w, 0);
-  try {
-    await write(session, "stock.picking", [outPickingId], {
+  // 8. Mettre à jour nb colis + poids total sur le picking
+  tasks.push(
+    write(session, "stock.picking", [outPickingId], {
       number_of_packages: nPackages,
       shipping_weight: totalWeight,
-    });
-  } catch {
-    // number_of_packages peut ne pas exister — on essaie juste le poids
-    try { await write(session, "stock.picking", [outPickingId], { shipping_weight: totalWeight }); } catch { /* champ absent, pas critique */ }
-  }
+    }).catch(() =>
+      // number_of_packages peut ne pas exister — fallback poids seul
+      write(session, "stock.picking", [outPickingId], { shipping_weight: totalWeight }).catch(() => null)
+    )
+  );
 
-  // 8. Valider le picking OUT
+  await Promise.all(tasks);
+
+  // 9. Valider le picking OUT — Odoo (module delivery) appelle souvent send_to_shipper
+  //    automatiquement à la validation si un carrier est défini.
   await validatePicking(session, outPickingId);
 
-  // 9. Envoyer au transporteur (génère étiquettes TNT)
-  await callMethod(session, "stock.picking", "send_to_shipper", [[outPickingId]]);
+  // 10. Polling intelligent : on attend que les étiquettes apparaissent (max 5s)
+  //     Si elles arrivent, c'est que le carrier auto-shipper a fait son boulot → on NE rappelle PAS
+  //     send_to_shipper (sinon on dédouble les étiquettes).
+  const pollLabels = async (maxMs: number, intervalMs = 400): Promise<any[]> => {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      const atts = await searchRead(session, "ir.attachment",
+        [["res_model", "=", "stock.picking"], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
+        ["id", "name", "datas", "create_date"], 100);
+      const fresh = atts.filter((a: any) => !existingIds.has(a.id));
+      if (fresh.length > 0) return fresh;
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+    return [];
+  };
 
-  // 10. Attendre la génération des pièces jointes
-  await new Promise(r => setTimeout(r, 2500));
-  const after = await searchRead(session, "ir.attachment",
-    [["res_model", "=", "stock.picking"], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
-    ["id", "name", "datas", "create_date"], 100);
-  const newAttachments = after.filter((a: any) => !existingIds.has(a.id));
-  const labels = newAttachments.length > 0 ? newAttachments : [];
+  let newAttachments = await pollLabels(hasCarrier ? 4500 : 800);
 
-  // 11. Nom du picking
-  const [pick] = await searchRead(session, "stock.picking", [["id", "=", outPickingId]], ["name"], 1);
-  const pickingName = pick?.name || `OUT-${outPickingId}`;
+  // 11. Si rien n'est apparu et qu'on a un carrier, fallback : appel manuel send_to_shipper
+  if (newAttachments.length === 0 && hasCarrier) {
+    try {
+      await callMethod(session, "stock.picking", "send_to_shipper", [[outPickingId]]);
+      newAttachments = await pollLabels(4000);
+    } catch { /* send_to_shipper a déjà été appelé ou le module ne le supporte pas */ }
+  }
+
+  const labels = newAttachments;
 
   // 12. Imprimer le BL si printerId fourni
   // printPickingReportDirect ne throw jamais — il retourne { success, error }

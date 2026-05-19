@@ -251,13 +251,17 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
 
   // ── Scan par nom WH/OUT/... OU par numéro S (origin / x_studio_cde_client) ──
   const handleScan = useCallback(async (code: string) => {
-    const trimmed = code.trim().toUpperCase();
+    // Nettoyer caractères invisibles : \r, \n, espaces, caractères de contrôle, NBSP
+    const cleaned = code.replace(/[\x00-\x1F\x7F\xA0]/g, "").trim();
+    const trimmed = cleaned.toUpperCase();
     if (!trimmed) return;
     setScanError("");
+    console.log("[Scan] Recherche:", JSON.stringify(trimmed), "Liste chargée:", pickings.length, "OUT");
 
     // 1. Cherche dans la liste déjà chargée (par nom exact)
     const foundByName = pickings.find(p => p.name.trim().toUpperCase() === trimmed);
     if (foundByName) {
+      console.log("[Scan] ✅ Trouvé par name:", foundByName.name);
       openDetail(foundByName.id, foundByName.name, foundByName.partnerName, foundByName.origin);
       setScanCode("");
       return;
@@ -270,10 +274,16 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
       return matchOrigin(p.origin || "", trimmed);
     });
     if (foundByClient) {
+      console.log("[Scan] ✅ Trouvé dans liste locale:", foundByClient.name, "cde:", foundByClient.cdeClient, "origin:", foundByClient.origin);
       openDetail(foundByClient.id, foundByClient.name, foundByClient.partnerName, foundByClient.origin);
       setScanCode("");
       return;
     }
+
+    // Debug : log les 3 premiers cdeClient + origins de la liste pour comparaison
+    console.log("[Scan] Pas trouvé en local. Échantillon liste:",
+      pickings.slice(0, 3).map(p => ({ name: p.name, cde: p.cdeClient, origin: p.origin }))
+    );
 
     // 3. Recherche Odoo directe — UNE seule requête avec domaine OR multi-critères
     //    Filtre picking_type_code = outgoing pour éviter de tomber sur un PICK/INTERNAL
@@ -293,6 +303,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           ["x_studio_cde_client", "ilike", trimmed],
       ];
       let results: any[] = await odoo.searchRead(session, "stock.picking", domainOut, FIELDS, 20);
+      console.log("[Scan] Odoo 3a (OUT direct):", results.length, "résultat(s)");
 
       // 3b. Fallback : si x_studio_cde_client pointe vers sale.order, recherche en 2 étapes
       if (!results.length) {
@@ -334,13 +345,18 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         );
         const outPick = results.find((r: any) => /\/OUT\//i.test(r.name || ""));
         const p = exact || outPick || results[0];
+        console.log("[Scan] ✅ Trouvé via Odoo:", p.name, "(sélection:", exact ? "exact" : outPick ? "OUT" : "premier", ")");
         openDetail(p.id, p.name, p.partner_id ? p.partner_id[1] : "", p.origin || "");
         setScanCode("");
       } else {
-        setScanError(`"${trimmed}" introuvable (vérifié sur name / origin / cde client — ${pickings.length} OUT en attente)`);
+        // Diagnostic : afficher quelques cdeClient présents
+        const sample = pickings.slice(0, 5).map(p => p.cdeClient).filter(Boolean).join(", ") || "aucun cdeClient visible";
+        console.warn("[Scan] ❌ Introuvable. Recherché:", trimmed, "— Échantillon liste:", sample);
+        setScanError(`"${trimmed}" introuvable. ${pickings.length} OUT chargés. Ex de S présents : ${sample || "(aucun)"}`);
       }
     } catch (e: any) {
-      setScanError((e as Error).message);
+      console.error("[Scan] Erreur Odoo:", e);
+      setScanError("Erreur Odoo: " + (e as Error).message);
     }
   }, [pickings, session, openDetail]);
 
