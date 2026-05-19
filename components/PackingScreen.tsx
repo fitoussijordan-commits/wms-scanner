@@ -164,19 +164,13 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     if (view === "list") loadList();
   }, [view, loadList]);
 
-  // Auto-focus + listener global : le scanner peut taper sans cliquer sur le champ
+  // Listener global : si on tape hors d'un input/select, rediriger vers le champ scan
+  // (sans autoFocus — ne force pas l'ouverture du clavier mobile)
   useEffect(() => {
     if (view !== "list") return;
-
-    // Focus immédiat sur le champ scan
-    const focusScan = () => { scanInputRef.current?.focus(); };
-    focusScan();
-
-    // Listener global : si on tape hors d'un input/select, rediriger vers le champ scan
     const onGlobalKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName ?? "";
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      // Focalise l'input et laisse le navigateur y envoyer la frappe
       scanInputRef.current?.focus();
     };
     document.addEventListener("keydown", onGlobalKey);
@@ -713,7 +707,6 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input
           ref={scanInputRef}
-          autoFocus
           style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, fontWeight: 600, outline: "none" }}
           value={scanCode}
           onChange={e => { setScanCode(e.target.value); if (scanError) setScanError(""); }}
