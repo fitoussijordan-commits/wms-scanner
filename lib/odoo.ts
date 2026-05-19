@@ -914,8 +914,8 @@ export async function createMultiDestTransfer(
 export async function getPackablePickings(session: OdooSession): Promise<any[]> {
   return searchRead(session, "stock.picking",
     [["picking_type_code", "=", "outgoing"], ["state", "=", "assigned"]],
-    ["id", "name", "state", "origin", "partner_id", "scheduled_date", "date_deadline",
-     "move_ids_without_package", "carrier_id"],
+    ["id", "name", "state", "origin", "x_studio_cde_client", "partner_id", "scheduled_date",
+     "date_deadline", "move_ids_without_package", "carrier_id"],
     200, "date_deadline asc, scheduled_date asc, id asc"
   );
 }
