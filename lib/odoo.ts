@@ -1119,7 +1119,7 @@ export async function validateSatellitePicking(
     if (!blResult.success) blError = blResult.error || "Échec impression BL";
   }
 
-  return { pickingName, blPrinted, blError };
+  return { name: pickingName, blPrinted, blError };
 }
 
 // Recherche les OUT validés (state=done) par nom/origine/partenaire
