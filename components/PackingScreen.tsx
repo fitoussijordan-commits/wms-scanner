@@ -6,10 +6,10 @@ import * as odoo from "@/lib/odoo";
 import * as pn from "@/lib/printnode";
 import type { OdooSession } from "@/lib/odoo";
 
-// ── Clés localStorage session-only (jamais syncées Supabase) ──────────────────
+// ── Clés localStorage session-only ───────────────────────────────────────────
 const LS_BL_PRINTER    = "wms_packing_bl_printer";
 const LS_LABEL_PRINTER = "wms_packing_label_printer";
-const LS_BL_REPORT     = "wms_packing_bl_report";   // template rapport BL (session-local)
+const LS_BL_REPORT     = "wms_packing_bl_report";
 
 function readLocalPrinter(key: string): number | null {
   try { const v = localStorage.getItem(key); return v ? parseInt(v, 10) : null; } catch { return null; }
@@ -24,9 +24,25 @@ function saveLocalStr(key: string, val: string) {
   try { localStorage.setItem(key, val); } catch {}
 }
 
-/** Convertit "4,6" ou "4.6" en nombre float */
+/** "4,6" ou "4.6" → float */
 function parseWeight(s: string): number {
   return parseFloat(s.replace(",", ".")) || 0;
+}
+
+/** Match exact d'un numéro S dans un champ origin multi (ex: "S66191, S66192") */
+function matchOrigin(origin: string, query: string): boolean {
+  const up = origin.toUpperCase();
+  const q  = query.toUpperCase().trim();
+  if (!q) return false;
+  if (up === q) return true;
+  return up.split(/[,\s]+/).map(s => s.trim()).some(s => s === q);
+}
+
+/** Normalise une valeur Many2one / string / false pour comparaison */
+function normalizeCdeClient(val: any): string {
+  if (!val) return "";
+  if (Array.isArray(val)) return String(val[1] || "").trim().toUpperCase();
+  return String(val).trim().toUpperCase();
 }
 
 const C = {
@@ -61,11 +77,19 @@ interface PackablePicking {
   id:          number;
   name:        string;
   origin:      string;
-  cdeClient:   string;   // x_studio_cde_client (numéro S comme S66439)
+  cdeClient:   string;
   partnerName: string;
+  partnerId:   number;
   carrierId:   string;
   lineCount:   number;
   date:        string;
+}
+
+interface GroupedPicking {
+  id:        number;
+  name:      string;
+  origin:    string;
+  cdeClient: string;
 }
 
 interface DoneResult {
@@ -74,62 +98,51 @@ interface DoneResult {
   blPrinted:        boolean;
   labelPrinted:     boolean;
   labelAttachments: { id: number; name: string; datas: string }[];
+  groupResults:     { name: string; blPrinted: boolean; blError?: string }[];
 }
 
 interface PickingReport { id: number; name: string; report_name: string; }
 
 interface Props {
-  session:          OdooSession;
-  onBack:           () => void;
-  onToast:          (msg: string, type?: "success" | "error" | "info") => void;
+  session:           OdooSession;
+  onBack:            () => void;
+  onToast:           (msg: string, type?: "success" | "error" | "info") => void;
   initialPickingId?: number;
 }
 
-/** Vérifie si un numéro S scanné correspond à un champ origin (qui peut contenir "S66191, S66192") */
-function matchOrigin(origin: string, query: string): boolean {
-  const up = origin.toUpperCase();
-  const q  = query.toUpperCase().trim();
-  if (!q) return false;
-  if (up === q) return true;
-  // Split sur virgule / espace pour gérer plusieurs SO
-  return up.split(/[,\s]+/).map(s => s.trim()).some(s => s === q);
-}
-
-/** Normalise une valeur cdeClient (peut être un string, un tuple Many2one, ou false) pour comparaison */
-function normalizeCdeClient(val: any): string {
-  if (!val) return "";
-  if (Array.isArray(val)) return String(val[1] || "").trim().toUpperCase();
-  return String(val).trim().toUpperCase();
-}
-
 export default function PackingScreen({ session, onBack, onToast, initialPickingId }: Props) {
-  const [view,           setView]           = useState<"list" | "detail">(initialPickingId ? "detail" : "list");
-  const [loadingList,    setLoadingList]    = useState(true);
-  const [pickings,       setPickings]       = useState<PackablePicking[]>([]);
-  const [selectedId,     setSelectedId]     = useState<number | null>(initialPickingId ?? null);
-  const [lines,          setLines]          = useState<PackingLine[]>([]);
-  const [loadingDetail,  setLoadingDetail]  = useState(false);
-  const [nPackages,      setNPackages]      = useState(1);
-  const [weights,        setWeights]        = useState<string[]>([""]);
-  const [packing,        setPacking]        = useState(false);
-  const [done,           setDone]           = useState<DoneResult | null>(null);
-  const [error,          setError]          = useState("");
-  const [showAllLines,   setShowAllLines]   = useState(false);
-  const [selectedName,   setSelectedName]   = useState("");
-  const [selectedPartner,setSelectedPartner]= useState("");
-  const [selectedOrigin, setSelectedOrigin] = useState("");
-  const [scanCode,       setScanCode]       = useState("");
-  const [scanError,      setScanError]      = useState("");
-  const [blError,        setBlError]        = useState("");
+  const [view,            setView]            = useState<"list" | "detail">(initialPickingId ? "detail" : "list");
+  const [loadingList,     setLoadingList]     = useState(true);
+  const [pickings,        setPickings]        = useState<PackablePicking[]>([]);
+  const [selectedId,      setSelectedId]      = useState<number | null>(initialPickingId ?? null);
+  const [lines,           setLines]           = useState<PackingLine[]>([]);
+  const [loadingDetail,   setLoadingDetail]   = useState(false);
+  const [nPackages,       setNPackages]       = useState(1);
+  const [weights,         setWeights]         = useState<string[]>([""]);
+  const [packing,         setPacking]         = useState(false);
+  const [done,            setDone]            = useState<DoneResult | null>(null);
+  const [error,           setError]           = useState("");
+  const [showAllLines,    setShowAllLines]    = useState(false);
+  const [selectedName,    setSelectedName]    = useState("");
+  const [selectedPartner, setSelectedPartner] = useState("");
+  const [selectedOrigin,  setSelectedOrigin]  = useState("");
+  const [scanCode,        setScanCode]        = useState("");
+  const [scanError,       setScanError]       = useState("");
+  const [blError,         setBlError]         = useState("");
 
-  // Guard anti double-exécution (le bouton disabled ne suffit pas avant le re-render)
+  // ── Commandes groupées ────────────────────────────────────────────────────────
+  const [groupedPickings,  setGroupedPickings]  = useState<GroupedPicking[]>([]);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
+  const [loadingGroup,     setLoadingGroup]     = useState(false);
+
+  // Guard anti double-exécution
   const packingInProgress = useRef(false);
 
-  // Buffer pour capturer le scan clavier sans jamais appeler .focus() (évite le clavier mobile)
+  // Buffer scanner PDA — sans .focus() (évite clavier mobile)
   const scanBufferRef = useRef("");
   const scanTimerRef  = useRef<ReturnType<typeof setTimeout>>();
 
-  // ── Imprimantes + template session-local ─────────────────────────────────────
+  // ── Imprimantes + template ────────────────────────────────────────────────────
   const [blPrinterId,      setBlPrinterId]      = useState<number | null>(() => readLocalPrinter(LS_BL_PRINTER));
   const [labelPrinterId,   setLabelPrinterId]   = useState<number | null>(() => readLocalPrinter(LS_LABEL_PRINTER));
   const [blReportName,     setBlReportName]     = useState<string>(() => readLocalStr(LS_BL_REPORT, "stock.report_picking"));
@@ -139,7 +152,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   const [loadingPrinters,  setLoadingPrinters]  = useState(false);
   const [printerError,     setPrinterError]     = useState("");
 
-  // ── Sync weights length ──────────────────────────────────────────────────────
+  // ── Sync longueur tableau poids ───────────────────────────────────────────────
   useEffect(() => {
     setWeights(prev => {
       if (prev.length === nPackages) return prev;
@@ -148,7 +161,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     });
   }, [nPackages]);
 
-  // ── Load list ────────────────────────────────────────────────────────────────
+  // ── Load liste ────────────────────────────────────────────────────────────────
   const loadList = useCallback(async () => {
     setLoadingList(true);
     setError("");
@@ -160,6 +173,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         origin:      p.origin || "",
         cdeClient:   Array.isArray(p.x_studio_cde_client) ? p.x_studio_cde_client[1] : (p.x_studio_cde_client || ""),
         partnerName: p.partner_id ? p.partner_id[1] : "",
+        partnerId:   p.partner_id ? p.partner_id[0] : 0,
         carrierId:   p.carrier_id ? p.carrier_id[1] : "",
         lineCount:   Array.isArray(p.move_ids_without_package) ? p.move_ids_without_package.length : 0,
         date:        p.date_deadline || p.scheduled_date || "",
@@ -174,8 +188,8 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     if (view === "list") loadList();
   }, [view, loadList]);
 
-  // ── Open detail ──────────────────────────────────────────────────────────────
-  const openDetail = useCallback(async (pickingId: number, name: string, partner: string, origin: string) => {
+  // ── Open detail ───────────────────────────────────────────────────────────────
+  const openDetail = useCallback(async (pickingId: number, name: string, partner: string, origin: string, partnerId?: number) => {
     setSelectedId(pickingId);
     setSelectedName(name);
     setSelectedPartner(partner);
@@ -183,13 +197,28 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     setView("detail");
     setDone(null);
     setError("");
+    setBlError("");
     setNPackages(1);
     setWeights([""]);
     setShowAllLines(false);
+    setGroupedPickings([]);
+    setSelectedGroupIds([]);
     setLoadingDetail(true);
+    setLoadingGroup(true);
+
     try {
-      const moveLines = await odoo.getPickingMoveLines(session, pickingId);
-      const moves     = await odoo.getPickingMoves(session, pickingId);
+      // Articles + commandes groupées en parallèle
+      const [moveLines, moves, pickingInfo] = await Promise.all([
+        odoo.getPickingMoveLines(session, pickingId),
+        odoo.getPickingMoves(session, pickingId),
+        partnerId ? Promise.resolve(null) :
+          odoo.searchRead(session, "stock.picking", [["id", "=", pickingId]],
+            ["id", "partner_id"], 1).then((r: any[]) => r[0] || null),
+      ]);
+
+      const resolvedPartnerId = partnerId || (pickingInfo?.partner_id ? pickingInfo.partner_id[0] : 0);
+
+      // Articles
       const productIds = Array.from(new Set(moveLines.map((ml: any) => ml.product_id[0]))) as number[];
       const products = productIds.length
         ? await odoo.searchRead(session, "product.product", [["id", "in", productIds]], ["id", "default_code"], productIds.length)
@@ -210,11 +239,33 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         };
       }).filter((l: PackingLine) => l.qty > 0);
       setLines(parsed);
-    } catch (e: any) { setError(e.message); }
-    finally { setLoadingDetail(false); }
+      setLoadingDetail(false);
+
+      // Commandes groupées : autres OUT assignés du même partenaire
+      if (resolvedPartnerId) {
+        try {
+          const siblings = await odoo.searchRead(session, "stock.picking",
+            [["partner_id", "=", resolvedPartnerId],
+             ["picking_type_code", "=", "outgoing"],
+             ["state", "=", "assigned"],
+             ["id", "!=", pickingId]],
+            ["id", "name", "origin", "x_studio_cde_client"], 20);
+          const mapped: GroupedPicking[] = siblings.map((s: any) => ({
+            id:        s.id,
+            name:      s.name,
+            origin:    s.origin || "",
+            cdeClient: Array.isArray(s.x_studio_cde_client) ? s.x_studio_cde_client[1] : (s.x_studio_cde_client || ""),
+          }));
+          setGroupedPickings(mapped);
+          setSelectedGroupIds(mapped.map(s => s.id)); // tous cochés par défaut
+        } catch { /* silencieux */ }
+      }
+
+    } catch (e: any) { setError(e.message); setLoadingDetail(false); }
+    finally { setLoadingGroup(false); }
   }, [session]);
 
-  // Auto-open if initialPickingId provided
+  // Auto-open si initialPickingId
   useEffect(() => {
     if (initialPickingId && view === "detail") {
       const load = async () => {
@@ -223,7 +274,8 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           const [pick] = await odoo.searchRead(session, "stock.picking",
             [["id", "=", initialPickingId]],
             ["id", "name", "origin", "partner_id", "carrier_id"], 1);
-          if (pick) await openDetail(initialPickingId, pick.name, pick.partner_id?.[1] || "", pick.origin || "");
+          if (pick) await openDetail(initialPickingId, pick.name,
+            pick.partner_id?.[1] || "", pick.origin || "", pick.partner_id?.[0]);
         } catch (e: any) { setError((e as Error).message); }
         finally { setLoadingDetail(false); }
       };
@@ -232,11 +284,11 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Charger imprimantes + templates PrintNode ────────────────────────────────
+  // ── Modal imprimantes + template ──────────────────────────────────────────────
   const openPrinterModal = async () => {
     setShowPrinterModal(true);
     setPrinterError("");
-    if (printerList.length && reportList.length) return;   // déjà chargé
+    if (printerList.length && reportList.length) return;
     setLoadingPrinters(true);
     try {
       const [printers, reports] = await Promise.all([
@@ -249,95 +301,71 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     finally { setLoadingPrinters(false); }
   };
 
-  // ── Scan par nom WH/OUT/... OU par numéro S (origin / x_studio_cde_client) ──
+  // ── Scan ──────────────────────────────────────────────────────────────────────
   const handleScan = useCallback(async (code: string) => {
-    // Nettoyer caractères invisibles : \r, \n, espaces, caractères de contrôle, NBSP
     const cleaned = code.replace(/[\x00-\x1F\x7F\xA0]/g, "").trim();
     const trimmed = cleaned.toUpperCase();
     if (!trimmed) return;
     setScanError("");
-    console.log("[Scan] Recherche:", JSON.stringify(trimmed), "Liste chargée:", pickings.length, "OUT");
 
-    // 1. Cherche dans la liste déjà chargée (par nom exact)
+    // 1. Dans la liste chargée — par nom exact
     const foundByName = pickings.find(p => p.name.trim().toUpperCase() === trimmed);
     if (foundByName) {
-      console.log("[Scan] ✅ Trouvé par name:", foundByName.name);
-      openDetail(foundByName.id, foundByName.name, foundByName.partnerName, foundByName.origin);
-      setScanCode("");
-      return;
+      openDetail(foundByName.id, foundByName.name, foundByName.partnerName, foundByName.origin, foundByName.partnerId);
+      setScanCode(""); return;
     }
 
-    // 2. Cherche dans la liste par cdeClient (S-number) ou origin — comparaison tolérante
+    // 2. Dans la liste — par cdeClient ou origin
     const foundByClient = pickings.find(p => {
       const cde = normalizeCdeClient(p.cdeClient);
       if (cde && (cde === trimmed || cde.includes(trimmed) || trimmed.includes(cde))) return true;
       return matchOrigin(p.origin || "", trimmed);
     });
     if (foundByClient) {
-      console.log("[Scan] ✅ Trouvé dans liste locale:", foundByClient.name, "cde:", foundByClient.cdeClient, "origin:", foundByClient.origin);
-      openDetail(foundByClient.id, foundByClient.name, foundByClient.partnerName, foundByClient.origin);
-      setScanCode("");
-      return;
+      openDetail(foundByClient.id, foundByClient.name, foundByClient.partnerName, foundByClient.origin, foundByClient.partnerId);
+      setScanCode(""); return;
     }
 
-    // Debug : log les 3 premiers cdeClient + origins de la liste pour comparaison
-    console.log("[Scan] Pas trouvé en local. Échantillon liste:",
-      pickings.slice(0, 3).map(p => ({ name: p.name, cde: p.cdeClient, origin: p.origin }))
-    );
-
-    // 3. Recherche Odoo directe — UNE seule requête avec domaine OR multi-critères
-    //    Filtre picking_type_code = outgoing pour éviter de tomber sur un PICK/INTERNAL
+    // 3. Recherche Odoo directe
     const STATE_FILTER = ["assigned", "partially_available", "confirmed", "waiting"];
-    const FIELDS       = ["id", "name", "origin", "x_studio_cde_client", "partner_id", "carrier_id",
-                          "move_ids_without_package", "date_deadline", "scheduled_date"];
+    const FIELDS = ["id", "name", "origin", "x_studio_cde_client", "partner_id", "carrier_id",
+                    "move_ids_without_package", "date_deadline", "scheduled_date"];
     try {
-      // 3a. Requête OUT directe : name=, origin=, x_studio_cde_client ilike (couvre Char et Many2one display name)
-      //    Préfix d'OR pour Odoo : "|" "|" "|" expr1 expr2 expr3 expr4 (3 "|" pour 4 expressions)
-      const domainOut: any[] = [
-        ["picking_type_code", "=", "outgoing"],
-        ["state", "in", STATE_FILTER],
-        "|", "|", "|",
-          ["name", "=", trimmed],
-          ["origin", "=", trimmed],
-          ["origin", "ilike", trimmed],
-          ["x_studio_cde_client", "ilike", trimmed],
-      ];
-      let results: any[] = await odoo.searchRead(session, "stock.picking", domainOut, FIELDS, 20);
-      console.log("[Scan] Odoo 3a (OUT direct):", results.length, "résultat(s)");
+      // 3a. OUT direct (nom, origin, cdeClient ilike)
+      let results: any[] = await odoo.searchRead(session, "stock.picking",
+        [["picking_type_code", "=", "outgoing"], ["state", "in", STATE_FILTER],
+         "|", "|", "|",
+           ["name", "=", trimmed], ["origin", "=", trimmed],
+           ["origin", "ilike", trimmed], ["x_studio_cde_client", "ilike", trimmed]],
+        FIELDS, 20);
 
-      // 3b. Fallback : si x_studio_cde_client pointe vers sale.order, recherche en 2 étapes
+      // 3b. Recherche par sale.order (deux étapes — dot-notation instable sur champ Studio)
       if (!results.length) {
         try {
           const soList = await odoo.searchRead(session, "sale.order",
-            [["name", "=", trimmed]], ["id", "name"], 1);
+            [["name", "=", trimmed]], ["id"], 1);
           if (soList.length) {
-            const soId = soList[0].id;
             results = await odoo.searchRead(session, "stock.picking",
               [["picking_type_code", "=", "outgoing"],
-               ["x_studio_cde_client", "=", soId],
+               ["x_studio_cde_client", "=", soList[0].id],
                ["state", "in", STATE_FILTER]],
               FIELDS, 10);
           }
-        } catch { /* sale.order pas accessible, on ignore */ }
+        } catch { /* sale.order non accessible */ }
       }
 
-      // 3c. Dernier fallback : sans filtre picking_type_code (au cas où le champ relaté serait instable)
+      // 3c. Fallback sans picking_type_code
       if (!results.length) {
-        const looseDomain: any[] = [
-          ["state", "in", STATE_FILTER],
-          "|", "|",
-            ["name", "=", trimmed],
-            ["origin", "ilike", trimmed],
-            ["x_studio_cde_client", "ilike", trimmed],
-        ];
-        const loose: any[] = await odoo.searchRead(session, "stock.picking", looseDomain, FIELDS, 20);
-        // Préférer un OUT
+        const loose: any[] = await odoo.searchRead(session, "stock.picking",
+          [["state", "in", STATE_FILTER],
+           "|", "|", ["name", "=", trimmed], ["origin", "ilike", trimmed],
+           ["x_studio_cde_client", "ilike", trimmed]],
+          FIELDS, 20);
         const outPick = loose.find((r: any) => /\/OUT\//i.test(r.name || ""));
         results = outPick ? [outPick] : loose;
       }
 
       if (results.length) {
-        // Préférer match exact sur origin/cdeClient, puis OUT
         const exact = results.find((r: any) =>
           matchOrigin(r.origin || "", trimmed) ||
           normalizeCdeClient(r.x_studio_cde_client) === trimmed ||
@@ -345,74 +373,50 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         );
         const outPick = results.find((r: any) => /\/OUT\//i.test(r.name || ""));
         const p = exact || outPick || results[0];
-        console.log("[Scan] ✅ Trouvé via Odoo:", p.name, "(sélection:", exact ? "exact" : outPick ? "OUT" : "premier", ")");
-        openDetail(p.id, p.name, p.partner_id ? p.partner_id[1] : "", p.origin || "");
+        openDetail(p.id, p.name, p.partner_id ? p.partner_id[1] : "", p.origin || "",
+          p.partner_id ? p.partner_id[0] : undefined);
         setScanCode("");
       } else {
-        // Diagnostic : afficher quelques cdeClient présents
-        const sample = pickings.slice(0, 5).map(p => p.cdeClient).filter(Boolean).join(", ") || "aucun cdeClient visible";
-        console.warn("[Scan] ❌ Introuvable. Recherché:", trimmed, "— Échantillon liste:", sample);
-        setScanError(`"${trimmed}" introuvable. ${pickings.length} OUT chargés. Ex de S présents : ${sample || "(aucun)"}`);
+        const sample = pickings.slice(0, 5).map(p => p.cdeClient).filter(Boolean).join(", ") || "—";
+        setScanError(`"${trimmed}" introuvable. ${pickings.length} OUT chargés. Ex S présents : ${sample}`);
       }
     } catch (e: any) {
-      console.error("[Scan] Erreur Odoo:", e);
-      setScanError("Erreur Odoo: " + (e as Error).message);
+      setScanError("Erreur Odoo : " + (e as Error).message);
     }
   }, [pickings, session, openDetail]);
 
-  // Listener global pour scanner PDA — accumule les caractères dans un ref (SANS .focus())
-  // Le scanner envoie le code + Enter ; on intercepte sans ouvrir le clavier
-  // Doit être APRÈS handleScan pour éviter "used before declaration"
+  // Listener global clavier — PDA scanner sans .focus()
   useEffect(() => {
     if (view !== "list") return;
-
     const onGlobalKey = (e: KeyboardEvent) => {
-      // Si le focus est sur un champ saisissable (input, textarea, select, contentEditable),
-      // on laisse les handlers locaux gérer (évite doublons quand le user tape dans la scan bar)
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName ?? "";
       if (tag === "TEXTAREA" || tag === "SELECT" || tag === "INPUT") return;
       if (target?.isContentEditable) return;
-
       if (e.key === "Enter") {
         const code = scanBufferRef.current.trim();
         scanBufferRef.current = "";
         clearTimeout(scanTimerRef.current);
-        if (code) {
-          setScanCode(code);
-          handleScan(code);
-        }
+        if (code) { setScanCode(code); handleScan(code); }
         return;
       }
-
-      // Caractère imprimable → ajouter au buffer
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         scanBufferRef.current += e.key;
         setScanCode(scanBufferRef.current);
-        // Timeout sécurité : vide le buffer si pas d'Enter dans 3s
         clearTimeout(scanTimerRef.current);
-        scanTimerRef.current = setTimeout(() => {
-          scanBufferRef.current = "";
-          setScanCode("");
-        }, 3000);
+        scanTimerRef.current = setTimeout(() => { scanBufferRef.current = ""; setScanCode(""); }, 3000);
       }
     };
-
     document.addEventListener("keydown", onGlobalKey);
-    return () => {
-      document.removeEventListener("keydown", onGlobalKey);
-      clearTimeout(scanTimerRef.current);
-    };
+    return () => { document.removeEventListener("keydown", onGlobalKey); clearTimeout(scanTimerRef.current); };
   }, [view, handleScan]);
 
-  // ── Validate & Ship ──────────────────────────────────────────────────────────
+  // ── Validate & Ship ───────────────────────────────────────────────────────────
   const validate = async () => {
     if (!selectedId) return;
-    // Garde anti double-exécution
     if (packingInProgress.current) return;
     packingInProgress.current = true;
 
-    // Accepte virgule française (4,6 → 4.6)
     const parsedWeights = weights.map(w => parseWeight(w));
     if (parsedWeights.some(w => w <= 0)) {
       onToast("Renseignez le poids de chaque colis", "error");
@@ -421,15 +425,14 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     }
     setPacking(true); setError(""); setBlError("");
     try {
+      // ── 1. Picking principal : pack + ship + BL ────────────────────────────
       const result = await odoo.packAndShipOut(session, selectedId, parsedWeights, {
-        blPrinterId:    blPrinterId ?? undefined,
-        blReportName:   blReportName,
+        blPrinterId:  blPrinterId ?? undefined,
+        blReportName: blReportName,
       });
-
-      // Remonter l'erreur BL si présente
       if (result.blError) setBlError(result.blError);
 
-      // Imprimer uniquement le bon nombre d'étiquettes (1 par colis)
+      // Étiquettes : 1 par colis max
       let labelPrinted = false;
       if (labelPrinterId && result.labelAttachments.length > 0) {
         const toprint = result.labelAttachments.slice(0, nPackages);
@@ -441,14 +444,30 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         }
       }
 
+      // ── 2. Pickings satellites : validate sans transporteur + BL ──────────
+      const groupResults: { name: string; blPrinted: boolean; blError?: string }[] = [];
+      for (const gId of selectedGroupIds) {
+        try {
+          const gr = await odoo.validateSatellitePicking(session, gId, {
+            blPrinterId:  blPrinterId ?? undefined,
+            blReportName: blReportName,
+          });
+          groupResults.push(gr);
+        } catch (e: any) {
+          groupResults.push({ name: `OUT-${gId}`, blPrinted: false, blError: e.message });
+        }
+      }
+
       setDone({
         pickingName:      result.pickingName,
         labelCount:       result.labelAttachments.length,
         blPrinted:        result.blPrinted ?? false,
         labelPrinted,
         labelAttachments: result.labelAttachments,
+        groupResults,
       });
-      onToast(`✅ ${result.pickingName} expédié`, "success");
+      const total = 1 + groupResults.length;
+      onToast(`✅ ${total} commande${total > 1 ? "s" : ""} expédiée${total > 1 ? "s" : ""}`, "success");
     } catch (e: any) {
       setError(e.message);
       onToast("Erreur : " + e.message, "error");
@@ -461,7 +480,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   const totalWeight      = weights.reduce((s, w) => s + parseWeight(w), 0);
   const allWeightsFilled = weights.every(w => parseWeight(w) > 0);
 
-  // ── Modal sélection imprimante + template ────────────────────────────────────
+  // ── Modal imprimantes ─────────────────────────────────────────────────────────
   const PrinterModal = () => (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div style={{ background: C.white, borderRadius: 16, padding: 24, width: "100%", maxWidth: 420, maxHeight: "90vh", overflowY: "auto" as const }}>
@@ -472,84 +491,57 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 16, padding: "8px 12px", background: C.blueSoft, borderRadius: 8, lineHeight: 1.5 }}>
           Ces réglages sont <strong>propres à ce poste</strong> (stockés localement, non partagés).
         </div>
-
-        {loadingPrinters && <div style={{ textAlign: "center", padding: 20, color: C.textMuted }}>Chargement…</div>}
+        {loadingPrinters && <div style={{ textAlign: "center" as const, padding: 20, color: C.textMuted }}>Chargement…</div>}
         {printerError && <div style={{ color: C.danger, fontSize: 13, marginBottom: 12 }}>{printerError}</div>}
-
         {!loadingPrinters && (<>
           {/* Template BL */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 6 }}>
-              Template bon de livraison (BL)
-            </div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 6 }}>Template bon de livraison (BL)</div>
             {reportList.length === 0 ? (
               <div style={{ fontSize: 13, color: C.textMuted }}>Aucun rapport disponible</div>
             ) : (
-              <select
-                value={blReportName}
+              <select value={blReportName}
                 onChange={e => { setBlReportName(e.target.value); saveLocalStr(LS_BL_REPORT, e.target.value); }}
                 style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${C.teal}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit", background: C.bg, color: C.text, outline: "none" }}>
                 <option value="stock.report_picking">Standard (stock.report_picking)</option>
-                {reportList.map(r => (
-                  <option key={r.id} value={r.report_name}>{r.name}</option>
-                ))}
+                {reportList.map(r => <option key={r.id} value={r.report_name}>{r.name}</option>)}
               </select>
             )}
           </div>
-
           {/* Imprimante BL */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 6 }}>
-              Imprimante BL
-            </div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 6 }}>Imprimante BL</div>
             {printerList.length === 0 ? (
               <div style={{ fontSize: 13, color: C.textMuted }}>Aucune imprimante PrintNode</div>
             ) : (
-              <select
-                value={blPrinterId ?? ""}
-                onChange={e => {
-                  const v = e.target.value ? parseInt(e.target.value, 10) : null;
-                  setBlPrinterId(v); saveLocalPrinter(LS_BL_PRINTER, v);
-                }}
+              <select value={blPrinterId ?? ""}
+                onChange={e => { const v = e.target.value ? parseInt(e.target.value, 10) : null; setBlPrinterId(v); saveLocalPrinter(LS_BL_PRINTER, v); }}
                 style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${blPrinterId ? C.teal : C.border}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit", background: C.bg, color: C.text, outline: "none" }}>
-                <option value="">— Aucune (pas d'impression BL) —</option>
-                {printerList.map(pr => (
-                  <option key={pr.id} value={pr.id}>{pr.name} ({pr.computer.name})</option>
-                ))}
+                <option value="">— Aucune —</option>
+                {printerList.map(pr => <option key={pr.id} value={pr.id}>{pr.name} ({pr.computer.name})</option>)}
               </select>
             )}
           </div>
-
-          {/* Imprimante étiquette TNT */}
+          {/* Imprimante étiquette */}
           <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 6 }}>
-              Imprimante étiquette transporteur
-            </div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 6 }}>Imprimante étiquette transporteur</div>
             {printerList.length === 0 ? (
               <div style={{ fontSize: 13, color: C.textMuted }}>Aucune imprimante PrintNode</div>
             ) : (
-              <select
-                value={labelPrinterId ?? ""}
-                onChange={e => {
-                  const v = e.target.value ? parseInt(e.target.value, 10) : null;
-                  setLabelPrinterId(v); saveLocalPrinter(LS_LABEL_PRINTER, v);
-                }}
+              <select value={labelPrinterId ?? ""}
+                onChange={e => { const v = e.target.value ? parseInt(e.target.value, 10) : null; setLabelPrinterId(v); saveLocalPrinter(LS_LABEL_PRINTER, v); }}
                 style={{ width: "100%", padding: "10px 12px", border: `1.5px solid ${labelPrinterId ? C.teal : C.border}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit", background: C.bg, color: C.text, outline: "none" }}>
-                <option value="">— Aucune (pas d'impression étiquette) —</option>
-                {printerList.map(pr => (
-                  <option key={pr.id} value={pr.id}>{pr.name} ({pr.computer.name})</option>
-                ))}
+                <option value="">— Aucune —</option>
+                {printerList.map(pr => <option key={pr.id} value={pr.id}>{pr.name} ({pr.computer.name})</option>)}
               </select>
             )}
           </div>
-
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => {
               setBlPrinterId(null); saveLocalPrinter(LS_BL_PRINTER, null);
               setLabelPrinterId(null); saveLocalPrinter(LS_LABEL_PRINTER, null);
               setBlReportName("stock.report_picking"); saveLocalStr(LS_BL_REPORT, "stock.report_picking");
-            }}
-              style={{ flex: 1, padding: "10px 0", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 13, fontWeight: 600, color: C.textMuted, cursor: "pointer", fontFamily: "inherit" }}>
+            }} style={{ flex: 1, padding: "10px 0", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 13, fontWeight: 600, color: C.textMuted, cursor: "pointer", fontFamily: "inherit" }}>
               Effacer
             </button>
             <button onClick={() => setShowPrinterModal(false)}
@@ -579,21 +571,19 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           <div style={{ fontWeight: 700, fontSize: 17, color: C.green, marginBottom: 4 }}>{done.pickingName}</div>
           <div style={{ fontSize: 13, color: "#065f46" }}>Commande expédiée et stock mis à jour</div>
         </div>
+
+        {/* Résultat principal */}
         <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }}>
           <div style={{ fontSize: 13, color: C.textMuted, display: "flex", flexDirection: "column" as const, gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 16 }}>{done.blPrinted ? "🖨️" : "⚠️"}</span>
               <span style={{ color: done.blPrinted ? C.green : C.warning }}>
-                {done.blPrinted
-                  ? "Bon de livraison imprimé"
-                  : blError
-                    ? `BL non imprimé — ${blError}`
-                    : "BL non imprimé (configurer imprimante)"}
+                {done.blPrinted ? "Bon de livraison imprimé" : blError ? `BL non imprimé — ${blError}` : "BL non imprimé (configurer imprimante)"}
               </span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 16 }}>{done.labelPrinted ? "🖨️" : (done.labelCount > 0 ? "⚠️" : "ℹ️")}</span>
-              <span style={{ color: done.labelPrinted ? C.green : (done.labelCount > 0 ? C.warning : C.textMuted) }}>
+              <span style={{ fontSize: 16 }}>{done.labelPrinted ? "🖨️" : done.labelCount > 0 ? "⚠️" : "ℹ️"}</span>
+              <span style={{ color: done.labelPrinted ? C.green : done.labelCount > 0 ? C.warning : C.textMuted }}>
                 {done.labelCount > 0
                   ? `${Math.min(done.labelCount, nPackages)} étiquette${nPackages > 1 ? "s" : ""} ${done.labelPrinted ? "imprimée" + (nPackages > 1 ? "s" : "") : "disponible" + (nPackages > 1 ? "s" : "") + " (configurer imprimante)"}`
                   : "Aucune étiquette TNT (vérifier transporteur)"}
@@ -601,6 +591,27 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
             </div>
           </div>
         </div>
+
+        {/* Résultats commandes groupées */}
+        {done.groupResults.length > 0 && (
+          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.4, marginBottom: 10 }}>
+              Commandes groupées ({done.groupResults.length})
+            </div>
+            {done.groupResults.map((gr, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
+                <span style={{ fontSize: 14 }}>{gr.blPrinted ? "🖨️" : gr.blError ? "⚠️" : "✅"}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{gr.name}</div>
+                  <div style={{ fontSize: 11, color: gr.blPrinted ? C.green : gr.blError ? C.danger : C.textMuted }}>
+                    {gr.blPrinted ? "BL imprimé" : gr.blError ? `BL échoué : ${gr.blError}` : "Validé (pas d'imprimante BL)"}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         <button onClick={() => { setDone(null); setView("list"); }}
           style={{ width: "100%", padding: "14px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
           Commande suivante
@@ -629,8 +640,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           <button onClick={openPrinterModal} title="Imprimantes"
             style={{ position: "relative", background: (blPrinterId || labelPrinterId) ? C.teal + "18" : "none", border: "none", cursor: "pointer", padding: 6, color: (blPrinterId || labelPrinterId) ? C.teal : C.textMuted, borderRadius: 8 }}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/>
-              <rect x="6" y="14" width="12" height="8"/>
+              <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
             </svg>
             {(blPrinterId || labelPrinterId) && (
               <span style={{ position: "absolute", top: 2, right: 2, width: 6, height: 6, background: C.teal, borderRadius: "50%", border: "1.5px solid #fff" }} />
@@ -643,9 +653,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
             Réf : {selectedOrigin}
           </div>
         )}
-        {error && (
-          <div style={{ background: "#fef2f2", border: `1px solid #fecaca`, borderRadius: 10, padding: 12, marginBottom: 12, color: C.danger, fontSize: 13 }}>{error}</div>
-        )}
+        {error && <div style={{ background: "#fef2f2", border: `1px solid #fecaca`, borderRadius: 10, padding: 12, marginBottom: 12, color: C.danger, fontSize: 13 }}>{error}</div>}
         {blError && (
           <div style={{ background: "#fffbeb", border: `1px solid #fde68a`, borderRadius: 10, padding: 12, marginBottom: 12, color: "#92400e", fontSize: 13 }}>
             ⚠️ BL non imprimé : {blError}
@@ -654,13 +662,11 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
 
         {/* Articles */}
         {loadingDetail ? (
-          <div style={{ textAlign: "center", padding: 30, color: C.textMuted }}>Chargement des articles…</div>
+          <div style={{ textAlign: "center" as const, padding: 30, color: C.textMuted }}>Chargement des articles…</div>
         ) : (
           <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 16, boxShadow: C.shadow }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.4 }}>
-                Articles ({lines.length})
-              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.4 }}>Articles ({lines.length})</div>
               {lines.length > 8 && (
                 <button onClick={() => setShowAllLines(v => !v)}
                   style={{ fontSize: 12, fontWeight: 600, color: C.blue, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
@@ -675,9 +681,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
                   <div style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{l.productName}</div>
                   {l.lotName && <div style={{ fontSize: 11, color: C.textMuted }}>Lot {l.lotName}</div>}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, whiteSpace: "nowrap" as const }}>
-                  {l.qty} {l.uomName}
-                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, whiteSpace: "nowrap" as const }}>{l.qty} {l.uomName}</div>
               </div>
             ))}
             {!showAllLines && lines.length > 8 && (
@@ -687,6 +691,49 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
               </button>
             )}
           </div>
+        )}
+
+        {/* Commandes groupées */}
+        {!loadingGroup && groupedPickings.length > 0 && (
+          <div style={{ background: C.white, border: `1.5px solid ${C.teal}`, borderRadius: 12, padding: 14, marginBottom: 16, boxShadow: C.shadow }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.teal, textTransform: "uppercase" as const, letterSpacing: 0.4, marginBottom: 10 }}>
+              📦 Commandes groupées — même client ({groupedPickings.length})
+            </div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>
+              Cochées = validées sans transporteur + BL imprimé automatiquement
+            </div>
+            {groupedPickings.map(gp => {
+              const checked = selectedGroupIds.includes(gp.id);
+              return (
+                <div key={gp.id}
+                  onClick={() => setSelectedGroupIds(prev =>
+                    checked ? prev.filter(id => id !== gp.id) : [...prev, gp.id]
+                  )}
+                  style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: `1px solid ${C.border}`, cursor: "pointer" }}>
+                  <div style={{ width: 20, height: 20, borderRadius: 5, border: `2px solid ${checked ? C.teal : C.border}`, background: checked ? C.teal : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    {checked && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="#fff" strokeWidth="2" strokeLinecap="round"/></svg>}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{gp.name}</div>
+                    {(gp.cdeClient || gp.origin) && (
+                      <div style={{ fontSize: 11, color: C.textMuted }}>
+                        {gp.cdeClient && <span style={{ color: C.blue, fontWeight: 600, marginRight: 6 }}>{gp.cdeClient}</span>}
+                        {gp.origin}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {selectedGroupIds.length > 0 && (
+              <div style={{ marginTop: 10, padding: "6px 10px", background: C.teal + "12", borderRadius: 7, fontSize: 12, color: C.teal, fontWeight: 600 }}>
+                {selectedGroupIds.length} commande{selectedGroupIds.length > 1 ? "s" : ""} sera{selectedGroupIds.length > 1 ? "ont" : ""} validée{selectedGroupIds.length > 1 ? "s" : ""} + BL imprimé{selectedGroupIds.length > 1 ? "s" : ""}
+              </div>
+            )}
+          </div>
+        )}
+        {loadingGroup && (
+          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12, textAlign: "center" as const }}>Recherche de commandes groupées…</div>
         )}
 
         {/* Conditionnement */}
@@ -746,14 +793,15 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           )}
         </div>
 
-        {/* Bottom fixed button */}
+        {/* Bouton valider */}
         <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: C.white, borderTop: `1px solid ${C.border}`, padding: "12px 16px" }}>
           <button onClick={validate} disabled={packing || !allWeightsFilled || loadingDetail}
             style={{ width: "100%", padding: "15px 0", background: packing ? "#93c5fd" : !allWeightsFilled ? "#e5e7eb" : C.teal, color: !allWeightsFilled ? C.textMuted : "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: packing || !allWeightsFilled ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, fontFamily: "inherit" }}>
             {packing ? (
               <><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 11-2.64-6.36"/></svg>Expédition en cours…</>
             ) : (
-              <><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Valider & Imprimer</>
+              <><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Valider & Imprimer{selectedGroupIds.length > 0 ? ` (+${selectedGroupIds.length} groupée${selectedGroupIds.length > 1 ? "s" : ""})` : ""}</>
             )}
           </button>
           {!allWeightsFilled && !packing && (
@@ -780,8 +828,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           <button onClick={openPrinterModal} title="Configurer imprimantes"
             style={{ position: "relative", background: (blPrinterId || labelPrinterId) ? C.teal + "18" : C.blueSoft, border: "none", cursor: "pointer", padding: "8px 10px", borderRadius: 10, color: (blPrinterId || labelPrinterId) ? C.teal : C.textMuted }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/>
-              <rect x="6" y="14" width="12" height="8"/>
+              <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
             </svg>
             {(blPrinterId || labelPrinterId) && (
               <span style={{ position: "absolute", top: 4, right: 4, width: 6, height: 6, background: C.teal, borderRadius: "50%", border: "1.5px solid #fff" }} />
@@ -793,7 +840,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         </div>
       </div>
 
-      {/* Scan bar — accepte scanner PDA (via listener global) OU saisie manuelle */}
+      {/* Scan bar — scanner PDA via listener global OU saisie manuelle */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input
           type="text"
@@ -802,7 +849,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           spellCheck={false}
           style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, fontWeight: 600, outline: "none" }}
           value={scanCode}
-          onChange={e => { scanBufferRef.current = e.target.value; setScanCode(e.target.value); }}
+          onChange={e => { scanBufferRef.current = e.target.value; setScanCode(e.target.value); if (scanError) setScanError(""); }}
           onKeyDown={e => {
             if (e.key === "Enter") {
               e.preventDefault();
@@ -823,10 +870,10 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         <div style={{ marginBottom: 10, padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 13, color: C.danger, fontWeight: 600 }}>{scanError}</div>
       )}
 
-      {loadingList && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement…</div>}
+      {loadingList && <div style={{ textAlign: "center" as const, padding: 40, color: C.textMuted }}>Chargement…</div>}
       {!loadingList && error && <div style={{ background: "#fef2f2", border: `1px solid #fecaca`, borderRadius: 10, padding: 14, color: C.danger, fontSize: 14 }}>{error}</div>}
       {!loadingList && !error && pickings.length === 0 && (
-        <div style={{ textAlign: "center", padding: 50 }}>
+        <div style={{ textAlign: "center" as const, padding: 50 }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
           <div style={{ color: C.textMuted, fontSize: 15 }}>Aucune commande à emballer</div>
         </div>
@@ -848,7 +895,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
             <span style={{ fontSize: 11, color: C.textMuted }}>{p.lineCount} article{p.lineCount > 1 ? "s" : ""}</span>
             {p.date && <span style={{ fontSize: 11, color: C.textMuted }}>{new Date(p.date).toLocaleDateString("fr-FR")}</span>}
           </div>
-          <button onClick={() => openDetail(p.id, p.name, p.partnerName, p.origin)}
+          <button onClick={() => openDetail(p.id, p.name, p.partnerName, p.origin, p.partnerId)}
             style={{ width: "100%", padding: "11px 0", background: C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
             Emballer
           </button>

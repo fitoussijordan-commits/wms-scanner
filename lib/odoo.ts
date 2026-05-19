@@ -1074,6 +1074,54 @@ export async function packAndShipOut(
   return { pickingName, labelAttachments: labels, blPrinted, blError };
 }
 
+/** Valide un picking satellite (commande groupée) SANS transporteur.
+ *  Pas de colis créé, pas de send_to_shipper — juste qty_done + validate + impression BL optionnelle.
+ */
+export async function validateSatellitePicking(
+  session: OdooSession,
+  pickingId: number,
+  printOptions?: { blPrinterId?: number; blReportName?: string }
+): Promise<{ pickingName: string; blPrinted: boolean; blError?: string }> {
+  const [info] = await searchRead(session, "stock.picking", [["id", "=", pickingId]], ["name"], 1);
+  const pickingName = info?.name || `OUT-${pickingId}`;
+
+  await callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
+
+  const moveLines = await searchRead(session, "stock.move.line",
+    [["picking_id", "=", pickingId], ["state", "not in", ["done", "cancel"]]],
+    ["id", "reserved_uom_qty"], 500);
+
+  const mlsToFill = moveLines.filter((ml: any) => ml.reserved_uom_qty > 0);
+  if (mlsToFill.length) {
+    const byQty: Record<number, number[]> = {};
+    for (const ml of mlsToFill) {
+      const q = ml.reserved_uom_qty;
+      if (!byQty[q]) byQty[q] = [];
+      byQty[q].push(ml.id);
+    }
+    await Promise.all(
+      Object.entries(byQty).map(([qtyStr, ids]) =>
+        write(session, "stock.move.line", ids, { qty_done: parseFloat(qtyStr) })
+      )
+    );
+  }
+
+  await validatePicking(session, pickingId);
+
+  let blPrinted = false;
+  let blError: string | undefined;
+  if (printOptions?.blPrinterId) {
+    const blResult = await printPickingReportDirect(session, pickingId, printOptions.blPrinterId, {
+      reportName: printOptions.blReportName || getSavedPrepReportName(),
+      title: `BL_${pickingName}.pdf`,
+    });
+    blPrinted = blResult.success;
+    if (!blResult.success) blError = blResult.error || "Échec impression BL";
+  }
+
+  return { pickingName, blPrinted, blError };
+}
+
 // Recherche les OUT validés (state=done) par nom/origine/partenaire
 export async function searchDoneOutPickings(session: OdooSession, query: string): Promise<any[]> {
   const domain: any[] = [["state", "=", "done"], ["picking_type_code", "=", "outgoing"]];
