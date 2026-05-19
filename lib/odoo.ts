@@ -1025,13 +1025,10 @@ export async function packAndShipOut(
 
   await Promise.all(tasks);
 
-  // 9. Valider le picking OUT — Odoo (module delivery) appelle souvent send_to_shipper
-  //    automatiquement à la validation si un carrier est défini.
+  // 9. Valider le picking OUT
   await validatePicking(session, outPickingId);
 
-  // 10. Polling intelligent : on attend que les étiquettes apparaissent (max 5s)
-  //     Si elles arrivent, c'est que le carrier auto-shipper a fait son boulot → on NE rappelle PAS
-  //     send_to_shipper (sinon on dédouble les étiquettes).
+  // 10. Polling étiquettes (helper interne)
   const pollLabels = async (maxMs: number, intervalMs = 400): Promise<any[]> => {
     const deadline = Date.now() + maxMs;
     while (Date.now() < deadline) {
@@ -1045,31 +1042,30 @@ export async function packAndShipOut(
     return [];
   };
 
-  let newAttachments = await pollLabels(hasCarrier ? 4500 : 800);
-
-  // 11. Si rien n'est apparu et qu'on a un carrier, fallback : appel manuel send_to_shipper
-  if (newAttachments.length === 0 && hasCarrier) {
-    try {
-      await callMethod(session, "stock.picking", "send_to_shipper", [[outPickingId]]);
-      newAttachments = await pollLabels(4000);
-    } catch { /* send_to_shipper a déjà été appelé ou le module ne le supporte pas */ }
-  }
+  // 11 + 12. send_to_shipper (carrier) ET impression BL en parallèle — gain ~4-6s
+  const [newAttachments, blResultRaw] = await Promise.all([
+    // Branche étiquette transporteur
+    (async (): Promise<any[]> => {
+      if (!hasCarrier) return pollLabels(800);
+      try {
+        await callMethod(session, "stock.picking", "send_to_shipper", [[outPickingId]]);
+      } catch { /* déjà appelé ou module absent */ }
+      return pollLabels(3500);
+    })(),
+    // Branche BL — commence immédiatement sans attendre les étiquettes
+    printOptions?.blPrinterId
+      ? printPickingReportDirect(session, outPickingId, printOptions.blPrinterId, {
+          reportName: printOptions.blReportName || getSavedPrepReportName(),
+          title: `BL_${pickingName}.pdf`,
+        })
+      : Promise.resolve({ success: false, error: undefined as string | undefined }),
+  ]);
 
   const labels = newAttachments;
-
-  // 12. Imprimer le BL si printerId fourni
-  // printPickingReportDirect ne throw jamais — il retourne { success, error }
-  // On vérifie explicitement le résultat pour remonter l'erreur
-  let blPrinted = false;
-  let blError: string | undefined;
-  if (printOptions?.blPrinterId) {
-    const blResult = await printPickingReportDirect(session, outPickingId, printOptions.blPrinterId, {
-      reportName: printOptions.blReportName || getSavedPrepReportName(),
-      title: `BL_${pickingName}.pdf`,
-    });
-    blPrinted = blResult.success;
-    if (!blResult.success) blError = blResult.error || "Échec impression BL (raison inconnue)";
-  }
+  const blPrinted = blResultRaw.success;
+  const blError: string | undefined = !blResultRaw.success
+    ? (blResultRaw.error || (printOptions?.blPrinterId ? "Échec impression BL (raison inconnue)" : undefined))
+    : undefined;
 
   return { pickingName, labelAttachments: labels, blPrinted, blError };
 }
@@ -1081,7 +1077,7 @@ export async function validateSatellitePicking(
   session: OdooSession,
   pickingId: number,
   printOptions?: { blPrinterId?: number; blReportName?: string }
-): Promise<{ pickingName: string; blPrinted: boolean; blError?: string }> {
+): Promise<{ name: string; blPrinted: boolean; blError?: string }> {
   const [info] = await searchRead(session, "stock.picking", [["id", "=", pickingId]], ["name"], 1);
   const pickingName = info?.name || `OUT-${pickingId}`;
 
