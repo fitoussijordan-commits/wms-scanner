@@ -944,7 +944,7 @@ export async function packAndShipOut(
   outPickingId: number,
   packageWeights: number[],
   printOptions?: { blPrinterId?: number; labelPrinterId?: number; blReportName?: string }
-): Promise<{ pickingName: string; labelAttachments: { id: number; name: string; datas: string }[] }> {
+): Promise<{ pickingName: string; labelAttachments: { id: number; name: string; datas: string }[]; blPrinted: boolean; blError?: string }> {
   const nPackages = packageWeights.length;
   if (!nPackages) throw new Error("Au moins un colis requis");
 
