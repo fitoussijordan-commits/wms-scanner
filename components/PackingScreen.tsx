@@ -167,48 +167,6 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     if (view === "list") loadList();
   }, [view, loadList]);
 
-  // Listener global pour scanner PDA — accumule les caractères dans un ref (SANS .focus())
-  // Le scanner envoie le code + Enter ; on intercepte sans ouvrir le clavier
-  useEffect(() => {
-    if (view !== "list") return;
-
-    const onGlobalKey = (e: KeyboardEvent) => {
-      // Si le focus est sur un autre champ (ex: modale), on ignore
-      const tag = (e.target as HTMLElement)?.tagName ?? "";
-      if (tag === "TEXTAREA" || tag === "SELECT") return;
-      if (tag === "INPUT" && (e.target as HTMLInputElement).type !== "text" && (e.target as HTMLInputElement).type !== "search" && (e.target as HTMLInputElement).type !== "") return;
-
-      if (e.key === "Enter") {
-        const code = scanBufferRef.current.trim();
-        scanBufferRef.current = "";
-        clearTimeout(scanTimerRef.current);
-        if (code) {
-          setScanCode(code);
-          handleScan(code);
-        }
-        return;
-      }
-
-      // Caractère imprimable → ajouter au buffer
-      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        scanBufferRef.current += e.key;
-        setScanCode(scanBufferRef.current);
-        // Timeout sécurité : vide le buffer si pas d'Enter dans 3s
-        clearTimeout(scanTimerRef.current);
-        scanTimerRef.current = setTimeout(() => {
-          scanBufferRef.current = "";
-          setScanCode("");
-        }, 3000);
-      }
-    };
-
-    document.addEventListener("keydown", onGlobalKey);
-    return () => {
-      document.removeEventListener("keydown", onGlobalKey);
-      clearTimeout(scanTimerRef.current);
-    };
-  }, [view, handleScan]);
-
   // ── Open detail ──────────────────────────────────────────────────────────────
   const openDetail = useCallback(async (pickingId: number, name: string, partner: string, origin: string) => {
     setSelectedId(pickingId);
@@ -350,6 +308,49 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
       setScanError((e as Error).message);
     }
   }, [pickings, session, openDetail]);
+
+  // Listener global pour scanner PDA — accumule les caractères dans un ref (SANS .focus())
+  // Le scanner envoie le code + Enter ; on intercepte sans ouvrir le clavier
+  // Doit être APRÈS handleScan pour éviter "used before declaration"
+  useEffect(() => {
+    if (view !== "list") return;
+
+    const onGlobalKey = (e: KeyboardEvent) => {
+      // Si le focus est sur un autre champ (ex: modale), on ignore
+      const tag = (e.target as HTMLElement)?.tagName ?? "";
+      if (tag === "TEXTAREA" || tag === "SELECT") return;
+      if (tag === "INPUT" && (e.target as HTMLInputElement).type !== "text" && (e.target as HTMLInputElement).type !== "search" && (e.target as HTMLInputElement).type !== "") return;
+
+      if (e.key === "Enter") {
+        const code = scanBufferRef.current.trim();
+        scanBufferRef.current = "";
+        clearTimeout(scanTimerRef.current);
+        if (code) {
+          setScanCode(code);
+          handleScan(code);
+        }
+        return;
+      }
+
+      // Caractère imprimable → ajouter au buffer
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        scanBufferRef.current += e.key;
+        setScanCode(scanBufferRef.current);
+        // Timeout sécurité : vide le buffer si pas d'Enter dans 3s
+        clearTimeout(scanTimerRef.current);
+        scanTimerRef.current = setTimeout(() => {
+          scanBufferRef.current = "";
+          setScanCode("");
+        }, 3000);
+      }
+    };
+
+    document.addEventListener("keydown", onGlobalKey);
+    return () => {
+      document.removeEventListener("keydown", onGlobalKey);
+      clearTimeout(scanTimerRef.current);
+    };
+  }, [view, handleScan]);
 
   // ── Validate & Ship ──────────────────────────────────────────────────────────
   const validate = async () => {
