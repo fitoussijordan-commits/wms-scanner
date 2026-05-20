@@ -5468,7 +5468,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     const allDone = items.length > 0 && items.every(it => (waveScannedSkus[it.sku] || 0) >= it.totalQty);
     const currentItem = items.find(it => (waveScannedSkus[it.sku] || 0) < it.totalQty);
     const doneItems = items.filter(it => (waveScannedSkus[it.sku] || 0) >= it.totalQty);
-    const remainingItems = items.filter(it => (waveScannedSkus[it.sku] || 0) < it.totalQty);
+    const remainingItems = items.filter((it: any) => (waveScannedSkus[it.sku] || 0) < it.totalQty);
     const scannedCount = doneItems.length;
     const progPct = items.length > 0 ? Math.round(scannedCount / items.length * 100) : 0;
 
@@ -5486,6 +5486,28 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       setWaveOrders(new Set()); setWaveScannedSkus({}); setWaveLocConfirmed(false);
       setWaveSelectMode(false); setWaveActive(false); setWaveScanError("");
       setEshopTab("prep");
+    };
+
+    const [wavePrinting, setWavePrinting] = useState(false);
+    const [wavePrintProgress, setWavePrintProgress] = useState("");
+
+    const printAllWave = async () => {
+      if (wavePrinting) return;
+      setWavePrinting(true);
+      const orders = parcels.filter((p: any) => waveOrders.has(p.order_number));
+      let blOk = 0, labelOk = 0, errors: string[] = [];
+      for (let i = 0; i < orders.length; i++) {
+        const p = orders[i];
+        setWavePrintProgress(`${i + 1}/${orders.length} — ${p.order_number}`);
+        // BL
+        try { await printPackingSlip(p); blOk++; } catch (e: any) { errors.push(`BL ${p.order_number}: ${e.message}`); }
+        // Étiquette transport
+        try { await printLabel(p); labelOk++; } catch (e: any) { errors.push(`Étiq. ${p.order_number}: ${e.message}`); }
+      }
+      setWavePrinting(false);
+      setWavePrintProgress("");
+      if (errors.length) onToast(`⚠ ${errors.length} erreur(s) — ${blOk} BL, ${labelOk} étiq. imprimés`);
+      else onToast(`✅ ${blOk} BL + ${labelOk} étiquettes imprimés`);
     };
 
     const completeWave = async () => {
@@ -5535,8 +5557,13 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           <div style={{ background: C.greenSoft, border: `2px solid ${C.green}`, borderRadius: 20, padding: 28, textAlign: "center", marginBottom: 16 }}>
             <div style={{ fontSize: 36, marginBottom: 8 }}>✅</div>
             <div style={{ fontSize: 18, fontWeight: 800, color: C.green }}>Tout prélevé !</div>
-            <div style={{ fontSize: 13, color: C.textSec, marginTop: 4, marginBottom: 20 }}>{items.length} articles pour {waveOrders.size} commandes</div>
-            <button onClick={completeWave} style={{ width: "100%", padding: "16px 0", borderRadius: 14, border: "none", background: C.green, color: "#fff", fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(34,197,94,0.3)" }}>
+            <div style={{ fontSize: 13, color: C.textSec, marginTop: 4, marginBottom: 16 }}>{items.length} articles pour {waveOrders.size} commandes</div>
+            {/* Impression en masse BL + étiquettes */}
+            <button onClick={printAllWave} disabled={wavePrinting}
+              style={{ width: "100%", padding: "14px 0", borderRadius: 12, border: "none", background: wavePrinting ? "#9ca3af" : C.blue, color: "#fff", fontSize: 14, fontWeight: 800, cursor: wavePrinting ? "default" : "pointer", fontFamily: "inherit", marginBottom: 10, boxShadow: "0 2px 8px rgba(37,99,235,0.25)" }}>
+              {wavePrinting ? `🖨️ ${wavePrintProgress}` : `🖨️ Imprimer BL + étiquettes (${waveOrders.size})`}
+            </button>
+            <button onClick={completeWave} disabled={wavePrinting} style={{ width: "100%", padding: "14px 0", borderRadius: 12, border: "none", background: wavePrinting ? "#9ca3af" : C.green, color: "#fff", fontSize: 14, fontWeight: 800, cursor: wavePrinting ? "default" : "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(34,197,94,0.3)" }}>
               ✓ Marquer les commandes comme préparées
             </button>
           </div>
