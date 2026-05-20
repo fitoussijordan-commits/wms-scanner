@@ -998,21 +998,28 @@ export async function packAndShipOut(
     }
   }
 
-  // 6. Assigner toutes les move lines au colis 1
-  if (moveLines.length && packageIds[0]) {
-    const mlIds = moveLines.map((ml: any) => ml.id);
-    tasks.push(call(session, "/web/dataset/call_kw", {
-      model: "stock.move.line", method: "write",
-      args: [mlIds, { result_package_id: packageIds[0] }], kwargs: {},
-    }));
+  // 6. Distribuer les move lines en round-robin sur les N colis
+  //    → chaque colis reçoit du contenu → TNT génère 1 étiquette par colis
+  if (moveLines.length && packageIds.length) {
+    // Grouper par colis cible pour batcher les writes
+    const mlsByPkg: Record<number, number[]> = {};
+    for (let i = 0; i < moveLines.length; i++) {
+      const pkgId = packageIds[i % packageIds.length];
+      if (!mlsByPkg[pkgId]) mlsByPkg[pkgId] = [];
+      mlsByPkg[pkgId].push(moveLines[i].id);
+    }
+    for (const [pkgId, ids] of Object.entries(mlsByPkg)) {
+      tasks.push(write(session, "stock.move.line", ids, { result_package_id: Number(pkgId) }));
+    }
   }
 
-  // 7. Colis 2..N → stock.package.level (en parallèle)
-  for (let i = 1; i < packageIds.length; i++) {
+  // 7. Si nPackages > moveLines.length, certains colis n'ont pas de lignes → stock.package.level
+  const assignedCount = Math.min(moveLines.length, packageIds.length);
+  for (let i = assignedCount; i < packageIds.length; i++) {
     tasks.push(
       create(session, "stock.package.level", {
         package_id: packageIds[i], picking_id: outPickingId, is_done: true,
-      }).catch(() => null) // version Odoo sans stock.package.level — le number_of_packages suffit
+      }).catch(() => null)
     );
   }
 
