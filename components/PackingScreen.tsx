@@ -152,6 +152,7 @@ interface DoneResult {
   labelCount:       number;
   blPrinted:        boolean;
   labelPrinted:     boolean;
+  labelsPending:    boolean;
   labelAttachments: { id: number; name: string; datas: string }[];
   groupResults:     { name: string; blPrinted: boolean; blError?: string }[];
 }
@@ -460,52 +461,67 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     }
     setPacking(true); setError(""); setBlError("");
     try {
-      // ── 1. Picking principal : pack + ship + BL ────────────────────────────
-      const result = await odoo.packAndShipOut(session, selectedId, parsedWeights, {
-        blPrinterId:  blPrinterId ?? undefined,
-        blReportName: blReportName,
-      });
+      // ── 1. Picking principal + satellites EN PARALLÈLE ────────────────────
+      const satellitePromises = selectedGroupIds.map(gId =>
+        odoo.validateSatellitePicking(session, gId, {
+          blPrinterId:  blPrinterId ?? undefined,
+          blReportName: blReportName,
+        }).catch((e: any) => ({ name: `OUT-${gId}`, blPrinted: false, blError: e.message }))
+      );
+
+      const [result, ...groupResults] = await Promise.all([
+        odoo.packAndShipOut(session, selectedId, parsedWeights, {
+          blPrinterId:  blPrinterId ?? undefined,
+          blReportName: blReportName,
+        }),
+        ...satellitePromises,
+      ]);
+
       if (result.blError) setBlError(result.blError);
 
-      // Imprimer chaque PDF d'étiquette tel quel (Odoo génère 1 PDF global avec toutes les étiquettes)
-      let labelPrinted = false;
-      if (labelPrinterId && result.labelAttachments.length > 0) {
-        for (const att of result.labelAttachments) {
-          if (att.datas) {
-            const r = await pn.printPdfLabel(labelPrinterId, att.datas, att.name || "Étiquette");
-            if (r.success) labelPrinted = true;
-          }
-        }
-      }
-
-      // ── 2. Pickings satellites : validate sans transporteur + BL ──────────
-      const groupResults: { name: string; blPrinted: boolean; blError?: string }[] = [];
-      for (const gId of selectedGroupIds) {
-        try {
-          const gr = await odoo.validateSatellitePicking(session, gId, {
-            blPrinterId:  blPrinterId ?? undefined,
-            blReportName: blReportName,
-          });
-          groupResults.push(gr);
-        } catch (e: any) {
-          groupResults.push({ name: `OUT-${gId}`, blPrinted: false, blError: e.message });
-        }
-      }
-
+      // ── 2. Afficher succès immédiatement ─────────────────────────────────
+      const total = 1 + groupResults.length;
       setDone({
         pickingName:      result.pickingName,
         labelCount:       result.labelAttachments.length,
         blPrinted:        result.blPrinted ?? false,
-        labelPrinted,
+        labelPrinted:     false,
         labelAttachments: result.labelAttachments,
-        groupResults,
+        groupResults:     groupResults as any[],
+        labelsPending:    result.labelsPending ?? false,
       });
-      const total = 1 + groupResults.length;
       onToast(`✅ ${total} commande${total > 1 ? "s" : ""} expédiée${total > 1 ? "s" : ""}`, "success");
+      setPacking(false);
+      packingInProgress.current = false;
+
+      // ── 3. Impression étiquettes en arrière-plan ─────────────────────────
+      const printLabels = async (atts: any[]) => {
+        if (!labelPrinterId || !atts.length) return;
+        for (const att of atts) {
+          if (att.datas) await pn.printPdfLabel(labelPrinterId, att.datas, att.name || "Étiquette");
+        }
+        onToast("🖨️ Étiquette(s) imprimée(s)", "success");
+      };
+
+      if (result.labelAttachments.length > 0) {
+        printLabels(result.labelAttachments);
+      } else if (result.labelsPending) {
+        // Étiquette pas encore prête — poll en arrière-plan jusqu'à 30s
+        (async () => {
+          const deadline = Date.now() + 30000;
+          while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 2000));
+            try {
+              const atts = await odoo.getPickingAttachments(session, selectedId);
+              if (atts.length > 0) { printLabels(atts); return; }
+            } catch {}
+          }
+          onToast("⚠ Étiquette non reçue — vérifie SendCloud/TNT", "error");
+        })();
+      }
     } catch (e: any) {
       setError(e.message);
       onToast("Erreur : " + e.message, "error");
-    } finally {
       setPacking(false);
       packingInProgress.current = false;
     }

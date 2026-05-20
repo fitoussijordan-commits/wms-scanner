@@ -944,7 +944,7 @@ export async function packAndShipOut(
   outPickingId: number,
   packageWeights: number[],
   printOptions?: { blPrinterId?: number; labelPrinterId?: number; blReportName?: string; overlayDate?: string }
-): Promise<{ pickingName: string; labelAttachments: { id: number; name: string; datas: string }[]; blPrinted: boolean; blError?: string }> {
+): Promise<{ pickingName: string; labelAttachments: { id: number; name: string; datas: string }[]; labelsPending: boolean; blPrinted: boolean; blError?: string }> {
   const nPackages = packageWeights.length;
   if (!nPackages) throw new Error("Au moins un colis requis");
 
@@ -1053,39 +1053,44 @@ export async function packAndShipOut(
     return [];
   };
 
-  // 11 + 12. Étiquettes + BL en parallèle
-  //   - Si transporteur : Odoo appelle send_to_shipper AUTOMATIQUEMENT lors de button_validate.
-  //     On poll d'abord (4.5s). Si une étiquette apparaît → c'est l'auto-shipper, on ne rappelle pas.
-  //     Si rien → fallback manuel send_to_shipper (cas Odoo sans auto-ship configuré).
-  //   - BL démarre en même temps (parallèle)
-  const [newAttachments, blResultRaw] = await Promise.all([
-    (async (): Promise<any[]> => {
-      if (!hasCarrier) return pollLabels(600);
-      // Poll : Odoo auto-ship a peut-être déjà généré l'étiquette
-      const autoLabels = await pollLabels(4500);
-      if (autoLabels.length > 0) return autoLabels;
-      // Fallback : appel manuel si l'auto-ship n'a rien produit
-      try {
-        await callMethod(session, "stock.picking", "send_to_shipper", [[outPickingId]]);
-      } catch { /* module absent */ }
-      return pollLabels(4000);
-    })(),
-    printOptions?.blPrinterId
-      ? printPickingReportDirect(session, outPickingId, printOptions.blPrinterId, {
-          reportName: printOptions.blReportName || getSavedPrepReportName(),
-          title: `BL_${pickingName}.pdf`,
-          overlayDate: printOptions.overlayDate,
-        })
-      : Promise.resolve({ success: false, error: undefined as string | undefined }),
-  ]);
+  // 11. BL en parallèle avec le polling étiquette
+  const blPromise = printOptions?.blPrinterId
+    ? printPickingReportDirect(session, outPickingId, printOptions.blPrinterId, {
+        reportName: printOptions.blReportName || getSavedPrepReportName(),
+        title: `BL_${pickingName}.pdf`,
+        overlayDate: printOptions.overlayDate,
+      })
+    : Promise.resolve({ success: false, error: undefined as string | undefined });
 
-  const labels = newAttachments;
+  // 12. Étiquettes transporteur — poll rapide (1.5s), si rien → fallback send_to_shipper async
+  //     On ne bloque PAS l'UI sur le polling long : on renvoie labelsPending=true et
+  //     le client relance fetchLabels() en arrière-plan si nécessaire.
+  let labelAttachments: any[] = [];
+  const quickLabels = await pollLabels(1500);
+  if (quickLabels.length > 0) {
+    labelAttachments = quickLabels;
+  } else if (hasCarrier) {
+    // Lancer send_to_shipper + poll en arrière-plan (non-bloquant)
+    // → la fonction retourne tout de suite avec labelsPending=true
+    // → le caller poll via fetchLabelAttachments() séparément
+    (async () => {
+      try { await callMethod(session, "stock.picking", "send_to_shipper", [[outPickingId]]); } catch {}
+    })();
+  }
+
+  const blResultRaw = await blPromise;
   const blPrinted = blResultRaw.success;
   const blError: string | undefined = !blResultRaw.success
     ? (blResultRaw.error || (printOptions?.blPrinterId ? "Échec impression BL (raison inconnue)" : undefined))
     : undefined;
 
-  return { pickingName, labelAttachments: labels, blPrinted, blError };
+  return {
+    pickingName,
+    labelAttachments,
+    labelsPending: hasCarrier && labelAttachments.length === 0,
+    blPrinted,
+    blError,
+  };
 }
 
 /** Valide un picking satellite (commande groupée) SANS transporteur.
