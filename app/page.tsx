@@ -4529,7 +4529,12 @@ const printerIconWhite = <svg width="20" height="20" viewBox="0 0 24 24" fill="n
 // ============================================
 function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
   // ── Tabs ──
-  const [eshopTab, setEshopTab] = useState<"orders" | "prep" | "pack">("orders");
+  const [eshopTab, setEshopTab] = useState<"orders" | "prep" | "pack" | "wave">("orders");
+
+  // ── Wave picking ──
+  const [waveOrders,    setWaveOrders]    = useState<Set<string>>(new Set());
+  const [waveSelectMode, setWaveSelectMode] = useState(false);
+  const [wavePickedSkus, setWavePickedSkus] = useState<Set<string>>(new Set());
 
   // ── Shared data ──
   const [parcels, setParcels] = useState<any[]>([]);
@@ -5248,51 +5253,219 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const renderPrepTab = () => {
     if (prepOrder) return renderPrepDetail();
     const pending = parcels.filter(p => !preparedIds.has(p.order_number));
+    const toggleWaveOrder = (orderNumber: string) => {
+      setWaveOrders(prev => {
+        const next = new Set(prev);
+        if (next.has(orderNumber)) next.delete(orderNumber); else next.add(orderNumber);
+        return next;
+      });
+    };
     return (
       <>
-        {/* Scan / saisie n° commande */}
-        <div style={{ ...cardStyle, padding: 16, marginBottom: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Scanne ou saisis le numéro de commande</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              value={prepInput}
-              onChange={e => { setPrepInput(e.target.value); setPrepInputErr(""); }}
-              onKeyDown={e => {
-                if (e.key === "Enter" || e.key === "Tab") {
-                  e.preventDefault();
-                  // Lire la valeur DOM réelle (pas le state — évite la stale closure avec scanner)
-                  const val = (e.currentTarget as HTMLInputElement).value.trim();
-                  const found = findOrderByNumber(val);
-                  if (found) { setPrepInput(""); openPrepOrder(found); }
-                  else setPrepInputErr(`❌ Commande "${val}" non trouvée`);
-                }
-              }}
-              placeholder="Ex: 26411772"
-              style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1.5px solid ${prepInputErr ? C.red : C.border}`, fontSize: 14, fontFamily: "inherit", outline: "none" }}
-            />
+        {/* Scan / saisie n° commande — masqué en mode sélection lot */}
+        {!waveSelectMode && (
+          <div style={{ ...cardStyle, padding: 16, marginBottom: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Scanne ou saisis le numéro de commande</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                value={prepInput}
+                onChange={e => { setPrepInput(e.target.value); setPrepInputErr(""); }}
+                onKeyDown={e => {
+                  if (e.key === "Enter" || e.key === "Tab") {
+                    e.preventDefault();
+                    const val = (e.currentTarget as HTMLInputElement).value.trim();
+                    const found = findOrderByNumber(val);
+                    if (found) { setPrepInput(""); openPrepOrder(found); }
+                    else setPrepInputErr(`❌ Commande "${val}" non trouvée`);
+                  }
+                }}
+                placeholder="Ex: 26411772"
+                style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: `1.5px solid ${prepInputErr ? C.red : C.border}`, fontSize: 14, fontFamily: "inherit", outline: "none" }}
+              />
+              <button
+                onClick={() => { const found = findOrderByNumber(prepInput); if (found) { setPrepInput(""); openPrepOrder(found); } else setPrepInputErr(`❌ "${prepInput.trim()}" non trouvée`); }}
+                style={{ padding: "10px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                OK
+              </button>
+            </div>
+            {prepInputErr && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{prepInputErr}</div>}
+          </div>
+        )}
+
+        {/* Barre mode sélection */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>
+            {waveSelectMode ? `${waveOrders.size} sélectionnée(s)` : `À préparer (${pending.length})`}
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {waveSelectMode && waveOrders.size > 0 && (
+              <button
+                onClick={() => { setWavePickedSkus(new Set()); setEshopTab("wave"); }}
+                style={{ padding: "7px 12px", background: "#db2777", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                🧺 Liste de prélèvement ({waveOrders.size})
+              </button>
+            )}
             <button
-              onClick={() => { const found = findOrderByNumber(prepInput); if (found) { setPrepInput(""); openPrepOrder(found); } else setPrepInputErr(`❌ "${prepInput.trim()}" non trouvée`); }}
-              style={{ padding: "10px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-              OK
+              onClick={() => { setWaveSelectMode(m => !m); if (waveSelectMode) setWaveOrders(new Set()); }}
+              style={{ padding: "7px 12px", background: waveSelectMode ? "#fce7f3" : C.bg, color: waveSelectMode ? "#9d174d" : C.textSec, border: `1.5px solid ${waveSelectMode ? "#db2777" : C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+              {waveSelectMode ? "✕ Annuler" : "☑ Sélection lot"}
             </button>
           </div>
-          {prepInputErr && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{prepInputErr}</div>}
         </div>
-        {/* Liste commandes à préparer */}
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>
-          À préparer ({pending.length})
-        </div>
-        {pending.map((p: any) => (
-          <div key={p.id} onClick={() => openPrepOrder(p)} style={{ ...cardStyle, marginBottom: 8, padding: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{p.order_number}</div>
-              <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
-              <div style={{ fontSize: 11, color: C.textMuted }}>{(p.parcel_items || []).length} article(s)</div>
+
+        {/* Tout sélectionner */}
+        {waveSelectMode && pending.length > 0 && (
+          <button
+            onClick={() => setWaveOrders(new Set(pending.map((p: any) => p.order_number)))}
+            style={{ width: "100%", marginBottom: 8, padding: "8px 0", background: "transparent", border: `1.5px dashed ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, color: C.textSec, cursor: "pointer", fontFamily: "inherit" }}>
+            Tout sélectionner ({pending.length})
+          </button>
+        )}
+
+        {/* Liste commandes */}
+        {pending.map((p: any) => {
+          const isSelected = waveOrders.has(p.order_number);
+          return (
+            <div
+              key={p.id}
+              onClick={() => waveSelectMode ? toggleWaveOrder(p.order_number) : openPrepOrder(p)}
+              style={{ ...cardStyle, marginBottom: 8, padding: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10, background: isSelected ? "#fce7f3" : C.white, border: `1.5px solid ${isSelected ? "#db2777" : C.border}` }}
+            >
+              {waveSelectMode && (
+                <div style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${isSelected ? "#db2777" : C.border}`, background: isSelected ? "#db2777" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  {isSelected && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
+                </div>
+              )}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{p.order_number}</div>
+                <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
+                <div style={{ fontSize: 11, color: C.textMuted }}>{(p.parcel_items || []).length} article(s)</div>
+              </div>
+              {!waveSelectMode && <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>}
             </div>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-          </div>
-        ))}
+          );
+        })}
         {pending.length === 0 && !loading && <Alert type="info">Toutes les commandes sont préparées !</Alert>}
+      </>
+    );
+  };
+
+  // ── Wave picking : liste de prélèvement consolidée ─────────────────────────
+  const buildWaveItems = () => {
+    const map = new Map<string, { sku: string; ref: string; name: string; location: string; totalQty: number; dispatch: { orderNumber: string; qty: number }[] }>();
+    for (const p of parcels.filter((p: any) => waveOrders.has(p.order_number))) {
+      for (const item of (p.parcel_items || [])) {
+        const sku = item.sku;
+        const match = matchData[sku];
+        const loc = match?.product_id ? locationData[match.product_id] : null;
+        if (!map.has(sku)) {
+          map.set(sku, { sku, ref: match?.default_code || sku, name: match?.product_name || item.description || sku, location: loc?.location_name ? shortLoc(loc.location_name) : "?", totalQty: 0, dispatch: [] });
+        }
+        const entry = map.get(sku)!;
+        entry.totalQty += (item.quantity || 1);
+        const existing = entry.dispatch.find(d => d.orderNumber === p.order_number);
+        if (existing) existing.qty += (item.quantity || 1);
+        else entry.dispatch.push({ orderNumber: p.order_number, qty: item.quantity || 1 });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.location.localeCompare(b.location));
+  };
+
+  const renderWaveTab = () => {
+    const items = buildWaveItems();
+    const totalLines = items.length;
+    const pickedCount = items.filter(it => wavePickedSkus.has(it.sku)).length;
+    const allPicked = totalLines > 0 && pickedCount === totalLines;
+
+    const togglePicked = (sku: string) => {
+      setWavePickedSkus(prev => { const next = new Set(prev); if (next.has(sku)) next.delete(sku); else next.add(sku); return next; });
+    };
+
+    return (
+      <>
+        {/* Header wave */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+          <button onClick={() => setEshopTab("prep")} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>Liste de prélèvement</div>
+            <div style={{ fontSize: 12, color: C.textSec }}>{waveOrders.size} commande{waveOrders.size > 1 ? "s" : ""} · {totalLines} référence{totalLines > 1 ? "s" : ""}</div>
+          </div>
+          {totalLines > 0 && (
+            <button
+              onClick={() => setWavePickedSkus(allPicked ? new Set() : new Set(items.map(i => i.sku)))}
+              style={{ padding: "7px 12px", background: allPicked ? C.greenSoft : C.bg, border: `1.5px solid ${allPicked ? C.green : C.border}`, borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", color: allPicked ? C.green : C.textSec }}>
+              {allPicked ? "✅ Tout prélevé" : "Tout cocher"}
+            </button>
+          )}
+        </div>
+
+        {/* Progress bar */}
+        {totalLines > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ fontSize: 12, color: C.textSec }}>Progression</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: allPicked ? C.green : C.blue }}>{pickedCount}/{totalLines}</span>
+            </div>
+            <div style={{ height: 6, borderRadius: 3, background: C.bg, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${totalLines > 0 ? Math.round(pickedCount / totalLines * 100) : 0}%`, background: allPicked ? C.green : C.blue, transition: "width .3s", borderRadius: 3 }} />
+            </div>
+          </div>
+        )}
+
+        {/* Commandes incluses */}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const, marginBottom: 12 }}>
+          {Array.from(waveOrders).map(on => (
+            <span key={on} style={{ fontSize: 11, fontWeight: 700, background: "#fce7f3", color: "#9d174d", padding: "3px 9px", borderRadius: 99 }}>{on}</span>
+          ))}
+        </div>
+
+        {/* Liste de prélèvement */}
+        {items.map((item, i) => {
+          const isPicked = wavePickedSkus.has(item.sku);
+          return (
+            <div
+              key={item.sku}
+              style={{ ...cardStyle, marginBottom: 8, padding: 14, opacity: isPicked ? 0.6 : 1, transition: "opacity .2s", background: isPicked ? "#f0fdf4" : C.white, border: `1.5px solid ${isPicked ? C.green : C.border}` }}
+            >
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                {/* Checkbox */}
+                <button
+                  onClick={() => togglePicked(item.sku)}
+                  style={{ flexShrink: 0, width: 26, height: 26, borderRadius: 7, border: `2px solid ${isPicked ? C.green : C.border}`, background: isPicked ? C.green : "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", marginTop: 2 }}>
+                  {isPicked && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
+                </button>
+
+                <div style={{ flex: 1 }}>
+                  {/* Ligne principale */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" as const }}>
+                    {/* Emplacement */}
+                    <span style={{ fontSize: 12, fontWeight: 800, background: "#eff6ff", color: "#1d4ed8", padding: "2px 8px", borderRadius: 6, fontFamily: "monospace" }}>{item.location}</span>
+                    {/* Ref */}
+                    <span style={{ fontSize: 11, fontFamily: "monospace", color: C.textMuted }}>{item.ref}</span>
+                    {/* Qty totale */}
+                    <span style={{ marginLeft: "auto", fontSize: 18, fontWeight: 900, color: isPicked ? C.green : C.text }}>×{item.totalQty}</span>
+                  </div>
+                  {/* Désignation */}
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 6, textDecoration: isPicked ? "line-through" : "none" }}>{item.name}</div>
+                  {/* Dispatch par commande */}
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" as const }}>
+                    {item.dispatch.map(d => (
+                      <span key={d.orderNumber} style={{ fontSize: 11, background: "#f3f4f6", color: C.textSec, padding: "2px 7px", borderRadius: 5, fontWeight: 600 }}>
+                        {d.orderNumber} → {d.qty}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {items.length === 0 && (
+          <Alert type="info">Aucun article dans les commandes sélectionnées.</Alert>
+        )}
       </>
     );
   };
@@ -5403,6 +5576,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     { key: "orders", label: "📦 Commandes" },
     { key: "prep",   label: "🔍 Préparation" },
     { key: "pack",   label: "📫 Emballage" },
+    { key: "wave",   label: `🧺${waveOrders.size > 0 ? ` (${waveOrders.size})` : ""}` },
   ] as const;
 
   return (
@@ -5415,8 +5589,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, margin: 0 }}>E-shop</h2>
       </div>
 
-      {/* 3 tabs — hide when in prep detail or pack detail */}
-      {!(eshopTab === "prep" && prepOrder) && !(eshopTab === "pack" && packOrder) && (
+      {/* Tabs — masqués en vue détail prep/pack et en wave */}
+      {!(eshopTab === "prep" && prepOrder) && !(eshopTab === "pack" && packOrder) && eshopTab !== "wave" && (
         <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
           {TABS.map(({ key, label }) => (
             <button key={key} onClick={() => setEshopTab(key)} style={{
@@ -5431,6 +5605,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       {eshopTab === "orders" && renderOrdersTab()}
       {eshopTab === "prep"   && renderPrepTab()}
       {eshopTab === "pack"   && renderPackTab()}
+      {eshopTab === "wave"   && renderWaveTab()}
     </>
   );
 }
