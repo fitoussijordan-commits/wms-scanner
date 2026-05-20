@@ -5492,11 +5492,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       const newSet = new Set(Array.from(preparedIds));
       for (const on of Array.from(waveOrders)) newSet.add(on);
       await savePrepared(newSet);
-      onToast(`✅ ${waveOrders.size} commande(s) marquées préparées`);
+      onToast(`✅ ${waveOrders.size} commande(s) prêtes à emballer`);
       clearWaveState();
       setWaveOrders(new Set()); setWaveScannedSkus({}); setWaveLocConfirmed(false);
       setWaveSelectMode(false); setWaveActive(false); setWaveScanError("");
-      setEshopTab("prep");
+      setEshopTab("pack"); // → direct vers Emballage
     };
 
     return (
