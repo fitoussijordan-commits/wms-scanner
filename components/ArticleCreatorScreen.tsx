@@ -114,10 +114,11 @@ interface Props {
   session: odoo.OdooSession;
   onBack: () => void;
   onToast: (msg: string, type?: "success" | "error" | "info") => void;
+  initialTab?: "creation" | "seuils";
 }
 
-export default function ArticleCreatorScreen({ session, onBack, onToast }: Props) {
-  const [tab, setTab] = useState<"creation" | "seuils">("creation");
+export default function ArticleCreatorScreen({ session, onBack, onToast, initialTab = "creation" }: Props) {
+  const [tab, setTab] = useState<"creation" | "seuils">(initialTab);
 
   return (
     <div style={S.screen}>

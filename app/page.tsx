@@ -5601,7 +5601,7 @@ function applyMapping(row: any[], headers: string[], mapping: ColMapping): Impor
 }
 
 function ProductImportScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
-  const [tab, setTab] = useState<"import" | "create">("import");
+  const [tab, setTab] = useState<"import" | "create" | "seuils">("import");
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [checking, setChecking] = useState(false);
   const [currentIdx, setCurrentIdx] = useState<number | null>(null);
@@ -5616,9 +5616,9 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   const [mapping, setMapping] = useState<ColMapping | null>(null);
   const [showMapping, setShowMapping] = useState(false);
 
-  // ── Onglet Créer article ─────────────────────────────────────────
-  if (tab === "create") {
-    return <ArticleCreatorScreen session={session} onBack={() => setTab("import")} onToast={onToast} />;
+  // ── Onglets plein-écran ──────────────────────────────────────────
+  if (tab === "create" || tab === "seuils") {
+    return <ArticleCreatorScreen session={session} onBack={() => setTab("import")} onToast={onToast} initialTab={tab === "seuils" ? "seuils" : "creation"} />;
   }
 
   // ── Parse Excel ──────────────────────────────────────────────────
@@ -5851,7 +5851,7 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
 
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 4, marginBottom: 20, background: C.bg, borderRadius: 12, padding: 4 }}>
-        {([["import", "Import Excel"], ["create", "Créer article"]] as const).map(([t, label]) => (
+        {([["import", "Import Excel"], ["create", "Créer article"], ["seuils", "Seuils d'alerte"]] as const).map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)}
             style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600,
               background: tab === t ? C.white : "transparent", color: tab === t ? C.text : C.textMuted,
