@@ -500,7 +500,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         for (const att of atts) {
           if (att.datas) await pn.printPdfLabel(labelPrinterId, att.datas, att.name || "Étiquette");
         }
-        onToast("🖨️ Étiquette(s) imprimée(s)", "success");
+        setDone(prev => prev ? { ...prev, labelPrinted: true, labelsPending: false } : prev);
       };
 
       if (result.labelAttachments.length > 0) {
@@ -632,11 +632,17 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
               </span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 16 }}>{done.labelPrinted ? "🖨️" : done.labelCount > 0 ? "⚠️" : "ℹ️"}</span>
-              <span style={{ color: done.labelPrinted ? C.green : done.labelCount > 0 ? C.warning : C.textMuted }}>
-                {done.labelCount > 0
-                  ? `${Math.min(done.labelCount, nPackages)} étiquette${nPackages > 1 ? "s" : ""} ${done.labelPrinted ? "imprimée" + (nPackages > 1 ? "s" : "") : "disponible" + (nPackages > 1 ? "s" : "") + " (configurer imprimante)"}`
-                  : "Aucune étiquette TNT (vérifier transporteur)"}
+              <span style={{ fontSize: 16 }}>
+                {done.labelPrinted ? "🖨️" : done.labelsPending || (done.labelCount === 0 && labelPrinterId) ? "⏳" : done.labelCount > 0 && !labelPrinterId ? "⚠️" : "ℹ️"}
+              </span>
+              <span style={{ color: done.labelPrinted ? C.green : C.textMuted }}>
+                {done.labelPrinted
+                  ? `${nPackages} étiquette${nPackages > 1 ? "s" : ""} imprimée${nPackages > 1 ? "s" : ""}`
+                  : done.labelsPending || (done.labelCount === 0 && !!labelPrinterId)
+                    ? "Étiquette en cours d'impression…"
+                    : done.labelCount > 0 && !labelPrinterId
+                      ? "Étiquette disponible (configurer imprimante étiquette)"
+                      : "Aucune étiquette transporteur"}
               </span>
             </div>
           </div>
