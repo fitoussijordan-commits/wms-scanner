@@ -9871,14 +9871,16 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         disabled={loading || doneLines === 0}
       />
       {onValidateAndPack && allDone && (
-        <BigButton
-          icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>}
-          label={loading ? "Envoi..." : "Valider + Emballer"}
-          sub="Valide la prépa et ouvre l'emballage"
-          color="#0d9488"
-          onClick={() => { if (allDone) { onValidateAndPack(); return; } }}
-          disabled={loading}
-        />
+        <div style={{ marginTop: 10 }}>
+          <BigButton
+            icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>}
+            label={loading ? "Envoi..." : "Valider + Emballer"}
+            sub="Valide la prépa et ouvre l'emballage"
+            color="#0d9488"
+            onClick={() => { if (allDone) { onValidateAndPack(); return; } }}
+            disabled={loading}
+          />
+        </div>
       )}
     </>
   );
@@ -10179,14 +10181,16 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         disabled={loading || doneLines === 0}
       />
       {onValidateAndPack && allDone && (
-        <BigButton
-          icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>}
-          label={loading ? "Envoi..." : "Valider + Emballer"}
-          sub="Valide la prépa et ouvre l'emballage"
-          color="#0d9488"
-          onClick={() => { if (allDone) { onValidateAndPack(); return; } }}
-          disabled={loading}
-        />
+        <div style={{ marginTop: 10 }}>
+          <BigButton
+            icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>}
+            label={loading ? "Envoi..." : "Valider + Emballer"}
+            sub="Valide la prépa et ouvre l'emballage"
+            color="#0d9488"
+            onClick={() => { if (allDone) { onValidateAndPack(); return; } }}
+            disabled={loading}
+          />
+        </div>
       )}
 
       {/* ── Modale backorder warning ── */}
