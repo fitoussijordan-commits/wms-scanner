@@ -4956,7 +4956,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         const sku = item.sku;
         const match = matchData[sku];
         const loc = match?.product_id ? locationData[match.product_id] : null;
-        const isChariot = chariotSkus.includes(sku);
+        const isChariot = chariotSkus.some(ex => ex.toLowerCase() === (sku || "").toLowerCase());
         if (!map.has(sku)) {
           map.set(sku, { sku, ref: match?.default_code || sku, name: match?.product_name || item.description || sku, location: loc?.location_name ? shortLoc(loc.location_name) : (isChariot ? "Chariot Eshop" : "?"), locationFull: loc?.location_name || "", totalQty: 0, dispatch: [], _isChariot: isChariot });
         }
