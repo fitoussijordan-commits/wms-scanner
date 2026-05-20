@@ -251,7 +251,6 @@ const TABS = [
   { key: "stock-tracking", label: "Suivi stock", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
   { key: "catalogue", label: "Catalogue", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> },
   { key: "libre", label: "Mode Libre", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> },
-  { key: "assistant", label: "Assistant IA", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><circle cx="18" cy="6" r="4" fill="currentColor" stroke="none" opacity=".3"/><path d="M16 6h4M18 4v4" stroke="currentColor" strokeWidth="1.5"/></svg> },
 ] as const;
 
 // ─── CATALOGUE — définition des colonnes disponibles ────────────────────────
@@ -2227,48 +2226,6 @@ export default function Dashboard() {
         {TABS.map((t) => <button key={t.key} className="wms-tab" data-active={tab === t.key} onClick={() => setTab(t.key)}><span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>{t.icon} {t.label}</span></button>)}
       </nav>
 
-      {/* BANDEAU COMMANDES DU JOUR */}
-      {todayOutPending !== null && (
-        <div style={{ background: "var(--bg-raised)", borderBottom: "1px solid var(--border)", padding: "10px 28px", display: "flex", alignItems: "center", gap: 20 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{
-              background: todayOutPending === 0 ? "var(--success-soft)" : todayOutPending <= 5 ? "var(--warning-soft)" : "var(--danger-soft)",
-              border: `1px solid ${todayOutPending === 0 ? "var(--success-border)" : todayOutPending <= 5 ? "var(--warning-border)" : "var(--danger-border)"}`,
-              borderRadius: 10, padding: "6px 16px", display: "flex", alignItems: "center", gap: 10,
-            }}>
-              <span style={{ fontSize: 18 }}>{todayOutPending === 0 ? "✅" : "📦"}</span>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: .5 }}>À emballer aujourd'hui</div>
-                <div style={{ fontSize: 22, fontWeight: 900, lineHeight: 1.1, color: todayOutPending === 0 ? "var(--success)" : todayOutPending <= 5 ? "var(--warning)" : "var(--danger)" }}>
-                  {todayOutPending} <span style={{ fontSize: 13, fontWeight: 500 }}>commande{todayOutPending !== 1 ? "s" : ""}</span>
-                </div>
-              </div>
-            </div>
-            {todayOutDone !== null && todayOutDone > 0 && (
-              <div style={{ background: "var(--success-soft)", border: "1px solid var(--success-border)", borderRadius: 10, padding: "6px 16px" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: .5 }}>Expédiées aujourd'hui</div>
-                <div style={{ fontSize: 22, fontWeight: 900, lineHeight: 1.1, color: "var(--success)" }}>
-                  {todayOutDone} <span style={{ fontSize: 13, fontWeight: 500 }}>expédiée{todayOutDone !== 1 ? "s" : ""}</span>
-                </div>
-              </div>
-            )}
-            {/* Barre de progression */}
-            {todayOutDone !== null && (todayOutPending + todayOutDone) > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 160 }}>
-                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  {todayOutDone} / {todayOutDone + todayOutPending} traitées
-                </div>
-                <div style={{ height: 8, background: "var(--border)", borderRadius: 4, overflow: "hidden", width: 160 }}>
-                  <div style={{ height: "100%", width: `${Math.round((todayOutDone / (todayOutDone + todayOutPending)) * 100)}%`, background: "var(--success)", borderRadius: 4, transition: "width .4s ease" }} />
-                </div>
-              </div>
-            )}
-          </div>
-          <button onClick={loadTodayOut} title="Rafraîchir" style={{ marginLeft: "auto", background: "none", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 10px", cursor: "pointer", color: "var(--text-muted)", fontSize: 13, fontFamily: "inherit" }}>
-            🔄
-          </button>
-        </div>
-      )}
 
       {/* CONTENT */}
       <main style={{ maxWidth: 1260, margin: "0 auto", padding: "28px 28px 60px" }}>
@@ -3089,7 +3046,7 @@ export default function Dashboard() {
         )}
 
         {tab === "libre" && (
-          <div style={{ animation: "fadeIn .3s ease both" }}>
+          <div style={{ animation: "fadeIn .3s ease both", maxWidth: 860, margin: "0 auto" }}>
             <div style={{ marginBottom: 24 }}>
               <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Mode Libre</h2>
               <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Collez n'importe quel texte contenant des références Odoo — le tableau se construit automatiquement.</p>
