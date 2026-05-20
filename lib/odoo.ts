@@ -1047,19 +1047,15 @@ export async function packAndShipOut(
   };
 
   // 11 + 12. Étiquettes + BL en parallèle
-  //   - Poll court (600ms) d'abord : si Odoo a auto-généré une étiquette à la validation → on l'utilise
-  //     sans appeler send_to_shipper (évite les doublons d'étiquettes)
-  //   - Si rien après 600ms → send_to_shipper + poll 3s
+  //   - Si transporteur : toujours appeler send_to_shipper (génère 1 étiquette par colis)
   //   - BL démarre en même temps (parallèle)
   const [newAttachments, blResultRaw] = await Promise.all([
     (async (): Promise<any[]> => {
       if (!hasCarrier) return pollLabels(600);
-      const quick = await pollLabels(600);
-      if (quick.length > 0) return quick;           // Odoo a auto-généré → pas de send_to_shipper
       try {
         await callMethod(session, "stock.picking", "send_to_shipper", [[outPickingId]]);
-      } catch { /* module absent ou déjà appelé */ }
-      return pollLabels(3000);
+      } catch { /* module absent */ }
+      return pollLabels(4000);
     })(),
     printOptions?.blPrinterId
       ? printPickingReportDirect(session, outPickingId, printOptions.blPrinterId, {
