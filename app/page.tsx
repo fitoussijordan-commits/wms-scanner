@@ -9644,18 +9644,34 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 
   // Fusion visuelle : même produit + même lot + même emplacement → afficher le total combiné
   // (Odoo crée 1 ligne par BL, on les fusionne à l'écran sans toucher aux écritures Odoo)
+  // En multi-scan (picking._groupPickings), on calcule aussi le détail par BL pour l'affichage.
   const effectiveQty = useMemo(() => {
-    if (!activeLine) return { done: 0, total: 0, isMerged: false };
+    if (!activeLine) return { done: 0, total: 0, isMerged: false, perPicking: [] as { label: string; done: number; total: number }[] };
     const siblings = allLines.filter((ml: any) =>
       ml.location_id?.[0] === activeLine.location_id?.[0] &&
       ml.product_id?.[0] === activeLine.product_id?.[0] &&
       (ml.lot_id?.[0] ?? null) === (activeLine.lot_id?.[0] ?? null)
     );
-    if (siblings.length <= 1) return { done: getQty(activeLine), total: activeLine.reserved_uom_qty || 0, isMerged: false };
+    if (siblings.length <= 1) return { done: getQty(activeLine), total: activeLine.reserved_uom_qty || 0, isMerged: false, perPicking: [] };
     const done = siblings.reduce((s: number, ml: any) => s + Math.min(getQty(ml), ml.reserved_uom_qty || 0), 0);
     const total = siblings.reduce((s: number, ml: any) => s + (ml.reserved_uom_qty || 0), 0);
-    return { done, total, isMerged: true };
-  }, [activeLine, allLines]);
+    // Détail par BL (seulement en multi-scan)
+    let perPicking: { label: string; done: number; total: number }[] = [];
+    if (picking?._groupPickings?.length > 1) {
+      const originMap = new Map<number, string>();
+      for (const gp of picking._groupPickings) originMap.set(gp.id, gp.origin || gp.name || String(gp.id));
+      const byPick = new Map<number, { label: string; done: number; total: number }>();
+      for (const ml of siblings) {
+        const pid = ml.picking_id?.[0]; if (!pid) continue;
+        if (!byPick.has(pid)) byPick.set(pid, { label: originMap.get(pid) || String(pid), done: 0, total: 0 });
+        const g = byPick.get(pid)!;
+        g.total += ml.reserved_uom_qty || 0;
+        g.done  += Math.min(getQty(ml), ml.reserved_uom_qty || 0);
+      }
+      perPicking = Array.from(byPick.values());
+    }
+    return { done, total, isMerged: true, perPicking };
+  }, [activeLine, allLines, picking?._groupPickings]);
 
   // Lignes d'affichage = uniquement les lignes réservées
   const displayLines = useMemo(() =>
@@ -10007,7 +10023,20 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
                 <span style={{ fontSize: 18, color: C.textMuted, margin: "0 4px" }}>/</span>
                 <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{effectiveQty.total}</span>
                 <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 4 }}>{activeLine?.product_uom_id?.[1] || ""}</span>
-                {effectiveQty.isMerged && <span style={{ fontSize: 10, color: C.textMuted, display: "block", marginTop: 2 }}>lignes fusionnées</span>}
+                {effectiveQty.isMerged && effectiveQty.perPicking.length > 1 ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 4, marginTop: 5 }}>
+                    {effectiveQty.perPicking.map((pp, i) => (
+                      <span key={i} style={{ fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 6,
+                        background: pp.done >= pp.total ? "#dcfce7" : "#eff6ff",
+                        color: pp.done >= pp.total ? "#16a34a" : "#1d4ed8",
+                        border: `1px solid ${pp.done >= pp.total ? "#bbf7d0" : "#bfdbfe"}` }}>
+                        {pp.label} · {pp.done}/{pp.total}
+                      </span>
+                    ))}
+                  </div>
+                ) : effectiveQty.isMerged ? (
+                  <span style={{ fontSize: 10, color: C.textMuted, display: "block", marginTop: 2 }}>lignes fusionnées</span>
+                ) : null}
               </div>
               <button
                 onClick={() => activeLine && onAdjustQty(activeLine.id, getQty(activeLine) + 1)}
