@@ -848,7 +848,21 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           spellCheck={false}
           style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, fontWeight: 600, outline: "none" }}
           value={scanCode}
-          onChange={e => { scanBufferRef.current = e.target.value; setScanCode(e.target.value); if (scanError) setScanError(""); }}
+          onChange={e => {
+            const val = e.target.value;
+            // Certains scanners PDA injectent \n ou \r comme terminateur au lieu de déclencher onKeyDown
+            if (val.includes("\n") || val.includes("\r")) {
+              const code = val.replace(/[\r\n]/g, "").trim();
+              scanBufferRef.current = "";
+              clearTimeout(scanTimerRef.current);
+              setScanCode("");
+              if (code) handleScan(code);
+              return;
+            }
+            scanBufferRef.current = val;
+            setScanCode(val);
+            if (scanError) setScanError("");
+          }}
           onKeyDown={e => {
             if (e.key === "Enter") {
               e.preventDefault();
