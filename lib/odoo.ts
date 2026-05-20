@@ -960,6 +960,9 @@ export async function packAndShipOut(
       [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
       ["id", "reserved_uom_qty"], 500),
   ]);
+  const existingIds  = new Set(before.map((a: any) => a.id));
+  const pickingName  = pickInfo[0]?.name || `OUT-${outPickingId}`;
+  const hasCarrier   = !!pickInfo[0]?.carrier_id;
 
   // 4. Créer les N colis EN PARALLÈLE, puis forcer le poids par write()
   //    (certaines versions Odoo ignorent shipping_weight au create — le write est obligatoire)
