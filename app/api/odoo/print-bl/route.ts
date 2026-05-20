@@ -98,10 +98,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Réponse Odoo inattendue: ${contentType}` }, { status: 400 });
     }
 
-    // ── 2. Ajouter l'overlay date ──────────────────────────────────────
+    // ── 2. Overlay date uniquement si demandé explicitement ───────────
     const pdfBuffer = await pdfRes.arrayBuffer();
-    const pdfWithOverlay = await addDateOverlay(pdfBuffer, overlayDate, overlayIndex, overlayTotal);
-    const pdfBase64 = Buffer.from(pdfWithOverlay).toString("base64");
+    const needsOverlay = !!(overlayDate || overlayIndex !== undefined || overlayTotal !== undefined);
+    const pdfFinal = needsOverlay
+      ? await addDateOverlay(pdfBuffer, overlayDate, overlayIndex, overlayTotal)
+      : new Uint8Array(pdfBuffer);
+    const pdfBase64 = Buffer.from(pdfFinal).toString("base64");
 
     // ── 3. Envoyer directement à PrintNode ────────────────────────────
     const pnRes = await fetch(`${PRINTNODE_API_URL}/printjobs`, {

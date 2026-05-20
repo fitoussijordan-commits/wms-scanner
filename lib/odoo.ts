@@ -948,24 +948,18 @@ export async function packAndShipOut(
   const nPackages = packageWeights.length;
   if (!nPackages) throw new Error("Au moins un colis requis");
 
-  // 1. Snapshot des pièces jointes existantes + lire info picking (carrier + nom) en parallèle
-  const [before, pickInfo] = await Promise.all([
+  // 1. Snapshot + pickInfo + action_assign + move lines — tout en parallèle
+  //    Le picking est déjà "assigned" (c'est ainsi qu'on l'a trouvé), action_assign est quasi no-op
+  const [before, pickInfo, , moveLines] = await Promise.all([
     searchRead(session, "ir.attachment",
       [["res_model", "=", "stock.picking"], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
       ["id"], 100),
     searchRead(session, "stock.picking", [["id", "=", outPickingId]], ["name", "carrier_id"], 1),
+    callMethod(session, "stock.picking", "action_assign", [[outPickingId]]).catch(() => null),
+    searchRead(session, "stock.move.line",
+      [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
+      ["id", "reserved_uom_qty"], 500),
   ]);
-  const existingIds = new Set(before.map((a: any) => a.id));
-  const pickingName = pickInfo[0]?.name || `OUT-${outPickingId}`;
-  const hasCarrier  = !!pickInfo[0]?.carrier_id;
-
-  // 2. S'assurer que le stock est réservé
-  await callMethod(session, "stock.picking", "action_assign", [[outPickingId]]);
-
-  // 3. Set qty_done = reserved sur toutes les move lines
-  const moveLines = await searchRead(session, "stock.move.line",
-    [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
-    ["id", "reserved_uom_qty"], 500);
 
   // 4. Créer les N colis EN PARALLÈLE, puis forcer le poids par write()
   //    (certaines versions Odoo ignorent shipping_weight au create — le write est obligatoire)
@@ -1035,8 +1029,8 @@ export async function packAndShipOut(
   // 9. Valider le picking OUT
   await validatePicking(session, outPickingId);
 
-  // 10. Polling étiquettes (helper interne)
-  const pollLabels = async (maxMs: number, intervalMs = 400): Promise<any[]> => {
+  // 10. Polling étiquettes (helper interne) — intervalle 200ms pour réactivité
+  const pollLabels = async (maxMs: number): Promise<any[]> => {
     const deadline = Date.now() + maxMs;
     while (Date.now() < deadline) {
       const atts = await searchRead(session, "ir.attachment",
@@ -1044,22 +1038,26 @@ export async function packAndShipOut(
         ["id", "name", "datas", "create_date"], 100);
       const fresh = atts.filter((a: any) => !existingIds.has(a.id));
       if (fresh.length > 0) return fresh;
-      await new Promise(r => setTimeout(r, intervalMs));
+      await new Promise(r => setTimeout(r, 200));
     }
     return [];
   };
 
-  // 11 + 12. send_to_shipper (carrier) ET impression BL en parallèle — gain ~4-6s
+  // 11 + 12. Étiquettes + BL en parallèle
+  //   - Poll court (600ms) d'abord : si Odoo a auto-généré une étiquette à la validation → on l'utilise
+  //     sans appeler send_to_shipper (évite les doublons d'étiquettes)
+  //   - Si rien après 600ms → send_to_shipper + poll 3s
+  //   - BL démarre en même temps (parallèle)
   const [newAttachments, blResultRaw] = await Promise.all([
-    // Branche étiquette transporteur
     (async (): Promise<any[]> => {
-      if (!hasCarrier) return pollLabels(800);
+      if (!hasCarrier) return pollLabels(600);
+      const quick = await pollLabels(600);
+      if (quick.length > 0) return quick;           // Odoo a auto-généré → pas de send_to_shipper
       try {
         await callMethod(session, "stock.picking", "send_to_shipper", [[outPickingId]]);
-      } catch { /* déjà appelé ou module absent */ }
-      return pollLabels(3500);
+      } catch { /* module absent ou déjà appelé */ }
+      return pollLabels(3000);
     })(),
-    // Branche BL — commence immédiatement sans attendre les étiquettes
     printOptions?.blPrinterId
       ? printPickingReportDirect(session, outPickingId, printOptions.blPrinterId, {
           reportName: printOptions.blReportName || getSavedPrepReportName(),
