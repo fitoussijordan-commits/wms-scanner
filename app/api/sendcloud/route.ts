@@ -111,9 +111,10 @@ async function createParcelV2Direct(
   const name =
     [addr.first_name, addr.last_name].filter(Boolean).join(" ") ||
     addr.company_name || addr.name || "Client";
-  const street =
-    [addr.street, addr.house_number].filter(Boolean).join(" ") ||
-    addr.address_line_1 || addr.address_1 || addr.address || "";
+  // V3 utilise address_line_1, V2 utilise street — on prend le bon selon ce qui est présent
+  const streetBase = addr.street || addr.address_line_1 || addr.address_1 || addr.address || "";
+  const houseNum   = addr.house_number || "";
+  const street     = streetBase && houseNum ? `${streetBase} ${houseNum}` : streetBase || houseNum;
 
   // Poids total (somme des poids articles, fallback 1kg)
   const totalWeight = Math.max(
