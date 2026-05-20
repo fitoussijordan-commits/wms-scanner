@@ -4566,6 +4566,21 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     try { await odoo.savePreparedOrders(session, Array.from(ids)); } catch(e) { console.error("savePrepared:", e); }
   };
 
+  // ── Persistance wave state (localStorage) ─────────────────────────────────
+  const WAVE_KEY = "wms_wave_state";
+
+  const saveWaveState = (orders: Set<string>, scanned: Record<string, number>, active: boolean) => {
+    try {
+      localStorage.setItem(WAVE_KEY, JSON.stringify({
+        orders: Array.from(orders),
+        scanned,
+        active,
+      }));
+    } catch {}
+  };
+
+  const clearWaveState = () => { try { localStorage.removeItem(WAVE_KEY); } catch {} };
+
   // Load orders from SendCloud V3
   // Load shared state from Odoo on mount
   useEffect(() => {
@@ -4578,7 +4593,26 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     odoo.loadPreparedOrders(session).then(orders => {
       if (orders.length) setPreparedIds(new Set<string>(orders));
     }).catch(() => {});
+
+    // Restaurer le wave en cours si on revient sur l'écran
+    try {
+      const saved = localStorage.getItem(WAVE_KEY);
+      if (saved) {
+        const { orders, scanned, active } = JSON.parse(saved);
+        if (active && orders?.length) {
+          setWaveOrders(new Set(orders));
+          setWaveScannedSkus(scanned || {});
+          setWaveActive(true);
+          setEshopTab("wave");
+        }
+      }
+    } catch {}
   }, [session]);
+
+  // Sauvegarder le wave state à chaque changement
+  useEffect(() => {
+    if (waveActive) saveWaveState(waveOrders, waveScannedSkus, true);
+  }, [waveOrders, waveScannedSkus, waveActive]);
 
   const loadParcels = async () => {
     setLoading(true); setError("");
@@ -5448,6 +5482,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     };
 
     const cancelWave = () => {
+      clearWaveState();
       setWaveOrders(new Set()); setWaveScannedSkus({}); setWaveLocConfirmed(false);
       setWaveSelectMode(false); setWaveActive(false); setWaveScanError("");
       setEshopTab("prep");
@@ -5458,7 +5493,10 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       for (const on of Array.from(waveOrders)) newSet.add(on);
       await savePrepared(newSet);
       onToast(`✅ ${waveOrders.size} commande(s) marquées préparées`);
-      cancelWave();
+      clearWaveState();
+      setWaveOrders(new Set()); setWaveScannedSkus({}); setWaveLocConfirmed(false);
+      setWaveSelectMode(false); setWaveActive(false); setWaveScanError("");
+      setEshopTab("prep");
     };
 
     return (
