@@ -4538,6 +4538,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [waveScannedSkus,  setWaveScannedSkus]  = useState<Record<string, number>>({});
   const [waveLocConfirmed, setWaveLocConfirmed] = useState(false);
   const [waveScanError,    setWaveScanError]    = useState("");
+  const [wavePrinting,     setWavePrinting]     = useState(false);
+  const [wavePrintProgress, setWavePrintProgress] = useState("");
 
   // ── Shared data ──
   const [parcels, setParcels] = useState<any[]>([]);
@@ -5487,9 +5489,6 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       setWaveSelectMode(false); setWaveActive(false); setWaveScanError("");
       setEshopTab("prep");
     };
-
-    const [wavePrinting, setWavePrinting] = useState(false);
-    const [wavePrintProgress, setWavePrintProgress] = useState("");
 
     const printAllWave = async () => {
       if (wavePrinting) return;
