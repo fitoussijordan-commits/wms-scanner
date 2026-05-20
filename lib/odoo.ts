@@ -2170,3 +2170,48 @@ export async function createProductTemplate(session: OdooSession, data: {
   if (data.weight) vals.weight = data.weight;
   return create(session, "product.template", vals);
 }
+
+/** Recherche des produits par liste de références (default_code) ou mots-clés.
+ *  Retourne id, default_code, name, temp_min_quantity.
+ */
+export async function searchProductsForThreshold(
+  session: OdooSession,
+  refs: string[]
+): Promise<{ id: number; default_code: string; name: string; temp_min_quantity: number }[]> {
+  if (!refs.length) return [];
+  // Chercher par code exact d'abord, puis fallback nom contient
+  const byCode = await searchRead(
+    session, "product.template",
+    [["default_code", "in", refs]],
+    ["id", "default_code", "name", "temp_min_quantity"],
+    500
+  );
+  const foundCodes = new Set((byCode || []).map((p: any) => p.default_code));
+  const notFound = refs.filter(r => !foundCodes.has(r));
+  let byName: any[] = [];
+  if (notFound.length > 0) {
+    // Cherche par nom partiel pour les refs non trouvées par code
+    const domain: any[] = ["|", ...notFound.flatMap(r => [["name", "ilike", r], ["default_code", "ilike", r]])];
+    byName = await searchRead(session, "product.template", domain, ["id", "default_code", "name", "temp_min_quantity"], 200);
+  }
+  const all = [...(byCode || []), ...(byName || [])];
+  // Déduplication par id
+  const seen = new Set<number>();
+  return all.filter((p: any) => { if (seen.has(p.id)) return false; seen.add(p.id); return true; })
+    .map((p: any) => ({
+      id: p.id,
+      default_code: p.default_code || "",
+      name: p.name || "",
+      temp_min_quantity: typeof p.temp_min_quantity === "number" ? p.temp_min_quantity : 0,
+    }));
+}
+
+/** Met à jour temp_min_quantity sur plusieurs product.template en une fois */
+export async function bulkUpdateMinQuantity(
+  session: OdooSession,
+  updates: { id: number; value: number }[]
+): Promise<void> {
+  await Promise.all(
+    updates.map(u => write(session, "product.template", [u.id], { temp_min_quantity: u.value }))
+  );
+}
