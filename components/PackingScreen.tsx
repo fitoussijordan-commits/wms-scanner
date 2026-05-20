@@ -426,9 +426,11 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     setPacking(true); setError(""); setBlError("");
     try {
       // ── 1. Picking principal : pack + ship + BL ────────────────────────────
+      const today = new Date().toISOString().split("T")[0];
       const result = await odoo.packAndShipOut(session, selectedId, parsedWeights, {
         blPrinterId:  blPrinterId ?? undefined,
         blReportName: blReportName,
+        overlayDate:  today,
       });
       if (result.blError) setBlError(result.blError);
 
@@ -451,6 +453,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           const gr = await odoo.validateSatellitePicking(session, gId, {
             blPrinterId:  blPrinterId ?? undefined,
             blReportName: blReportName,
+            overlayDate:  today,
           });
           groupResults.push(gr);
         } catch (e: any) {
@@ -853,9 +856,12 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           onKeyDown={e => {
             if (e.key === "Enter") {
               e.preventDefault();
-              const v = scanCode.trim();
+              // Utiliser la valeur DOM (toujours à jour) plutôt que l'état React
+              // qui peut être périmé quand le scanner PDA tape très vite
+              const v = (e.currentTarget as HTMLInputElement).value.trim();
               scanBufferRef.current = "";
               clearTimeout(scanTimerRef.current);
+              setScanCode("");
               if (v) handleScan(v);
             }
           }}

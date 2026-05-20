@@ -943,7 +943,7 @@ export async function packAndShipOut(
   session: OdooSession,
   outPickingId: number,
   packageWeights: number[],
-  printOptions?: { blPrinterId?: number; labelPrinterId?: number; blReportName?: string }
+  printOptions?: { blPrinterId?: number; labelPrinterId?: number; blReportName?: string; overlayDate?: string }
 ): Promise<{ pickingName: string; labelAttachments: { id: number; name: string; datas: string }[]; blPrinted: boolean; blError?: string }> {
   const nPackages = packageWeights.length;
   if (!nPackages) throw new Error("Au moins un colis requis");
@@ -967,11 +967,18 @@ export async function packAndShipOut(
     [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
     ["id", "reserved_uom_qty"], 500);
 
-  // 4. Créer les N colis EN PARALLÈLE (avant ils étaient séquentiels)
+  // 4. Créer les N colis EN PARALLÈLE, puis forcer le poids par write()
+  //    (certaines versions Odoo ignorent shipping_weight au create — le write est obligatoire)
   const totalWeight = packageWeights.reduce((s, w) => s + w, 0);
   const packageIds = await Promise.all(
-    packageWeights.map(weight =>
-      create(session, "stock.quant.package", { shipping_weight: weight }) as Promise<number>
+    packageWeights.map(() =>
+      create(session, "stock.quant.package", {}) as Promise<number>
+    )
+  );
+  // Écriture explicite du poids sur chaque colis
+  await Promise.all(
+    packageIds.map((pkgId, i) =>
+      write(session, "stock.quant.package", [pkgId], { shipping_weight: packageWeights[i] }).catch(() => null)
     )
   );
 
@@ -1057,6 +1064,7 @@ export async function packAndShipOut(
       ? printPickingReportDirect(session, outPickingId, printOptions.blPrinterId, {
           reportName: printOptions.blReportName || getSavedPrepReportName(),
           title: `BL_${pickingName}.pdf`,
+          overlayDate: printOptions.overlayDate,
         })
       : Promise.resolve({ success: false, error: undefined as string | undefined }),
   ]);
@@ -1076,7 +1084,7 @@ export async function packAndShipOut(
 export async function validateSatellitePicking(
   session: OdooSession,
   pickingId: number,
-  printOptions?: { blPrinterId?: number; blReportName?: string }
+  printOptions?: { blPrinterId?: number; blReportName?: string; overlayDate?: string }
 ): Promise<{ name: string; blPrinted: boolean; blError?: string }> {
   const [info] = await searchRead(session, "stock.picking", [["id", "=", pickingId]], ["name"], 1);
   const pickingName = info?.name || `OUT-${pickingId}`;
@@ -1110,6 +1118,7 @@ export async function validateSatellitePicking(
     const blResult = await printPickingReportDirect(session, pickingId, printOptions.blPrinterId, {
       reportName: printOptions.blReportName || getSavedPrepReportName(),
       title: `BL_${pickingName}.pdf`,
+      overlayDate: printOptions.overlayDate,
     });
     blPrinted = blResult.success;
     if (!blResult.success) blError = blResult.error || "Échec impression BL";
