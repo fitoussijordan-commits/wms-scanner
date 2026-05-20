@@ -2,6 +2,61 @@
 // components/PackingScreen.tsx — Emballage + expédition automatique (pack & ship)
 
 import { useState, useEffect, useCallback, useRef } from "react";
+
+// ── Hook scanner identique à la Préparation (Zebra / DataWedge) ──────────────
+function useScannerListener(onScan: (code: string) => void, enabled: boolean) {
+  const buf      = useRef("");
+  const timer    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTgt  = useRef<EventTarget | null>(null);
+  const cb       = useRef(onScan);
+  cb.current = onScan;
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    const isTextInput = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLInputElement) && !(el instanceof HTMLTextAreaElement)) return false;
+      if (el instanceof HTMLTextAreaElement) return true;
+      const t = (el as HTMLInputElement).type;
+      return !t || t === "text" || t === "search" || t === "email" || t === "tel" || t === "url" || t === "password";
+    };
+
+    const flush = (tgt?: HTMLElement) => {
+      const code = buf.current.replace(/[^\x20-\x7EÀ-ɏ]/g, "").trim();
+      buf.current = "";
+      if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+      if (code.length >= 3) {
+        cb.current(code);
+        // Vide le champ input si le scan y est tombé
+        if (tgt instanceof HTMLInputElement) {
+          const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+          if (s) { s.call(tgt, ""); tgt.dispatchEvent(new Event("input", { bubbles: true })); }
+        }
+      }
+    };
+
+    const handle = (e: KeyboardEvent) => {
+      const tgt = e.target as HTMLElement;
+      // Enter ou Tab = terminateur DataWedge — flush immédiat
+      if (e.key === "Enter" || e.key === "Tab") {
+        if (buf.current.length >= 3) { e.preventDefault(); e.stopPropagation(); }
+        flush(tgt instanceof HTMLInputElement ? tgt : undefined);
+        return;
+      }
+      if (e.key.length !== 1) return;
+      buf.current += e.key;
+      lastTgt.current = e.target;
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => {
+        if (isTextInput(lastTgt.current)) { buf.current = ""; timer.current = null; return; }
+        flush();
+      }, 80);
+    };
+
+    window.addEventListener("keydown", handle, true);
+    return () => { window.removeEventListener("keydown", handle, true); if (timer.current) clearTimeout(timer.current); };
+  }, [enabled]);
+}
 import * as odoo from "@/lib/odoo";
 import * as pn from "@/lib/printnode";
 import type { OdooSession } from "@/lib/odoo";
@@ -138,7 +193,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   // Guard anti double-exécution
   const packingInProgress = useRef(false);
 
-  // Buffer scanner PDA — sans .focus() (évite clavier mobile)
+  // (refs conservés pour compatibilité saisie manuelle)
   const scanBufferRef = useRef("");
   const scanTimerRef  = useRef<ReturnType<typeof setTimeout>>();
 
@@ -385,31 +440,11 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     }
   }, [pickings, session, openDetail]);
 
-  // Listener global clavier — PDA scanner sans .focus()
-  useEffect(() => {
-    if (view !== "list") return;
-    const onGlobalKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName ?? "";
-      if (tag === "TEXTAREA" || tag === "SELECT" || tag === "INPUT") return;
-      if (target?.isContentEditable) return;
-      if (e.key === "Enter") {
-        const code = scanBufferRef.current.trim();
-        scanBufferRef.current = "";
-        clearTimeout(scanTimerRef.current);
-        if (code) { setScanCode(code); handleScan(code); }
-        return;
-      }
-      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        scanBufferRef.current += e.key;
-        setScanCode(scanBufferRef.current);
-        clearTimeout(scanTimerRef.current);
-        scanTimerRef.current = setTimeout(() => { scanBufferRef.current = ""; setScanCode(""); }, 3000);
-      }
-    };
-    document.addEventListener("keydown", onGlobalKey);
-    return () => { document.removeEventListener("keydown", onGlobalKey); clearTimeout(scanTimerRef.current); };
-  }, [view, handleScan]);
+  // Hook scanner identique à la Préparation (capture=true, Enter+Tab, vide le champ)
+  useScannerListener(useCallback((code: string) => {
+    setScanCode(code);
+    handleScan(code);
+  }, [handleScan]), view === "list");
 
   // ── Validate & Ship ───────────────────────────────────────────────────────────
   const validate = async () => {
@@ -849,28 +884,13 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           style={{ flex: 1, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", background: C.white, color: C.text, fontWeight: 600, outline: "none" }}
           value={scanCode}
           onChange={e => {
-            const val = e.target.value;
-            // Certains scanners PDA injectent \n ou \r comme terminateur au lieu de déclencher onKeyDown
-            if (val.includes("\n") || val.includes("\r")) {
-              const code = val.replace(/[\r\n]/g, "").trim();
-              scanBufferRef.current = "";
-              clearTimeout(scanTimerRef.current);
-              setScanCode("");
-              if (code) handleScan(code);
-              return;
-            }
-            scanBufferRef.current = val;
-            setScanCode(val);
+            setScanCode(e.target.value);
             if (scanError) setScanError("");
           }}
           onKeyDown={e => {
             if (e.key === "Enter") {
               e.preventDefault();
-              // Utiliser la valeur DOM (toujours à jour) plutôt que l'état React
-              // qui peut être périmé quand le scanner PDA tape très vite
               const v = (e.currentTarget as HTMLInputElement).value.trim();
-              scanBufferRef.current = "";
-              clearTimeout(scanTimerRef.current);
               setScanCode("");
               if (v) handleScan(v);
             }
