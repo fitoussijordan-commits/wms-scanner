@@ -432,13 +432,12 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
       });
       if (result.blError) setBlError(result.blError);
 
-      // Étiquettes : 1 par colis max
+      // Imprimer chaque PDF d'étiquette tel quel (Odoo génère 1 PDF global avec toutes les étiquettes)
       let labelPrinted = false;
       if (labelPrinterId && result.labelAttachments.length > 0) {
-        const toprint = result.labelAttachments.slice(0, nPackages);
-        for (const att of toprint) {
+        for (const att of result.labelAttachments) {
           if (att.datas) {
-            const r = await pn.printPdfLabel(labelPrinterId, att.datas, att.name || "Étiquette TNT");
+            const r = await pn.printPdfLabel(labelPrinterId, att.datas, att.name || "Étiquette");
             if (r.success) labelPrinted = true;
           }
         }
