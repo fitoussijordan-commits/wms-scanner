@@ -1102,7 +1102,7 @@ export default function Dashboard() {
       // If no specific match, take all internal types to avoid losing data
       const pickTypeIds = (pickCandidates.length ? pickCandidates : pickingTypes.filter((t: any) => t.code === "internal")).map((t: any) => t.id);
 
-      // Load OUT pickings — add write_uid (= user who validated, i.e. the actual preparer)
+      // Load OUT pickings
       const outPickings = outTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", outTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "partner_id", "move_ids", "write_uid"], 2000, "date_done desc") : [];
 
       // Load PICK pickings
@@ -1119,12 +1119,55 @@ export default function Dashboard() {
       }
       setDeliveries(Object.entries(byDate).sort(([a], [b]) => b.localeCompare(a)).map(([date, v]) => ({ date, ...v })));
 
-      // Stats préparateurs
-      // write_uid = dernier utilisateur à avoir modifié le picking = celui qui a validé (préparé)
-      // user_id = "Responsable" Odoo = souvent le vendeur, PAS le préparateur → on l'ignore
+      // ── Stats préparateurs via mail.tracking.value ──────────────────────────
+      // On cherche QUI a passé l'état à "done" dans l'historique Odoo (chatter)
+      // = l'auteur du message "Prêt → Fait (État)" — plus fiable que write_uid
+      // qui peut être écrasé par des opérations post-validation (send_to_shipper, etc.)
+      const allPickingIds = allPickings.map((p: any) => p.id);
+      const pickingAuthorMap: Record<number, string> = {};
+
+      if (allPickingIds.length > 0) {
+        try {
+          // 1. Récupère les tracking values : state → done sur ces pickings
+          const trackingVals = await odoo.searchRead(
+            session, "mail.tracking.value",
+            [
+              ["mail_message_id.model", "=", "stock.picking"],
+              ["mail_message_id.res_id", "in", allPickingIds],
+              ["field_id.name", "=", "state"],
+              ["new_value_char", "in", ["Fait", "Done", "fait", "done"]],
+            ],
+            ["mail_message_id"],
+            5000
+          );
+
+          if (trackingVals.length > 0) {
+            // 2. Récupère les messages correspondants pour avoir author_id + res_id
+            const msgIds = [...new Set(trackingVals.map((tv: any) =>
+              Array.isArray(tv.mail_message_id) ? tv.mail_message_id[0] : tv.mail_message_id
+            ))];
+            const msgs = await odoo.searchRead(
+              session, "mail.message",
+              [["id", "in", msgIds]],
+              ["id", "res_id", "author_id"],
+              5000
+            );
+            // picking_id → nom de l'auteur (premier message trouvé = celui qui a validé)
+            for (const msg of msgs) {
+              if (msg.res_id && msg.author_id && !pickingAuthorMap[msg.res_id]) {
+                pickingAuthorMap[msg.res_id] = msg.author_id[1] || "Inconnu";
+              }
+            }
+          }
+        } catch {
+          // Si mail.tracking.value n'est pas accessible, fallback sur write_uid
+        }
+      }
+
       const prepByUser: Record<string, { picking: number; emballage: number }> = {};
       for (const p of allPickings) {
-        const name = p.write_uid?.[1] || "Inconnu";
+        // Priorité : auteur du message "Prêt→Fait" — sinon write_uid en fallback
+        const name = pickingAuthorMap[p.id] || p.write_uid?.[1] || "Inconnu";
         if (!prepByUser[name]) prepByUser[name] = { picking: 0, emballage: 0 };
         if (p.pickKind === "pick") prepByUser[name].picking++;
         else prepByUser[name].emballage++;
