@@ -351,7 +351,7 @@ function SeuilsTab({ session, onToast }: { session: odoo.OdooSession; onToast: (
   const [loading,   setLoading]   = useState(false);
   const [saving,    setSaving]    = useState(false);
 
-  // Nombre de lignes modifiées (newVal différent de l'actuel ou non vide)
+  // Lignes modifiées (seuil changé)
   const changedRows = rows.filter(r => r.newVal.trim() !== "" && r.newVal.trim() !== String(r.currentVal) && !r.saved);
 
   /** Parse la zone de texte → liste de refs (et éventuellement quantités) */
@@ -425,7 +425,6 @@ function SeuilsTab({ session, onToast }: { session: odoo.OdooSession; onToast: (
     try {
       const updates = toSave.map(r => ({ id: r.id, value: parseFloat(r.newVal) || 0 }));
       await odoo.bulkUpdateMinQuantity(session, updates);
-      // Marquer comme sauvegardé
       setRows(prev => prev.map(r => {
         const u = updates.find(u => u.id === r.id);
         if (!u) return r;
@@ -537,7 +536,7 @@ function SeuilsTab({ session, onToast }: { session: odoo.OdooSession; onToast: (
                   <span style={{ fontFamily: "monospace", fontSize: 12, color: "#374151", fontWeight: 600 }}>
                     {row.default_code || "—"}
                   </span>
-                  <span style={{ fontSize: 12, color: "#4b5563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span title={row.name} style={{ fontSize: 12, color: "#4b5563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {row.name}
                   </span>
                   <span style={{ fontSize: 13, color: "#6b7280", textAlign: "right", fontFamily: "monospace" }}>
