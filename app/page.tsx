@@ -4570,11 +4570,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   // Load shared state from Odoo on mount
   useEffect(() => {
     if (!session) return;
-    odoo.getConfigParam(session, "wms_eshop_chariot_skus").then(val => {
-      console.log("[chariot] val from Odoo:", val);
-      if (val) { try { const p = JSON.parse(val); setChariotSkus(p); setChariotSkusLocal(p); } catch {} }
+    // Chariot SKUs stockés en ir.attachment (via saveChariotSkus/loadChariotSkus)
+    odoo.loadChariotSkus(session).then(p => {
+      if (p.length) { setChariotSkus(p); setChariotSkusLocal(p); }
       setChariotLoaded(true);
-    }).catch((e) => { console.log("[chariot] error:", e); setChariotLoaded(true); });
+    }).catch(() => setChariotLoaded(true));
     odoo.loadPreparedOrders(session).then(orders => {
       if (orders.length) setPreparedIds(new Set<string>(orders));
     }).catch(() => {});
