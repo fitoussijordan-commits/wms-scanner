@@ -4871,7 +4871,16 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     })
     .map((item: any) => ({
       ...item,
-      _isChariot: chariotSkus.some(ex => ex.toLowerCase() === (item.sku || "").toLowerCase()),
+      _isChariot: (() => {
+        const chariotList = chariotSkus.length > 0 ? chariotSkus : getChariotSkusLocal();
+        const m = matchData[item.sku];
+        return chariotList.some(ex => {
+          const el = ex.toLowerCase();
+          return el === (item.sku || "").toLowerCase()
+            || el === (m?.default_code || "").toLowerCase()
+            || el === (m?.barcode || "").toLowerCase();
+        });
+      })(),
     }))
     .sort((a: any, b: any) => {
       const locA = getLocation(a.sku)?.location_name || "zzz";
@@ -4956,7 +4965,14 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         const sku = item.sku;
         const match = matchData[sku];
         const loc = match?.product_id ? locationData[match.product_id] : null;
-        const isChariot = chariotSkus.some(ex => ex.toLowerCase() === (sku || "").toLowerCase());
+        // Chariot : cherche dans le state React OU le cache module (si state pas encore chargé)
+        const chariotList = chariotSkus.length > 0 ? chariotSkus : getChariotSkusLocal();
+        const isChariot = chariotList.some(ex => {
+          const el = ex.toLowerCase();
+          return el === (sku || "").toLowerCase()
+            || el === (match?.default_code || "").toLowerCase()
+            || el === (match?.barcode || "").toLowerCase();
+        });
         if (!map.has(sku)) {
           map.set(sku, { sku, ref: match?.default_code || sku, name: match?.product_name || item.description || sku, location: loc?.location_name ? shortLoc(loc.location_name) : (isChariot ? "Chariot Eshop" : "?"), locationFull: loc?.location_name || "", totalQty: 0, dispatch: [], _isChariot: isChariot });
         }
