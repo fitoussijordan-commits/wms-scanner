@@ -1143,9 +1143,9 @@ export default function Dashboard() {
 
           if (trackingVals.length > 0) {
             // 2. Récupère les messages correspondants pour avoir author_id + res_id
-            const msgIds = [...new Set(trackingVals.map((tv: any) =>
+            const msgIds = Array.from(new Set(trackingVals.map((tv: any) =>
               Array.isArray(tv.mail_message_id) ? tv.mail_message_id[0] : tv.mail_message_id
-            ))];
+            )));
             const msgs = await odoo.searchRead(
               session, "mail.message",
               [["id", "in", msgIds]],
