@@ -1125,54 +1125,53 @@ export default function Dashboard() {
       const allPickingIds = allPickings.map((p: any) => p.id);
       const pickingAuthorMap: Record<number, string> = {};
 
+      // ── Identifier le valideur par proximité temporelle avec date_done ────────
+      // Le message de changement d'état est créé dans la même transaction que la validation
+      // → son date ≈ date_done. On prend le message le plus proche, sans dépendre de
+      // tracking_value_ids (incompatible certaines versions Odoo) ni de new_value_char (traduit).
       if (allPickingIds.length > 0) {
         try {
-          // Approche en 2 étapes pour compatibilité maximale avec toutes les versions Odoo :
-          // Étape 1 : récupère tous les messages de tracking sur ces pickings (champs simples = aucun problème)
-          const allTrackingMsgs = await odoo.searchRead(
+          const allMsgs = await odoo.searchRead(
             session, "mail.message",
             [
               ["model", "=", "stock.picking"],
               ["res_id", "in", allPickingIds],
-              ["tracking_value_ids", "!=", false],
+              ["author_id", "!=", false],
             ],
             ["id", "res_id", "author_id", "date"],
-            10000
+            15000
           );
 
-          if (allTrackingMsgs.length > 0) {
-            const msgIds = allTrackingMsgs.map((m: any) => m.id);
+          // date_done par picking (en ms UTC)
+          const doneDateMs: Record<number, number> = {};
+          for (const p of allPickings) {
+            if (p.date_done) doneDateMs[p.id] = new Date(p.date_done).getTime();
+          }
 
-            // Étape 2 : parmi ces messages, lesquels enregistrent la transition vers "Fait" ?
-            // Filtre direct par mail_message_id (Many2one simple, compatible toutes versions)
-            const doneTrackingVals = await odoo.searchRead(
-              session, "mail.tracking.value",
-              [
-                ["mail_message_id", "in", msgIds],
-                ["new_value_char", "in", ["Fait", "Done", "fait", "done", "Terminé", "Terminé(e)"]],
-              ],
-              ["mail_message_id"],
-              8000
-            );
+          // Groupe messages par picking, exclut les bots
+          const msgsByPicking: Record<number, any[]> = {};
+          for (const msg of allMsgs) {
+            const authorName = (msg.author_id?.[1] || "").toLowerCase();
+            if (authorName.includes("bot") || authorName === "odoobot") continue;
+            if (!msgsByPicking[msg.res_id]) msgsByPicking[msg.res_id] = [];
+            msgsByPicking[msg.res_id].push(msg);
+          }
 
-            // IDs des messages qui correspondent à une transition → Fait
-            const doneMsgIdSet = new Set(doneTrackingVals.map((tv: any) =>
-              Array.isArray(tv.mail_message_id) ? tv.mail_message_id[0] : tv.mail_message_id
-            ));
-
-            // Pour chaque picking, prendre l'auteur du message "→ Fait" le plus récent
-            const latestByPicking: Record<number, { date: string; author: string }> = {};
-            for (const msg of allTrackingMsgs) {
-              if (!doneMsgIdSet.has(msg.id)) continue;
-              if (!msg.res_id || !msg.author_id) continue;
-              const prev = latestByPicking[msg.res_id];
-              if (!prev || (msg.date || "") > prev.date) {
-                latestByPicking[msg.res_id] = { date: msg.date || "", author: msg.author_id[1] || "Inconnu" };
+          // Pour chaque picking, message le plus proche de date_done (dans la fenêtre ±30 min)
+          for (const [pickingIdStr, msgs] of Object.entries(msgsByPicking)) {
+            const pickingId = Number(pickingIdStr);
+            const doneMs = doneDateMs[pickingId];
+            if (!doneMs) continue;
+            let closest: any = null;
+            let closestDiff = Infinity;
+            for (const msg of msgs) {
+              const diff = Math.abs(new Date(msg.date).getTime() - doneMs);
+              if (diff < closestDiff && diff < 30 * 60 * 1000) {
+                closestDiff = diff;
+                closest = msg;
               }
             }
-            for (const [resId, val] of Object.entries(latestByPicking)) {
-              pickingAuthorMap[Number(resId)] = val.author;
-            }
+            if (closest) pickingAuthorMap[pickingId] = closest.author_id[1] || "Inconnu";
           }
         } catch {
           // fallback write_uid si mail inaccessible
@@ -1181,7 +1180,6 @@ export default function Dashboard() {
 
       const prepByUser: Record<string, { picking: number; emballage: number }> = {};
       for (const p of allPickings) {
-        // Priorité : auteur du message "Prêt→Fait" — sinon write_uid en fallback
         const name = pickingAuthorMap[p.id] || p.write_uid?.[1] || "Inconnu";
         if (!prepByUser[name]) prepByUser[name] = { picking: 0, emballage: 0 };
         if (p.pickKind === "pick") prepByUser[name].picking++;
