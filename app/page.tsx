@@ -8025,8 +8025,18 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
   const [bulkItems, setBulkItems] = useState<BulkItem[]>([]);
 
   const parseBulkRefs = async () => {
-    // Extrait une ref par ligne (ou séparées par virgule/point-virgule/tab)
-    const rawRefs = bulkText.split(/[\n,;|\t]+/).map(r => r.trim()).filter(r => r.length >= 2);
+    // Extrait le 1er token de chaque ligne → garde uniquement les refs alphanumériques pures (≥4 chars)
+    // Cela permet de coller un export brut contenant des noms de produits, des quantités, etc.
+    const rawRefs = bulkText
+      .split(/\n/)
+      .map(l => l.trim())
+      .filter(Boolean)
+      .flatMap(line => {
+        // Séparateurs alternatifs sur la même ligne (virgule, point-virgule, pipe, tab)
+        const parts = line.split(/[,;|\t]+/).map(p => p.trim()).filter(Boolean);
+        return parts.map(part => part.split(/\s+/)[0]); // premier token de chaque segment
+      })
+      .filter(tok => /^[A-Za-z0-9]{4,}$/.test(tok)); // alphanum pur, min 4 chars — rejette "15.0", "-2.0", "MEA"
     // Déduplique en gardant l'ordre
     const seen = new Set<string>(); const refs = rawRefs.filter(r => { if (seen.has(r)) return false; seen.add(r); return true; });
     if (!refs.length) { onToast("Aucune référence détectée"); return; }
