@@ -469,6 +469,8 @@ export default function Dashboard() {
   const [dlvSearch, setDlvSearch] = useState("");
   const [dlvFilter, setDlvFilter] = useState<"all" | "alert" | "ok">("alert");
   const DLV_SELL_MARGIN_MONTHS = 12; // règle : ne vendre que si DLV > 12 mois
+  const [dlvColWidths, setDlvColWidths] = useState<Record<string, number>>({ "Statut": 115, "Ref": 100, "Produit": 210, "Lot": 120, "DLV": 120, "Sell-by": 120, "J. restants": 90, "Qté stock": 85, "Conso/mois": 92, "Vendable": 85, "À risque": 85 });
+  const dlvResizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null);
 
   // ── Assistant IA Odoo ────────────────────────────────────────────────────
   type AiMessage = { role: "user" | "assistant"; text: string; model?: string; queriesRun?: number; rawData?: { description: string; model: string; rows: any[] }[] };
@@ -3352,49 +3354,80 @@ export default function Dashboard() {
               )}
 
               {/* Table */}
-              {filtered.length > 0 && (
-                <div className="wms-card" style={{ padding: 0, overflow: "hidden" }}>
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                      <thead>
-                        <tr style={{ background: "var(--bg-raised)", borderBottom: "2px solid var(--border)" }}>
-                          {["Statut","Ref","Produit","Lot","DLV","Sell-by","J. restants","Qté stock","Conso/mois","Vendable","À risque"].map(h => (
-                            <th key={h} style={{ padding: "10px 14px", textAlign: h === "Qté stock" || h === "Conso/mois" || h === "Vendable" || h === "À risque" ? "right" : "left", fontSize: 11, fontWeight: 700, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filtered.map((r, i) => {
-                          const cfg = STATUS_CFG[r.status];
-                          const rowBg = (r.status === "perished" || r.status === "critical") ? "#fffbfb" : r.status === "risk" ? "#fffdf8" : undefined;
-                          return (
-                            <tr key={`${r.productId}_${r.lotId}`} style={{ borderBottom: "1px solid var(--border)", background: i % 2 === 0 ? (rowBg || "var(--bg-surface)") : (rowBg || "var(--bg-raised)"), transition: "background .15s" }}>
-                              <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
-                                <span style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700 }}>{cfg.label}</span>
-                              </td>
-                              <td style={{ padding: "10px 14px", fontWeight: 700, color: "var(--text-primary)", whiteSpace: "nowrap" }}>{r.ref || "—"}</td>
-                              <td style={{ padding: "10px 14px", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.name}>{r.name}</td>
-                              <td style={{ padding: "10px 14px", fontFamily: "monospace", fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{r.lotName}</td>
-                              <td style={{ padding: "10px 14px", whiteSpace: "nowrap", fontWeight: 600 }}>{fmtDate(new Date(r.dlvDate.split(" ")[0] + "T00:00:00"))}</td>
-                              <td style={{ padding: "10px 14px", whiteSpace: "nowrap", color: r.daysToSellBy <= 0 ? "#dc2626" : r.daysToSellBy < 90 ? "#c2410c" : "var(--text-primary)", fontWeight: 600 }}>{fmtDate(r.sellByDate)}</td>
-                              <td style={{ padding: "10px 14px", whiteSpace: "nowrap", textAlign: "center", fontWeight: 700, color: r.daysToSellBy <= 0 ? "#dc2626" : r.daysToSellBy < 30 ? "#dc2626" : r.daysToSellBy < 90 ? "#c2410c" : "var(--text-primary)" }}>{fmtDays(r.daysToSellBy)}</td>
-                              <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 600 }}>{Math.round(r.qty)}</td>
-                              <td style={{ padding: "10px 14px", textAlign: "right", color: r.avgMonthly === 0 ? "var(--text-muted)" : "var(--text-primary)" }}>{r.avgMonthly === 0 ? "—" : r.avgMonthly}</td>
-                              <td style={{ padding: "10px 14px", textAlign: "right", color: "var(--text-muted)" }}>{r.avgMonthly === 0 ? "?" : r.unitsSellable}</td>
-                              <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: r.unitsAtRisk > 0 ? "#dc2626" : r.status === "unknown" ? "var(--text-muted)" : "#15803d" }}>
-                                {r.status === "unknown" ? "?" : r.unitsAtRisk > 0 ? `⚠ ${Math.round(r.unitsAtRisk)}` : "✓ 0"}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+              {filtered.length > 0 && (() => {
+                const COLS: { key: string; label: string; align: "left"|"right"|"center" }[] = [
+                  { key: "Statut",     label: "Statut",      align: "left"   },
+                  { key: "Ref",        label: "Ref",         align: "left"   },
+                  { key: "Produit",    label: "Produit",     align: "left"   },
+                  { key: "Lot",        label: "Lot",         align: "left"   },
+                  { key: "DLV",        label: "DLV",         align: "left"   },
+                  { key: "Sell-by",    label: "Sell-by",     align: "left"   },
+                  { key: "J. restants",label: "J. restants", align: "center" },
+                  { key: "Qté stock",  label: "Qté stock",   align: "right"  },
+                  { key: "Conso/mois", label: "Conso/mois",  align: "right"  },
+                  { key: "Vendable",   label: "Vendable",    align: "right"  },
+                  { key: "À risque",   label: "À risque",    align: "right"  },
+                ];
+                const startResize = (col: string, e: React.MouseEvent) => {
+                  e.preventDefault();
+                  dlvResizingRef.current = { col, startX: e.clientX, startW: dlvColWidths[col] || 100 };
+                  const onMove = (ev: MouseEvent) => {
+                    if (!dlvResizingRef.current) return;
+                    const newW = Math.max(50, dlvResizingRef.current.startW + ev.clientX - dlvResizingRef.current.startX);
+                    setDlvColWidths(prev => ({ ...prev, [dlvResizingRef.current!.col]: newW }));
+                  };
+                  const onUp = () => { dlvResizingRef.current = null; document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); };
+                  document.addEventListener("mousemove", onMove);
+                  document.addEventListener("mouseup", onUp);
+                };
+                return (
+                  <div className="wms-card" style={{ padding: 0, overflow: "hidden" }}>
+                    <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 360px)" }}>
+                      <table style={{ borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed", width: COLS.reduce((s, c) => s + (dlvColWidths[c.key] || 100), 0) }}>
+                        <colgroup>{COLS.map(c => <col key={c.key} style={{ width: dlvColWidths[c.key] || 100 }} />)}</colgroup>
+                        <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
+                          <tr style={{ background: "var(--bg-raised)", borderBottom: "2px solid var(--border)" }}>
+                            {COLS.map(c => (
+                              <th key={c.key} style={{ padding: "10px 14px", textAlign: c.align, fontSize: 11, fontWeight: 700, color: "var(--text-muted)", whiteSpace: "nowrap", position: "relative", background: "var(--bg-raised)", userSelect: "none", overflow: "hidden" }}>
+                                {c.label}
+                                <div onMouseDown={e => startResize(c.key, e)} style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 5, cursor: "col-resize", background: "transparent" }} onMouseEnter={e => (e.currentTarget.style.background = "var(--border)")} onMouseLeave={e => (e.currentTarget.style.background = "transparent")} />
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filtered.map((r, i) => {
+                            const cfg = STATUS_CFG[r.status];
+                            const rowBg = (r.status === "perished" || r.status === "critical") ? "#fffbfb" : r.status === "risk" ? "#fffdf8" : undefined;
+                            return (
+                              <tr key={`${r.productId}_${r.lotId}`} style={{ borderBottom: "1px solid var(--border)", background: i % 2 === 0 ? (rowBg || "var(--bg-surface)") : (rowBg || "var(--bg-raised)") }}>
+                                <td style={{ padding: "10px 14px", overflow: "hidden" }}>
+                                  <span style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{cfg.label}</span>
+                                </td>
+                                <td style={{ padding: "10px 14px", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.ref || "—"}</td>
+                                <td style={{ padding: "10px 14px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.name}>{r.name}</td>
+                                <td style={{ padding: "10px 14px", fontFamily: "monospace", fontSize: 12, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.lotName}</td>
+                                <td style={{ padding: "10px 14px", whiteSpace: "nowrap", fontWeight: 600, overflow: "hidden" }}>{fmtDate(new Date(r.dlvDate.split(" ")[0] + "T00:00:00"))}</td>
+                                <td style={{ padding: "10px 14px", whiteSpace: "nowrap", overflow: "hidden", color: r.daysToSellBy <= 0 ? "#dc2626" : r.daysToSellBy < 90 ? "#c2410c" : "var(--text-primary)", fontWeight: 600 }}>{fmtDate(r.sellByDate)}</td>
+                                <td style={{ padding: "10px 14px", whiteSpace: "nowrap", textAlign: "center", fontWeight: 700, overflow: "hidden", color: r.daysToSellBy <= 0 ? "#dc2626" : r.daysToSellBy < 30 ? "#dc2626" : r.daysToSellBy < 90 ? "#c2410c" : "var(--text-primary)" }}>{fmtDays(r.daysToSellBy)}</td>
+                                <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 600, overflow: "hidden" }}>{Math.round(r.qty)}</td>
+                                <td style={{ padding: "10px 14px", textAlign: "right", overflow: "hidden", color: r.avgMonthly === 0 ? "var(--text-muted)" : "var(--text-primary)" }}>{r.avgMonthly === 0 ? "—" : r.avgMonthly}</td>
+                                <td style={{ padding: "10px 14px", textAlign: "right", overflow: "hidden", color: "var(--text-muted)" }}>{r.avgMonthly === 0 ? "?" : r.unitsSellable}</td>
+                                <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, overflow: "hidden", color: r.unitsAtRisk > 0 ? "#dc2626" : r.status === "unknown" ? "var(--text-muted)" : "#15803d" }}>
+                                  {r.status === "unknown" ? "?" : r.unitsAtRisk > 0 ? `⚠ ${Math.round(r.unitsAtRisk)}` : "✓ 0"}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", borderTop: "1px solid var(--border)" }}>
+                      {filtered.length} lot{filtered.length > 1 ? "s" : ""} affiché{filtered.length > 1 ? "s" : ""} · Glisser le bord des colonnes pour redimensionner · Vendable = mois restants × conso/mois
+                    </div>
                   </div>
-                  <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", borderTop: "1px solid var(--border)" }}>
-                    {filtered.length} lot{filtered.length > 1 ? "s" : ""} affiché{filtered.length > 1 ? "s" : ""} · La colonne «&nbsp;Vendable&nbsp;» = mois restants × conso/mois · «&nbsp;À risque&nbsp;» = stock − vendable
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               {filtered.length === 0 && dlvRows.length > 0 && (
                 <div style={{ textAlign: "center", padding: "40px 20px", color: "var(--text-muted)", fontSize: 14 }}>Aucun lot ne correspond au filtre.</div>
