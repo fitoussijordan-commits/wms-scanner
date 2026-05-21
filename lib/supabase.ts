@@ -315,6 +315,44 @@ export async function deletePendingOrderBatch(batch_id: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+// ══════════════════════════════════════════
+// DLV AVG — conso mensuelle dédiée suivi DLV
+// ══════════════════════════════════════════
+
+export interface WmsDlvAvg {
+  odoo_ref: string;
+  avg_monthly: number;
+  product_name: string;
+  updated_at?: string;
+}
+
+export async function saveDlvAvg(items: WmsDlvAvg[]): Promise<void> {
+  if (!items.length) return;
+  for (let i = 0; i < items.length; i += 500) {
+    const batch = items.slice(i, i + 500);
+    const { error } = await sb.from("wms_dlv_avg").upsert(
+      batch.map(item => ({ ...item, updated_at: new Date().toISOString() })),
+      { onConflict: "odoo_ref" }
+    );
+    if (error) throw new Error(error.message);
+  }
+  await sb.from("wms_sync_meta").upsert(
+    { key: "dlv_avg_synced_at", value: new Date().toISOString(), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+}
+
+export async function loadDlvAvg(): Promise<Record<string, number>> {
+  const { data, error } = await sb.from("wms_dlv_avg").select("odoo_ref, avg_monthly");
+  if (error) throw new Error(error.message);
+  return Object.fromEntries((data || []).map(r => [r.odoo_ref, r.avg_monthly || 0]));
+}
+
+export async function getDlvAvgAge(): Promise<Date | null> {
+  const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "dlv_avg_synced_at").single();
+  return data?.value ? new Date(data.value) : null;
+}
+
 export async function saveAvgMonthlyBulk(input: { odoo_ref: string; avg_monthly: number }[] | Record<string, number>): Promise<void> {
   const items = Array.isArray(input) ? input : Object.entries(input).map(([odoo_ref, avg_monthly]) => ({ odoo_ref, avg_monthly }));
   for (let i = 0; i < items.length; i += 500) {

@@ -471,6 +471,10 @@ export default function Dashboard() {
   const DLV_SELL_MARGIN_MONTHS = 12; // règle : ne vendre que si DLV > 12 mois
   const [dlvColWidths, setDlvColWidths] = useState<Record<string, number>>({ "Statut": 115, "Ref": 100, "Produit": 210, "Lot": 120, "DLV": 120, "Sell-by": 120, "J. restants": 90, "Qté stock": 85, "Conso/mois": 92, "Vendable": 85, "À risque": 85 });
   const dlvResizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null);
+  const [dlvAvgMonthlyByRef, setDlvAvgMonthlyByRef] = useState<Record<string, number>>({});
+  const [dlvAvgSyncedAt, setDlvAvgSyncedAt] = useState<Date | null>(null);
+  const [dlvConsoImporting, setDlvConsoImporting] = useState(false);
+  const dlvFileRef = useRef<HTMLInputElement>(null);
 
   // ── Assistant IA Odoo ────────────────────────────────────────────────────
   type AiMessage = { role: "user" | "assistant"; text: string; model?: string; queriesRun?: number; rawData?: { description: string; model: string; rows: any[] }[] };
@@ -620,6 +624,9 @@ export default function Dashboard() {
     });
     // Load avg_monthly from Supabase
     supa.loadAvgMonthly().then(avg => { setAvgMonthlyByRef(avg); }).catch(() => {});
+    // Load DLV avg (séparé du suivi stock)
+    supa.loadDlvAvg().then(avg => { setDlvAvgMonthlyByRef(avg); }).catch(() => {});
+    supa.getDlvAvgAge().then(d => setDlvAvgSyncedAt(d)).catch(() => {});
     // Load cache ages
     supa.getStockCacheAge().then(d => setStockSyncedAt(d));
     supa.getConsoCacheAge().then(d => setConsoSyncedAt(d));
@@ -771,7 +778,7 @@ export default function Dashboard() {
         const sellByDate = new Date(dlvDate);
         sellByDate.setMonth(sellByDate.getMonth() - DLV_SELL_MARGIN_MONTHS);
         const daysToSellBy = Math.floor((sellByDate.getTime() - today.getTime()) / 86400000);
-        const avgMonthly = avgMonthlyByRef[lot.ref] || 0;
+        const avgMonthly = dlvAvgMonthlyByRef[lot.ref] || avgMonthlyByRef[lot.ref] || 0;
         const monthsToSellBy = Math.max(0, daysToSellBy / 30);
         const unitsSellable = avgMonthly > 0 ? Math.floor(monthsToSellBy * avgMonthly) : 0;
         const unitsAtRisk = Math.max(0, lot.qty - (avgMonthly > 0 ? unitsSellable : 0));
@@ -792,7 +799,69 @@ export default function Dashboard() {
       setDlvRows(rows);
     } catch (e: any) { setError(e.message); }
     setDlvLoading(false);
-  }, [session, avgMonthlyByRef, DLV_SELL_MARGIN_MONTHS]);
+  }, [session, dlvAvgMonthlyByRef, avgMonthlyByRef, DLV_SELL_MARGIN_MONTHS]);
+
+  // ── IMPORT CONSO DLV (séparé du suivi stock) ──
+  const importDlvConso = useCallback(async (file: File) => {
+    setDlvConsoImporting(true);
+    try {
+      const XLSX = await import("xlsx");
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      const FR_MONTHS: Record<string, string> = { janvier:"01",février:"02",mars:"03",avril:"04",mai:"05",juin:"06",juillet:"07",août:"08",septembre:"09",octobre:"10",novembre:"11",décembre:"12" };
+      let monthCols: { col: number; month: string }[] = [];
+      let dataStartRow = 0;
+      for (let r = 0; r < rows.length; r++) {
+        const cols: { col: number; month: string }[] = [];
+        for (let c = 0; c < rows[r].length; c++) {
+          const cell = String(rows[r][c]).trim().toLowerCase();
+          const parts = cell.split(" ");
+          if (parts.length === 2 && FR_MONTHS[parts[0]] && /^\d{4}$/.test(parts[1]))
+            cols.push({ col: c, month: `${parts[1]}-${FR_MONTHS[parts[0]]}` });
+        }
+        if (cols.length > 0) { monthCols = cols; dataStartRow = r + 2; break; }
+      }
+      if (monthCols.length === 0) throw new Error("Colonnes de mois introuvables dans le fichier.");
+      // Calcul avg 12 derniers mois
+      const now = new Date();
+      const last12: string[] = [];
+      for (let i = 1; i <= 12; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        last12.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+      }
+      const byRef: Record<string, { name: string; totals: number[]; months: string[] }> = {};
+      for (let r = dataStartRow; r < rows.length; r++) {
+        const cell0 = String(rows[r][0] || "").trim();
+        const m = cell0.match(/^\[([^\]]+)\]/);
+        if (!m) continue;
+        const ref = m[1].trim();
+        const name = cell0.replace(/^\[[^\]]+\]\s*/, "").trim();
+        if (!byRef[ref]) byRef[ref] = { name, totals: [], months: [] };
+        for (const { col, month } of monthCols) {
+          if (!last12.includes(month)) continue;
+          const qty = parseFloat(String(rows[r][col] || "0").replace(",", ".")) || 0;
+          if (qty > 0) { byRef[ref].totals.push(qty); byRef[ref].months.push(month); }
+        }
+      }
+      const items: supa.WmsDlvAvg[] = [];
+      const newAvg: Record<string, number> = {};
+      for (const [ref, v] of Object.entries(byRef)) {
+        const avg = v.totals.length > 0 ? Math.round(v.totals.reduce((s, x) => s + x, 0) / 12) : 0;
+        if (avg > 0) {
+          items.push({ odoo_ref: ref, avg_monthly: avg, product_name: v.name });
+          newAvg[ref] = avg;
+        }
+      }
+      if (items.length === 0) throw new Error("Aucune consommation trouvée dans le fichier.");
+      await supa.saveDlvAvg(items);
+      setDlvAvgMonthlyByRef(prev => ({ ...prev, ...newAvg }));
+      setDlvAvgSyncedAt(new Date());
+      alert(`✓ Conso DLV importée !\n${items.length} articles · moyenne sur 12 mois.`);
+    } catch (e: any) { alert(`⚠ Erreur import conso DLV : ${e.message}`); }
+    setDlvConsoImporting(false);
+  }, []);
 
   // ── IMPORT CONSO DEPUIS EXPORT ODOO (Tableau croisé dynamique) ──
   const importConsoFromOdoo = useCallback(async (file: File) => {
@@ -3314,9 +3383,18 @@ export default function Dashboard() {
                   <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Suivi DLV</h2>
                   <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Règle : vente possible uniquement si DLV &gt; 12 mois — stock à risque si la conso ne couvre pas avant la deadline</p>
                 </div>
-                <button className="wms-btn" onClick={loadDlv} disabled={dlvLoading} style={{ flexShrink: 0 }}>
-                  {dlvLoading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Charger les lots
-                </button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                    <button className="wms-btn" onClick={() => dlvFileRef.current?.click()} disabled={dlvConsoImporting} style={{ flexShrink: 0 }}>
+                      {dlvConsoImporting ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>} Importer conso DLV
+                    </button>
+                    {dlvAvgSyncedAt && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Màj {dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
+                    <input ref={dlvFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={e => { const f = e.target.files?.[0]; if (f) importDlvConso(f); e.target.value = ""; }} style={{ display: "none" }} />
+                  </div>
+                  <button className="wms-btn" onClick={loadDlv} disabled={dlvLoading} style={{ flexShrink: 0 }}>
+                    {dlvLoading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Charger les lots
+                  </button>
+                </div>
               </div>
 
               {/* Stats summary */}
@@ -3349,7 +3427,7 @@ export default function Dashboard() {
                   <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
                   <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Aucune donnée chargée</div>
                   <div style={{ fontSize: 13 }}>Clique sur «&nbsp;Charger les lots&nbsp;» pour récupérer les DLV depuis Odoo.</div>
-                  {Object.keys(avgMonthlyByRef).length === 0 && <div style={{ fontSize: 12, color: "var(--warning)", marginTop: 10 }}>⚠ Importe d&apos;abord la conso Odoo (onglet Suivi Stock) pour avoir les moyennes de consommation.</div>}
+                  {Object.keys(dlvAvgMonthlyByRef).length === 0 && <div style={{ fontSize: 12, color: "var(--warning)", marginTop: 10 }}>⚠ Importe d&apos;abord la conso via «&nbsp;Importer conso DLV&nbsp;» (tableau croisé Odoo) pour avoir les moyennes.</div>}
                 </div>
               )}
 
