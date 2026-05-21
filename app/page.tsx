@@ -4753,75 +4753,49 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     }
   };
 
-  const printLabel = async (p: any) => {
-    setPrinting(true);
-    try {
-      const orderId = p._raw?.order_id || p.id;
-      const orderNumber = p.order_number;
-      // POST pour passer tout le _raw au serveur → pas besoin de refetch V3
+  // throwErrors=true → utilisé par printAllWave pour propager les erreurs au lieu de les swallow
+  const printLabelCore = async (p: any): Promise<void> => {
+    const orderId = p._raw?.order_id || p.id;
+    const orderNumber = p.order_number;
+
+    const fetchLabel = async () => {
       const res = await fetch("/api/sendcloud?action=label", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ order_id: orderId, order_number: orderNumber, order_raw: p._raw }),
       });
       const data = await res.json();
+      return { res, data };
+    };
 
-      // 202 = colis trouvé mais étiquette pas encore prête — retry auto après 10s
+    let { res, data } = await fetchLabel();
+
+    // 202 = étiquette pas encore prête → retry après 10s
+    if (res.status === 202 || data.labelPending) {
+      await new Promise(r => setTimeout(r, 10000));
+      const r2 = await fetchLabel();
+      res = r2.res; data = r2.data;
       if (res.status === 202 || data.labelPending) {
-        onToast(`⏳ Étiquette en cours — nouvelle tentative dans 10s…`);
-        await new Promise(r => setTimeout(r, 10000));
-        // Retry une fois automatiquement
-        const res2 = await fetch("/api/sendcloud?action=label", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ order_id: orderId, order_number: orderNumber, order_raw: p._raw }),
-        });
-        const data2 = await res2.json();
-        if (res2.status === 202 || data2.labelPending) {
-          onToast(`⏳ Toujours en cours — réessaie manuellement dans quelques secondes`);
-          return;
-        }
-        if (!res2.ok) throw new Error(data2.error || "Erreur étiquette (retry)");
-        if (!data2.labelBase64) throw new Error("Pas de PDF reçu (retry)");
-        // Substituer pour la suite
-        Object.assign(data, data2);
-        Object.assign(res, { ok: true });
-        // fallthrough au code d'impression ci-dessous
-        const scCfg2 = pn.getLabelTypeConfig("sendcloud");
-        const printerId2 = scCfg2.printerId || pn.getSavedPrinterId();
-        if (printerId2) {
-          const result2 = await pn.printPdfLabel(printerId2, data2.labelBase64, `SendCloud ${orderNumber}`);
-          if (result2.success) { onToast(`✓ Étiquette ${data2.tracking || orderNumber} imprimée`); vibrateSuccess(); }
-          else throw new Error(result2.error || "Erreur impression (retry)");
-        } else {
-          const byteArray2 = Uint8Array.from(atob(data2.labelBase64), c => c.charCodeAt(0));
-          const blob2 = new Blob([byteArray2], { type: "application/pdf" });
-          window.open(URL.createObjectURL(blob2), "_blank");
-          onToast("PDF ouvert dans un nouvel onglet");
-        }
-        return;
+        throw new Error(`Étiquette ${orderNumber} toujours en cours — réessaie manuellement`);
       }
-      if (!res.ok) { throw new Error([data.error, data.hint].filter(Boolean).join(" | ")); }
-      if (!data.labelBase64) { throw new Error("Pas de PDF reçu"); }
+    }
+    if (!res.ok) throw new Error([data.error, data.hint].filter(Boolean).join(" | ") || `Erreur ${res.status}`);
+    if (!data.labelBase64) throw new Error("Pas de PDF reçu");
 
-      const scCfg = pn.getLabelTypeConfig("sendcloud");
-      const printerId = scCfg.printerId || pn.getSavedPrinterId();
-      if (printerId) {
-        const result = await pn.printPdfLabel(printerId, data.labelBase64, `SendCloud ${orderNumber}`);
-        if (result.success) {
-          onToast(`✓ Étiquette ${data.tracking || orderNumber} imprimée`);
-          vibrateSuccess();
-        } else {
-          throw new Error(result.error || "Erreur impression");
-        }
-      } else {
-        // Fallback: download PDF
-        const byteArray = Uint8Array.from(atob(data.labelBase64), c => c.charCodeAt(0));
-        const blob = new Blob([byteArray], { type: "application/pdf" });
-        const url = URL.createObjectURL(blob);
-        window.open(url, "_blank");
-        onToast("PDF ouvert dans un nouvel onglet");
-      }
+    const scCfg = pn.getLabelTypeConfig("sendcloud");
+    const printerId = scCfg.printerId || pn.getSavedPrinterId();
+    if (!printerId) throw new Error("Aucune imprimante configurée pour les étiquettes SendCloud (va dans Paramètres → Imprimantes)");
+
+    const result = await pn.printPdfLabel(printerId, data.labelBase64, `SendCloud ${orderNumber}`);
+    if (!result.success) throw new Error(result.error || "Erreur impression PrintNode");
+  };
+
+  const printLabel = async (p: any) => {
+    setPrinting(true);
+    try {
+      await printLabelCore(p);
+      onToast(`✓ Étiquette ${p.order_number} imprimée`);
+      vibrateSuccess();
     } catch (e: any) { onToast(`⚠ Étiquette: ${e.message}`); vibrateError(); }
     setPrinting(false);
   };
@@ -5500,13 +5474,17 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         setWavePrintProgress(`${i + 1}/${orders.length} — ${p.order_number}`);
         // BL
         try { await printPackingSlip(p); blOk++; } catch (e: any) { errors.push(`BL ${p.order_number}: ${e.message}`); }
-        // Étiquette transport
-        try { await printLabel(p); labelOk++; } catch (e: any) { errors.push(`Étiq. ${p.order_number}: ${e.message}`); }
+        // Étiquette transport — on utilise printLabelCore qui throw proprement
+        try { await printLabelCore(p); labelOk++; } catch (e: any) { errors.push(`Étiq. ${p.order_number}: ${e.message}`); }
       }
       setWavePrinting(false);
       setWavePrintProgress("");
-      if (errors.length) onToast(`⚠ ${errors.length} erreur(s) — ${blOk} BL, ${labelOk} étiq. imprimés`);
-      else onToast(`✅ ${blOk} BL + ${labelOk} étiquettes imprimés`);
+      if (errors.length) {
+        // Affiche la 1ère erreur pour diagnostic
+        onToast(`⚠ ${errors.length} erreur(s) — ${blOk} BL, ${labelOk} étiq. OK · ${errors[0]}`);
+      } else {
+        onToast(`✅ ${blOk} BL + ${labelOk} étiquettes imprimés`);
+      }
     };
 
     const completeWave = async () => {
