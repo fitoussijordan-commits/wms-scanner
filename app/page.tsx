@@ -5449,6 +5449,24 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     const scannedCount = doneItems.length;
     const progPct = items.length > 0 ? Math.round(scannedCount / items.length * 100) : 0;
 
+    // ── Progression par commande (allocation FIFO sur SKUs partagés) ─────────
+    const orderProgress: { orderNumber: string; done: number; total: number }[] = Array.from(waveOrders).map(orderNum => {
+      const orderItems = items.filter(it => it.dispatch.some((d: any) => d.orderNumber === orderNum));
+      let done = 0;
+      for (const it of orderItems) {
+        const scanned = waveScannedSkus[it.sku] || 0;
+        let cumulBefore = 0;
+        for (const d of it.dispatch) {
+          if (d.orderNumber === orderNum) {
+            if (scanned >= cumulBefore + d.qty) done++;
+            break;
+          }
+          cumulBefore += d.qty;
+        }
+      }
+      return { orderNumber: orderNum, done, total: orderItems.length };
+    });
+
     const adjustWaveQty = (sku: string, newQty: number) => {
       const item = items.find(i => i.sku === sku);
       const maxQty = item?.totalQty || 1;
@@ -5528,6 +5546,30 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           <div style={{ height: 8, borderRadius: 4, background: C.bg, overflow: "hidden", border: `1px solid ${C.border}` }}>
             <div style={{ height: "100%", width: `${progPct}%`, borderRadius: 4, background: allDone ? C.green : C.blue, transition: "width .3s" }} />
           </div>
+          {/* Détail par commande — affiché uniquement si plusieurs commandes */}
+          {orderProgress.length > 1 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const, marginTop: 8 }}>
+              {orderProgress.map(op => {
+                const orderDone = op.done >= op.total && op.total > 0;
+                return (
+                  <div key={op.orderNumber} style={{
+                    display: "flex", alignItems: "center", gap: 5,
+                    background: orderDone ? C.greenSoft : "#f0f5ff",
+                    border: `1px solid ${orderDone ? C.greenBorder : C.blueBorder}`,
+                    borderRadius: 8, padding: "4px 10px",
+                  }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: orderDone ? "#166534" : "#1e40af" }}>
+                      {op.orderNumber}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: orderDone ? C.green : C.blue, fontFamily: "monospace" }}>
+                      {op.done}/{op.total}
+                    </span>
+                    {orderDone && <span style={{ fontSize: 12 }}>✓</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Carte article courant */}
