@@ -3383,12 +3383,12 @@ export default function Dashboard() {
                 return (
                   <div className="wms-card" style={{ padding: 0, overflow: "hidden" }}>
                     <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 360px)" }}>
-                      <table style={{ borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed", width: COLS.reduce((s, c) => s + (dlvColWidths[c.key] || 100), 0) }}>
+                      <table style={{ borderSpacing: 0, borderCollapse: "separate", fontSize: 13, tableLayout: "fixed", width: COLS.reduce((s, c) => s + (dlvColWidths[c.key] || 100), 0) }}>
                         <colgroup>{COLS.map(c => <col key={c.key} style={{ width: dlvColWidths[c.key] || 100 }} />)}</colgroup>
-                        <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
-                          <tr style={{ background: "var(--bg-raised)", borderBottom: "2px solid var(--border)" }}>
+                        <thead>
+                          <tr>
                             {COLS.map(c => (
-                              <th key={c.key} style={{ padding: "10px 14px", textAlign: c.align, fontSize: 11, fontWeight: 700, color: "var(--text-muted)", whiteSpace: "nowrap", position: "relative", background: "var(--bg-raised)", userSelect: "none", overflow: "hidden" }}>
+                              <th key={c.key} style={{ padding: "10px 14px", textAlign: c.align, fontSize: 11, fontWeight: 700, color: "var(--text-muted)", whiteSpace: "nowrap", position: "sticky", top: 0, zIndex: 2, background: "var(--bg-raised)", userSelect: "none", overflow: "hidden", boxShadow: "0 2px 0 var(--border)" }}>
                                 {c.label}
                                 <div onMouseDown={e => startResize(c.key, e)} style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 5, cursor: "col-resize", background: "transparent" }} onMouseEnter={e => (e.currentTarget.style.background = "var(--border)")} onMouseLeave={e => (e.currentTarget.style.background = "transparent")} />
                               </th>
