@@ -5635,18 +5635,18 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             ) : (
               <div>
                 <div style={{ display: "flex", alignItems: "stretch", border: `1.5px solid ${C.border}`, borderRadius: 14, overflow: "hidden", background: C.white, marginBottom: 10 }}>
-                  <button onClick={() => adjustWaveQty(currentItem.sku, (waveScannedSkus[currentItem.sku] || 0) - 1)} disabled={!waveLocConfirmed || (waveScannedSkus[currentItem.sku] || 0) <= 0}
-                    style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 28, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}`, opacity: (!waveLocConfirmed || (waveScannedSkus[currentItem.sku] || 0) <= 0) ? 0.3 : 1 }}>−</button>
+                  <button onClick={() => { if (!waveLocConfirmed) setWaveLocConfirmed(true); adjustWaveQty(currentItem.sku, (waveScannedSkus[currentItem.sku] || 0) - 1); }} disabled={(waveScannedSkus[currentItem.sku] || 0) <= 0}
+                    style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 28, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}`, opacity: ((waveScannedSkus[currentItem.sku] || 0) <= 0) ? 0.3 : 1 }}>−</button>
                   <div style={{ flex: 1, textAlign: "center", padding: "12px 4px" }}>
                     <span style={{ fontSize: 36, fontWeight: 900, color: C.text }}>{waveScannedSkus[currentItem.sku] || 0}</span>
                     <span style={{ fontSize: 18, color: C.textMuted, margin: "0 4px" }}>/</span>
                     <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{currentItem.totalQty}</span>
                   </div>
-                  <button onClick={() => adjustWaveQty(currentItem.sku, (waveScannedSkus[currentItem.sku] || 0) + 1)} disabled={!waveLocConfirmed || (waveScannedSkus[currentItem.sku] || 0) >= currentItem.totalQty}
-                    style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 28, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", opacity: (!waveLocConfirmed || (waveScannedSkus[currentItem.sku] || 0) >= currentItem.totalQty) ? 0.3 : 1 }}>+</button>
+                  <button onClick={() => { if (!waveLocConfirmed) setWaveLocConfirmed(true); adjustWaveQty(currentItem.sku, (waveScannedSkus[currentItem.sku] || 0) + 1); }} disabled={(waveScannedSkus[currentItem.sku] || 0) >= currentItem.totalQty}
+                    style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 28, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", opacity: ((waveScannedSkus[currentItem.sku] || 0) >= currentItem.totalQty) ? 0.3 : 1 }}>+</button>
                 </div>
-                {waveLocConfirmed && (waveScannedSkus[currentItem.sku] || 0) > 0 && (waveScannedSkus[currentItem.sku] || 0) < currentItem.totalQty && (
-                  <button onClick={() => adjustWaveQty(currentItem.sku, currentItem.totalQty)} style={{ width: "100%", padding: "11px 0", borderRadius: 12, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(34,197,94,0.35)" }}>
+                {(waveScannedSkus[currentItem.sku] || 0) > 0 && (waveScannedSkus[currentItem.sku] || 0) < currentItem.totalQty && (
+                  <button onClick={() => { if (!waveLocConfirmed) setWaveLocConfirmed(true); adjustWaveQty(currentItem.sku, currentItem.totalQty); }} style={{ width: "100%", padding: "11px 0", borderRadius: 12, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(34,197,94,0.35)" }}>
                     ✓ Tout mettre — {currentItem.totalQty} unité{currentItem.totalQty > 1 ? "s" : ""}
                   </button>
                 )}

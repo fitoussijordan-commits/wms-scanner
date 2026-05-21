@@ -251,6 +251,7 @@ const TABS = [
   { key: "stock-tracking", label: "Suivi stock", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
   { key: "catalogue", label: "Catalogue", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> },
   { key: "libre", label: "Mode Libre", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> },
+  { key: "dlv", label: "Suivi DLV", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><circle cx="12" cy="16" r="2" fill="currentColor"/></svg> },
 ] as const;
 
 // ─── CATALOGUE — définition des colonnes disponibles ────────────────────────
@@ -460,6 +461,14 @@ export default function Dashboard() {
   const [alertsUnderstockOpen, setAlertsUnderstockOpen] = useState(true);
   const [alertsOverstockOpen, setAlertsOverstockOpen] = useState(true);
   const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
+
+  // ── Suivi DLV ────────────────────────────────────────────────────────────
+  type DlvRow = { productId: number; ref: string; name: string; lotId: number; lotName: string; qty: number; dlvDate: string; sellByDate: Date; daysToSellBy: number; avgMonthly: number; unitsSellable: number; unitsAtRisk: number; status: "perished" | "critical" | "risk" | "watch" | "ok" | "unknown" };
+  const [dlvRows, setDlvRows] = useState<DlvRow[]>([]);
+  const [dlvLoading, setDlvLoading] = useState(false);
+  const [dlvSearch, setDlvSearch] = useState("");
+  const [dlvFilter, setDlvFilter] = useState<"all" | "alert" | "ok">("alert");
+  const DLV_SELL_MARGIN_MONTHS = 12; // règle : ne vendre que si DLV > 12 mois
 
   // ── Assistant IA Odoo ────────────────────────────────────────────────────
   type AiMessage = { role: "user" | "assistant"; text: string; model?: string; queriesRun?: number; rawData?: { description: string; model: string; rows: any[] }[] };
@@ -745,6 +754,43 @@ export default function Dashboard() {
       supa.saveStockCache(cacheItems).catch(() => {});
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, [session, watchlist, defaultThreshold]);
+
+  // ── SUIVI DLV ──
+  const loadDlv = useCallback(async () => {
+    if (!session) return;
+    setDlvLoading(true);
+    try {
+      const lots = await odoo.getDlvStockLots(session);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const rows: DlvRow[] = lots.map(lot => {
+        // Normalise la date (peut être "YYYY-MM-DD HH:MM:SS" ou "YYYY-MM-DDTHH:MM:SS")
+        const dlvRaw = lot.dlvDate.split(" ")[0].split("T")[0];
+        const dlvDate = new Date(dlvRaw + "T00:00:00");
+        const sellByDate = new Date(dlvDate);
+        sellByDate.setMonth(sellByDate.getMonth() - DLV_SELL_MARGIN_MONTHS);
+        const daysToSellBy = Math.floor((sellByDate.getTime() - today.getTime()) / 86400000);
+        const avgMonthly = avgMonthlyByRef[lot.ref] || 0;
+        const monthsToSellBy = Math.max(0, daysToSellBy / 30);
+        const unitsSellable = avgMonthly > 0 ? Math.floor(monthsToSellBy * avgMonthly) : 0;
+        const unitsAtRisk = Math.max(0, lot.qty - (avgMonthly > 0 ? unitsSellable : 0));
+
+        let status: DlvRow["status"];
+        if (avgMonthly === 0) status = "unknown";
+        else if (daysToSellBy <= 0) status = "perished";
+        else if (daysToSellBy < 30) status = "critical";
+        else if (unitsAtRisk > 0) status = "risk";
+        else if (daysToSellBy < 90) status = "watch";
+        else status = "ok";
+
+        return { ...lot, sellByDate, daysToSellBy, avgMonthly, unitsSellable: avgMonthly > 0 ? unitsSellable : lot.qty, unitsAtRisk: avgMonthly > 0 ? unitsAtRisk : 0, status };
+      });
+      // Trier : périmés → critiques → risques → attention → ok → inconnus
+      const ORDER = { perished: 0, critical: 1, risk: 2, watch: 3, ok: 4, unknown: 5 };
+      rows.sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.daysToSellBy - b.daysToSellBy);
+      setDlvRows(rows);
+    } catch (e: any) { setError(e.message); }
+    setDlvLoading(false);
+  }, [session, avgMonthlyByRef, DLV_SELL_MARGIN_MONTHS]);
 
   // ── IMPORT CONSO DEPUIS EXPORT ODOO (Tableau croisé dynamique) ──
   const importConsoFromOdoo = useCallback(async (file: File) => {
@@ -3235,6 +3281,127 @@ export default function Dashboard() {
             )}
           </div>
         )}
+
+        {/* ══════════════════ SUIVI DLV ══════════════════ */}
+        {tab === "dlv" && (() => {
+          const fmtDate = (d: Date) => d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
+          const fmtDays = (n: number) => n <= 0 ? "Dépassé" : n < 30 ? `${n}j` : n < 365 ? `${Math.round(n / 30)}mois` : `${(n / 365).toFixed(1)}ans`;
+          const STATUS_CFG: Record<DlvRow["status"], { label: string; color: string; bg: string; border: string }> = {
+            perished: { label: "⛔ Périmé",   color: "#7c2d12", bg: "#fef2f2", border: "#fca5a5" },
+            critical: { label: "🔴 Critique",  color: "#dc2626", bg: "#fef2f2", border: "#fca5a5" },
+            risk:     { label: "🟠 Risque",    color: "#c2410c", bg: "#fff7ed", border: "#fed7aa" },
+            watch:    { label: "🟡 Attention", color: "#b45309", bg: "#fefce8", border: "#fde68a" },
+            ok:       { label: "🟢 OK",        color: "#15803d", bg: "#f0fdf4", border: "#bbf7d0" },
+            unknown:  { label: "⚪ Sans conso", color: "#64748b", bg: "#f8fafc", border: "#e2e8f0" },
+          };
+          const search = dlvSearch.trim().toLowerCase();
+          const filtered = dlvRows.filter(r => {
+            const matchSearch = !search || r.ref.toLowerCase().includes(search) || r.name.toLowerCase().includes(search) || r.lotName.toLowerCase().includes(search);
+            const matchFilter = dlvFilter === "all" || (dlvFilter === "alert" && ["perished","critical","risk","watch"].includes(r.status)) || (dlvFilter === "ok" && ["ok","unknown"].includes(r.status));
+            return matchSearch && matchFilter;
+          });
+          const counts = { perished: 0, critical: 0, risk: 0, watch: 0, ok: 0, unknown: 0 };
+          for (const r of dlvRows) counts[r.status]++;
+          const nbAlert = counts.perished + counts.critical + counts.risk + counts.watch;
+
+          return (
+            <div style={{ animation: "fadeIn .3s ease both" }}>
+              {/* Header */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+                <div>
+                  <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Suivi DLV</h2>
+                  <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Règle : vente possible uniquement si DLV &gt; 12 mois — stock à risque si la conso ne couvre pas avant la deadline</p>
+                </div>
+                <button className="wms-btn" onClick={loadDlv} disabled={dlvLoading} style={{ flexShrink: 0 }}>
+                  {dlvLoading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Charger les lots
+                </button>
+              </div>
+
+              {/* Stats summary */}
+              {dlvRows.length > 0 && (
+                <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+                  {(["perished","critical","risk","watch","ok","unknown"] as DlvRow["status"][]).map(s => counts[s] > 0 && (
+                    <div key={s} style={{ background: STATUS_CFG[s].bg, border: `1px solid ${STATUS_CFG[s].border}`, borderRadius: 10, padding: "10px 16px", minWidth: 90, textAlign: "center" }}>
+                      <div style={{ fontSize: 20, fontWeight: 900, color: STATUS_CFG[s].color }}>{counts[s]}</div>
+                      <div style={{ fontSize: 11, color: STATUS_CFG[s].color, fontWeight: 600 }}>{STATUS_CFG[s].label}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Filters */}
+              {dlvRows.length > 0 && (
+                <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+                  <input value={dlvSearch} onChange={e => setDlvSearch(e.target.value)} placeholder="Rechercher ref, nom, lot…" style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", minWidth: 220, outline: "none", background: "var(--bg-surface)", color: "var(--text-primary)" }} />
+                  {(["all","alert","ok"] as const).map(f => (
+                    <button key={f} onClick={() => setDlvFilter(f)} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid var(--border)", background: dlvFilter === f ? "var(--accent)" : "var(--bg-surface)", color: dlvFilter === f ? "#fff" : "var(--text-primary)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                      {f === "all" ? `Tous (${dlvRows.length})` : f === "alert" ? `⚠ Alertes (${nbAlert})` : `✓ OK (${counts.ok + counts.unknown})`}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Empty state */}
+              {dlvRows.length === 0 && !dlvLoading && (
+                <div style={{ textAlign: "center", padding: "60px 20px", color: "var(--text-muted)" }}>
+                  <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Aucune donnée chargée</div>
+                  <div style={{ fontSize: 13 }}>Clique sur «&nbsp;Charger les lots&nbsp;» pour récupérer les DLV depuis Odoo.</div>
+                  {Object.keys(avgMonthlyByRef).length === 0 && <div style={{ fontSize: 12, color: "var(--warning)", marginTop: 10 }}>⚠ Importe d&apos;abord la conso Odoo (onglet Suivi Stock) pour avoir les moyennes de consommation.</div>}
+                </div>
+              )}
+
+              {/* Table */}
+              {filtered.length > 0 && (
+                <div className="wms-card" style={{ padding: 0, overflow: "hidden" }}>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ background: "var(--bg-raised)", borderBottom: "2px solid var(--border)" }}>
+                          {["Statut","Ref","Produit","Lot","DLV","Sell-by","J. restants","Qté stock","Conso/mois","Vendable","À risque"].map(h => (
+                            <th key={h} style={{ padding: "10px 14px", textAlign: h === "Qté stock" || h === "Conso/mois" || h === "Vendable" || h === "À risque" ? "right" : "left", fontSize: 11, fontWeight: 700, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtered.map((r, i) => {
+                          const cfg = STATUS_CFG[r.status];
+                          const rowBg = (r.status === "perished" || r.status === "critical") ? "#fffbfb" : r.status === "risk" ? "#fffdf8" : undefined;
+                          return (
+                            <tr key={`${r.productId}_${r.lotId}`} style={{ borderBottom: "1px solid var(--border)", background: i % 2 === 0 ? (rowBg || "var(--bg-surface)") : (rowBg || "var(--bg-raised)"), transition: "background .15s" }}>
+                              <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
+                                <span style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700 }}>{cfg.label}</span>
+                              </td>
+                              <td style={{ padding: "10px 14px", fontWeight: 700, color: "var(--text-primary)", whiteSpace: "nowrap" }}>{r.ref || "—"}</td>
+                              <td style={{ padding: "10px 14px", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.name}>{r.name}</td>
+                              <td style={{ padding: "10px 14px", fontFamily: "monospace", fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{r.lotName}</td>
+                              <td style={{ padding: "10px 14px", whiteSpace: "nowrap", fontWeight: 600 }}>{fmtDate(new Date(r.dlvDate.split(" ")[0] + "T00:00:00"))}</td>
+                              <td style={{ padding: "10px 14px", whiteSpace: "nowrap", color: r.daysToSellBy <= 0 ? "#dc2626" : r.daysToSellBy < 90 ? "#c2410c" : "var(--text-primary)", fontWeight: 600 }}>{fmtDate(r.sellByDate)}</td>
+                              <td style={{ padding: "10px 14px", whiteSpace: "nowrap", textAlign: "center", fontWeight: 700, color: r.daysToSellBy <= 0 ? "#dc2626" : r.daysToSellBy < 30 ? "#dc2626" : r.daysToSellBy < 90 ? "#c2410c" : "var(--text-primary)" }}>{fmtDays(r.daysToSellBy)}</td>
+                              <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 600 }}>{Math.round(r.qty)}</td>
+                              <td style={{ padding: "10px 14px", textAlign: "right", color: r.avgMonthly === 0 ? "var(--text-muted)" : "var(--text-primary)" }}>{r.avgMonthly === 0 ? "—" : r.avgMonthly}</td>
+                              <td style={{ padding: "10px 14px", textAlign: "right", color: "var(--text-muted)" }}>{r.avgMonthly === 0 ? "?" : r.unitsSellable}</td>
+                              <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: r.unitsAtRisk > 0 ? "#dc2626" : r.status === "unknown" ? "var(--text-muted)" : "#15803d" }}>
+                                {r.status === "unknown" ? "?" : r.unitsAtRisk > 0 ? `⚠ ${Math.round(r.unitsAtRisk)}` : "✓ 0"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", borderTop: "1px solid var(--border)" }}>
+                    {filtered.length} lot{filtered.length > 1 ? "s" : ""} affiché{filtered.length > 1 ? "s" : ""} · La colonne «&nbsp;Vendable&nbsp;» = mois restants × conso/mois · «&nbsp;À risque&nbsp;» = stock − vendable
+                  </div>
+                </div>
+              )}
+
+              {filtered.length === 0 && dlvRows.length > 0 && (
+                <div style={{ textAlign: "center", padding: "40px 20px", color: "var(--text-muted)", fontSize: 14 }}>Aucun lot ne correspond au filtre.</div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* ══════════════════ ASSISTANT IA ODOO ══════════════════ */}
         {tab === "assistant" && (

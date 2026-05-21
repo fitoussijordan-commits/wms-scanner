@@ -2143,6 +2143,76 @@ export async function setReceptionLots(
 // validatePicking est déjà défini plus haut dans ce fichier (ligne ~710) — on réutilise l'existant.
 
 // ============================================
+// DLV — lots avec dates d'expiration en stock
+// ============================================
+
+/** Retourne tous les lots en stock (emplacements internes) qui ont une date d'expiration.
+ *  Agrège les quantités par produit+lot (plusieurs emplacements → 1 ligne). */
+export async function getDlvStockLots(session: OdooSession): Promise<{
+  productId: number;
+  ref: string;
+  name: string;
+  lotId: number;
+  lotName: string;
+  qty: number;
+  dlvDate: string; // "YYYY-MM-DD HH:MM:SS" ou "YYYY-MM-DD"
+}[]> {
+  // 1. Quants internes avec lot, quantité positive
+  const quants: any[] = await searchRead(
+    session, "stock.quant",
+    [["location_id.usage", "=", "internal"], ["lot_id", "!=", false], ["quantity", ">", 0]],
+    ["product_id", "lot_id", "quantity"],
+    5000
+  );
+  if (!quants?.length) return [];
+
+  // 2. Lots → dates d'expiration
+  const lotIds = Array.from(new Set(quants.map((q: any) => q.lot_id[0]))) as number[];
+  const lots: any[] = await searchRead(
+    session, "stock.lot",
+    [["id", "in", lotIds]],
+    ["id", "name", "expiration_date", "use_date", "removal_date"],
+    lotIds.length
+  );
+  const lotMap: Record<number, any> = {};
+  for (const l of lots) lotMap[l.id] = l;
+
+  // 3. Garder uniquement les lots avec une date
+  const withDlv = quants.filter((q: any) => {
+    const lot = lotMap[q.lot_id[0]];
+    return lot && (lot.expiration_date || lot.use_date || lot.removal_date);
+  });
+  if (!withDlv.length) return [];
+
+  // 4. Produits → ref + nom
+  const productIds = Array.from(new Set(withDlv.map((q: any) => q.product_id[0]))) as number[];
+  const products: any[] = await searchRead(
+    session, "product.product",
+    [["id", "in", productIds]],
+    ["id", "default_code", "name"],
+    productIds.length
+  );
+  const productMap: Record<number, any> = {};
+  for (const p of products) productMap[p.id] = p;
+
+  // 5. Agréger qty par produit+lot
+  const byKey: Record<string, { productId: number; ref: string; name: string; lotId: number; lotName: string; qty: number; dlvDate: string }> = {};
+  for (const q of withDlv) {
+    const pid = q.product_id[0];
+    const lid = q.lot_id[0];
+    const key = `${pid}_${lid}`;
+    const lot = lotMap[lid];
+    const dlvDate: string = lot.expiration_date || lot.use_date || lot.removal_date;
+    if (!byKey[key]) {
+      const prod = productMap[pid];
+      byKey[key] = { productId: pid, ref: prod?.default_code || "", name: prod?.name || "", lotId: lid, lotName: lot.name || "", qty: 0, dlvDate };
+    }
+    byKey[key].qty += q.quantity;
+  }
+  return Object.values(byKey).filter(v => v.qty > 0);
+}
+
+// ============================================
 // ARTICLE CREATOR — codification + création Odoo
 // ============================================
 
