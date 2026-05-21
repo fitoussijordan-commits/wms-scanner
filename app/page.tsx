@@ -4753,8 +4753,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     }
   };
 
-  // throwErrors=true → utilisé par printAllWave pour propager les erreurs au lieu de les swallow
-  const printLabelCore = async (p: any): Promise<void> => {
+  // Retourne le printerId utilisé pour debug
+  const printLabelCore = async (p: any): Promise<number> => {
     const orderId = p._raw?.order_id || p.id;
     const orderNumber = p.order_number;
 
@@ -4784,17 +4784,18 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
     const scCfg = pn.getLabelTypeConfig("sendcloud");
     const printerId = scCfg.printerId || pn.getSavedPrinterId();
-    if (!printerId) throw new Error("Aucune imprimante configurée pour les étiquettes SendCloud (va dans Paramètres → Imprimantes)");
+    if (!printerId) throw new Error("Aucune imprimante configurée pour les étiquettes SendCloud → va dans Paramètres → Imprimantes");
 
     const result = await pn.printPdfLabel(printerId, data.labelBase64, `SendCloud ${orderNumber}`);
-    if (!result.success) throw new Error(result.error || "Erreur impression PrintNode");
+    if (!result.success) throw new Error(`Erreur PrintNode imprimante #${printerId}: ${result.error}`);
+    return printerId;
   };
 
   const printLabel = async (p: any) => {
     setPrinting(true);
     try {
-      await printLabelCore(p);
-      onToast(`✓ Étiquette ${p.order_number} imprimée`);
+      const printerId = await printLabelCore(p);
+      onToast(`✓ Étiquette ${p.order_number} → imprimante #${printerId}`);
       vibrateSuccess();
     } catch (e: any) { onToast(`⚠ Étiquette: ${e.message}`); vibrateError(); }
     setPrinting(false);
