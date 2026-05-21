@@ -2224,6 +2224,23 @@ export async function searchProductsForThreshold(
     }));
 }
 
+/** Recherche live par query partielle (nom ou ref) — pour autocomplete */
+export async function searchProductsByQuery(
+  session: OdooSession,
+  query: string,
+  limit = 20
+): Promise<{ id: number; default_code: string; name: string; temp_min_quantity: number }[]> {
+  if (!query.trim()) return [];
+  const domain: any[] = ["|", ["default_code", "ilike", query], ["name", "ilike", query]];
+  const res = await searchRead(session, "product.template", domain, ["id", "default_code", "name", "temp_min_quantity"], limit);
+  return (res || []).map((p: any) => ({
+    id: p.id,
+    default_code: p.default_code || "",
+    name: p.name || "",
+    temp_min_quantity: typeof p.temp_min_quantity === "number" ? p.temp_min_quantity : 0,
+  }));
+}
+
 /** Met à jour temp_min_quantity sur plusieurs product.template en une fois */
 export async function bulkUpdateMinQuantity(
   session: OdooSession,
