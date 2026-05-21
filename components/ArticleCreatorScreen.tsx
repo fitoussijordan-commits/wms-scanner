@@ -161,7 +161,7 @@ export default function ArticleCreatorScreen({ session, onBack, onToast, initial
 // ONGLET CRÉATION (code original inchangé)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function CreationTab({ session, onToast }: { session: odoo.OdooSession; onToast: (msg: string, type?: "success"|"error"|"info") => void }) {
+export function CreationTab({ session, onToast }: { session: odoo.OdooSession; onToast: (msg: string, type?: "success"|"error"|"info") => void }) {
   const [catCode,  setCatCode]  = useState("1");
   const [famCode,  setFamCode]  = useState(1);
   const [sfCode,   setSfCode]   = useState(1);

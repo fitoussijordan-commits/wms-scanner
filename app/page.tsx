@@ -8,7 +8,7 @@ import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
 import SupplierImportScreen from "@/components/SupplierImportScreen";
-import ArticleCreatorScreen, { SeuilsTab } from "@/components/ArticleCreatorScreen";
+import ArticleCreatorScreen, { SeuilsTab, CreationTab } from "@/components/ArticleCreatorScreen";
 import FreeScanScreen from "@/components/FreeScanScreen";
 import ReturnsScreen from "@/components/ReturnsScreen";
 import PackingScreen from "@/components/PackingScreen";
@@ -6014,10 +6014,6 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   const [mapping, setMapping] = useState<ColMapping | null>(null);
   const [showMapping, setShowMapping] = useState(false);
 
-  // ── Onglet Créer article → plein-écran séparé ───────────────────
-  if (tab === "create") {
-    return <ArticleCreatorScreen session={session} onBack={() => setTab("import")} onToast={onToast} initialTab="creation" />;
-  }
 
   // ── Parse Excel ──────────────────────────────────────────────────
   const handleFile = async (file: File) => {
@@ -6261,6 +6257,8 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
 
       {tab === "seuils" ? (
         <SeuilsTab session={session} onToast={onToast} />
+      ) : tab === "create" ? (
+        <CreationTab session={session} onToast={onToast} />
       ) : rows.length === 0 ? (
         // ── Upload zone ──
         <div>
