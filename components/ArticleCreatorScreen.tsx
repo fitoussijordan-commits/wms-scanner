@@ -344,7 +344,7 @@ function CreationTab({ session, onToast }: { session: odoo.OdooSession; onToast:
 // ONGLET SEUILS D'ALERTE — redesign complet
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function SeuilsTab({ session, onToast }: { session: odoo.OdooSession; onToast: (msg: string, type?: "success"|"error"|"info") => void }) {
+export function SeuilsTab({ session, onToast }: { session: odoo.OdooSession; onToast: (msg: string, type?: "success"|"error"|"info") => void }) {
   const [query,        setQuery]        = useState("");
   const [suggestions,  setSuggestions]  = useState<{ id: number; default_code: string; name: string; temp_min_quantity: number }[]>([]);
   const [dropOpen,     setDropOpen]     = useState(false);

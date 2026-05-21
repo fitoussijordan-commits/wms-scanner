@@ -8,7 +8,7 @@ import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
 import SupplierImportScreen from "@/components/SupplierImportScreen";
-import ArticleCreatorScreen from "@/components/ArticleCreatorScreen";
+import ArticleCreatorScreen, { SeuilsTab } from "@/components/ArticleCreatorScreen";
 import FreeScanScreen from "@/components/FreeScanScreen";
 import ReturnsScreen from "@/components/ReturnsScreen";
 import PackingScreen from "@/components/PackingScreen";
@@ -6014,9 +6014,9 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   const [mapping, setMapping] = useState<ColMapping | null>(null);
   const [showMapping, setShowMapping] = useState(false);
 
-  // ── Onglets plein-écran ──────────────────────────────────────────
-  if (tab === "create" || tab === "seuils") {
-    return <ArticleCreatorScreen session={session} onBack={() => setTab("import")} onToast={onToast} initialTab={tab === "seuils" ? "seuils" : "creation"} />;
+  // ── Onglet Créer article → plein-écran séparé ───────────────────
+  if (tab === "create") {
+    return <ArticleCreatorScreen session={session} onBack={() => setTab("import")} onToast={onToast} initialTab="creation" />;
   }
 
   // ── Parse Excel ──────────────────────────────────────────────────
@@ -6259,7 +6259,9 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
         ))}
       </div>
 
-      {rows.length === 0 ? (
+      {tab === "seuils" ? (
+        <SeuilsTab session={session} onToast={onToast} />
+      ) : rows.length === 0 ? (
         // ── Upload zone ──
         <div>
           <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
