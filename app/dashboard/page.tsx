@@ -801,6 +801,95 @@ export default function Dashboard() {
     setDlvLoading(false);
   }, [session, dlvAvgMonthlyByRef, avgMonthlyByRef, DLV_SELL_MARGIN_MONTHS]);
 
+  // ── EXPORT DLV EXCEL ──
+  const exportDlvExcel = useCallback(async (rows: DlvRow[]) => {
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "WMS";
+    wb.created = new Date();
+    const ws = wb.addWorksheet("Suivi DLV", { views: [{ state: "frozen", ySplit: 1 }] });
+
+    // Couleurs par statut
+    const STATUS_COLORS: Record<string, { bg: string; fg: string; label: string }> = {
+      perished: { bg: "FFFEF2F2", fg: "FF7C2D12", label: "⛔ Périmé"    },
+      critical: { bg: "FFFEF2F2", fg: "FFDC2626", label: "🔴 Critique"  },
+      risk:     { bg: "FFFFF7ED", fg: "FFC2410C", label: "🟠 Risque"    },
+      watch:    { bg: "FFFEFCE8", fg: "FFB45309", label: "🟡 Attention" },
+      ok:       { bg: "FFF0FDF4", fg: "FF15803D", label: "🟢 OK"        },
+      unknown:  { bg: "FFF8FAFC", fg: "FF64748B", label: "⚪ Sans conso" },
+    };
+
+    // En-têtes
+    ws.columns = [
+      { header: "Statut",      key: "statut",    width: 16 },
+      { header: "Ref",         key: "ref",        width: 14 },
+      { header: "Produit",     key: "name",       width: 30 },
+      { header: "Lot",         key: "lot",        width: 16 },
+      { header: "DLV",         key: "dlv",        width: 14 },
+      { header: "Sell-by",     key: "sellby",     width: 14 },
+      { header: "J. restants", key: "days",       width: 12 },
+      { header: "Qté stock",   key: "qty",        width: 11 },
+      { header: "Conso/mois",  key: "conso",      width: 11 },
+      { header: "Vendable",    key: "vendable",   width: 11 },
+      { header: "À risque",    key: "arisque",    width: 11 },
+    ];
+
+    // Style en-tête
+    const headerRow = ws.getRow(1);
+    headerRow.eachCell(cell => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+      cell.alignment = { vertical: "middle", horizontal: "center" };
+      cell.border = { bottom: { style: "medium", color: { argb: "FF334155" } } };
+    });
+    headerRow.height = 28;
+
+    // Lignes
+    const fmtD = (d: Date) => d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
+    for (const r of rows) {
+      const cfg = STATUS_COLORS[r.status];
+      const row = ws.addRow({
+        statut:  cfg.label,
+        ref:     r.ref || "",
+        name:    r.name,
+        lot:     r.lotName,
+        dlv:     fmtD(new Date(r.dlvDate.split(" ")[0] + "T00:00:00")),
+        sellby:  fmtD(r.sellByDate),
+        days:    r.daysToSellBy <= 0 ? "Dépassé" : r.daysToSellBy,
+        qty:     Math.round(r.qty),
+        conso:   r.avgMonthly || "",
+        vendable: r.avgMonthly > 0 ? r.unitsSellable : "",
+        arisque: r.avgMonthly > 0 ? Math.round(r.unitsAtRisk) : "",
+      });
+      row.height = 22;
+      row.eachCell(cell => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: cfg.bg } };
+        cell.alignment = { vertical: "middle" };
+        cell.border = { bottom: { style: "thin", color: { argb: "FFE2E8F0" } } };
+      });
+      // Colonne statut : couleur texte + gras
+      const statCell = row.getCell("statut");
+      statCell.font = { bold: true, color: { argb: cfg.fg }, size: 11 };
+      // Colonne "À risque" : rouge si > 0, vert si 0
+      const riskCell = row.getCell("arisque");
+      if (r.avgMonthly > 0) {
+        riskCell.font = { bold: true, color: { argb: r.unitsAtRisk > 0 ? "FFDC2626" : "FF15803D" }, size: 11 };
+        riskCell.value = r.unitsAtRisk > 0 ? `⚠ ${Math.round(r.unitsAtRisk)}` : "✓ 0";
+      }
+      // Colonnes numériques alignées à droite
+      (["qty","conso","vendable"] as const).forEach(k => { row.getCell(k).alignment = { vertical: "middle", horizontal: "right" }; });
+      row.getCell("days").alignment = { vertical: "middle", horizontal: "center" };
+    }
+
+    // Téléchargement
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `suivi-dlv-${new Date().toISOString().slice(0,10)}.xlsx`; a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
   // ── IMPORT CONSO DLV (séparé du suivi stock) ──
   const importDlvConso = useCallback(async (file: File) => {
     setDlvConsoImporting(true);
@@ -3418,6 +3507,9 @@ export default function Dashboard() {
                       {f === "all" ? `Tous (${dlvRows.length})` : f === "alert" ? `⚠ Alertes (${nbAlert})` : `✓ OK (${counts.ok + counts.unknown})`}
                     </button>
                   ))}
+                  <button onClick={() => exportDlvExcel(filtered)} className="wms-btn" style={{ marginLeft: "auto" }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export Excel
+                  </button>
                 </div>
               )}
 
