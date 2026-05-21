@@ -1127,34 +1127,43 @@ export default function Dashboard() {
 
       if (allPickingIds.length > 0) {
         try {
-          // 1. Récupère les tracking values : state → done sur ces pickings
-          // new_value_char peut être 'Fait' (FR), 'Done' (EN), ou 'done' (valeur technique selon version Odoo)
-          const trackingVals = await odoo.searchRead(
-            session, "mail.tracking.value",
+          // Approche en 2 étapes pour compatibilité maximale avec toutes les versions Odoo :
+          // Étape 1 : récupère tous les messages de tracking sur ces pickings (champs simples = aucun problème)
+          const allTrackingMsgs = await odoo.searchRead(
+            session, "mail.message",
             [
-              ["mail_message_id.model", "=", "stock.picking"],
-              ["mail_message_id.res_id", "in", allPickingIds],
-              ["new_value_char", "in", ["Fait", "Done", "fait", "done", "Terminé", "Terminé(e)"]],
+              ["model", "=", "stock.picking"],
+              ["res_id", "in", allPickingIds],
+              ["tracking_value_ids", "!=", false],
             ],
-            ["mail_message_id"],
-            8000
+            ["id", "res_id", "author_id", "date"],
+            10000
           );
 
-          if (trackingVals.length > 0) {
-            // 2. Récupère les messages correspondants pour avoir author_id + res_id
-            const msgIds = Array.from(new Set(trackingVals.map((tv: any) =>
-              Array.isArray(tv.mail_message_id) ? tv.mail_message_id[0] : tv.mail_message_id
-            )));
-            const msgs = await odoo.searchRead(
-              session, "mail.message",
-              [["id", "in", msgIds], ["model", "=", "stock.picking"]],
-              ["id", "res_id", "author_id", "date"],
+          if (allTrackingMsgs.length > 0) {
+            const msgIds = allTrackingMsgs.map((m: any) => m.id);
+
+            // Étape 2 : parmi ces messages, lesquels enregistrent la transition vers "Fait" ?
+            // Filtre direct par mail_message_id (Many2one simple, compatible toutes versions)
+            const doneTrackingVals = await odoo.searchRead(
+              session, "mail.tracking.value",
+              [
+                ["mail_message_id", "in", msgIds],
+                ["new_value_char", "in", ["Fait", "Done", "fait", "done", "Terminé", "Terminé(e)"]],
+              ],
+              ["mail_message_id"],
               8000
             );
-            // picking_id → auteur du message le plus récent (= celui qui a validé en dernier = done)
-            // On prend le message le plus récent par picking pour éviter de prendre un message intermédiaire
+
+            // IDs des messages qui correspondent à une transition → Fait
+            const doneMsgIdSet = new Set(doneTrackingVals.map((tv: any) =>
+              Array.isArray(tv.mail_message_id) ? tv.mail_message_id[0] : tv.mail_message_id
+            ));
+
+            // Pour chaque picking, prendre l'auteur du message "→ Fait" le plus récent
             const latestByPicking: Record<number, { date: string; author: string }> = {};
-            for (const msg of msgs) {
+            for (const msg of allTrackingMsgs) {
+              if (!doneMsgIdSet.has(msg.id)) continue;
               if (!msg.res_id || !msg.author_id) continue;
               const prev = latestByPicking[msg.res_id];
               if (!prev || (msg.date || "") > prev.date) {
@@ -1166,7 +1175,7 @@ export default function Dashboard() {
             }
           }
         } catch {
-          // Si mail.tracking.value n'est pas accessible, fallback sur write_uid
+          // fallback write_uid si mail inaccessible
         }
       }
 
