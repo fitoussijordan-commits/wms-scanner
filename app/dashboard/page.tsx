@@ -1093,14 +1093,13 @@ export default function Dashboard() {
       const outTypeIds = pickingTypes.filter((t: any) => t.code === "outgoing").map((t: any) => t.id);
 
       // PICK types = internal types whose sequence_code or name contains "pick" or "prel" (prélèvement)
-      // Falls back to ALL internal types if none match — avoids missing preps
+      // On ne fait PAS de fallback sur tous les internes — sinon les mvts internes admin (Raynald) faussent les stats
       const pickCandidates = pickingTypes.filter((t: any) => {
         const sc = (t.sequence_code || "").toLowerCase();
         const nm = (t.name || "").toLowerCase();
-        return sc.includes("pick") || nm.includes("pick") || sc.includes("prel") || nm.includes("prél") || nm.includes("prele");
+        return sc.includes("pick") || nm.includes("pick") || sc.includes("prel") || nm.includes("prél") || nm.includes("prele") || nm.includes("prépa") || nm.includes("prepa");
       });
-      // If no specific match, take all internal types to avoid losing data
-      const pickTypeIds = (pickCandidates.length ? pickCandidates : pickingTypes.filter((t: any) => t.code === "internal")).map((t: any) => t.id);
+      const pickTypeIds = pickCandidates.map((t: any) => t.id);
 
       // Load OUT pickings
       const outPickings = outTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", outTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "partner_id", "move_ids", "write_uid"], 2000, "date_done desc") : [];
@@ -1129,16 +1128,16 @@ export default function Dashboard() {
       if (allPickingIds.length > 0) {
         try {
           // 1. Récupère les tracking values : state → done sur ces pickings
+          // new_value_char peut être 'Fait' (FR), 'Done' (EN), ou 'done' (valeur technique selon version Odoo)
           const trackingVals = await odoo.searchRead(
             session, "mail.tracking.value",
             [
               ["mail_message_id.model", "=", "stock.picking"],
               ["mail_message_id.res_id", "in", allPickingIds],
-              ["field_id.name", "=", "state"],
-              ["new_value_char", "in", ["Fait", "Done", "fait", "done"]],
+              ["new_value_char", "in", ["Fait", "Done", "fait", "done", "Terminé", "Terminé(e)"]],
             ],
             ["mail_message_id"],
-            5000
+            8000
           );
 
           if (trackingVals.length > 0) {
@@ -1148,15 +1147,22 @@ export default function Dashboard() {
             )));
             const msgs = await odoo.searchRead(
               session, "mail.message",
-              [["id", "in", msgIds]],
-              ["id", "res_id", "author_id"],
-              5000
+              [["id", "in", msgIds], ["model", "=", "stock.picking"]],
+              ["id", "res_id", "author_id", "date"],
+              8000
             );
-            // picking_id → nom de l'auteur (premier message trouvé = celui qui a validé)
+            // picking_id → auteur du message le plus récent (= celui qui a validé en dernier = done)
+            // On prend le message le plus récent par picking pour éviter de prendre un message intermédiaire
+            const latestByPicking: Record<number, { date: string; author: string }> = {};
             for (const msg of msgs) {
-              if (msg.res_id && msg.author_id && !pickingAuthorMap[msg.res_id]) {
-                pickingAuthorMap[msg.res_id] = msg.author_id[1] || "Inconnu";
+              if (!msg.res_id || !msg.author_id) continue;
+              const prev = latestByPicking[msg.res_id];
+              if (!prev || (msg.date || "") > prev.date) {
+                latestByPicking[msg.res_id] = { date: msg.date || "", author: msg.author_id[1] || "Inconnu" };
               }
+            }
+            for (const [resId, val] of Object.entries(latestByPicking)) {
+              pickingAuthorMap[Number(resId)] = val.author;
             }
           }
         } catch {
