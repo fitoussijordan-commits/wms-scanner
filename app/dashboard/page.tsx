@@ -3615,14 +3615,16 @@ export default function Dashboard() {
                   <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Règle standard : DLV &minus; 12 mois · Souplesse (échantillons / miniatures / testeurs) : DLV &minus; 4 mois · Minimum {DLV_MIN_MONTHS} mois d&apos;historique requis</p>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                  <button className="wms-btn" onClick={() => dlvFileRef.current?.click()} disabled={dlvConsoImporting}>
-                    {dlvConsoImporting ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>} Importer conso
-                  </button>
-                  <input ref={dlvFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={e => { const f = e.target.files?.[0]; if (f) importDlvConso(f); e.target.value = ""; }} style={{ display: "none" }} />
+                  <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"center"}}>
+                    <button className="wms-btn" onClick={syncDlvConsoFromOdoo} disabled={dlvConsoImporting} title="Sync conso 12 mois depuis Odoo (même logique que Suivi Stock)" style={{borderColor:"#8b5cf6",color:"#7c3aed"}}>
+                      {dlvConsoImporting ? <Spinner /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Sync conso
+                    </button>
+                    {dlvAvgSyncedAt && <span style={{fontSize:10,color:"var(--text-muted)"}}>Màj {dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
+                    {!dlvAvgSyncedAt && Object.keys(dlvAvgMonthlyByRef).length===0 && <span style={{fontSize:10,color:"#f59e0b"}}>⚠ Pas de cache</span>}
+                  </div>
                   <button className="wms-btn" onClick={loadDlv} disabled={dlvLoading}>
                     {dlvLoading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Charger les lots
                   </button>
-                  {dlvAvgSyncedAt && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Màj {dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
                 </div>
               </div>
 
@@ -3666,7 +3668,7 @@ export default function Dashboard() {
                   <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
                   <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Aucune donnée chargée</div>
                   <div style={{ fontSize: 13 }}>Clique sur «&nbsp;Charger les lots&nbsp;» pour récupérer les DLV depuis Odoo.</div>
-                  {Object.keys(dlvAvgMonthlyByRef).length === 0 && <div style={{ fontSize: 12, color: "var(--warning)", marginTop: 10 }}>⚠ Importe d&apos;abord la conso via «&nbsp;Importer conso DLV&nbsp;» (tableau croisé Odoo) pour avoir les moyennes.</div>}
+                  {Object.keys(dlvAvgMonthlyByRef).length === 0 && <div style={{ fontSize: 12, color: "var(--warning)", marginTop: 10 }}>⚠ Clique sur «&nbsp;Sync conso&nbsp;» pour charger les consommations depuis Odoo.</div>}
                 </div>
               )}
 
