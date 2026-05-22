@@ -8058,7 +8058,38 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
   const [newStockSearching, setNewStockSearching] = useState(false);
 
   // ── Onglets ──────────────────────────────────────────────────────────────
-  const [tab, setTab] = useState<"ajustement" | "chaine">("ajustement");
+  const [tab, setTab] = useState<"ajustement" | "chaine" | "sorties">("ajustement");
+
+  // ── Sorties orphelines ───────────────────────────────────────────────────
+  type OrphanMove = { id: number; productId: number; ref: string; name: string; qty: number; state: string; date: string; locationName: string; locationDestName: string };
+  const [orphans, setOrphans] = useState<OrphanMove[]>([]);
+  const [orphansLoading, setOrphansLoading] = useState(false);
+  const [orphanSelected, setOrphanSelected] = useState<Set<number>>(new Set());
+  const [orphanCancelling, setOrphanCancelling] = useState(false);
+  const [orphanSearch, setOrphanSearch] = useState("");
+
+  const loadOrphans = async () => {
+    setOrphansLoading(true);
+    setOrphanSelected(new Set());
+    try {
+      const moves = await odoo.getOrphanMoves(session);
+      setOrphans(moves);
+      if (moves.length === 0) onToast("✓ Aucune sortie orpheline trouvée");
+    } catch (e: any) { onToast("⚠ " + e.message); }
+    setOrphansLoading(false);
+  };
+
+  const cancelSelected = async () => {
+    if (!orphanSelected.size) return;
+    setOrphanCancelling(true);
+    try {
+      await odoo.cancelOrphanMoves(session, Array.from(orphanSelected));
+      onToast(`✓ ${orphanSelected.size} mouvement(s) annulé(s)`);
+      setOrphans(prev => prev.filter(m => !orphanSelected.has(m.id)));
+      setOrphanSelected(new Set());
+    } catch (e: any) { onToast("⚠ " + e.message); }
+    setOrphanCancelling(false);
+  };
   const [bulkOpen, setBulkOpen] = useState(false); // unused désormais, garde pour compat
   const [bulkText, setBulkText] = useState("");
   const [bulkParsing, setBulkParsing] = useState(false);
@@ -8277,7 +8308,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
 
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 4, margin: "14px 0 16px", background: C.bg, borderRadius: 12, padding: 4 }}>
-        {([["ajustement", "Ajustement"] , ["chaine", "Mise à jour en chaîne"]] as const).map(([t, label]) => (
+        {([["ajustement", "Ajustement"], ["chaine", "Mise à jour en chaîne"], ["sorties", "⚠ Sorties orphelines"]] as const).map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)}
             style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600,
               background: tab === t ? C.white : "transparent", color: tab === t ? C.text : C.textMuted,
@@ -8380,6 +8411,98 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
                 </button>
               </div>
             </>
+          )}
+        </div>
+      )}
+
+      {/* ── Onglet Sorties orphelines ── */}
+      {tab === "sorties" && (
+        <div style={{ maxWidth: 960, margin: "0 auto" }}>
+          <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 16 }}>
+            Mouvements de stock en attente (confirmed/assigned) <strong>sans bon de livraison associé</strong>. Ils bloquent du stock inutilement. Tu peux les sélectionner et les annuler.
+          </div>
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" as const }}>
+            <button onClick={loadOrphans} disabled={orphansLoading}
+              style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: C.blue, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: orphansLoading ? 0.6 : 1 }}>
+              {orphansLoading ? "Chargement..." : "🔍 Analyser les sorties"}
+            </button>
+            {orphans.length > 0 && (
+              <>
+                <input value={orphanSearch} onChange={e => setOrphanSearch(e.target.value)} placeholder="Filtrer ref, nom..."
+                  style={{ padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", flex: 1, minWidth: 180, outline: "none" }} />
+                <button onClick={() => setOrphanSelected(new Set(orphans.filter(m => { const s = orphanSearch.toLowerCase(); return !s || m.ref.toLowerCase().includes(s) || m.name.toLowerCase().includes(s); }).map(m => m.id)))}
+                  style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  Tout sélectionner
+                </button>
+                <button onClick={() => setOrphanSelected(new Set())}
+                  style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  Désélectionner
+                </button>
+                {orphanSelected.size > 0 && (
+                  <button onClick={cancelSelected} disabled={orphanCancelling}
+                    style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: C.red, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: orphanCancelling ? 0.6 : 1, marginLeft: "auto" }}>
+                    {orphanCancelling ? "Annulation..." : `⛔ Annuler ${orphanSelected.size} mouvement(s)`}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+
+          {orphans.length > 0 && (() => {
+            const s = orphanSearch.toLowerCase();
+            const visible = orphans.filter(m => !s || m.ref.toLowerCase().includes(s) || m.name.toLowerCase().includes(s));
+            const STATE_LABELS: Record<string, string> = { confirmed: "Confirmé", waiting: "En attente", assigned: "Réservé", partially_available: "Partiel" };
+            const STATE_COLORS: Record<string, string> = { confirmed: "#f59e0b", waiting: "#94a3b8", assigned: "#ef4444", partially_available: "#f97316" };
+            return (
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: C.bg, borderBottom: `2px solid ${C.border}` }}>
+                      <th style={{ padding: "10px 12px", width: 36 }}>
+                        <input type="checkbox" checked={visible.every(m => orphanSelected.has(m.id))} onChange={e => {
+                          if (e.target.checked) setOrphanSelected(prev => new Set(Array.from(prev).concat(visible.map(m => m.id))));
+                          else setOrphanSelected(prev => { const n = new Set(Array.from(prev)); visible.forEach(m => n.delete(m.id)); return n; });
+                        }} />
+                      </th>
+                      {["Ref","Produit","Qté","État","Emplacement","Dest.","Date"].map(h => (
+                        <th key={h} style={{ padding: "10px 12px", textAlign: "left" as const, fontSize: 11, fontWeight: 700, color: C.textMuted, whiteSpace: "nowrap" as const }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visible.map((m, i) => (
+                      <tr key={m.id} onClick={() => setOrphanSelected(prev => { const n = new Set(prev); n.has(m.id) ? n.delete(m.id) : n.add(m.id); return n; })}
+                        style={{ borderBottom: `1px solid ${C.border}`, background: orphanSelected.has(m.id) ? C.blueSoft : i % 2 === 0 ? C.white : C.bg, cursor: "pointer", transition: "background .1s" }}>
+                        <td style={{ padding: "10px 12px" }}><input type="checkbox" readOnly checked={orphanSelected.has(m.id)} /></td>
+                        <td style={{ padding: "10px 12px", fontWeight: 700, fontFamily: "monospace", fontSize: 12, whiteSpace: "nowrap" as const }}>{m.ref || "—"}</td>
+                        <td style={{ padding: "10px 12px", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }} title={m.name}>{m.name}</td>
+                        <td style={{ padding: "10px 12px", fontWeight: 700, textAlign: "right" as const }}>{Math.round(m.qty)}</td>
+                        <td style={{ padding: "10px 12px" }}>
+                          <span style={{ background: STATE_COLORS[m.state] + "22", color: STATE_COLORS[m.state] || C.textMuted, border: `1px solid ${STATE_COLORS[m.state] || C.border}`, borderRadius: 5, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>
+                            {STATE_LABELS[m.state] || m.state}
+                          </span>
+                        </td>
+                        <td style={{ padding: "10px 12px", fontSize: 12, color: C.textSec, whiteSpace: "nowrap" as const }}>{m.locationName}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 12, color: C.textMuted, whiteSpace: "nowrap" as const }}>{m.locationDestName}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 12, color: C.textMuted, whiteSpace: "nowrap" as const }}>{m.date}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div style={{ padding: "10px 16px", fontSize: 12, color: C.textMuted, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
+                  <span>{visible.length} mouvement(s) orphelin(s) · {orphanSelected.size} sélectionné(s)</span>
+                  <span>Cliquer une ligne pour sélectionner</span>
+                </div>
+              </div>
+            );
+          })()}
+
+          {orphans.length === 0 && !orphansLoading && (
+            <div style={{ textAlign: "center" as const, padding: "48px 20px", color: C.textMuted }}>
+              <div style={{ fontSize: 36, marginBottom: 10 }}>✅</div>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>Clique sur "Analyser les sorties" pour démarrer</div>
+            </div>
           )}
         </div>
       )}

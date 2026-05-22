@@ -2490,7 +2490,7 @@ export default function Dashboard() {
 
 
       {/* CONTENT */}
-      <main style={{ maxWidth: 1260, margin: "0 auto", padding: "28px 28px 60px" }}>
+      <main style={{ maxWidth: tab === "dlv" || tab === "stock-monitor" ? "100%" : 1260, margin: "0 auto", padding: "28px 28px 60px" }}>
         {supaError && <div style={{ background: "var(--warning-soft)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 16px", fontSize: 13, color: "var(--warning)", marginBottom: 12 }}>⚠ {supaError} — mode dégradé localStorage</div>}
         {error && <div style={{ background: "var(--danger-soft)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "14px 18px", fontSize: 14, color: "var(--danger)", marginBottom: 24, display: "flex", alignItems: "center", gap: 10, animation: "fadeIn .3s ease both" }}>{I.alert}<span style={{ flex: 1 }}>{error}</span><button onClick={() => setError("")} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer", fontSize: 18, padding: 4 }}>×</button></div>}
 
@@ -3470,8 +3470,7 @@ export default function Dashboard() {
           const nbAlert = counts.perished + counts.critical + counts.risk + counts.watch;
 
           return (
-            <div style={{ animation: "fadeIn .3s ease both", margin: "0 -28px" }}>
-              <div style={{ padding: "0 28px 0" }}>
+            <div style={{ animation: "fadeIn .3s ease both" }}>
               {/* Header */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
                 <div>
@@ -3536,8 +3535,6 @@ export default function Dashboard() {
                 </div>
               )}
 
-              </div>{/* /padding wrapper */}
-
               {/* Table — pleine largeur */}
               {filtered.length > 0 && (() => {
                 const COLS: { key: string; label: string; align: "left"|"right"|"center" }[] = [
@@ -3566,7 +3563,7 @@ export default function Dashboard() {
                   document.addEventListener("mouseup", onUp);
                 };
                 return (
-                  <div className="wms-card" style={{ padding: 0, overflow: "hidden", margin: "0 28px 0" }}>
+                  <div className="wms-card" style={{ padding: 0, overflow: "hidden" }}>
                     <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 360px)" }}>
                       <table style={{ borderSpacing: 0, borderCollapse: "separate", fontSize: 13, tableLayout: "fixed", width: COLS.reduce((s, c) => s + (dlvColWidths[c.key] || 100), 0) }}>
                         <colgroup>{COLS.map(c => <col key={c.key} style={{ width: dlvColWidths[c.key] || 100 }} />)}</colgroup>

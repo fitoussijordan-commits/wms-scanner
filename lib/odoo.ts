@@ -2312,6 +2312,69 @@ export async function searchProductsByQuery(
 }
 
 /** Met à jour temp_min_quantity sur plusieurs product.template en une fois */
+// ============================================
+// SORTIES ORPHELINES — stock.move sans picking
+// ============================================
+
+/** Retourne tous les stock.move en état actif (confirmed/waiting/assigned)
+ *  sans picking_id (orphelins) dans des emplacements internes. */
+export async function getOrphanMoves(session: OdooSession): Promise<{
+  id: number;
+  productId: number;
+  ref: string;
+  name: string;
+  qty: number;
+  state: string;
+  date: string;
+  locationName: string;
+  locationDestName: string;
+}[]> {
+  const moves: any[] = await searchRead(
+    session, "stock.move",
+    [
+      ["state", "in", ["confirmed", "waiting", "assigned", "partially_available"]],
+      ["picking_id", "=", false],
+      ["location_id.usage", "=", "internal"],
+    ],
+    ["id", "product_id", "product_qty", "state", "date", "location_id", "location_dest_id"],
+    500
+  );
+  if (!moves?.length) return [];
+
+  // Enrichir avec les default_code
+  const productIds = Array.from(new Set(moves.map((m: any) => m.product_id[0]))) as number[];
+  const products: any[] = await searchRead(
+    session, "product.product",
+    [["id", "in", productIds]],
+    ["id", "default_code", "name"],
+    productIds.length
+  );
+  const prodMap: Record<number, any> = {};
+  for (const p of products) prodMap[p.id] = p;
+
+  return moves.map((m: any) => {
+    const prod = prodMap[m.product_id[0]];
+    return {
+      id: m.id,
+      productId: m.product_id[0],
+      ref: prod?.default_code || "",
+      name: prod?.name || m.product_id[1] || "",
+      qty: m.product_qty || 0,
+      state: m.state,
+      date: m.date ? m.date.split(" ")[0] : "",
+      locationName: Array.isArray(m.location_id) ? m.location_id[1] : "",
+      locationDestName: Array.isArray(m.location_dest_id) ? m.location_dest_id[1] : "",
+    };
+  });
+}
+
+/** Annule une liste de stock.move orphelins (passe à state=cancel + libère réservation) */
+export async function cancelOrphanMoves(session: OdooSession, moveIds: number[]): Promise<void> {
+  if (!moveIds.length) return;
+  await write(session, "stock.move", moveIds, { state: "draft" });
+  await write(session, "stock.move", moveIds, { state: "cancel" });
+}
+
 export async function bulkUpdateMinQuantity(
   session: OdooSession,
   updates: { id: number; value: number }[]
