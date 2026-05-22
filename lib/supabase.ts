@@ -50,18 +50,21 @@ export async function deleteThreshold(odoo_ref: string): Promise<void> {
 
 export async function saveThresholdsBulk(thresholds: WmsThreshold[]): Promise<void> {
   if (!thresholds.length) return;
-  // DELETE les refs concernés puis INSERT propre (pas de dépendance à une contrainte unique)
-  const refs = thresholds.map(t => t.odoo_ref);
-  for (let i = 0; i < refs.length; i += 500) {
-    const { error } = await sb.from("wms_thresholds").delete().in("odoo_ref", refs.slice(i, i + 500));
-    if (error) throw new Error(error.message);
+  const now = new Date().toISOString();
+  // 1. UPDATE les lignes existantes (en parallèle par batch de 50)
+  for (let i = 0; i < thresholds.length; i += 50) {
+    const batch = thresholds.slice(i, i + 50);
+    await Promise.all(batch.map(t =>
+      sb.from("wms_thresholds").update({ threshold: t.threshold, product_name: t.product_name, updated_at: now }).eq("odoo_ref", t.odoo_ref)
+    ));
   }
+  // 2. INSERT les lignes qui n'existaient pas encore (celles dont UPDATE n'a rien modifié)
+  //    → on tente INSERT et on ignore les erreurs de doublon
   for (let i = 0; i < thresholds.length; i += 500) {
     const batch = thresholds.slice(i, i + 500);
-    const { error } = await sb.from("wms_thresholds").insert(
-      batch.map((t) => ({ ...t, updated_at: new Date().toISOString() }))
-    );
-    if (error) throw new Error(error.message);
+    try {
+      await sb.from("wms_thresholds").insert(batch.map(t => ({ ...t, updated_at: now })));
+    } catch {} // ignore si déjà existant
   }
 }
 

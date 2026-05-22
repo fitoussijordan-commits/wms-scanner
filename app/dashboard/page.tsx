@@ -2174,8 +2174,7 @@ export default function Dashboard() {
     setSmRows(r=>r.map(row=>{if(row.ref!==ref)return row;const u={...row,threshold:n};u.status=smStatus(u.stock,u.conso,n,u.daysLeft,u.daysUntilDeliv);return u;}));
     setSmEditThr(null);
     try {
-      await supa.sb.from("wms_thresholds").delete().eq("odoo_ref",ref);
-      const {error}=await supa.sb.from("wms_thresholds").insert({odoo_ref:ref,threshold:n,product_name:name,updated_at:new Date().toISOString()});
+      const {error}=await supa.sb.from("wms_thresholds").update({threshold:n,updated_at:new Date().toISOString()}).eq("odoo_ref",ref);
       if(error) throw new Error(error.message);
     } catch(e:any) { setError("Erreur sauvegarde seuil : "+e.message); }
   };
@@ -2193,22 +2192,17 @@ export default function Dashboard() {
       u.status=smStatus(u.stock,u.conso,n,u.daysLeft,u.daysUntilDeliv);
       return u;
     }));
-    // Sauvegarde Supabase : DELETE les refs concernés puis INSERT propre (évite tout problème de contrainte)
+    // Sauvegarde Supabase : UPDATE direct sur les lignes existantes (pas de DELETE/INSERT)
     try {
-      const refs=toUpdate.map(r=>r.ref);
-      // DELETE par batch de 500
-      for(let i=0;i<refs.length;i+=500){
-        const {error}=await supa.sb.from("wms_thresholds").delete().in("odoo_ref",refs.slice(i,i+500));
-        if(error) throw new Error("DELETE: "+error.message);
-      }
-      // INSERT tous les rows frais (en gardant supplier_date + expected_qty)
-      const items=toUpdate.map((r,i)=>{
-        const existing=smRows.find(row=>row.ref===r.ref);
-        return {odoo_ref:r.ref,threshold:newVal[i],product_name:r.name,supplier_date:existing?.supplierDate??null,expected_qty:existing?.expected_qty??0,updated_at:new Date().toISOString()};
-      });
-      for(let i=0;i<items.length;i+=500){
-        const {error}=await supa.sb.from("wms_thresholds").insert(items.slice(i,i+500));
-        if(error) throw new Error("INSERT: "+error.message);
+      const now=new Date().toISOString();
+      // Batches de 50 en parallèle pour aller vite
+      for(let i=0;i<toUpdate.length;i+=50){
+        const batch=toUpdate.slice(i,i+50);
+        const results=await Promise.all(batch.map((r,j)=>
+          supa.sb.from("wms_thresholds").update({threshold:newVal[i+j],updated_at:now}).eq("odoo_ref",r.ref)
+        ));
+        const err=results.find(r=>r.error);
+        if(err?.error) throw new Error(err.error.message);
       }
     } catch(e:any) { setError("Erreur sauvegarde seuils : "+e.message); }
   };
