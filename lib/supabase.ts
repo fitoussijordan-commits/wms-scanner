@@ -112,7 +112,16 @@ export async function getConsoCacheAge(): Promise<Date | null> {
 
 export async function saveConsoCache(items: WmsConsoCache[]): Promise<void> {
   if (!items.length) return;
-  // DELETE d'abord les mois concernés pour éviter tout conflit ON CONFLICT
+  // DELETE tous les mois hors fenêtre 12 mois + les mois à réécrire (pas de cumul)
+  const today = new Date();
+  const validMonths = new Set<string>();
+  for (let i = 1; i <= 12; i++) {
+    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    validMonths.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  }
+  // Supprimer tout ce qui est hors fenêtre
+  await sb.from("wms_conso_cache").delete().not("month", "in", `(${Array.from(validMonths).map(m => `"${m}"`).join(",")})`).then(() => {});
+  // DELETE les mois qu'on va réécrire
   const months = Array.from(new Set(items.map(i => i.month)));
   const { error: delError } = await sb.from("wms_conso_cache").delete().in("month", months);
   if (delError) throw new Error(delError.message);
@@ -255,9 +264,15 @@ export async function saveWatchlist(items: WmsWatchlistItem[]): Promise<void> {
 // ══════════════════════════════════════════
 
 export async function loadAvgMonthly(): Promise<{ avg: Record<string, number>; nbMonths: Record<string, number> }> {
-  const { data, error } = await sb.from("wms_conso_cache").select("odoo_ref, month, qty");
+  // Fenêtre fixe : 12 mois complets avant le mois courant (même fenêtre que smSyncOdoo)
+  const today = new Date();
+  const validMonths = new Set<string>();
+  for (let i = 1; i <= 12; i++) {
+    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    validMonths.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  }
+  const { data, error } = await sb.from("wms_conso_cache").select("odoo_ref, month, qty").in("month", Array.from(validMonths));
   if (error) throw new Error(error.message);
-  // Fenêtre fixe 12 mois : total / 12 (même logique que smSyncOdoo)
   const byRef: Record<string, { total: number; months: Set<string> }> = {};
   for (const r of (data || [])) {
     if (!byRef[r.odoo_ref]) byRef[r.odoo_ref] = { total: 0, months: new Set() };
