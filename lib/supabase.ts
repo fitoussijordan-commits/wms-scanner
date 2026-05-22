@@ -112,20 +112,9 @@ export async function getConsoCacheAge(): Promise<Date | null> {
 
 export async function saveConsoCache(items: WmsConsoCache[]): Promise<void> {
   if (!items.length) return;
-  // DELETE tous les mois hors fenêtre 12 mois + les mois à réécrire (pas de cumul)
-  const today = new Date();
-  const validMonths = new Set<string>();
-  for (let i = 1; i <= 12; i++) {
-    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
-    validMonths.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-  }
-  // Supprimer tout ce qui est hors fenêtre
-  await sb.from("wms_conso_cache").delete().not("month", "in", `(${Array.from(validMonths).map(m => `"${m}"`).join(",")})`).then(() => {});
-  // DELETE les mois qu'on va réécrire
-  const months = Array.from(new Set(items.map(i => i.month)));
-  const { error: delError } = await sb.from("wms_conso_cache").delete().in("month", months);
+  // Vider toute la table, puis réécrire proprement
+  const { error: delError } = await sb.from("wms_conso_cache").delete().neq("odoo_ref", "");
   if (delError) throw new Error(delError.message);
-  // INSERT par batch de 500
   for (let i = 0; i < items.length; i += 500) {
     const batch = items.slice(i, i + 500);
     const { error } = await sb.from("wms_conso_cache").insert(
@@ -133,6 +122,7 @@ export async function saveConsoCache(items: WmsConsoCache[]): Promise<void> {
     );
     if (error) throw new Error(error.message);
   }
+  const months = Array.from(new Set(items.map(i => i.month)));
   await sb.from("wms_sync_meta").upsert([
     { key: "conso_synced_at", value: new Date().toISOString(), updated_at: new Date().toISOString() },
     { key: "conso_months_count", value: String(months.length), updated_at: new Date().toISOString() },
@@ -342,11 +332,12 @@ export interface WmsDlvAvg {
 
 export async function saveDlvAvg(items: WmsDlvAvg[]): Promise<void> {
   if (!items.length) return;
+  // Vider toute la table, puis réécrire proprement
+  await sb.from("wms_dlv_avg").delete().neq("odoo_ref", "");
   for (let i = 0; i < items.length; i += 500) {
     const batch = items.slice(i, i + 500);
-    const { error } = await sb.from("wms_dlv_avg").upsert(
-      batch.map(item => ({ ...item, updated_at: new Date().toISOString() })),
-      { onConflict: "odoo_ref" }
+    const { error } = await sb.from("wms_dlv_avg").insert(
+      batch.map(item => ({ ...item, updated_at: new Date().toISOString() }))
     );
     if (error) throw new Error(error.message);
   }
