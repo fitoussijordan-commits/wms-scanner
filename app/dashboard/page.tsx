@@ -2462,17 +2462,29 @@ export default function Dashboard() {
     <div className="wms-root" data-theme="light"><style>{GLOBAL_CSS}</style>
 
       {/* HEADER */}
-      <header style={{ background: "var(--bg-raised)", borderBottom: "1px solid var(--border)", padding: "0 28px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 60, position: "sticky", top: 0, zIndex: 20 }}>
-        <a href="/" style={{ display: "flex", alignItems: "center", gap: 14, textDecoration: "none", color: "inherit" }}>
-          <div style={{ width: 34, height: 34, borderRadius: 8, background: "linear-gradient(135deg,var(--accent),#6366f1)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", flexShrink: 0 }}>{I.warehouse}</div>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "-.2px", lineHeight: 1.2 }}>WMS Dashboard</div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: MONO }}>{session.name} · {session.config?.url?.replace("https://", "")}</div>
+      <header style={{ background: "#fff", borderBottom: "1px solid var(--border)", padding: "0 20px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56, position: "sticky", top: 0, zIndex: 20, boxShadow: "0 1px 0 var(--border)" }}>
+        {/* Left: home + logo + badge */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <a href="/" title="Retour au scanner" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8, border: "1px solid var(--border)", color: "var(--text-muted)", textDecoration: "none", background: "var(--bg-raised)", flexShrink: 0, fontSize: 15 }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          </a>
+          <img src="/logo-dr-hauschka.png" alt="Dr. Hauschka" style={{ height: 26, objectFit: "contain" }} />
+          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--accent)", background: "var(--accent-soft)", padding: "2px 7px", borderRadius: 5, letterSpacing: ".04em" }}>WMS</span>
+        </div>
+        {/* Right: user + actions */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 5px #22c55e" }} />
+            <span style={{ fontSize: 12, color: "var(--text-secondary)", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.name}</span>
+            <span style={{ fontSize: 11, color: "var(--text-muted)", display: "none" }}>·</span>
+            <span style={{ fontSize: 11, color: "var(--text-muted)", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.config?.url?.replace("https://", "")}</span>
           </div>
-        </a>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-<a href="/" className="wms-btn wms-btn-ghost" style={{ textDecoration: "none", padding: "8px 14px", fontSize: 13 }}>{I.scanner} Scanner</a>
-          <button className="wms-btn wms-btn-danger" onClick={logout} style={{ padding: "8px 14px", fontSize: 13 }}>{I.logout} Déco.</button>
+          <a href="/" title="Scanner" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8, border: "1px solid var(--border)", color: "var(--text-muted)", textDecoration: "none", background: "var(--bg-raised)", flexShrink: 0 }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          </a>
+          <button onClick={logout} title="Déconnexion" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8, border: "1px solid #fecaca", color: "#ef4444", background: "#fff5f5", cursor: "pointer", flexShrink: 0 }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          </button>
         </div>
       </header>
 
