@@ -1733,7 +1733,13 @@ export default function Dashboard() {
     a.click(); URL.revokeObjectURL(url);
   }, [libreRows, libreCols]);
 
-  useEffect(() => { if (!session) return; if (tab === "deliveries") loadDeliveries(); if (tab === "stock-monitor") smLoad(smDeliveryMonth); }, [tab, session]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!session) return;
+    if (tab === "deliveries") loadDeliveries();
+    // Suivi Stock : charge uniquement si pas encore de données affichées
+    // Ne jamais forcer la sync conso au changement de tab — utiliser le cache
+    if (tab === "stock-monitor" && smRows.length === 0) smLoad(smDeliveryMonth);
+  }, [tab, session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ══════════════════════════════════════════════════════
   // SUIVI STOCK — nouveau tab (remplace Alertes + Conso)
@@ -2087,13 +2093,22 @@ export default function Dashboard() {
 
       if (forceConsoSync) {
         // Sync forcée : fetch Odoo + écrase le cache (DELETE+INSERT)
-        // smSyncOdoo gérera le save quand cachedConso=undefined
         consoToUse = undefined;
       } else {
-        // Utiliser la conso déjà en mémoire (chargée depuis Supabase au login)
-        const hasCached = Object.keys(avgMonthlyByRef).length > 0;
-        consoToUse = hasCached ? avgMonthlyByRef : undefined;
-        // Si pas de cache du tout → smSyncOdoo fetch Odoo automatiquement
+        // Utiliser la conso en mémoire — si vide, tenter Supabase avant de toucher Odoo
+        let cached = avgMonthlyByRef;
+        if (Object.keys(cached).length === 0) {
+          try {
+            const { avg, nbMonths: nb } = await supa.loadAvgMonthly();
+            if (Object.keys(avg).length > 0) {
+              setAvgMonthlyByRef(avg);
+              setDlvAvgNbMonths(prev => ({ ...nb, ...prev }));
+              cached = avg;
+            }
+          } catch {}
+        }
+        // Si toujours vide → pas de cache Supabase → sync Odoo inévitable
+        consoToUse = Object.keys(cached).length > 0 ? cached : undefined;
       }
 
       await smSyncOdoo(refs,thrMap,supMap,delivMonth||smDeliveryMonth,expectedMap,consoToUse);
