@@ -8061,7 +8061,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
   const [tab, setTab] = useState<"ajustement" | "chaine" | "sorties">("ajustement");
 
   // ── Sorties orphelines ───────────────────────────────────────────────────
-  type OrphanMove = { id: number; productId: number; ref: string; name: string; qty: number; state: string; date: string; locationName: string; locationDestName: string };
+  type OrphanMove = { id: number; quantId: number; productId: number; ref: string; name: string; lotName: string; qty: number; reservedQty: number; uncoveredQty: number; state: string; date: string; locationName: string; locationDestName: string; reason: string };
   const [orphans, setOrphans] = useState<OrphanMove[]>([]);
   const [orphansLoading, setOrphansLoading] = useState(false);
   const [orphanSelected, setOrphanSelected] = useState<Set<number>>(new Set());
@@ -8451,47 +8451,42 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
 
           {orphans.length > 0 && (() => {
             const s = orphanSearch.toLowerCase();
-            const visible = orphans.filter(m => !s || m.ref.toLowerCase().includes(s) || m.name.toLowerCase().includes(s));
-            const STATE_LABELS: Record<string, string> = { confirmed: "Confirmé", waiting: "En attente", assigned: "Réservé", partially_available: "Partiel" };
-            const STATE_COLORS: Record<string, string> = { confirmed: "#f59e0b", waiting: "#94a3b8", assigned: "#ef4444", partially_available: "#f97316" };
+            const visible = orphans.filter(m => !s || m.ref.toLowerCase().includes(s) || m.name.toLowerCase().includes(s) || m.lotName.toLowerCase().includes(s));
+            const totalUncovered = visible.reduce((sum, m) => sum + m.uncoveredQty, 0);
             return (
               <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: 13 }}>
                   <thead>
                     <tr style={{ background: C.bg, borderBottom: `2px solid ${C.border}` }}>
                       <th style={{ padding: "10px 12px", width: 36 }}>
-                        <input type="checkbox" checked={visible.every(m => orphanSelected.has(m.id))} onChange={e => {
+                        <input type="checkbox" checked={visible.length > 0 && visible.every(m => orphanSelected.has(m.id))} onChange={e => {
                           if (e.target.checked) setOrphanSelected(prev => new Set(Array.from(prev).concat(visible.map(m => m.id))));
                           else setOrphanSelected(prev => { const n = new Set(Array.from(prev)); visible.forEach(m => n.delete(m.id)); return n; });
                         }} />
                       </th>
-                      {["Ref","Produit","Qté","État","Emplacement","Dest.","Date"].map(h => (
-                        <th key={h} style={{ padding: "10px 12px", textAlign: "left" as const, fontSize: 11, fontWeight: 700, color: C.textMuted, whiteSpace: "nowrap" as const }}>{h}</th>
+                      {["Ref", "Produit", "Lot", "Qté sortie", "⚠ Sans livraison", "Emplacement", "Motif"].map(h => (
+                        <th key={h} style={{ padding: "10px 12px", textAlign: h === "Qté sortie" || h === "⚠ Sans livraison" ? "right" as const : "left" as const, fontSize: 11, fontWeight: 700, color: C.textMuted, whiteSpace: "nowrap" as const }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {visible.map((m, i) => (
-                      <tr key={m.id} onClick={() => setOrphanSelected(prev => { const n = new Set(prev); n.has(m.id) ? n.delete(m.id) : n.add(m.id); return n; })}
+                      <tr key={m.id} onClick={() => setOrphanSelected(prev => { const n = new Set(Array.from(prev)); n.has(m.id) ? n.delete(m.id) : n.add(m.id); return n; })}
                         style={{ borderBottom: `1px solid ${C.border}`, background: orphanSelected.has(m.id) ? C.blueSoft : i % 2 === 0 ? C.white : C.bg, cursor: "pointer", transition: "background .1s" }}>
                         <td style={{ padding: "10px 12px" }}><input type="checkbox" readOnly checked={orphanSelected.has(m.id)} /></td>
                         <td style={{ padding: "10px 12px", fontWeight: 700, fontFamily: "monospace", fontSize: 12, whiteSpace: "nowrap" as const }}>{m.ref || "—"}</td>
-                        <td style={{ padding: "10px 12px", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }} title={m.name}>{m.name}</td>
-                        <td style={{ padding: "10px 12px", fontWeight: 700, textAlign: "right" as const }}>{Math.round(m.qty)}</td>
-                        <td style={{ padding: "10px 12px" }}>
-                          <span style={{ background: STATE_COLORS[m.state] + "22", color: STATE_COLORS[m.state] || C.textMuted, border: `1px solid ${STATE_COLORS[m.state] || C.border}`, borderRadius: 5, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>
-                            {STATE_LABELS[m.state] || m.state}
-                          </span>
-                        </td>
+                        <td style={{ padding: "10px 12px", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }} title={m.name}>{m.name}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 12, color: C.textMuted, fontFamily: "monospace" as const }}>{m.lotName || "—"}</td>
+                        <td style={{ padding: "10px 12px", textAlign: "right" as const, fontWeight: 600 }}>{Math.round(m.qty)}</td>
+                        <td style={{ padding: "10px 12px", textAlign: "right" as const, fontWeight: 800, color: C.red }}>⚠ {Math.round(m.uncoveredQty)}</td>
                         <td style={{ padding: "10px 12px", fontSize: 12, color: C.textSec, whiteSpace: "nowrap" as const }}>{m.locationName}</td>
-                        <td style={{ padding: "10px 12px", fontSize: 12, color: C.textMuted, whiteSpace: "nowrap" as const }}>{m.locationDestName}</td>
-                        <td style={{ padding: "10px 12px", fontSize: 12, color: C.textMuted, whiteSpace: "nowrap" as const }}>{m.date}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 12, color: C.textMuted }}>{m.reason}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                <div style={{ padding: "10px 16px", fontSize: 12, color: C.textMuted, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
-                  <span>{visible.length} mouvement(s) orphelin(s) · {orphanSelected.size} sélectionné(s)</span>
+                <div style={{ padding: "10px 16px", fontSize: 12, color: C.textMuted, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", flexWrap: "wrap" as const, gap: 8 }}>
+                  <span>{visible.length} article(s) · <b style={{ color: C.red }}>{Math.round(totalUncovered)} unités sans livraison active</b> · {orphanSelected.size} sélectionné(s)</span>
                   <span>Cliquer une ligne pour sélectionner</span>
                 </div>
               </div>
