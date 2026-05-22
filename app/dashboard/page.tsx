@@ -3470,7 +3470,8 @@ export default function Dashboard() {
           const nbAlert = counts.perished + counts.critical + counts.risk + counts.watch;
 
           return (
-            <div style={{ animation: "fadeIn .3s ease both" }}>
+            <div style={{ animation: "fadeIn .3s ease both", margin: "0 -28px" }}>
+              <div style={{ padding: "0 28px 0" }}>
               {/* Header */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
                 <div>
@@ -3535,7 +3536,9 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {/* Table */}
+              </div>{/* /padding wrapper */}
+
+              {/* Table — pleine largeur */}
               {filtered.length > 0 && (() => {
                 const COLS: { key: string; label: string; align: "left"|"right"|"center" }[] = [
                   { key: "Statut",     label: "Statut",      align: "left"   },
@@ -3563,7 +3566,7 @@ export default function Dashboard() {
                   document.addEventListener("mouseup", onUp);
                 };
                 return (
-                  <div className="wms-card" style={{ padding: 0, overflow: "hidden" }}>
+                  <div className="wms-card" style={{ padding: 0, overflow: "hidden", margin: "0 28px 0" }}>
                     <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 360px)" }}>
                       <table style={{ borderSpacing: 0, borderCollapse: "separate", fontSize: 13, tableLayout: "fixed", width: COLS.reduce((s, c) => s + (dlvColWidths[c.key] || 100), 0) }}>
                         <colgroup>{COLS.map(c => <col key={c.key} style={{ width: dlvColWidths[c.key] || 100 }} />)}</colgroup>
