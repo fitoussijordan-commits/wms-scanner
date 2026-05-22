@@ -1719,9 +1719,9 @@ export default function Dashboard() {
     const prods:any[]=await odoo.searchRead(session,"product.product",[["default_code","in",refs.map(r=>r.ref)],["active","in",[true,false]]],["id","name","default_code","qty_available"],0);
     const stockByRef:Record<string,{id:number;name:string;qty:number}>={};
     for(const p of prods) if(p.default_code) stockByRef[p.default_code]={id:p.id,name:p.name,qty:p.qty_available??0};
-    setSmMsg("Consommation (3 mois)...");
+    setSmMsg("Consommation (12 mois)...");
     const today=new Date();
-    const from=new Date(today.getFullYear(),today.getMonth()-3,1).toISOString().slice(0,10)+" 00:00:00";
+    const from=new Date(today.getFullYear(),today.getMonth()-12,1).toISOString().slice(0,10)+" 00:00:00";
     const curMonthStart=new Date(today.getFullYear(),today.getMonth(),1).toISOString().slice(0,10)+" 00:00:00";
     const pids=Object.values(stockByRef).map(p=>p.id);
     const consoByRef:Record<string,number>={};
@@ -1729,8 +1729,7 @@ export default function Dashboard() {
       const moves:any[]=await odoo.searchRead(session,"stock.move",[["state","=","done"],["product_id","in",pids],["date",">=",from],["date","<",curMonthStart],["location_id.usage","=","internal"],["location_dest_id.usage","=","customer"]],["product_id","product_uom_qty","date"],0);
       const byPidMonth:Record<number,Record<string,number>>={};
       for(const m of moves){const pid=Array.isArray(m.product_id)?m.product_id[0]:m.product_id;const mo=String(m.date||"").slice(0,7);if(!byPidMonth[pid])byPidMonth[pid]={};byPidMonth[pid][mo]=(byPidMonth[pid][mo]||0)+(m.product_uom_qty||0);}
-      const months3:string[]=[];for(let i=3;i>=1;i--){const d=new Date(today.getFullYear(),today.getMonth()-i,1);months3.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);}
-      for(const [ref,info] of Object.entries(stockByRef)){const pid=info.id;const qtys=months3.map(m=>byPidMonth[pid]?.[m]??0);const nz=qtys.filter(q=>q>0).length;consoByRef[ref]=nz>0?qtys.reduce((a,b)=>a+b,0)/nz:0;}
+      for(const [ref,info] of Object.entries(stockByRef)){const pid=info.id;let total=0;for(let i=12;i>=1;i--){const d=new Date(today.getFullYear(),today.getMonth()-i,1);const mo=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;total+=(byPidMonth[pid]?.[mo]??0);}consoByRef[ref]=Math.round(total/12);}
     }
     const hasOrderConf=Object.keys(expectedMap||{}).length>0;
     const rows=smBuildRows(refs,stockByRef,consoByRef,thrMap,supMap,delivMonth,expectedMap,hasOrderConf);
@@ -2525,7 +2524,7 @@ export default function Dashboard() {
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
               <div>
                 <h2 style={{fontSize:22,fontWeight:800,letterSpacing:"-.3px",marginBottom:4}}>Suivi Stock</h2>
-                <p style={{fontSize:13,color:"var(--text-muted)"}}>Stock en temps réel · Conso moyenne 3 mois (OUT) · Livraison le 15 du mois suivant</p>
+                <p style={{fontSize:13,color:"var(--text-muted)"}}>Stock en temps réel · Conso moyenne 12 mois (OUT) · Livraison le 15 du mois suivant</p>
               </div>
               <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
