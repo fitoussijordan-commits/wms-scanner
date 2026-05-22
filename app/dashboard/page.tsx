@@ -637,8 +637,12 @@ export default function Dashboard() {
       try { const t = localStorage.getItem("wms_thresholds"); if (t) setThresholds(JSON.parse(t)); } catch (e) {}
     });
     // Load avg_monthly from Supabase
-    supa.loadAvgMonthly().then(avg => { setAvgMonthlyByRef(avg); }).catch(() => {});
-    // Load DLV avg (séparé du suivi stock)
+    supa.loadAvgMonthly().then(({ avg, nbMonths }) => {
+      setAvgMonthlyByRef(avg);
+      // nbMonths from wms_conso_cache sert aussi pour DLV (historique suffisant ?)
+      setDlvAvgNbMonths(prev => ({ ...nbMonths, ...prev }));
+    }).catch(() => {});
+    // Load DLV avg (séparé du suivi stock — fallback pour produits hors wms_thresholds)
     supa.loadDlvAvg().then(avg => { setDlvAvgMonthlyByRef(avg); }).catch(() => {});
     supa.getDlvAvgAge().then(d => setDlvAvgSyncedAt(d)).catch(() => {});
     // Load cache ages
@@ -793,7 +797,9 @@ export default function Dashboard() {
         const sellByDate = new Date(dlvDate);
         sellByDate.setMonth(sellByDate.getMonth() - marginMonths);
         const daysToSellBy = Math.floor((sellByDate.getTime() - today.getTime()) / 86400000);
-        const avgMonthly = dlvAvgMonthlyByRef[lot.ref] || avgMonthlyByRef[lot.ref] || 0;
+        // wms_conso_cache (avgMonthlyByRef) est prioritaire — même source que Suivi Stock
+        // dlvAvgMonthlyByRef (wms_dlv_avg) = fallback pour produits hors wms_thresholds
+        const avgMonthly = avgMonthlyByRef[lot.ref] || dlvAvgMonthlyByRef[lot.ref] || 0;
         const nbMonths = dlvAvgNbMonths[lot.ref] || 0;
         const hasEnoughHistory = avgMonthly === 0 ? false : (nbMonths === 0 || nbMonths >= DLV_MIN_MONTHS);
         const monthsToSellBy = Math.max(0, daysToSellBy / 30);
@@ -1122,8 +1128,9 @@ export default function Dashboard() {
         setThresholdsByRef(newThresholdsByRef);
       }
 
-      const avg = await supa.loadAvgMonthly();
+      const { avg, nbMonths: nb } = await supa.loadAvgMonthly();
       setAvgMonthlyByRef(avg);
+      setDlvAvgNbMonths(prev => ({ ...nb, ...prev }));
       setConsoSyncedAt(new Date());
       const nbProducts = new Set(items.map(i => i.odoo_ref)).size;
       const nbMonths = new Set(items.map(i => i.month)).size;
@@ -2672,13 +2679,11 @@ export default function Dashboard() {
                   </select>
                 </div>
                 <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth)} disabled={smLoading} title="Refresh stock Odoo — utilise la conso en cache">{smLoading?<Spinner/>:I.refresh} Actualiser</button>
-                <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"center"}}>
-                  <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth,true)} disabled={smLoading} title="Sync conso 12 mois depuis Odoo et écrase le cache" style={{borderColor:"#8b5cf6",color:"#7c3aed"}}>
-                    {smLoading?<Spinner/>:<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Sync conso
-                  </button>
-                  {consoSyncedAt&&<span style={{fontSize:10,color:"var(--text-muted)"}}>Màj {consoSyncedAt.toLocaleDateString("fr-FR")}</span>}
-                  {!consoSyncedAt&&Object.keys(avgMonthlyByRef).length===0&&<span style={{fontSize:10,color:"#f59e0b"}}>⚠ Pas de cache</span>}
-                </div>
+                <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth,true)} disabled={smLoading}
+                  title={consoSyncedAt ? `Sync conso 12 mois (màj ${consoSyncedAt.toLocaleDateString("fr-FR")})` : "Sync conso 12 mois depuis Odoo"}
+                  style={{borderColor:"#8b5cf6",color:"#7c3aed"}}>
+                  {smLoading?<Spinner/>:<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Sync conso{consoSyncedAt&&<span style={{fontSize:10,opacity:.7,marginLeft:4}}>{consoSyncedAt.toLocaleDateString("fr-FR")}</span>}
+                </button>
                 <input ref={smFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={smImportExcel} style={{display:"none"}}/>
                 <button className="wms-btn wms-btn-primary" onClick={()=>smFileRef.current?.click()} disabled={smLoading}>📤 Importer refs</button>
                 <input ref={smOrderFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={smImportOrder} style={{display:"none"}}/>
@@ -3615,13 +3620,11 @@ export default function Dashboard() {
                   <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Règle standard : DLV &minus; 12 mois · Souplesse (échantillons / miniatures / testeurs) : DLV &minus; 4 mois · Minimum {DLV_MIN_MONTHS} mois d&apos;historique requis</p>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                  <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"center"}}>
-                    <button className="wms-btn" onClick={syncDlvConsoFromOdoo} disabled={dlvConsoImporting} title="Sync conso 12 mois depuis Odoo (même logique que Suivi Stock)" style={{borderColor:"#8b5cf6",color:"#7c3aed"}}>
-                      {dlvConsoImporting ? <Spinner /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Sync conso
-                    </button>
-                    {dlvAvgSyncedAt && <span style={{fontSize:10,color:"var(--text-muted)"}}>Màj {dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
-                    {!dlvAvgSyncedAt && Object.keys(dlvAvgMonthlyByRef).length===0 && <span style={{fontSize:10,color:"#f59e0b"}}>⚠ Pas de cache</span>}
-                  </div>
+                  <button className="wms-btn" onClick={syncDlvConsoFromOdoo} disabled={dlvConsoImporting}
+                    title={dlvAvgSyncedAt ? `Sync conso 12 mois (màj ${dlvAvgSyncedAt.toLocaleDateString("fr-FR")})` : "Sync conso 12 mois depuis Odoo"}
+                    style={{borderColor:"#8b5cf6",color:"#7c3aed"}}>
+                    {dlvConsoImporting ? <Spinner /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Sync conso{dlvAvgSyncedAt&&<span style={{fontSize:10,opacity:.7,marginLeft:4}}>{dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
+                  </button>
                   <button className="wms-btn" onClick={loadDlv} disabled={dlvLoading}>
                     {dlvLoading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Charger les lots
                   </button>

@@ -254,24 +254,23 @@ export async function saveWatchlist(items: WmsWatchlistItem[]): Promise<void> {
 // AVG MONTHLY (consommation moyenne par ref)
 // ══════════════════════════════════════════
 
-export async function loadAvgMonthly(): Promise<Record<string, number>> {
-  const { data, error } = await sb.from("wms_conso_cache").select("odoo_ref, qty");
+export async function loadAvgMonthly(): Promise<{ avg: Record<string, number>; nbMonths: Record<string, number> }> {
+  const { data, error } = await sb.from("wms_conso_cache").select("odoo_ref, month, qty");
   if (error) throw new Error(error.message);
-  // Group by ref, compute average
+  // Fenêtre fixe 12 mois : total / 12 (même logique que smSyncOdoo)
   const byRef: Record<string, { total: number; months: Set<string> }> = {};
-  // We need month info - re-fetch with month
-  const { data: d2, error: e2 } = await sb.from("wms_conso_cache").select("odoo_ref, month, qty");
-  if (e2) throw new Error(e2.message);
-  for (const r of (d2 || [])) {
+  for (const r of (data || [])) {
     if (!byRef[r.odoo_ref]) byRef[r.odoo_ref] = { total: 0, months: new Set() };
-    byRef[r.odoo_ref].total += r.qty || 0;
+    byRef[r.odoo_ref].total += (r.qty || 0);
     byRef[r.odoo_ref].months.add(r.month);
   }
-  const result: Record<string, number> = {};
+  const avg: Record<string, number> = {};
+  const nbMonths: Record<string, number> = {};
   for (const [ref, v] of Object.entries(byRef)) {
-    result[ref] = v.months.size > 0 ? Math.round(v.total / v.months.size) : 0;
+    avg[ref] = Math.round(v.total / 12);
+    nbMonths[ref] = v.months.size;
   }
-  return result;
+  return { avg, nbMonths };
 }
 
 // ══════════════════════════════════════════
