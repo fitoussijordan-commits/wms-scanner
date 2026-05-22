@@ -482,6 +482,7 @@ export default function Dashboard() {
   const [dlvAvgNbMonths, setDlvAvgNbMonths] = useState<Record<string, number>>({});
   const [dlvAvgSyncedAt, setDlvAvgSyncedAt] = useState<Date | null>(null);
   const [dlvConsoImporting, setDlvConsoImporting] = useState(false);
+  const dlvFileRef = useRef<HTMLInputElement>(null);
   const DLV_MIN_MONTHS = 3; // moins de 3 mois d'historique → statut "unknown" (données insuffisantes)
   // Popup détail produit DLV
   type DlvDetailQuant = { locationId: number; locationName: string; locationFullName: string; lotId: number | null; lotName: string; dlvDate: string | null; qty: number; reservedQty: number };
@@ -907,35 +908,121 @@ export default function Dashboard() {
   }, []);
 
   // ── IMPORT CONSO DLV (séparé du suivi stock) ──
-  // Sync conso DLV directement depuis Odoo (stock.move done → client)
+  // Import conso DLV depuis Excel (tableau croisé Odoo) — source de vérité principale
+  const importDlvConso = useCallback(async (file: File) => {
+    setDlvConsoImporting(true);
+    try {
+      const XLSX = await import("xlsx");
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      const FR_MONTHS: Record<string, string> = { janvier:"01",février:"02",mars:"03",avril:"04",mai:"05",juin:"06",juillet:"07",août:"08",septembre:"09",octobre:"10",novembre:"11",décembre:"12" };
+      let monthCols: { col: number; month: string }[] = [];
+      let dataStartRow = 0;
+      for (let r = 0; r < rows.length; r++) {
+        const cols: { col: number; month: string }[] = [];
+        for (let c = 0; c < rows[r].length; c++) {
+          const cell = String(rows[r][c]).trim().toLowerCase();
+          const parts = cell.split(" ");
+          if (parts.length === 2 && FR_MONTHS[parts[0]] && /^\d{4}$/.test(parts[1]))
+            cols.push({ col: c, month: `${parts[1]}-${FR_MONTHS[parts[0]]}` });
+        }
+        if (cols.length > 0) { monthCols = cols; dataStartRow = r + 2; break; }
+      }
+      if (monthCols.length === 0) throw new Error("Colonnes de mois introuvables dans le fichier.");
+      const now = new Date();
+      const last12: string[] = [];
+      for (let i = 1; i <= 12; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        last12.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+      }
+      const byRef: Record<string, { name: string; total: number; nbMonths: number }> = {};
+      for (let r = dataStartRow; r < rows.length; r++) {
+        const cell0 = String(rows[r][0] || "").trim();
+        const m = cell0.match(/^\[([^\]]+)\]/);
+        if (!m) continue;
+        const ref = m[1].trim();
+        const name = cell0.replace(/^\[[^\]]+\]\s*/, "").trim();
+        if (!byRef[ref]) byRef[ref] = { name, total: 0, nbMonths: 0 };
+        for (const { col, month } of monthCols) {
+          if (!last12.includes(month)) continue;
+          const qty = parseFloat(String(rows[r][col] || "0").replace(",", ".")) || 0;
+          if (qty > 0) { byRef[ref].total += qty; byRef[ref].nbMonths++; }
+        }
+      }
+      const items: supa.WmsDlvAvg[] = [];
+      const newAvg: Record<string, number> = {};
+      const newNbMonths: Record<string, number> = {};
+      for (const [ref, v] of Object.entries(byRef)) {
+        const avg = Math.round(v.total / 12); // toujours divisé par 12 — fenêtre fixe
+        if (avg > 0) {
+          items.push({ odoo_ref: ref, avg_monthly: avg, product_name: v.name });
+          newAvg[ref] = avg;
+          newNbMonths[ref] = v.nbMonths;
+        }
+      }
+      if (items.length === 0) throw new Error("Aucune consommation trouvée dans le fichier.");
+      await supa.saveDlvAvg(items);
+      setDlvAvgMonthlyByRef(prev => ({ ...prev, ...newAvg }));
+      setDlvAvgNbMonths(prev => ({ ...prev, ...newNbMonths }));
+      setDlvAvgSyncedAt(new Date());
+      if (dlvRows.length > 0) setTimeout(() => loadDlv(), 100);
+    } catch (e: any) { setError(`Import conso DLV : ${e.message}`); }
+    setDlvConsoImporting(false);
+  }, [dlvRows.length]);
+
+  // Sync conso DLV directement depuis Odoo — même logique que Suivi Stock
   const syncDlvConsoFromOdoo = useCallback(async () => {
     if (!session) return;
     setDlvConsoImporting(true);
     try {
-      const rawItems = await odoo.getMonthlyConsumptionFromOdoo(session, 12);
-      if (rawItems.length === 0) throw new Error("Aucune sortie trouvée dans Odoo sur les 12 derniers mois.");
+      const today = new Date();
+      const from = new Date(today.getFullYear(), today.getMonth() - 12, 1).toISOString().slice(0, 10) + " 00:00:00";
+      const curMonthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10) + " 00:00:00";
 
-      // Calculer la moyenne mensuelle par ref (total / 12 — fenêtre fixe)
+      // Même query que smSyncOdoo : internal → customer, product_uom_qty, hors mois courant
+      const moves: any[] = await odoo.searchRead(
+        session, "stock.move",
+        [["state","=","done"],["date",">=",from],["date","<",curMonthStart],
+         ["location_id.usage","=","internal"],["location_dest_id.usage","=","customer"]],
+        ["product_id","product_uom_qty","date"],
+        0
+      );
+      if (moves.length === 0) throw new Error("Aucune sortie trouvée dans Odoo sur les 12 derniers mois.");
+
+      // Récupérer les refs produit
+      const pids = Array.from(new Set(moves.map((m:any) => Array.isArray(m.product_id) ? m.product_id[0] : m.product_id)));
+      const prods: any[] = await odoo.searchRead(session, "product.product",
+        [["id","in",pids],["active","in",[true,false]]],
+        ["id","name","default_code"], 0);
+      const pidToRef: Record<number, { ref: string; name: string }> = {};
+      for (const p of prods) if (p.default_code) pidToRef[p.id] = { ref: p.default_code, name: p.name };
+
+      // Agréger par ref
       const byRef: Record<string, { name: string; total: number; months: Set<string> }> = {};
-      for (const item of rawItems) {
-        if (!byRef[item.odoo_ref]) byRef[item.odoo_ref] = { name: item.product_name, total: 0, months: new Set() };
-        byRef[item.odoo_ref].total += item.qty;
-        byRef[item.odoo_ref].months.add(item.month);
+      for (const m of moves) {
+        const pid = Array.isArray(m.product_id) ? m.product_id[0] : m.product_id;
+        const info = pidToRef[pid];
+        if (!info) continue;
+        const mo = String(m.date || "").slice(0, 7);
+        if (!byRef[info.ref]) byRef[info.ref] = { name: info.name, total: 0, months: new Set() };
+        byRef[info.ref].total += (m.product_uom_qty || 0);
+        byRef[info.ref].months.add(mo);
       }
 
       const items: supa.WmsDlvAvg[] = [];
       const newAvg: Record<string, number> = {};
       const newNbMonths: Record<string, number> = {};
       for (const [ref, v] of Object.entries(byRef)) {
-        // Moyenne sur 12 mois (pas sur les mois actifs seulement) pour ne pas gonfler artificiellement
-        const avg = Math.round(v.total / 12);
+        const avg = Math.round(v.total / 12); // fenêtre fixe 12 mois
         if (avg > 0) {
           items.push({ odoo_ref: ref, avg_monthly: avg, product_name: v.name });
           newAvg[ref] = avg;
           newNbMonths[ref] = v.months.size;
         }
       }
-
+      if (items.length === 0) throw new Error("Aucune consommation calculée.");
       await supa.saveDlvAvg(items);
       setDlvAvgMonthlyByRef(prev => ({ ...prev, ...newAvg }));
       setDlvAvgNbMonths(prev => ({ ...prev, ...newNbMonths }));
@@ -2584,15 +2671,13 @@ export default function Dashboard() {
                     {smMonthOptions.map(o=><option key={o.val} value={o.val}>{o.label}</option>)}
                   </select>
                 </div>
-                <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"stretch"}}>
-                  <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth)} disabled={smLoading} title="Refresh stock Odoo — utilise la conso en cache">{smLoading?<Spinner/>:I.refresh} Actualiser</button>
-                </div>
-                <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"stretch"}}>
+                <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth)} disabled={smLoading} title="Refresh stock Odoo — utilise la conso en cache">{smLoading?<Spinner/>:I.refresh} Actualiser</button>
+                <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"center"}}>
                   <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth,true)} disabled={smLoading} title="Sync conso 12 mois depuis Odoo et écrase le cache" style={{borderColor:"#8b5cf6",color:"#7c3aed"}}>
                     {smLoading?<Spinner/>:<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Sync conso
                   </button>
-                  {consoSyncedAt&&<span style={{fontSize:10,color:"var(--text-muted)",textAlign:"center"}}>Màj {consoSyncedAt.toLocaleDateString("fr-FR")}</span>}
-                  {!consoSyncedAt&&Object.keys(avgMonthlyByRef).length===0&&<span style={{fontSize:10,color:"#f59e0b",textAlign:"center"}}>⚠ Pas de cache</span>}
+                  {consoSyncedAt&&<span style={{fontSize:10,color:"var(--text-muted)"}}>Màj {consoSyncedAt.toLocaleDateString("fr-FR")}</span>}
+                  {!consoSyncedAt&&Object.keys(avgMonthlyByRef).length===0&&<span style={{fontSize:10,color:"#f59e0b"}}>⚠ Pas de cache</span>}
                 </div>
                 <input ref={smFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={smImportExcel} style={{display:"none"}}/>
                 <button className="wms-btn wms-btn-primary" onClick={()=>smFileRef.current?.click()} disabled={smLoading}>📤 Importer refs</button>
@@ -3529,16 +3614,15 @@ export default function Dashboard() {
                   <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Suivi DLV</h2>
                   <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Règle standard : DLV &minus; 12 mois · Souplesse (échantillons / miniatures / testeurs) : DLV &minus; 4 mois · Minimum {DLV_MIN_MONTHS} mois d&apos;historique requis</p>
                 </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexDirection: "column" }}>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <button className="wms-btn" onClick={syncDlvConsoFromOdoo} disabled={dlvConsoImporting}>
-                      {dlvConsoImporting ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Sync conso (12 mois)
-                    </button>
-                    <button className="wms-btn" onClick={loadDlv} disabled={dlvLoading}>
-                      {dlvLoading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Charger les lots
-                    </button>
-                  </div>
-                  {dlvAvgSyncedAt && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Màj conso {dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <button className="wms-btn" onClick={() => dlvFileRef.current?.click()} disabled={dlvConsoImporting}>
+                    {dlvConsoImporting ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>} Importer conso
+                  </button>
+                  <input ref={dlvFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={e => { const f = e.target.files?.[0]; if (f) importDlvConso(f); e.target.value = ""; }} style={{ display: "none" }} />
+                  <button className="wms-btn" onClick={loadDlv} disabled={dlvLoading}>
+                    {dlvLoading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Charger les lots
+                  </button>
+                  {dlvAvgSyncedAt && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Màj {dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
                 </div>
               </div>
 
