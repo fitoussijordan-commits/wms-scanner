@@ -50,12 +50,12 @@ export async function deleteThreshold(odoo_ref: string): Promise<void> {
 
 export async function saveThresholdsBulk(thresholds: WmsThreshold[]): Promise<void> {
   if (!thresholds.length) return;
-  // INSERT pur — smLoadAll lit toujours la ligne la plus récente par odoo_ref
   const now = new Date().toISOString();
   for (let i = 0; i < thresholds.length; i += 500) {
     const batch = thresholds.slice(i, i + 500);
-    const { error } = await sb.from("wms_thresholds").insert(
-      batch.map(t => ({ ...t, updated_at: now }))
+    const { error } = await sb.from("wms_thresholds").upsert(
+      batch.map(t => ({ ...t, updated_at: now })),
+      { onConflict: "odoo_ref" }
     );
     if (error) throw new Error(error.message);
   }

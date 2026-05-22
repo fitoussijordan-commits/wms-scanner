@@ -2068,18 +2068,13 @@ export default function Dashboard() {
   // Structure : odoo_ref, threshold, product_name, supplier_date (colonne à ajouter)
 
   const smLoadAll = async (): Promise<{refs:{ref:string;name:string}[];thrMap:Record<string,number>;supMap:Record<string,string|null>;expectedMap:Record<string,number>}> => {
-    // Tri par updated_at ASC → Object.fromEntries garde la DERNIÈRE (= la plus récente) par ref
-    const {data,error}=await supa.sb.from("wms_thresholds").select("odoo_ref,threshold,product_name,supplier_date,expected_qty,updated_at").order("updated_at",{ascending:true});
+    const {data,error}=await supa.sb.from("wms_thresholds").select("odoo_ref,threshold,product_name,supplier_date,expected_qty").order("odoo_ref");
     if (error) throw new Error("wms_thresholds: "+error.message);
     const rows=data||[];
-    // Dédupliquer : garder la valeur la plus récente par odoo_ref
-    const byRef=new Map<string,any>();
-    for(const r of rows) byRef.set(r.odoo_ref,r);
-    const deduped=Array.from(byRef.values());
-    const refs=deduped.map((r:any)=>({ref:r.odoo_ref,name:r.product_name||r.odoo_ref}));
-    const thrMap:Record<string,number>=Object.fromEntries(deduped.map((r:any)=>[r.odoo_ref,r.threshold]));
-    const supMap:Record<string,string|null>=Object.fromEntries(deduped.filter((r:any)=>r.supplier_date).map((r:any)=>[r.odoo_ref,r.supplier_date]));
-    const expectedMap:Record<string,number>=Object.fromEntries(deduped.filter((r:any)=>r.expected_qty>0).map((r:any)=>[r.odoo_ref,r.expected_qty]));
+    const refs=rows.map((r:any)=>({ref:r.odoo_ref,name:r.product_name||r.odoo_ref}));
+    const thrMap:Record<string,number>=Object.fromEntries(rows.map((r:any)=>[r.odoo_ref,r.threshold]));
+    const supMap:Record<string,string|null>=Object.fromEntries(rows.filter((r:any)=>r.supplier_date).map((r:any)=>[r.odoo_ref,r.supplier_date]));
+    const expectedMap:Record<string,number>=Object.fromEntries(rows.filter((r:any)=>r.expected_qty>0).map((r:any)=>[r.odoo_ref,r.expected_qty]));
     return {refs,thrMap,supMap,expectedMap};
   };
 
@@ -2179,7 +2174,7 @@ export default function Dashboard() {
     setSmRows(r=>r.map(row=>{if(row.ref!==ref)return row;const u={...row,threshold:n};u.status=smStatus(u.stock,u.conso,n,u.daysLeft,u.daysUntilDeliv);return u;}));
     setSmEditThr(null);
     try {
-      const {error}=await supa.sb.from("wms_thresholds").insert({odoo_ref:ref,threshold:n,product_name:name,updated_at:new Date().toISOString()});
+      const {error}=await supa.sb.from("wms_thresholds").upsert({odoo_ref:ref,threshold:n,product_name:name,updated_at:new Date().toISOString()},{onConflict:"odoo_ref"});
       if(error) throw new Error(error.message);
     } catch(e:any) { setError("Erreur sauvegarde seuil : "+e.message); }
   };
@@ -2197,12 +2192,11 @@ export default function Dashboard() {
       u.status=smStatus(u.stock,u.conso,n,u.daysLeft,u.daysUntilDeliv);
       return u;
     }));
-    // Sauvegarde : INSERT nouvelles lignes (plus récentes) — smLoadAll lit toujours la plus récente par ref
     try {
       const now=new Date().toISOString();
       const items=toUpdate.map((r,i)=>({odoo_ref:r.ref,threshold:newVal[i],product_name:r.name,supplier_date:r.supplierDate??null,expected_qty:r.expected_qty??0,updated_at:now}));
       for(let i=0;i<items.length;i+=500){
-        const {error}=await supa.sb.from("wms_thresholds").insert(items.slice(i,i+500));
+        const {error}=await supa.sb.from("wms_thresholds").upsert(items.slice(i,i+500),{onConflict:"odoo_ref"});
         if(error) throw new Error(error.message);
       }
     } catch(e:any) { setError("Erreur sauvegarde seuils : "+e.message); }
