@@ -8496,98 +8496,64 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
                   </span>
                 </div>
 
-                {/* Tableau */}
-                <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-                  <table style={{ width: "100%", borderCollapse: "separate" as const, borderSpacing: 0, fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ background: C.bg }}>
-                        <th style={{ padding: "10px 14px", width: 40, borderBottom: `2px solid ${C.border}` }}>
-                          <input type="checkbox" checked={visible.length > 0 && allVisible}
-                            onChange={e => {
-                              if (e.target.checked) setOrphanSelected(new Set(visible.map(m => m.id)));
-                              else setOrphanSelected(new Set());
-                            }} />
-                        </th>
-                        {(["Ref", "Produit", "Lot", "Emplacement", "Qté sortie", "Correction"] as const).map(h => (
-                          <th key={h} style={{ padding: "10px 14px", textAlign: (h === "Qté sortie" || h === "Correction") ? "center" as const : "left" as const, fontSize: 11, fontWeight: 700, color: C.textMuted, whiteSpace: "nowrap" as const, borderBottom: `2px solid ${C.border}` }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visible.map((m, i) => {
-                        const sel = orphanSelected.has(m.id);
-                        const corr = orphanCorrections[m.quantId] ?? Math.round(m.uncoveredQty);
-                        const setCorr = (v: number) => setOrphanCorrections(prev => ({ ...prev, [m.quantId]: Math.max(0, Math.min(Math.round(m.qty), v)) }));
-                        return (
-                          <tr key={m.id}
-                            style={{ borderBottom: `1px solid ${C.border}`, background: sel ? (C.blueSoft || "#eff6ff") : i % 2 === 0 ? C.white : C.bg, transition: "background .1s" }}>
-                            {/* Checkbox */}
-                            <td style={{ padding: "12px 14px", textAlign: "center" as const }} onClick={() => toggleRow(m.id)}>
-                              <input type="checkbox" readOnly checked={sel} style={{ cursor: "pointer" }} />
-                            </td>
-                            {/* Ref */}
-                            <td style={{ padding: "12px 14px", cursor: "pointer" }} onClick={() => toggleRow(m.id)}>
-                              <span style={{ fontWeight: 800, fontFamily: "monospace", fontSize: 12, color: C.blue, background: "#eff6ff", borderRadius: 5, padding: "2px 7px" }}>{m.ref || "—"}</span>
-                            </td>
-                            {/* Produit */}
-                            <td style={{ padding: "12px 14px", maxWidth: 240, cursor: "pointer" }} onClick={() => toggleRow(m.id)}>
-                              <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, fontSize: 13 }} title={m.name}>{m.name}</div>
-                            </td>
-                            {/* Lot */}
-                            <td style={{ padding: "12px 14px", cursor: "pointer" }} onClick={() => toggleRow(m.id)}>
-                              {m.lotName
-                                ? <span style={{ fontFamily: "monospace", fontSize: 11, color: C.textMuted, background: C.bg, borderRadius: 5, padding: "2px 6px", border: `1px solid ${C.border}` }}>{m.lotName}</span>
-                                : <span style={{ color: C.textMuted, fontSize: 12 }}>—</span>}
-                            </td>
-                            {/* Emplacement */}
-                            <td style={{ padding: "12px 14px", fontSize: 12, color: C.textSec, whiteSpace: "nowrap" as const, cursor: "pointer" }} onClick={() => toggleRow(m.id)}>
-                              {m.locationName}
-                            </td>
-                            {/* Qté sortie */}
-                            <td style={{ padding: "12px 14px", textAlign: "center" as const, cursor: "pointer" }} onClick={() => toggleRow(m.id)}>
-                              <span style={{ fontWeight: 700, color: C.red }}>{Math.round(m.qty)}</span>
-                              {m.uncoveredQty < m.qty && (
-                                <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{Math.round(m.reservedQty)} couverts</div>
-                              )}
-                            </td>
-                            {/* Correction +/- */}
-                            <td style={{ padding: "8px 14px", textAlign: "center" as const }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "center" }}>
-                                <button
-                                  onClick={e => { e.stopPropagation(); setCorr(corr - 1); }}
-                                  disabled={corr <= 0}
-                                  style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.border}`, background: corr <= 0 ? C.bg : C.white, fontSize: 16, fontWeight: 700, cursor: corr <= 0 ? "not-allowed" : "pointer", fontFamily: "inherit", color: corr <= 0 ? C.textMuted : C.red, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>
-                                  −
-                                </button>
-                                <input
-                                  type="number"
-                                  value={corr}
-                                  min={0}
-                                  max={Math.round(m.qty)}
-                                  onClick={e => e.stopPropagation()}
-                                  onChange={e => setCorr(Number(e.target.value))}
-                                  style={{ width: 52, textAlign: "center" as const, padding: "4px 6px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit", outline: "none", color: corr > 0 ? C.red : C.textMuted, background: corr > 0 ? "#fff5f5" : C.white }}
-                                />
-                                <button
-                                  onClick={e => { e.stopPropagation(); setCorr(corr + 1); }}
-                                  disabled={corr >= Math.round(m.qty)}
-                                  style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.border}`, background: corr >= Math.round(m.qty) ? C.bg : C.white, fontSize: 16, fontWeight: 700, cursor: corr >= Math.round(m.qty) ? "not-allowed" : "pointer", fontFamily: "inherit", color: corr >= Math.round(m.qty) ? C.textMuted : "#16a34a", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>
-                                  +
-                                </button>
-                              </div>
-                              <div style={{ fontSize: 10, color: C.textMuted, marginTop: 3, textAlign: "center" as const }}>
-                                {corr === 0 ? "pas de correction" : corr === Math.round(m.qty) ? "tout retirer" : `retirer ${corr} / ${Math.round(m.qty)}`}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                  <div style={{ padding: "10px 16px", fontSize: 12, color: C.textMuted, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", flexWrap: "wrap" as const, gap: 8, background: C.bg }}>
-                    <span>{visible.length} ligne(s) · {orphanSelected.size} sélectionnée(s)</span>
-                    <span style={{ color: C.textMuted }}>Ajuster la correction puis sélectionner et valider</span>
-                  </div>
+                {/* Cartes liste */}
+                <div style={{ display: "flex", flexDirection: "column" as const, gap: 8 }}>
+                  {visible.map(m => {
+                    const sel = orphanSelected.has(m.id);
+                    const corr = orphanCorrections[m.quantId] ?? Math.round(m.uncoveredQty);
+                    const maxCorr = Math.round(m.qty);
+                    const setCorr = (v: number) => setOrphanCorrections(prev => ({ ...prev, [m.quantId]: Math.max(0, Math.min(maxCorr, v)) }));
+                    return (
+                      <div key={m.id} style={{ border: `2px solid ${sel ? C.blue : C.border}`, borderRadius: 12, background: sel ? "#f0f7ff" : C.white, overflow: "hidden" as const, transition: "border-color .15s, background .15s" }}>
+                        {/* Ligne 1 : checkbox + ref + nom */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", cursor: "pointer" }} onClick={() => toggleRow(m.id)}>
+                          <input type="checkbox" readOnly checked={sel} style={{ width: 18, height: 18, flexShrink: 0, cursor: "pointer", accentColor: C.blue }} />
+                          <span style={{ fontWeight: 800, fontFamily: "monospace", fontSize: 12, color: C.blue, background: "#dbeafe", borderRadius: 5, padding: "2px 7px", flexShrink: 0 }}>{m.ref || "—"}</span>
+                          <span style={{ fontWeight: 600, fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, color: C.text }} title={m.name}>{m.name}</span>
+                        </div>
+                        {/* Ligne 2 : lot + emplacement + qté + correction */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 14px 11px", flexWrap: "wrap" as const }}>
+                          {/* Lot */}
+                          {m.lotName
+                            ? <span style={{ fontFamily: "monospace", fontSize: 11, color: C.textMuted, background: C.bg, borderRadius: 5, padding: "2px 7px", border: `1px solid ${C.border}`, flexShrink: 0 }}>{m.lotName}</span>
+                            : null}
+                          {/* Emplacement */}
+                          <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>📍 {m.locationName}</span>
+                          {/* Qté bloquée */}
+                          <span style={{ fontSize: 12, fontWeight: 700, color: C.red, flexShrink: 0, marginLeft: "auto" }}>
+                            ⚠ {Math.round(m.uncoveredQty)} bloqué{m.uncoveredQty > 1 ? "s" : ""}
+                            {m.uncoveredQty < m.qty && <span style={{ fontWeight: 400, color: C.textMuted }}> / {Math.round(m.qty)} total</span>}
+                          </span>
+                        </div>
+                        {/* Ligne 3 : correction +/- (visible si sélectionné) */}
+                        {sel && (
+                          <div style={{ borderTop: `1px solid ${C.blue}22`, padding: "10px 14px", background: "#e8f2ff", display: "flex", alignItems: "center", gap: 10 }}>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: C.blue, flex: 1 }}>Unités à retirer :</span>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <button onClick={e => { e.stopPropagation(); setCorr(corr - 1); }} disabled={corr <= 0}
+                                style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${C.border}`, background: corr <= 0 ? C.bg : C.white, fontSize: 20, fontWeight: 700, cursor: corr <= 0 ? "not-allowed" : "pointer", fontFamily: "inherit", color: corr <= 0 ? C.textMuted : C.red, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>−</button>
+                              <input type="number" value={corr} min={0} max={maxCorr}
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => setCorr(Number(e.target.value))}
+                                style={{ width: 60, textAlign: "center" as const, padding: "6px 8px", border: `2px solid ${corr > 0 ? C.red : C.border}`, borderRadius: 8, fontSize: 16, fontWeight: 800, fontFamily: "inherit", outline: "none", color: corr > 0 ? C.red : C.textMuted, background: C.white }} />
+                              <button onClick={e => { e.stopPropagation(); setCorr(corr + 1); }} disabled={corr >= maxCorr}
+                                style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${C.border}`, background: corr >= maxCorr ? C.bg : C.white, fontSize: 20, fontWeight: 700, cursor: corr >= maxCorr ? "not-allowed" : "pointer", fontFamily: "inherit", color: corr >= maxCorr ? C.textMuted : "#16a34a", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>+</button>
+                            </div>
+                            <button onClick={e => { e.stopPropagation(); setCorr(maxCorr); }}
+                              style={{ padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.red}`, background: corr === maxCorr ? C.red : C.white, color: corr === maxCorr ? "#fff" : C.red, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
+                              Tout
+                            </button>
+                            <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
+                              {corr === 0 ? "aucun" : corr === maxCorr ? "tout retiré" : `${corr}/${maxCorr}`}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ marginTop: 10, fontSize: 12, color: C.textMuted, textAlign: "center" as const }}>
+                  {visible.length} ligne(s) · {orphanSelected.size} sélectionnée(s) · Cliquer pour sélectionner
                 </div>
               </div>
             );
