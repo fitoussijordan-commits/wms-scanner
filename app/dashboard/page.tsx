@@ -463,7 +463,7 @@ export default function Dashboard() {
   const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
 
   // ── Suivi DLV ────────────────────────────────────────────────────────────
-  type DlvRow = { productId: number; ref: string; name: string; lotId: number; lotName: string; qty: number; dlvDate: string; sellByDate: Date; daysToSellBy: number; avgMonthly: number; unitsSellable: number; unitsAtRisk: number; status: "overdue" | "critical" | "risk" | "watch" | "ok" | "unknown"; marginMonths: number };
+  type DlvRow = { productId: number; ref: string; name: string; lotId: number; lotName: string; qty: number; dlvDate: string; sellByDate: Date; daysToSellBy: number; avgMonthly: number; unitsSellable: number; unitsAtRisk: number; status: "overdue" | "critical" | "risk" | "watch" | "ok" | "unknown"; marginMonths: number; nbMonths: number };
   const [dlvRows, setDlvRows] = useState<DlvRow[]>([]);
   const [dlvLoading, setDlvLoading] = useState(false);
   const [dlvSearch, setDlvSearch] = useState("");
@@ -479,9 +479,10 @@ export default function Dashboard() {
   const [dlvColWidths, setDlvColWidths] = useState<Record<string, number>>({ "Statut": 115, "Ref": 100, "Produit": 210, "Lot": 120, "DLV": 120, "Sell-by": 120, "J. restants": 90, "Qté stock": 85, "Conso/mois": 92, "Vendable": 85, "À risque": 85 });
   const dlvResizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null);
   const [dlvAvgMonthlyByRef, setDlvAvgMonthlyByRef] = useState<Record<string, number>>({});
+  const [dlvAvgNbMonths, setDlvAvgNbMonths] = useState<Record<string, number>>({});
   const [dlvAvgSyncedAt, setDlvAvgSyncedAt] = useState<Date | null>(null);
   const [dlvConsoImporting, setDlvConsoImporting] = useState(false);
-  const dlvFileRef = useRef<HTMLInputElement>(null);
+  const DLV_MIN_MONTHS = 3; // moins de 3 mois d'historique → statut "unknown" (données insuffisantes)
   // Popup détail produit DLV
   type DlvDetailQuant = { locationId: number; locationName: string; locationFullName: string; lotId: number | null; lotName: string; dlvDate: string | null; qty: number; reservedQty: number };
   const [dlvDetailProduct, setDlvDetailProduct] = useState<{ productId: number; ref: string; name: string } | null>(null);
@@ -792,19 +793,21 @@ export default function Dashboard() {
         sellByDate.setMonth(sellByDate.getMonth() - marginMonths);
         const daysToSellBy = Math.floor((sellByDate.getTime() - today.getTime()) / 86400000);
         const avgMonthly = dlvAvgMonthlyByRef[lot.ref] || avgMonthlyByRef[lot.ref] || 0;
+        const nbMonths = dlvAvgNbMonths[lot.ref] || 0;
+        const hasEnoughHistory = avgMonthly === 0 ? false : (nbMonths === 0 || nbMonths >= DLV_MIN_MONTHS);
         const monthsToSellBy = Math.max(0, daysToSellBy / 30);
         const unitsSellable = avgMonthly > 0 ? Math.floor(monthsToSellBy * avgMonthly) : 0;
         const unitsAtRisk = Math.max(0, lot.qty - (avgMonthly > 0 ? unitsSellable : 0));
 
         let status: DlvRow["status"];
-        if (avgMonthly === 0) status = "unknown";
+        if (avgMonthly === 0 || !hasEnoughHistory) status = "unknown";
         else if (daysToSellBy <= 0) status = "overdue";
         else if (daysToSellBy < 30) status = "critical";
         else if (unitsAtRisk > 0) status = "risk";
         else if (daysToSellBy < 90) status = "watch";
         else status = "ok";
 
-        return { ...lot, sellByDate, daysToSellBy, avgMonthly, unitsSellable: avgMonthly > 0 ? unitsSellable : lot.qty, unitsAtRisk: avgMonthly > 0 ? unitsAtRisk : 0, status, marginMonths };
+        return { ...lot, sellByDate, daysToSellBy, avgMonthly, unitsSellable: avgMonthly > 0 ? unitsSellable : lot.qty, unitsAtRisk: avgMonthly > 0 ? unitsAtRisk : 0, status, marginMonths, nbMonths };
       });
       // Trier : hors délai → critiques → risques → attention → ok → inconnus
       const ORDER = { overdue: 0, critical: 1, risk: 2, watch: 3, ok: 4, unknown: 5 };
@@ -812,7 +815,7 @@ export default function Dashboard() {
       setDlvRows(rows);
     } catch (e: any) { setError(e.message); }
     setDlvLoading(false);
-  }, [session, dlvAvgMonthlyByRef, avgMonthlyByRef, DLV_SELL_MARGIN_MONTHS]);
+  }, [session, dlvAvgMonthlyByRef, dlvAvgNbMonths, avgMonthlyByRef, DLV_SELL_MARGIN_MONTHS, DLV_MIN_MONTHS]);
 
   // ── EXPORT DLV EXCEL ──
   const exportDlvExcel = useCallback(async (rows: DlvRow[]) => {
@@ -904,66 +907,44 @@ export default function Dashboard() {
   }, []);
 
   // ── IMPORT CONSO DLV (séparé du suivi stock) ──
-  const importDlvConso = useCallback(async (file: File) => {
+  // Sync conso DLV directement depuis Odoo (stock.move done → client)
+  const syncDlvConsoFromOdoo = useCallback(async () => {
+    if (!session) return;
     setDlvConsoImporting(true);
     try {
-      const XLSX = await import("xlsx");
-      const data = await file.arrayBuffer();
-      const wb = XLSX.read(data, { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-      const FR_MONTHS: Record<string, string> = { janvier:"01",février:"02",mars:"03",avril:"04",mai:"05",juin:"06",juillet:"07",août:"08",septembre:"09",octobre:"10",novembre:"11",décembre:"12" };
-      let monthCols: { col: number; month: string }[] = [];
-      let dataStartRow = 0;
-      for (let r = 0; r < rows.length; r++) {
-        const cols: { col: number; month: string }[] = [];
-        for (let c = 0; c < rows[r].length; c++) {
-          const cell = String(rows[r][c]).trim().toLowerCase();
-          const parts = cell.split(" ");
-          if (parts.length === 2 && FR_MONTHS[parts[0]] && /^\d{4}$/.test(parts[1]))
-            cols.push({ col: c, month: `${parts[1]}-${FR_MONTHS[parts[0]]}` });
-        }
-        if (cols.length > 0) { monthCols = cols; dataStartRow = r + 2; break; }
+      const rawItems = await odoo.getMonthlyConsumptionFromOdoo(session, 12);
+      if (rawItems.length === 0) throw new Error("Aucune sortie trouvée dans Odoo sur les 12 derniers mois.");
+
+      // Calculer la moyenne mensuelle par ref (total / 12 — fenêtre fixe)
+      const byRef: Record<string, { name: string; total: number; months: Set<string> }> = {};
+      for (const item of rawItems) {
+        if (!byRef[item.odoo_ref]) byRef[item.odoo_ref] = { name: item.product_name, total: 0, months: new Set() };
+        byRef[item.odoo_ref].total += item.qty;
+        byRef[item.odoo_ref].months.add(item.month);
       }
-      if (monthCols.length === 0) throw new Error("Colonnes de mois introuvables dans le fichier.");
-      // Calcul avg 12 derniers mois
-      const now = new Date();
-      const last12: string[] = [];
-      for (let i = 1; i <= 12; i++) {
-        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        last12.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-      }
-      const byRef: Record<string, { name: string; totals: number[]; months: string[] }> = {};
-      for (let r = dataStartRow; r < rows.length; r++) {
-        const cell0 = String(rows[r][0] || "").trim();
-        const m = cell0.match(/^\[([^\]]+)\]/);
-        if (!m) continue;
-        const ref = m[1].trim();
-        const name = cell0.replace(/^\[[^\]]+\]\s*/, "").trim();
-        if (!byRef[ref]) byRef[ref] = { name, totals: [], months: [] };
-        for (const { col, month } of monthCols) {
-          if (!last12.includes(month)) continue;
-          const qty = parseFloat(String(rows[r][col] || "0").replace(",", ".")) || 0;
-          if (qty > 0) { byRef[ref].totals.push(qty); byRef[ref].months.push(month); }
-        }
-      }
+
       const items: supa.WmsDlvAvg[] = [];
       const newAvg: Record<string, number> = {};
+      const newNbMonths: Record<string, number> = {};
       for (const [ref, v] of Object.entries(byRef)) {
-        const avg = v.totals.length > 0 ? Math.round(v.totals.reduce((s, x) => s + x, 0) / 12) : 0;
+        // Moyenne sur 12 mois (pas sur les mois actifs seulement) pour ne pas gonfler artificiellement
+        const avg = Math.round(v.total / 12);
         if (avg > 0) {
           items.push({ odoo_ref: ref, avg_monthly: avg, product_name: v.name });
           newAvg[ref] = avg;
+          newNbMonths[ref] = v.months.size;
         }
       }
-      if (items.length === 0) throw new Error("Aucune consommation trouvée dans le fichier.");
+
       await supa.saveDlvAvg(items);
       setDlvAvgMonthlyByRef(prev => ({ ...prev, ...newAvg }));
+      setDlvAvgNbMonths(prev => ({ ...prev, ...newNbMonths }));
       setDlvAvgSyncedAt(new Date());
-      alert(`✓ Conso DLV importée !\n${items.length} articles · moyenne sur 12 mois.`);
-    } catch (e: any) { alert(`⚠ Erreur import conso DLV : ${e.message}`); }
+      // Recharger les lots DLV si déjà chargés
+      if (dlvRows.length > 0) setTimeout(() => loadDlv(), 100);
+    } catch (e: any) { setError(e.message); }
     setDlvConsoImporting(false);
-  }, []);
+  }, [session, dlvRows.length]);
 
   // ── IMPORT CONSO DEPUIS EXPORT ODOO (Tableau croisé dynamique) ──
   const importConsoFromOdoo = useCallback(async (file: File) => {
@@ -3488,14 +3469,13 @@ export default function Dashboard() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
                 <div>
                   <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Suivi DLV</h2>
-                  <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Règle standard : DLV &minus; 12 mois · Souplesse (échantillons / miniatures / testeurs) : DLV &minus; 4 mois</p>
+                  <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Règle standard : DLV &minus; 12 mois · Souplesse (échantillons / miniatures / testeurs) : DLV &minus; 4 mois · Minimum {DLV_MIN_MONTHS} mois d&apos;historique requis</p>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexDirection: "column" }}>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <button className="wms-btn" onClick={() => dlvFileRef.current?.click()} disabled={dlvConsoImporting}>
-                      {dlvConsoImporting ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>} Importer conso DLV
+                    <button className="wms-btn" onClick={syncDlvConsoFromOdoo} disabled={dlvConsoImporting}>
+                      {dlvConsoImporting ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Sync conso (12 mois)
                     </button>
-                    <input ref={dlvFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={e => { const f = e.target.files?.[0]; if (f) importDlvConso(f); e.target.value = ""; }} style={{ display: "none" }} />
                     <button className="wms-btn" onClick={loadDlv} disabled={dlvLoading}>
                       {dlvLoading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Charger les lots
                     </button>
@@ -3624,7 +3604,19 @@ export default function Dashboard() {
                                 <td style={{ padding: "10px 14px", whiteSpace: "nowrap", overflow: "hidden", color: r.daysToSellBy <= 0 ? "#dc2626" : r.daysToSellBy < 90 ? "#c2410c" : "var(--text-primary)", fontWeight: 600 }}>{fmtDate(r.sellByDate)}</td>
                                 <td style={{ padding: "10px 14px", whiteSpace: "nowrap", textAlign: "center", fontWeight: 700, overflow: "hidden", color: r.daysToSellBy <= 0 ? "#dc2626" : r.daysToSellBy < 30 ? "#dc2626" : r.daysToSellBy < 90 ? "#c2410c" : "var(--text-primary)" }}>{fmtDays(r.daysToSellBy)}</td>
                                 <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 600, overflow: "hidden" }}>{Math.round(r.qty)}</td>
-                                <td style={{ padding: "10px 14px", textAlign: "right", overflow: "hidden", color: r.avgMonthly === 0 ? "var(--text-muted)" : "var(--text-primary)" }}>{r.avgMonthly === 0 ? "—" : r.avgMonthly}</td>
+                                <td style={{ padding: "10px 14px", textAlign: "right", overflow: "hidden" }}>
+                                  {r.avgMonthly === 0 ? <span style={{ color: "var(--text-muted)" }}>—</span> : (
+                                    <div>
+                                      <span style={{ color: "var(--text-primary)" }}>{r.avgMonthly}</span>
+                                      {r.nbMonths > 0 && r.nbMonths < DLV_MIN_MONTHS && (
+                                        <div style={{ fontSize: 10, color: "#f59e0b", marginTop: 1 }}>⚠ {r.nbMonths} mois seul.</div>
+                                      )}
+                                      {r.nbMonths >= DLV_MIN_MONTHS && (
+                                        <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 1 }}>{r.nbMonths} mois</div>
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
                                 <td style={{ padding: "10px 14px", textAlign: "right", overflow: "hidden", color: "var(--text-muted)" }}>{r.avgMonthly === 0 ? "?" : r.unitsSellable}</td>
                                 <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, overflow: "hidden", color: r.unitsAtRisk > 0 ? "#dc2626" : r.status === "unknown" ? "var(--text-muted)" : "#15803d" }}>
                                   {r.status === "unknown" ? "?" : r.unitsAtRisk > 0 ? `⚠ ${Math.round(r.unitsAtRisk)}` : "✓ 0"}

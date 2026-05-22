@@ -2213,6 +2213,63 @@ export async function getDlvStockLots(session: OdooSession): Promise<{
 }
 
 // ============================================
+// CONSO MENSUELLE DEPUIS ODOO (pour DLV + Suivi Stock)
+// ============================================
+
+/**
+ * Tire les sorties réelles (stock.move done, vers client) des N derniers mois.
+ * Retourne { odoo_ref, product_name, month, qty, nbMonths } par produit.
+ * nbMonths = nombre de mois distincts où il y a eu au moins 1 sortie.
+ */
+export async function getMonthlyConsumptionFromOdoo(
+  session: OdooSession,
+  nbMonths = 12
+): Promise<{ odoo_ref: string; product_name: string; month: string; qty: number }[]> {
+  // Calcul des bornes de dates
+  const now = new Date();
+  const dateFrom = new Date(now.getFullYear(), now.getMonth() - nbMonths, 1);
+  const dateFromStr = dateFrom.toISOString().slice(0, 10) + " 00:00:00";
+
+  // 1. Mouvements de stock done, vers emplacement client
+  const moves: any[] = await searchRead(
+    session, "stock.move",
+    [
+      ["state", "=", "done"],
+      ["location_dest_id.usage", "=", "customer"],
+      ["date", ">=", dateFromStr],
+    ],
+    ["product_id", "product_qty", "date"],
+    50000
+  );
+  if (!moves.length) return [];
+
+  // 2. Produits → ref + nom
+  const productIds = Array.from(new Set(moves.map((m: any) => m.product_id[0]))) as number[];
+  const products: any[] = await searchRead(
+    session, "product.product",
+    [["id", "in", productIds]],
+    ["id", "default_code", "name"],
+    productIds.length
+  );
+  const prodMap: Record<number, { ref: string; name: string }> = {};
+  for (const p of products) prodMap[p.id] = { ref: p.default_code || "", name: p.name || "" };
+
+  // 3. Agréger par ref + mois
+  const byKey: Record<string, { odoo_ref: string; product_name: string; month: string; qty: number }> = {};
+  for (const m of moves) {
+    const prod = prodMap[m.product_id[0]];
+    if (!prod?.ref) continue;
+    const month = String(m.date || "").slice(0, 7); // "YYYY-MM"
+    if (!month || month.length < 7) continue;
+    const key = `${prod.ref}_${month}`;
+    if (!byKey[key]) byKey[key] = { odoo_ref: prod.ref, product_name: prod.name, month, qty: 0 };
+    byKey[key].qty += m.product_qty || 0;
+  }
+
+  return Object.values(byKey).filter(v => v.qty > 0);
+}
+
+// ============================================
 // DLV PRODUCT STOCK DETAIL
 // ============================================
 
