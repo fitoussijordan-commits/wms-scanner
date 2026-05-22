@@ -2180,6 +2180,7 @@ export default function Dashboard() {
     const toUpdate=smRows.filter(r=>r.conso>0&&r.status!=="not_found");
     if(!toUpdate.length)return;
     const newVal=toUpdate.map(r=>Math.round(r.conso));
+    // Mise à jour UI
     setSmRows(rows=>rows.map(row=>{
       const idx=toUpdate.findIndex(r=>r.ref===row.ref);
       if(idx<0)return row;
@@ -2188,12 +2189,14 @@ export default function Dashboard() {
       u.status=smStatus(u.stock,u.conso,n,u.daysLeft,u.daysUntilDeliv);
       return u;
     }));
+    // Sauvegarde Supabase par batch de 500
     try {
-      await supa.sb.from("wms_thresholds").upsert(
-        toUpdate.map((r,i)=>({odoo_ref:r.ref,threshold:newVal[i],product_name:r.name,updated_at:new Date().toISOString()})),
-        {onConflict:"odoo_ref"}
-      );
-    } catch {}
+      const items=toUpdate.map((r,i)=>({odoo_ref:r.ref,threshold:newVal[i],product_name:r.name,updated_at:new Date().toISOString()}));
+      for(let i=0;i<items.length;i+=500){
+        const {error}=await supa.sb.from("wms_thresholds").upsert(items.slice(i,i+500),{onConflict:"odoo_ref"});
+        if(error) throw new Error(error.message);
+      }
+    } catch(e:any) { setError("Erreur sauvegarde seuils : "+e.message); }
   };
 
   // Import Order Confirmation allemagne → colonne "Attendu"
