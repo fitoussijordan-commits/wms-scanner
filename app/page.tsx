@@ -8067,6 +8067,8 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
   const [orphanSelected, setOrphanSelected] = useState<Set<number>>(new Set());
   const [orphanCancelling, setOrphanCancelling] = useState(false);
   const [orphanSearch, setOrphanSearch] = useState("");
+  // corrections: quantId → nb d'unités à retirer de WH/Sortie (défaut = uncoveredQty)
+  const [orphanCorrections, setOrphanCorrections] = useState<Record<number, number>>({});
 
   const loadOrphans = async () => {
     setOrphansLoading(true);
@@ -8074,6 +8076,10 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
     try {
       const moves = await odoo.getOrphanMoves(session);
       setOrphans(moves);
+      // Initialiser corrections à uncoveredQty pour chaque quant
+      const init: Record<number, number> = {};
+      for (const m of moves) init[m.quantId] = Math.round(m.uncoveredQty);
+      setOrphanCorrections(init);
       if (moves.length === 0) onToast("✓ Aucune sortie orpheline trouvée");
     } catch (e: any) { onToast("⚠ " + e.message); }
     setOrphansLoading(false);
@@ -8087,6 +8093,24 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
       onToast(`✓ ${orphanSelected.size} mouvement(s) annulé(s)`);
       setOrphans(prev => prev.filter(m => !orphanSelected.has(m.id)));
       setOrphanSelected(new Set());
+    } catch (e: any) { onToast("⚠ " + e.message); }
+    setOrphanCancelling(false);
+  };
+
+  const applyCorrections = async () => {
+    if (!orphanSelected.size) return;
+    setOrphanCancelling(true);
+    try {
+      const selected = orphans.filter(m => orphanSelected.has(m.id));
+      const corrections = selected.map(m => ({
+        quantId: m.quantId,
+        currentQty: m.qty,
+        correctionQty: orphanCorrections[m.quantId] ?? Math.round(m.uncoveredQty),
+      })).filter(c => c.correctionQty > 0);
+      if (!corrections.length) { onToast("⚠ Aucune correction à appliquer"); setOrphanCancelling(false); return; }
+      await odoo.applyOrphanCorrections(session, corrections);
+      onToast(`✓ ${corrections.length} correction(s) appliquée(s)`);
+      await loadOrphans();
     } catch (e: any) { onToast("⚠ " + e.message); }
     setOrphanCancelling(false);
   };
@@ -8417,77 +8441,153 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
 
       {/* ── Onglet Sorties orphelines ── */}
       {tab === "sorties" && (
-        <div style={{ maxWidth: 960, margin: "0 auto" }}>
-          <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 16 }}>
-            Mouvements de stock en attente (confirmed/assigned) <strong>sans bon de livraison associé</strong>. Ils bloquent du stock inutilement. Tu peux les sélectionner et les annuler.
-          </div>
+        <div style={{ maxWidth: 900, margin: "0 auto" }}>
 
+          {/* ── Toolbar ── */}
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" as const }}>
             <button onClick={loadOrphans} disabled={orphansLoading}
-              style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: C.blue, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: orphansLoading ? 0.6 : 1 }}>
-              {orphansLoading ? "Chargement..." : "🔍 Analyser les sorties"}
+              style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: C.blue, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: orphansLoading ? 0.6 : 1, display: "flex", alignItems: "center", gap: 6 }}>
+              {orphansLoading
+                ? <><span style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid #fff4", borderTopColor: "#fff", display: "inline-block", animation: "spin 0.7s linear infinite" }} />Analyse...</>
+                : <>🔍 Analyser les sorties</>}
             </button>
             {orphans.length > 0 && (
-              <>
-                <input value={orphanSearch} onChange={e => setOrphanSearch(e.target.value)} placeholder="Filtrer ref, nom..."
-                  style={{ padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", flex: 1, minWidth: 180, outline: "none" }} />
-                <button onClick={() => setOrphanSelected(new Set(orphans.filter(m => { const s = orphanSearch.toLowerCase(); return !s || m.ref.toLowerCase().includes(s) || m.name.toLowerCase().includes(s); }).map(m => m.id)))}
-                  style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-                  Tout sélectionner
-                </button>
-                <button onClick={() => setOrphanSelected(new Set())}
-                  style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-                  Désélectionner
-                </button>
-                {orphanSelected.size > 0 && (
-                  <button onClick={cancelSelected} disabled={orphanCancelling}
-                    style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: C.red, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: orphanCancelling ? 0.6 : 1, marginLeft: "auto" }}>
-                    {orphanCancelling ? "Annulation..." : `⛔ Annuler ${orphanSelected.size} mouvement(s)`}
-                  </button>
-                )}
-              </>
+              <input value={orphanSearch} onChange={e => setOrphanSearch(e.target.value)} placeholder="Filtrer ref, nom, lot..."
+                style={{ padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", flex: 1, minWidth: 180, outline: "none", background: C.white }} />
+            )}
+            {orphanSelected.size > 0 && (
+              <button onClick={applyCorrections} disabled={orphanCancelling}
+                style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: "#16a34a", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: orphanCancelling ? 0.6 : 1, marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+                {orphanCancelling
+                  ? <><span style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid #fff4", borderTopColor: "#fff", display: "inline-block", animation: "spin 0.7s linear infinite" }} />Correction...</>
+                  : <>✓ Valider correction ({orphanSelected.size})</>}
+              </button>
             )}
           </div>
 
+          {/* ── Info banner ── */}
           {orphans.length > 0 && (() => {
             const s = orphanSearch.toLowerCase();
             const visible = orphans.filter(m => !s || m.ref.toLowerCase().includes(s) || m.name.toLowerCase().includes(s) || m.lotName.toLowerCase().includes(s));
             const totalUncovered = visible.reduce((sum, m) => sum + m.uncoveredQty, 0);
+            const allVisible = visible.every(m => orphanSelected.has(m.id));
+
+            const toggleRow = (id: number) => setOrphanSelected(prev => {
+              const n = new Set(Array.from(prev));
+              n.has(id) ? n.delete(id) : n.add(id);
+              return n;
+            });
+
             return (
-              <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" as const, fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ background: C.bg, borderBottom: `2px solid ${C.border}` }}>
-                      <th style={{ padding: "10px 12px", width: 36 }}>
-                        <input type="checkbox" checked={visible.length > 0 && visible.every(m => orphanSelected.has(m.id))} onChange={e => {
-                          if (e.target.checked) setOrphanSelected(prev => new Set(Array.from(prev).concat(visible.map(m => m.id))));
-                          else setOrphanSelected(prev => { const n = new Set(Array.from(prev)); visible.forEach(m => n.delete(m.id)); return n; });
-                        }} />
-                      </th>
-                      {["Ref", "Produit", "Lot", "Qté sortie", "⚠ Sans livraison", "Emplacement", "Motif"].map(h => (
-                        <th key={h} style={{ padding: "10px 12px", textAlign: h === "Qté sortie" || h === "⚠ Sans livraison" ? "right" as const : "left" as const, fontSize: 11, fontWeight: 700, color: C.textMuted, whiteSpace: "nowrap" as const }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visible.map((m, i) => (
-                      <tr key={m.id} onClick={() => setOrphanSelected(prev => { const n = new Set(Array.from(prev)); n.has(m.id) ? n.delete(m.id) : n.add(m.id); return n; })}
-                        style={{ borderBottom: `1px solid ${C.border}`, background: orphanSelected.has(m.id) ? C.blueSoft : i % 2 === 0 ? C.white : C.bg, cursor: "pointer", transition: "background .1s" }}>
-                        <td style={{ padding: "10px 12px" }}><input type="checkbox" readOnly checked={orphanSelected.has(m.id)} /></td>
-                        <td style={{ padding: "10px 12px", fontWeight: 700, fontFamily: "monospace", fontSize: 12, whiteSpace: "nowrap" as const }}>{m.ref || "—"}</td>
-                        <td style={{ padding: "10px 12px", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }} title={m.name}>{m.name}</td>
-                        <td style={{ padding: "10px 12px", fontSize: 12, color: C.textMuted, fontFamily: "monospace" as const }}>{m.lotName || "—"}</td>
-                        <td style={{ padding: "10px 12px", textAlign: "right" as const, fontWeight: 600 }}>{Math.round(m.qty)}</td>
-                        <td style={{ padding: "10px 12px", textAlign: "right" as const, fontWeight: 800, color: C.red }}>⚠ {Math.round(m.uncoveredQty)}</td>
-                        <td style={{ padding: "10px 12px", fontSize: 12, color: C.textSec, whiteSpace: "nowrap" as const }}>{m.locationName}</td>
-                        <td style={{ padding: "10px 12px", fontSize: 12, color: C.textMuted }}>{m.reason}</td>
+              <div>
+                {/* Résumé + actions bulk */}
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, padding: "10px 14px", background: "#fef9ec", border: "1px solid #fde68a", borderRadius: 10, fontSize: 13 }}>
+                  <span style={{ fontSize: 18 }}>⚠️</span>
+                  <span><b style={{ color: C.red }}>{visible.length}</b> article(s) · <b style={{ color: C.red }}>{Math.round(totalUncovered)}</b> unités bloquées sans livraison</span>
+                  <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                    <button onClick={() => setOrphanSelected(new Set(visible.map(m => m.id)))}
+                      style={{ padding: "5px 11px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                      Tout sélectionner
+                    </button>
+                    <button onClick={() => setOrphanSelected(new Set())}
+                      style={{ padding: "5px 11px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.white, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                      Désélectionner
+                    </button>
+                  </span>
+                </div>
+
+                {/* Tableau */}
+                <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+                  <table style={{ width: "100%", borderCollapse: "separate" as const, borderSpacing: 0, fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: C.bg }}>
+                        <th style={{ padding: "10px 14px", width: 40, borderBottom: `2px solid ${C.border}` }}>
+                          <input type="checkbox" checked={visible.length > 0 && allVisible}
+                            onChange={e => {
+                              if (e.target.checked) setOrphanSelected(new Set(visible.map(m => m.id)));
+                              else setOrphanSelected(new Set());
+                            }} />
+                        </th>
+                        {(["Ref", "Produit", "Lot", "Emplacement", "Qté sortie", "Correction"] as const).map(h => (
+                          <th key={h} style={{ padding: "10px 14px", textAlign: (h === "Qté sortie" || h === "Correction") ? "center" as const : "left" as const, fontSize: 11, fontWeight: 700, color: C.textMuted, whiteSpace: "nowrap" as const, borderBottom: `2px solid ${C.border}` }}>{h}</th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div style={{ padding: "10px 16px", fontSize: 12, color: C.textMuted, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", flexWrap: "wrap" as const, gap: 8 }}>
-                  <span>{visible.length} article(s) · <b style={{ color: C.red }}>{Math.round(totalUncovered)} unités sans livraison active</b> · {orphanSelected.size} sélectionné(s)</span>
-                  <span>Cliquer une ligne pour sélectionner</span>
+                    </thead>
+                    <tbody>
+                      {visible.map((m, i) => {
+                        const sel = orphanSelected.has(m.id);
+                        const corr = orphanCorrections[m.quantId] ?? Math.round(m.uncoveredQty);
+                        const setCorr = (v: number) => setOrphanCorrections(prev => ({ ...prev, [m.quantId]: Math.max(0, Math.min(Math.round(m.qty), v)) }));
+                        return (
+                          <tr key={m.id}
+                            style={{ borderBottom: `1px solid ${C.border}`, background: sel ? (C.blueSoft || "#eff6ff") : i % 2 === 0 ? C.white : C.bg, transition: "background .1s" }}>
+                            {/* Checkbox */}
+                            <td style={{ padding: "12px 14px", textAlign: "center" as const }} onClick={() => toggleRow(m.id)}>
+                              <input type="checkbox" readOnly checked={sel} style={{ cursor: "pointer" }} />
+                            </td>
+                            {/* Ref */}
+                            <td style={{ padding: "12px 14px", cursor: "pointer" }} onClick={() => toggleRow(m.id)}>
+                              <span style={{ fontWeight: 800, fontFamily: "monospace", fontSize: 12, color: C.blue, background: "#eff6ff", borderRadius: 5, padding: "2px 7px" }}>{m.ref || "—"}</span>
+                            </td>
+                            {/* Produit */}
+                            <td style={{ padding: "12px 14px", maxWidth: 240, cursor: "pointer" }} onClick={() => toggleRow(m.id)}>
+                              <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, fontSize: 13 }} title={m.name}>{m.name}</div>
+                            </td>
+                            {/* Lot */}
+                            <td style={{ padding: "12px 14px", cursor: "pointer" }} onClick={() => toggleRow(m.id)}>
+                              {m.lotName
+                                ? <span style={{ fontFamily: "monospace", fontSize: 11, color: C.textMuted, background: C.bg, borderRadius: 5, padding: "2px 6px", border: `1px solid ${C.border}` }}>{m.lotName}</span>
+                                : <span style={{ color: C.textMuted, fontSize: 12 }}>—</span>}
+                            </td>
+                            {/* Emplacement */}
+                            <td style={{ padding: "12px 14px", fontSize: 12, color: C.textSec, whiteSpace: "nowrap" as const, cursor: "pointer" }} onClick={() => toggleRow(m.id)}>
+                              {m.locationName}
+                            </td>
+                            {/* Qté sortie */}
+                            <td style={{ padding: "12px 14px", textAlign: "center" as const, cursor: "pointer" }} onClick={() => toggleRow(m.id)}>
+                              <span style={{ fontWeight: 700, color: C.red }}>{Math.round(m.qty)}</span>
+                              {m.uncoveredQty < m.qty && (
+                                <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{Math.round(m.reservedQty)} couverts</div>
+                              )}
+                            </td>
+                            {/* Correction +/- */}
+                            <td style={{ padding: "8px 14px", textAlign: "center" as const }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "center" }}>
+                                <button
+                                  onClick={e => { e.stopPropagation(); setCorr(corr - 1); }}
+                                  disabled={corr <= 0}
+                                  style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.border}`, background: corr <= 0 ? C.bg : C.white, fontSize: 16, fontWeight: 700, cursor: corr <= 0 ? "not-allowed" : "pointer", fontFamily: "inherit", color: corr <= 0 ? C.textMuted : C.red, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>
+                                  −
+                                </button>
+                                <input
+                                  type="number"
+                                  value={corr}
+                                  min={0}
+                                  max={Math.round(m.qty)}
+                                  onClick={e => e.stopPropagation()}
+                                  onChange={e => setCorr(Number(e.target.value))}
+                                  style={{ width: 52, textAlign: "center" as const, padding: "4px 6px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit", outline: "none", color: corr > 0 ? C.red : C.textMuted, background: corr > 0 ? "#fff5f5" : C.white }}
+                                />
+                                <button
+                                  onClick={e => { e.stopPropagation(); setCorr(corr + 1); }}
+                                  disabled={corr >= Math.round(m.qty)}
+                                  style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.border}`, background: corr >= Math.round(m.qty) ? C.bg : C.white, fontSize: 16, fontWeight: 700, cursor: corr >= Math.round(m.qty) ? "not-allowed" : "pointer", fontFamily: "inherit", color: corr >= Math.round(m.qty) ? C.textMuted : "#16a34a", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>
+                                  +
+                                </button>
+                              </div>
+                              <div style={{ fontSize: 10, color: C.textMuted, marginTop: 3, textAlign: "center" as const }}>
+                                {corr === 0 ? "pas de correction" : corr === Math.round(m.qty) ? "tout retirer" : `retirer ${corr} / ${Math.round(m.qty)}`}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <div style={{ padding: "10px 16px", fontSize: 12, color: C.textMuted, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", flexWrap: "wrap" as const, gap: 8, background: C.bg }}>
+                    <span>{visible.length} ligne(s) · {orphanSelected.size} sélectionnée(s)</span>
+                    <span style={{ color: C.textMuted }}>Ajuster la correction puis sélectionner et valider</span>
+                  </div>
                 </div>
               </div>
             );
@@ -8495,8 +8595,9 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
 
           {orphans.length === 0 && !orphansLoading && (
             <div style={{ textAlign: "center" as const, padding: "48px 20px", color: C.textMuted }}>
-              <div style={{ fontSize: 36, marginBottom: 10 }}>✅</div>
-              <div style={{ fontSize: 14, fontWeight: 700 }}>Clique sur "Analyser les sorties" pour démarrer</div>
+              <div style={{ fontSize: 36, marginBottom: 10 }}>📦</div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Identifier le stock bloqué en WH/Sortie</div>
+              <div style={{ fontSize: 13 }}>Lance l&apos;analyse pour trouver les articles sans bon de livraison actif.</div>
             </div>
           )}
         </div>

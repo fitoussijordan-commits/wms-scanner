@@ -2509,6 +2509,26 @@ export async function cancelOrphanMoves(session: OdooSession, moveIds: number[])
   await write(session, "stock.move", moveIds, { state: "cancel" });
 }
 
+/**
+ * Applique une correction inventaire sur des quants orphelins.
+ * Pour chaque item : écrit inventory_quantity = currentQty - correctionQty
+ * puis appelle action_apply_inventory.
+ * correctionQty = nb d'unités à retirer de WH/Sortie (0 = pas de correction).
+ */
+export async function applyOrphanCorrections(
+  session: OdooSession,
+  corrections: { quantId: number; currentQty: number; correctionQty: number }[]
+): Promise<void> {
+  const toApply = corrections.filter(c => c.correctionQty > 0);
+  if (!toApply.length) return;
+  // Appliquer une par une pour éviter les conflits de lots
+  for (const c of toApply) {
+    const newQty = Math.max(0, c.currentQty - c.correctionQty);
+    await write(session, "stock.quant", [c.quantId], { inventory_quantity: newQty });
+    await callMethod(session, "stock.quant", "action_apply_inventory", [[c.quantId]]);
+  }
+}
+
 export async function bulkUpdateMinQuantity(
   session: OdooSession,
   updates: { id: number; value: number }[]
