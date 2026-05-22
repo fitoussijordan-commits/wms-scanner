@@ -2173,14 +2173,18 @@ export default function Dashboard() {
     const n=parseFloat(val); if(isNaN(n)||n<0){setSmEditThr(null);return;}
     setSmRows(r=>r.map(row=>{if(row.ref!==ref)return row;const u={...row,threshold:n};u.status=smStatus(u.stock,u.conso,n,u.daysLeft,u.daysUntilDeliv);return u;}));
     setSmEditThr(null);
-    try { await supa.sb.from("wms_thresholds").upsert({odoo_ref:ref,threshold:n,product_name:name,updated_at:new Date().toISOString()},{onConflict:"odoo_ref"}); } catch {}
+    try {
+      await supa.sb.from("wms_thresholds").delete().eq("odoo_ref",ref);
+      const {error}=await supa.sb.from("wms_thresholds").insert({odoo_ref:ref,threshold:n,product_name:name,updated_at:new Date().toISOString()});
+      if(error) throw new Error(error.message);
+    } catch(e:any) { setError("Erreur sauvegarde seuil : "+e.message); }
   };
 
   const smResetThresholds = async () => {
     const toUpdate=smRows.filter(r=>r.conso>0&&r.status!=="not_found");
     if(!toUpdate.length)return;
     const newVal=toUpdate.map(r=>Math.round(r.conso));
-    // Mise à jour UI
+    // Mise à jour UI immédiate
     setSmRows(rows=>rows.map(row=>{
       const idx=toUpdate.findIndex(r=>r.ref===row.ref);
       if(idx<0)return row;
@@ -2189,12 +2193,22 @@ export default function Dashboard() {
       u.status=smStatus(u.stock,u.conso,n,u.daysLeft,u.daysUntilDeliv);
       return u;
     }));
-    // Sauvegarde Supabase par batch de 500
+    // Sauvegarde Supabase : DELETE les refs concernés puis INSERT propre (évite tout problème de contrainte)
     try {
-      const items=toUpdate.map((r,i)=>({odoo_ref:r.ref,threshold:newVal[i],product_name:r.name,updated_at:new Date().toISOString()}));
+      const refs=toUpdate.map(r=>r.ref);
+      // DELETE par batch de 500
+      for(let i=0;i<refs.length;i+=500){
+        const {error}=await supa.sb.from("wms_thresholds").delete().in("odoo_ref",refs.slice(i,i+500));
+        if(error) throw new Error("DELETE: "+error.message);
+      }
+      // INSERT tous les rows frais (en gardant supplier_date + expected_qty)
+      const items=toUpdate.map((r,i)=>{
+        const existing=smRows.find(row=>row.ref===r.ref);
+        return {odoo_ref:r.ref,threshold:newVal[i],product_name:r.name,supplier_date:existing?.supplierDate??null,expected_qty:existing?.expected_qty??0,updated_at:new Date().toISOString()};
+      });
       for(let i=0;i<items.length;i+=500){
-        const {error}=await supa.sb.from("wms_thresholds").upsert(items.slice(i,i+500),{onConflict:"odoo_ref"});
-        if(error) throw new Error(error.message);
+        const {error}=await supa.sb.from("wms_thresholds").insert(items.slice(i,i+500));
+        if(error) throw new Error("INSERT: "+error.message);
       }
     } catch(e:any) { setError("Erreur sauvegarde seuils : "+e.message); }
   };

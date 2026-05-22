@@ -50,11 +50,19 @@ export async function deleteThreshold(odoo_ref: string): Promise<void> {
 
 export async function saveThresholdsBulk(thresholds: WmsThreshold[]): Promise<void> {
   if (!thresholds.length) return;
-  const { error } = await sb.from("wms_thresholds").upsert(
-    thresholds.map((t) => ({ ...t, updated_at: new Date().toISOString() })),
-    { onConflict: "odoo_ref" }
-  );
-  if (error) throw new Error(error.message);
+  // DELETE les refs concernés puis INSERT propre (pas de dépendance à une contrainte unique)
+  const refs = thresholds.map(t => t.odoo_ref);
+  for (let i = 0; i < refs.length; i += 500) {
+    const { error } = await sb.from("wms_thresholds").delete().in("odoo_ref", refs.slice(i, i + 500));
+    if (error) throw new Error(error.message);
+  }
+  for (let i = 0; i < thresholds.length; i += 500) {
+    const batch = thresholds.slice(i, i + 500);
+    const { error } = await sb.from("wms_thresholds").insert(
+      batch.map((t) => ({ ...t, updated_at: new Date().toISOString() }))
+    );
+    if (error) throw new Error(error.message);
+  }
 }
 
 // ══════════════════════════════════════════
