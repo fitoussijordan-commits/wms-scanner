@@ -1736,9 +1736,8 @@ export default function Dashboard() {
   useEffect(() => {
     if (!session) return;
     if (tab === "deliveries") loadDeliveries();
-    // Suivi Stock : charge uniquement si pas encore de données affichées
-    // Ne jamais forcer la sync conso au changement de tab — utiliser le cache
     if (tab === "stock-monitor" && smRows.length === 0) smLoad(smDeliveryMonth);
+    if (tab === "dlv" && dlvRows.length === 0) loadDlv();
   }, [tab, session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ══════════════════════════════════════════════════════
