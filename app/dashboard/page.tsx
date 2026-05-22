@@ -463,12 +463,19 @@ export default function Dashboard() {
   const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
 
   // ── Suivi DLV ────────────────────────────────────────────────────────────
-  type DlvRow = { productId: number; ref: string; name: string; lotId: number; lotName: string; qty: number; dlvDate: string; sellByDate: Date; daysToSellBy: number; avgMonthly: number; unitsSellable: number; unitsAtRisk: number; status: "perished" | "critical" | "risk" | "watch" | "ok" | "unknown" };
+  type DlvRow = { productId: number; ref: string; name: string; lotId: number; lotName: string; qty: number; dlvDate: string; sellByDate: Date; daysToSellBy: number; avgMonthly: number; unitsSellable: number; unitsAtRisk: number; status: "overdue" | "critical" | "risk" | "watch" | "ok" | "unknown"; marginMonths: number };
   const [dlvRows, setDlvRows] = useState<DlvRow[]>([]);
   const [dlvLoading, setDlvLoading] = useState(false);
   const [dlvSearch, setDlvSearch] = useState("");
-  const [dlvFilter, setDlvFilter] = useState<"all" | "alert" | "ok" | "perished" | "critical" | "risk" | "watch" | "ok-only" | "unknown">("alert");
-  const DLV_SELL_MARGIN_MONTHS = 12; // règle : ne vendre que si DLV > 12 mois
+  const [dlvFilter, setDlvFilter] = useState<"all" | "alert" | "ok" | "overdue" | "critical" | "risk" | "watch" | "ok-only" | "unknown">("alert");
+  const DLV_SELL_MARGIN_MONTHS = 12;  // règle standard : DLV - 12 mois
+  const DLV_FLEX_MARGIN_MONTHS = 4;   // règle souple : échantillons, miniatures, testeurs
+  // Mots-clés produits flex (case-insensitive)
+  const DLV_FLEX_KEYWORDS = ["échantillon", "echantillon", "miniature", "testeur", "tester", "sample", "mini "];
+  const getDlvMargin = (name: string): number => {
+    const n = name.toLowerCase();
+    return DLV_FLEX_KEYWORDS.some(k => n.includes(k)) ? DLV_FLEX_MARGIN_MONTHS : DLV_SELL_MARGIN_MONTHS;
+  };
   const [dlvColWidths, setDlvColWidths] = useState<Record<string, number>>({ "Statut": 115, "Ref": 100, "Produit": 210, "Lot": 120, "DLV": 120, "Sell-by": 120, "J. restants": 90, "Qté stock": 85, "Conso/mois": 92, "Vendable": 85, "À risque": 85 });
   const dlvResizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null);
   const [dlvAvgMonthlyByRef, setDlvAvgMonthlyByRef] = useState<Record<string, number>>({});
@@ -777,11 +784,12 @@ export default function Dashboard() {
       const lots = await odoo.getDlvStockLots(session);
       const today = new Date(); today.setHours(0, 0, 0, 0);
       const rows: DlvRow[] = lots.map(lot => {
+        const marginMonths = getDlvMargin(lot.name);
         // Normalise la date (peut être "YYYY-MM-DD HH:MM:SS" ou "YYYY-MM-DDTHH:MM:SS")
         const dlvRaw = lot.dlvDate.split(" ")[0].split("T")[0];
         const dlvDate = new Date(dlvRaw + "T00:00:00");
         const sellByDate = new Date(dlvDate);
-        sellByDate.setMonth(sellByDate.getMonth() - DLV_SELL_MARGIN_MONTHS);
+        sellByDate.setMonth(sellByDate.getMonth() - marginMonths);
         const daysToSellBy = Math.floor((sellByDate.getTime() - today.getTime()) / 86400000);
         const avgMonthly = dlvAvgMonthlyByRef[lot.ref] || avgMonthlyByRef[lot.ref] || 0;
         const monthsToSellBy = Math.max(0, daysToSellBy / 30);
@@ -790,16 +798,16 @@ export default function Dashboard() {
 
         let status: DlvRow["status"];
         if (avgMonthly === 0) status = "unknown";
-        else if (daysToSellBy <= 0) status = "perished";
+        else if (daysToSellBy <= 0) status = "overdue";
         else if (daysToSellBy < 30) status = "critical";
         else if (unitsAtRisk > 0) status = "risk";
         else if (daysToSellBy < 90) status = "watch";
         else status = "ok";
 
-        return { ...lot, sellByDate, daysToSellBy, avgMonthly, unitsSellable: avgMonthly > 0 ? unitsSellable : lot.qty, unitsAtRisk: avgMonthly > 0 ? unitsAtRisk : 0, status };
+        return { ...lot, sellByDate, daysToSellBy, avgMonthly, unitsSellable: avgMonthly > 0 ? unitsSellable : lot.qty, unitsAtRisk: avgMonthly > 0 ? unitsAtRisk : 0, status, marginMonths };
       });
-      // Trier : périmés → critiques → risques → attention → ok → inconnus
-      const ORDER = { perished: 0, critical: 1, risk: 2, watch: 3, ok: 4, unknown: 5 };
+      // Trier : hors délai → critiques → risques → attention → ok → inconnus
+      const ORDER = { overdue: 0, critical: 1, risk: 2, watch: 3, ok: 4, unknown: 5 };
       rows.sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.daysToSellBy - b.daysToSellBy);
       setDlvRows(rows);
     } catch (e: any) { setError(e.message); }
@@ -816,7 +824,7 @@ export default function Dashboard() {
 
     // Couleurs par statut
     const STATUS_COLORS: Record<string, { bg: string; fg: string; label: string }> = {
-      perished: { bg: "FFFEF2F2", fg: "FF7C2D12", label: "⛔ Périmé"    },
+      overdue:  { bg: "FFFEF2F2", fg: "FF7C2D12", label: "⛔ Hors délai" },
       critical: { bg: "FFFEF2F2", fg: "FFDC2626", label: "🔴 Critique"  },
       risk:     { bg: "FFFFF7ED", fg: "FFC2410C", label: "🟠 Risque"    },
       watch:    { bg: "FFFEFCE8", fg: "FFB45309", label: "🟡 Attention" },
@@ -3452,8 +3460,8 @@ export default function Dashboard() {
           const fmtDate = (d: Date) => d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
           const fmtDays = (n: number) => n <= 0 ? "Dépassé" : n < 30 ? `${n}j` : n < 365 ? `${Math.round(n / 30)}mois` : `${(n / 365).toFixed(1)}ans`;
           const STATUS_CFG: Record<DlvRow["status"], { label: string; color: string; bg: string; border: string }> = {
-            perished: { label: "⛔ Périmé",   color: "#7c2d12", bg: "#fef2f2", border: "#fca5a5" },
-            critical: { label: "🔴 Critique",  color: "#dc2626", bg: "#fef2f2", border: "#fca5a5" },
+            overdue:  { label: "⛔ Hors délai", color: "#7c2d12", bg: "#fef2f2", border: "#fca5a5" },
+            critical: { label: "🔴 Critique",   color: "#dc2626", bg: "#fef2f2", border: "#fca5a5" },
             risk:     { label: "🟠 Risque",    color: "#c2410c", bg: "#fff7ed", border: "#fed7aa" },
             watch:    { label: "🟡 Attention", color: "#b45309", bg: "#fefce8", border: "#fde68a" },
             ok:       { label: "🟢 OK",        color: "#15803d", bg: "#f0fdf4", border: "#bbf7d0" },
@@ -3464,15 +3472,15 @@ export default function Dashboard() {
             const matchSearch = !search || r.ref.toLowerCase().includes(search) || r.name.toLowerCase().includes(search) || r.lotName.toLowerCase().includes(search);
             const matchFilter =
               dlvFilter === "all" ||
-              (dlvFilter === "alert" && ["perished","critical","risk","watch"].includes(r.status)) ||
+              (dlvFilter === "alert" && ["overdue","critical","risk","watch"].includes(r.status)) ||
               (dlvFilter === "ok" && ["ok","unknown"].includes(r.status)) ||
               (dlvFilter === "ok-only" && r.status === "ok") ||
               r.status === dlvFilter;
             return matchSearch && matchFilter;
           });
-          const counts = { perished: 0, critical: 0, risk: 0, watch: 0, ok: 0, unknown: 0 };
+          const counts = { overdue: 0, critical: 0, risk: 0, watch: 0, ok: 0, unknown: 0 };
           for (const r of dlvRows) counts[r.status]++;
-          const nbAlert = counts.perished + counts.critical + counts.risk + counts.watch;
+          const nbAlert = counts.overdue + counts.critical + counts.risk + counts.watch;
 
           return (
             <div style={{ animation: "fadeIn .3s ease both" }}>
@@ -3480,7 +3488,7 @@ export default function Dashboard() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
                 <div>
                   <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Suivi DLV</h2>
-                  <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Règle : vente possible uniquement si DLV &gt; 12 mois — stock à risque si la conso ne couvre pas avant la deadline</p>
+                  <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Règle standard : DLV &minus; 12 mois · Souplesse (échantillons / miniatures / testeurs) : DLV &minus; 4 mois</p>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexDirection: "column" }}>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -3499,7 +3507,7 @@ export default function Dashboard() {
               {/* Stats summary */}
               {dlvRows.length > 0 && (
                 <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-                  {(["perished","critical","risk","watch","ok","unknown"] as DlvRow["status"][]).map(s => counts[s] > 0 && (() => {
+                  {(["overdue","critical","risk","watch","ok","unknown"] as DlvRow["status"][]).map(s => counts[s] > 0 && (() => {
                     const active = dlvFilter === s || (s === "ok" && dlvFilter === "ok-only");
                     return (
                       <button key={s} onClick={() => setDlvFilter(active ? "all" : s as any)}
@@ -3585,11 +3593,16 @@ export default function Dashboard() {
                         <tbody>
                           {filtered.map((r, i) => {
                             const cfg = STATUS_CFG[r.status];
-                            const rowBg = (r.status === "perished" || r.status === "critical") ? "#fffbfb" : r.status === "risk" ? "#fffdf8" : undefined;
+                            const rowBg = (r.status === "overdue" || r.status === "critical") ? "#fffbfb" : r.status === "risk" ? "#fffdf8" : undefined;
                             return (
                               <tr key={`${r.productId}_${r.lotId}`} style={{ borderBottom: "1px solid var(--border)", background: i % 2 === 0 ? (rowBg || "var(--bg-surface)") : (rowBg || "var(--bg-raised)") }}>
                                 <td style={{ padding: "10px 14px", overflow: "hidden" }}>
-                                  <span style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{cfg.label}</span>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                    <span style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{cfg.label}</span>
+                                    {r.marginMonths < DLV_SELL_MARGIN_MONTHS && (
+                                      <span style={{ background: "#ede9fe", color: "#7c3aed", border: "1px solid #c4b5fd", borderRadius: 5, padding: "1px 6px", fontSize: 10, fontWeight: 600, whiteSpace: "nowrap" }}>✦ souple {r.marginMonths}m</span>
+                                    )}
+                                  </div>
                                 </td>
                                 <td style={{ padding: "10px 14px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                   <button onClick={async () => {
@@ -3651,7 +3664,7 @@ export default function Dashboard() {
                       const productLots = dlvRows.filter(r => r.productId === dlvDetailProduct.productId);
                       if (!productLots.length) return null;
                       const STATUS_CFG2: Record<string, { label: string; color: string; bg: string; border: string }> = {
-                        perished: { label: "⛔ Périmé",    color: "#7c2d12", bg: "#fef2f2", border: "#fca5a5" },
+                        overdue:  { label: "⛔ Hors délai", color: "#7c2d12", bg: "#fef2f2", border: "#fca5a5" },
                         critical: { label: "🔴 Critique",  color: "#dc2626", bg: "#fef2f2", border: "#fca5a5" },
                         risk:     { label: "🟠 Risque",    color: "#c2410c", bg: "#fff7ed", border: "#fed7aa" },
                         watch:    { label: "🟡 Attention", color: "#b45309", bg: "#fefce8", border: "#fde68a" },
