@@ -1712,24 +1712,48 @@ export default function Dashboard() {
     thrMap:Record<string,number>,
     supMap:Record<string,string|null>,
     delivMonth?:string,
-    expectedMap?:Record<string,number>
+    expectedMap?:Record<string,number>,
+    cachedConso?:Record<string,number>   // si fourni → pas de requête Odoo pour la conso
   ) => {
     if (!session || !refs.length) return;
     setSmMsg("Stock Odoo...");
     const prods:any[]=await odoo.searchRead(session,"product.product",[["default_code","in",refs.map(r=>r.ref)],["active","in",[true,false]]],["id","name","default_code","qty_available"],0);
     const stockByRef:Record<string,{id:number;name:string;qty:number}>={};
     for(const p of prods) if(p.default_code) stockByRef[p.default_code]={id:p.id,name:p.name,qty:p.qty_available??0};
-    setSmMsg("Consommation (12 mois)...");
-    const today=new Date();
-    const from=new Date(today.getFullYear(),today.getMonth()-12,1).toISOString().slice(0,10)+" 00:00:00";
-    const curMonthStart=new Date(today.getFullYear(),today.getMonth(),1).toISOString().slice(0,10)+" 00:00:00";
-    const pids=Object.values(stockByRef).map(p=>p.id);
-    const consoByRef:Record<string,number>={};
-    if(pids.length){
-      const moves:any[]=await odoo.searchRead(session,"stock.move",[["state","=","done"],["product_id","in",pids],["date",">=",from],["date","<",curMonthStart],["location_id.usage","=","internal"],["location_dest_id.usage","=","customer"]],["product_id","product_uom_qty","date"],0);
-      const byPidMonth:Record<number,Record<string,number>>={};
-      for(const m of moves){const pid=Array.isArray(m.product_id)?m.product_id[0]:m.product_id;const mo=String(m.date||"").slice(0,7);if(!byPidMonth[pid])byPidMonth[pid]={};byPidMonth[pid][mo]=(byPidMonth[pid][mo]||0)+(m.product_uom_qty||0);}
-      for(const [ref,info] of Object.entries(stockByRef)){const pid=info.id;let total=0;for(let i=12;i>=1;i--){const d=new Date(today.getFullYear(),today.getMonth()-i,1);const mo=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;total+=(byPidMonth[pid]?.[mo]??0);}consoByRef[ref]=Math.round(total/12);}
+
+    let consoByRef:Record<string,number>={};
+    if(cachedConso) {
+      // Utiliser la conso en cache — pas de requête Odoo
+      for(const ref of Object.keys(stockByRef)) consoByRef[ref]=cachedConso[ref]??0;
+    } else {
+      // Pas de cache → fetch Odoo + sauvegarder
+      setSmMsg("Consommation (12 mois depuis Odoo)...");
+      const today=new Date();
+      const from=new Date(today.getFullYear(),today.getMonth()-12,1).toISOString().slice(0,10)+" 00:00:00";
+      const curMonthStart=new Date(today.getFullYear(),today.getMonth(),1).toISOString().slice(0,10)+" 00:00:00";
+      const pids=Object.values(stockByRef).map(p=>p.id);
+      if(pids.length){
+        const moves:any[]=await odoo.searchRead(session,"stock.move",[["state","=","done"],["product_id","in",pids],["date",">=",from],["date","<",curMonthStart],["location_id.usage","=","internal"],["location_dest_id.usage","=","customer"]],["product_id","product_uom_qty","date"],0);
+        const byPidMonth:Record<number,Record<string,number>>={};
+        for(const m of moves){const pid=Array.isArray(m.product_id)?m.product_id[0]:m.product_id;const mo=String(m.date||"").slice(0,7);if(!byPidMonth[pid])byPidMonth[pid]={};byPidMonth[pid][mo]=(byPidMonth[pid][mo]||0)+(m.product_uom_qty||0);}
+        // Agréger par ref+mois pour la sauvegarde
+        const consoItems:supa.WmsConsoCache[]=[];
+        for(const [ref,info] of Object.entries(stockByRef)){
+          const pid=info.id; let total=0;
+          for(let i=12;i>=1;i--){
+            const d=new Date(today.getFullYear(),today.getMonth()-i,1);
+            const mo=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+            const qty=(byPidMonth[pid]?.[mo]??0);
+            if(qty>0) consoItems.push({odoo_ref:ref,product_name:info.name,month:mo,qty});
+            total+=qty;
+          }
+          consoByRef[ref]=Math.round(total/12);
+        }
+        // Sauvegarder en cache Supabase (DELETE+INSERT par mois — pas de cumul)
+        if(consoItems.length) supa.saveConsoCache(consoItems).then(()=>supa.getConsoCacheAge().then(d=>{if(d)setConsoSyncedAt(d);})).catch(()=>{});
+        // Mettre à jour avgMonthlyByRef en mémoire
+        setAvgMonthlyByRef(prev=>({...prev,...consoByRef}));
+      }
     }
     const hasOrderConf=Object.keys(expectedMap||{}).length>0;
     const rows=smBuildRows(refs,stockByRef,consoByRef,thrMap,supMap,delivMonth,expectedMap,hasOrderConf);
@@ -1956,7 +1980,7 @@ export default function Dashboard() {
   };
 
   // ── Chargement complet depuis wms_thresholds ─────────────────────────────
-  const smLoad = useCallback(async (delivMonth?:string) => {
+  const smLoad = useCallback(async (delivMonth?:string, forceConsoSync=false) => {
     if (!session) return;
     setSmLoading(true); setSmMsg("Chargement références...");
     try {
@@ -1964,10 +1988,24 @@ export default function Dashboard() {
       setSmRefs(refs);
       setSmExpected(expectedMap);
       if (!refs.length){setSmLoading(false);setSmMsg("");return;}
-      await smSyncOdoo(refs,thrMap,supMap,delivMonth||smDeliveryMonth,expectedMap);
+
+      let consoToUse:Record<string,number>|undefined = undefined;
+
+      if (forceConsoSync) {
+        // Sync forcée : fetch Odoo + écrase le cache (DELETE+INSERT)
+        // smSyncOdoo gérera le save quand cachedConso=undefined
+        consoToUse = undefined;
+      } else {
+        // Utiliser la conso déjà en mémoire (chargée depuis Supabase au login)
+        const hasCached = Object.keys(avgMonthlyByRef).length > 0;
+        consoToUse = hasCached ? avgMonthlyByRef : undefined;
+        // Si pas de cache du tout → smSyncOdoo fetch Odoo automatiquement
+      }
+
+      await smSyncOdoo(refs,thrMap,supMap,delivMonth||smDeliveryMonth,expectedMap,consoToUse);
     } catch(e:any){setError(e.message);}
     finally{setSmLoading(false);setSmMsg("");}
-  },[session,smSyncOdoo]); // eslint-disable-line react-hooks/exhaustive-deps
+  },[session,smSyncOdoo,avgMonthlyByRef]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Import Excel → upsert dans wms_thresholds (garde seuils existants) ──
   const smImportExcel = async (e:React.ChangeEvent<HTMLInputElement>) => {
@@ -2546,7 +2584,16 @@ export default function Dashboard() {
                     {smMonthOptions.map(o=><option key={o.val} value={o.val}>{o.label}</option>)}
                   </select>
                 </div>
-                <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth)} disabled={smLoading}>{smLoading?<Spinner/>:I.refresh} Actualiser</button>
+                <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"stretch"}}>
+                  <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth)} disabled={smLoading} title="Refresh stock Odoo — utilise la conso en cache">{smLoading?<Spinner/>:I.refresh} Actualiser</button>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"stretch"}}>
+                  <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth,true)} disabled={smLoading} title="Sync conso 12 mois depuis Odoo et écrase le cache" style={{borderColor:"#8b5cf6",color:"#7c3aed"}}>
+                    {smLoading?<Spinner/>:<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Sync conso
+                  </button>
+                  {consoSyncedAt&&<span style={{fontSize:10,color:"var(--text-muted)",textAlign:"center"}}>Màj {consoSyncedAt.toLocaleDateString("fr-FR")}</span>}
+                  {!consoSyncedAt&&Object.keys(avgMonthlyByRef).length===0&&<span style={{fontSize:10,color:"#f59e0b",textAlign:"center"}}>⚠ Pas de cache</span>}
+                </div>
                 <input ref={smFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={smImportExcel} style={{display:"none"}}/>
                 <button className="wms-btn wms-btn-primary" onClick={()=>smFileRef.current?.click()} disabled={smLoading}>📤 Importer refs</button>
                 <input ref={smOrderFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={smImportOrder} style={{display:"none"}}/>
