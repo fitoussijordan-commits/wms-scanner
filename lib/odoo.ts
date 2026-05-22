@@ -2401,20 +2401,31 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
   pickingState: string;
   reason: string;
 }[]> {
-  // 1. Tous les quants dans emplacements output (WH/Sortie)
+  // 0. Trouver explicitement les emplacements "output" / "Sortie"
+  //    → usage="output" OU nom contient "sortie" (certains Odoo ont usage="internal" sur WH/Sortie)
+  const outputLocs: any[] = await searchRead(
+    session, "stock.location",
+    ["|", ["usage", "=", "output"], ["complete_name", "ilike", "sortie"]],
+    ["id", "complete_name", "usage"],
+    100
+  );
+  if (!outputLocs.length) return [];
+  const outputLocIds = outputLocs.map((l: any) => l.id as number);
+
+  // 1. Tous les quants dans ces emplacements avec qty > 0
   const quants: any[] = await searchRead(
     session, "stock.quant",
-    [["location_id.usage", "=", "output"], ["quantity", ">", 0]],
+    [["location_id", "in", outputLocIds], ["quantity", ">", 0]],
     ["id", "product_id", "location_id", "lot_id", "quantity", "reserved_quantity"],
     2000
   );
   if (!quants.length) return [];
 
   // 2. Pickings actifs (assigned/waiting/confirmed) depuis ces emplacements
-  const outputLocIds = Array.from(new Set(quants.map((q: any) => q.location_id[0]))) as number[];
+  const quantLocIds = Array.from(new Set(quants.map((q: any) => q.location_id[0]))) as number[];
   const activePicking: any[] = await searchRead(
     session, "stock.picking",
-    [["state", "in", ["assigned", "waiting", "confirmed"]], ["location_id", "in", outputLocIds]],
+    [["state", "in", ["assigned", "waiting", "confirmed"]], ["location_id", "in", quantLocIds]],
     ["id", "name", "state", "location_id", "scheduled_date"],
     500
   );
