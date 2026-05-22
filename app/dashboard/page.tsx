@@ -475,6 +475,11 @@ export default function Dashboard() {
   const [dlvAvgSyncedAt, setDlvAvgSyncedAt] = useState<Date | null>(null);
   const [dlvConsoImporting, setDlvConsoImporting] = useState(false);
   const dlvFileRef = useRef<HTMLInputElement>(null);
+  // Popup détail produit DLV
+  type DlvDetailQuant = { locationId: number; locationName: string; locationFullName: string; lotId: number | null; lotName: string; dlvDate: string | null; qty: number; reservedQty: number };
+  const [dlvDetailProduct, setDlvDetailProduct] = useState<{ productId: number; ref: string; name: string } | null>(null);
+  const [dlvDetailLoading, setDlvDetailLoading] = useState(false);
+  const [dlvDetailData, setDlvDetailData] = useState<DlvDetailQuant[]>([]);
 
   // ── Assistant IA Odoo ────────────────────────────────────────────────────
   type AiMessage = { role: "user" | "assistant"; text: string; model?: string; queriesRun?: number; rawData?: { description: string; model: string; rows: any[] }[] };
@@ -3586,7 +3591,20 @@ export default function Dashboard() {
                                 <td style={{ padding: "10px 14px", overflow: "hidden" }}>
                                   <span style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{cfg.label}</span>
                                 </td>
-                                <td style={{ padding: "10px 14px", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.ref || "—"}</td>
+                                <td style={{ padding: "10px 14px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  <button onClick={async () => {
+                                    setDlvDetailProduct({ productId: r.productId, ref: r.ref, name: r.name });
+                                    setDlvDetailData([]);
+                                    setDlvDetailLoading(true);
+                                    try {
+                                      const detail = await odoo.getProductStockDetail(session!, r.productId);
+                                      setDlvDetailData(detail);
+                                    } catch (e: any) { setError(e.message); }
+                                    setDlvDetailLoading(false);
+                                  }} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: 700, color: "var(--accent)", fontFamily: "inherit", fontSize: "inherit", textDecoration: "underline", textDecorationStyle: "dotted", textUnderlineOffset: 3 }}>
+                                    {r.ref || "—"}
+                                  </button>
+                                </td>
                                 <td style={{ padding: "10px 14px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.name}>{r.name}</td>
                                 <td style={{ padding: "10px 14px", fontFamily: "monospace", fontSize: 12, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.lotName}</td>
                                 <td style={{ padding: "10px 14px", whiteSpace: "nowrap", fontWeight: 600, overflow: "hidden" }}>{fmtDate(new Date(r.dlvDate.split(" ")[0] + "T00:00:00"))}</td>
@@ -3613,6 +3631,124 @@ export default function Dashboard() {
 
               {filtered.length === 0 && dlvRows.length > 0 && (
                 <div style={{ textAlign: "center", padding: "40px 20px", color: "var(--text-muted)", fontSize: 14 }}>Aucun lot ne correspond au filtre.</div>
+              )}
+
+              {/* ── Popup détail produit ── */}
+              {dlvDetailProduct && (
+                <div onClick={() => setDlvDetailProduct(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+                  <div onClick={e => e.stopPropagation()} style={{ background: "var(--bg-surface)", borderRadius: 16, boxShadow: "0 24px 64px rgba(0,0,0,.25)", width: "100%", maxWidth: 680, maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                    {/* Header popup */}
+                    <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-start", gap: 12 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", letterSpacing: ".05em", textTransform: "uppercase", marginBottom: 4 }}>{dlvDetailProduct.ref}</div>
+                        <div style={{ fontSize: 17, fontWeight: 800, color: "var(--text-primary)", lineHeight: 1.3 }}>{dlvDetailProduct.name}</div>
+                      </div>
+                      <button onClick={() => setDlvDetailProduct(null)} style={{ background: "var(--bg-raised)", border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", flexShrink: 0 }}>✕</button>
+                    </div>
+
+                    {/* Lots DLV pour ce produit (depuis les données déjà chargées) */}
+                    {(() => {
+                      const productLots = dlvRows.filter(r => r.productId === dlvDetailProduct.productId);
+                      if (!productLots.length) return null;
+                      const STATUS_CFG2: Record<string, { label: string; color: string; bg: string; border: string }> = {
+                        perished: { label: "⛔ Périmé",    color: "#7c2d12", bg: "#fef2f2", border: "#fca5a5" },
+                        critical: { label: "🔴 Critique",  color: "#dc2626", bg: "#fef2f2", border: "#fca5a5" },
+                        risk:     { label: "🟠 Risque",    color: "#c2410c", bg: "#fff7ed", border: "#fed7aa" },
+                        watch:    { label: "🟡 Attention", color: "#b45309", bg: "#fefce8", border: "#fde68a" },
+                        ok:       { label: "🟢 OK",        color: "#15803d", bg: "#f0fdf4", border: "#bbf7d0" },
+                        unknown:  { label: "⚪ Sans conso", color: "#64748b", bg: "#f8fafc", border: "#e2e8f0" },
+                      };
+                      return (
+                        <div style={{ padding: "16px 24px 0" }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 10 }}>Lots &amp; DLV</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
+                            {productLots.map(lot => {
+                              const cfg = STATUS_CFG2[lot.status];
+                              return (
+                                <div key={lot.lotId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, background: "var(--bg-raised)", border: "1px solid var(--border)" }}>
+                                  <span style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, borderRadius: 5, padding: "2px 7px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{cfg.label}</span>
+                                  <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--text-muted)", minWidth: 100 }}>{lot.lotName}</span>
+                                  <span style={{ fontSize: 13, fontWeight: 600 }}>DLV {fmtDate(new Date(lot.dlvDate.split(" ")[0] + "T00:00:00"))}</span>
+                                  <span style={{ fontSize: 12, color: "var(--text-muted)" }}>→ sell-by {fmtDate(lot.sellByDate)}</span>
+                                  <span style={{ marginLeft: "auto", fontWeight: 700, color: lot.daysToSellBy <= 0 ? "#dc2626" : lot.daysToSellBy < 30 ? "#dc2626" : lot.daysToSellBy < 90 ? "#c2410c" : "var(--text-primary)" }}>
+                                    {fmtDays(lot.daysToSellBy)}
+                                  </span>
+                                  <span style={{ fontSize: 12, color: "var(--text-muted)", minWidth: 60, textAlign: "right" }}>Qté {Math.round(lot.qty)}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Stock par emplacement */}
+                    <div style={{ flex: 1, overflowY: "auto", padding: "0 24px 20px" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 10 }}>Stock par emplacement</div>
+                      {dlvDetailLoading && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-muted)", fontSize: 13, padding: "16px 0" }}>
+                          <Spinner /> Chargement…
+                        </div>
+                      )}
+                      {!dlvDetailLoading && dlvDetailData.length === 0 && (
+                        <div style={{ color: "var(--text-muted)", fontSize: 13, padding: "12px 0" }}>Aucun stock interne trouvé.</div>
+                      )}
+                      {!dlvDetailLoading && dlvDetailData.length > 0 && (() => {
+                        // Grouper par emplacement
+                        const byLoc: Record<string, { name: string; rows: DlvDetailQuant[] }> = {};
+                        for (const q of dlvDetailData) {
+                          const k = q.locationFullName || q.locationName;
+                          if (!byLoc[k]) byLoc[k] = { name: k, rows: [] };
+                          byLoc[k].rows.push(q);
+                        }
+                        const totalQty = dlvDetailData.reduce((s, q) => s + q.qty, 0);
+                        const totalReserved = dlvDetailData.reduce((s, q) => s + q.reservedQty, 0);
+                        return (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            {Object.values(byLoc).map(loc => (
+                              <div key={loc.name} style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                                <div style={{ padding: "8px 14px", background: "var(--bg-raised)", fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                                  {loc.name}
+                                  <span style={{ marginLeft: "auto", fontWeight: 800, color: "var(--text-primary)" }}>
+                                    {Math.round(loc.rows.reduce((s, r) => s + r.qty, 0))} unités
+                                  </span>
+                                </div>
+                                {loc.rows.map((q, i) => (
+                                  <div key={i} style={{ padding: "8px 14px 8px 28px", borderTop: i > 0 ? "1px solid var(--border)" : undefined, display: "flex", alignItems: "center", gap: 8, background: "var(--bg-surface)", fontSize: 13 }}>
+                                    {q.lotName ? (
+                                      <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--text-muted)", background: "var(--bg-raised)", borderRadius: 4, padding: "1px 6px", border: "1px solid var(--border)" }}>
+                                        {q.lotName}
+                                      </span>
+                                    ) : (
+                                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Sans lot</span>
+                                    )}
+                                    {q.dlvDate && (
+                                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                                        DLV {fmtDate(new Date(q.dlvDate.split(" ")[0] + "T00:00:00"))}
+                                      </span>
+                                    )}
+                                    <span style={{ marginLeft: "auto", fontWeight: 700 }}>{Math.round(q.qty)}</span>
+                                    {q.reservedQty > 0 && (
+                                      <span style={{ fontSize: 11, color: "#c2410c", background: "#fff7ed", borderRadius: 4, padding: "1px 6px" }}>
+                                        {Math.round(q.reservedQty)} réservé
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                            <div style={{ fontSize: 12, color: "var(--text-muted)", paddingTop: 4, display: "flex", gap: 16 }}>
+                              <span>Total : <strong style={{ color: "var(--text-primary)" }}>{Math.round(totalQty)}</strong> unités</span>
+                              {totalReserved > 0 && <span>Réservé : <strong style={{ color: "#c2410c" }}>{Math.round(totalReserved)}</strong></span>}
+                              <span>Disponible : <strong style={{ color: "#15803d" }}>{Math.round(totalQty - totalReserved)}</strong></span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
           );

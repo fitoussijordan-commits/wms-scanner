@@ -2213,6 +2213,72 @@ export async function getDlvStockLots(session: OdooSession): Promise<{
 }
 
 // ============================================
+// DLV PRODUCT STOCK DETAIL
+// ============================================
+
+export async function getProductStockDetail(session: OdooSession, productId: number): Promise<{
+  locationId: number;
+  locationName: string;
+  locationFullName: string;
+  lotId: number | null;
+  lotName: string;
+  dlvDate: string | null;
+  qty: number;
+  reservedQty: number;
+}[]> {
+  // Quants internes pour ce produit
+  const quants: any[] = await searchRead(
+    session, "stock.quant",
+    [["product_id", "=", productId], ["location_id.usage", "=", "internal"], ["quantity", ">", 0]],
+    ["location_id", "lot_id", "quantity", "reserved_quantity"],
+    500
+  );
+  if (!quants.length) return [];
+
+  // Lots → dates d'expiration
+  const lotIds = Array.from(new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0]))) as number[];
+  const lotMap: Record<number, { name: string; dlvDate: string | null }> = {};
+  if (lotIds.length) {
+    const lots: any[] = await searchRead(
+      session, "stock.lot",
+      [["id", "in", lotIds]],
+      ["id", "name", "expiration_date", "use_date"],
+      lotIds.length
+    );
+    for (const l of lots) {
+      lotMap[l.id] = { name: l.name, dlvDate: l.expiration_date || l.use_date || null };
+    }
+  }
+
+  // Locations → nom complet
+  const locIds = Array.from(new Set(quants.map((q: any) => q.location_id[0]))) as number[];
+  const locMap: Record<number, string> = {};
+  if (locIds.length) {
+    const locs: any[] = await searchRead(
+      session, "stock.location",
+      [["id", "in", locIds]],
+      ["id", "complete_name"],
+      locIds.length
+    );
+    for (const l of locs) locMap[l.id] = l.complete_name;
+  }
+
+  return quants.map((q: any) => {
+    const lotInfo = q.lot_id ? (lotMap[q.lot_id[0]] || null) : null;
+    return {
+      locationId: q.location_id[0],
+      locationName: Array.isArray(q.location_id) ? q.location_id[1] : "",
+      locationFullName: locMap[q.location_id[0]] || (Array.isArray(q.location_id) ? q.location_id[1] : ""),
+      lotId: q.lot_id ? q.lot_id[0] : null,
+      lotName: lotInfo?.name || (q.lot_id ? q.lot_id[1] || "" : ""),
+      dlvDate: lotInfo?.dlvDate || null,
+      qty: q.quantity,
+      reservedQty: q.reserved_quantity || 0,
+    };
+  }).sort((a, b) => a.locationFullName.localeCompare(b.locationFullName));
+}
+
+// ============================================
 // ARTICLE CREATOR — codification + création Odoo
 // ============================================
 
@@ -2313,18 +2379,21 @@ export async function searchProductsByQuery(
 
 /** Met à jour temp_min_quantity sur plusieurs product.template en une fois */
 // ============================================
-// SORTIES ORPHELINES — stock.move sans picking
+// SORTIES ORPHELINES — stock en WH/Sortie sans livraison active
 // ============================================
 
-/** Retourne tous les stock.move en état actif (confirmed/waiting/assigned)
- *  sans picking_id (orphelins) dans des emplacements internes. */
+/** Retourne tout le stock dans les emplacements output (WH/Sortie)
+ *  en croisant avec les pickings actifs pour identifier ceux sans livraison en cours. */
 export async function getOrphanMoves(session: OdooSession): Promise<{
   id: number;
+  quantId: number;
   productId: number;
   ref: string;
   name: string;
+  lotName: string;
   qty: number;
   reservedQty: number;
+  uncoveredQty: number;
   state: string;
   date: string;
   locationName: string;
@@ -2332,123 +2401,93 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
   pickingState: string;
   reason: string;
 }[]> {
-  // Cas 1 : moves actifs sans picking du tout
-  const movesNoPicking: any[] = await searchRead(
-    session, "stock.move",
-    [
-      ["state", "in", ["confirmed", "waiting", "assigned", "partially_available"]],
-      ["picking_id", "=", false],
-      ["location_id.usage", "=", "internal"],
-    ],
-    ["id", "product_id", "product_qty", "reserved_availability", "state", "date", "location_id", "location_dest_id"],
-    500
-  );
-
-  // Cas 2 : moves actifs dont le picking est annulé ou déjà fait
-  const movesDeadPicking: any[] = await searchRead(
-    session, "stock.move",
-    [
-      ["state", "in", ["confirmed", "waiting", "assigned", "partially_available"]],
-      ["picking_id.state", "in", ["cancel", "done"]],
-      ["location_id.usage", "=", "internal"],
-    ],
-    ["id", "product_id", "product_qty", "reserved_availability", "state", "date", "location_id", "location_dest_id", "picking_id"],
-    500
-  );
-
-  // Cas 3 : quants avec reserved_quantity > 0 sans move.line actif associé
+  // 1. Tous les quants dans emplacements output (WH/Sortie)
   const quants: any[] = await searchRead(
     session, "stock.quant",
-    [["location_id.usage", "=", "internal"], ["reserved_quantity", ">", 0]],
-    ["id", "product_id", "location_id", "reserved_quantity", "lot_id"],
-    1000
+    [["location_id.usage", "=", "output"], ["quantity", ">", 0]],
+    ["id", "product_id", "location_id", "lot_id", "quantity", "reserved_quantity"],
+    2000
   );
-  // Trouver les quants qui n'ont aucune move.line active
-  let orphanQuants: any[] = [];
-  if (quants.length) {
-    const productIds = Array.from(new Set(quants.map((q: any) => q.product_id[0]))) as number[];
-    const activeLines: any[] = await searchRead(
+  if (!quants.length) return [];
+
+  // 2. Pickings actifs (assigned/waiting/confirmed) depuis ces emplacements
+  const outputLocIds = Array.from(new Set(quants.map((q: any) => q.location_id[0]))) as number[];
+  const activePicking: any[] = await searchRead(
+    session, "stock.picking",
+    [["state", "in", ["assigned", "waiting", "confirmed"]], ["location_id", "in", outputLocIds]],
+    ["id", "name", "state", "location_id", "scheduled_date"],
+    500
+  );
+  const activePickingIds = new Set(activePicking.map((p: any) => p.id));
+
+  // 3. Move.lines actifs depuis ces pickings → produit+lot couverts
+  type CoveredKey = string;
+  const coveredQty: Record<CoveredKey, number> = {};
+  if (activePicking.length) {
+    const moveLines: any[] = await searchRead(
       session, "stock.move.line",
-      [["state", "in", ["assigned", "partially_available"]], ["product_id", "in", productIds], ["location_id.usage", "=", "internal"]],
-      ["product_id", "location_id", "reserved_uom_qty", "lot_id"],
+      [["picking_id", "in", Array.from(activePickingIds)], ["state", "not in", ["done", "cancel"]]],
+      ["product_id", "lot_id", "location_id", "reserved_uom_qty"],
       5000
     );
-    // Somme des réservations actives par produit+emplacement
-    const activeMap: Record<string, number> = {};
-    for (const l of activeLines) {
-      const k = `${l.product_id[0]}_${l.location_id[0]}`;
-      activeMap[k] = (activeMap[k] || 0) + (l.reserved_uom_qty || 0);
+    for (const l of moveLines) {
+      const k = `${l.product_id[0]}_${l.location_id[0]}_${l.lot_id ? l.lot_id[0] : 0}`;
+      coveredQty[k] = (coveredQty[k] || 0) + (l.reserved_uom_qty || 0);
     }
-    orphanQuants = quants.filter((q: any) => {
-      const k = `${q.product_id[0]}_${q.location_id[0]}`;
-      return (activeMap[k] || 0) < q.reserved_quantity;
-    });
   }
 
-  const allMoves = [
-    ...movesNoPicking.map((m: any) => ({ ...m, _pickingState: "", _reason: "Aucun BL associé" })),
-    ...movesDeadPicking.map((m: any) => ({ ...m, _pickingState: m.picking_id?.[1] || "", _reason: "BL annulé/terminé" })),
-  ];
-
-  if (!allMoves.length && !orphanQuants.length) return [];
-
-  // Enrichir avec les default_code
-  const allProductIds = Array.from(new Set([
-    ...allMoves.map((m: any) => m.product_id[0]),
-    ...orphanQuants.map((q: any) => q.product_id[0]),
-  ])) as number[];
-  const products: any[] = allProductIds.length ? await searchRead(
+  // 4. Enrichir produits
+  const productIds = Array.from(new Set(quants.map((q: any) => q.product_id[0]))) as number[];
+  const products: any[] = await searchRead(
     session, "product.product",
-    [["id", "in", allProductIds]],
+    [["id", "in", productIds]],
     ["id", "default_code", "name"],
-    allProductIds.length
-  ) : [];
+    productIds.length
+  );
   const prodMap: Record<number, any> = {};
   for (const p of products) prodMap[p.id] = p;
 
-  const result: ReturnType<typeof getOrphanMoves> extends Promise<infer T> ? T : never[] = [];
-
-  // Déduplique par id de move
-  const seenIds = new Set<number>();
-  for (const m of allMoves) {
-    if (seenIds.has(m.id)) continue;
-    seenIds.add(m.id);
-    const prod = prodMap[m.product_id[0]];
-    result.push({
-      id: m.id,
-      productId: m.product_id[0],
-      ref: prod?.default_code || "",
-      name: prod?.name || m.product_id[1] || "",
-      qty: m.product_qty || 0,
-      reservedQty: m.reserved_availability || 0,
-      state: m.state,
-      date: m.date ? m.date.split(" ")[0] : "",
-      locationName: Array.isArray(m.location_id) ? m.location_id[1] : "",
-      locationDestName: Array.isArray(m.location_dest_id) ? m.location_dest_id[1] : "",
-      pickingState: m._pickingState || "",
-      reason: m._reason || "",
-    });
+  // 5. Enrichir lots
+  const lotIds = Array.from(new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0]))) as number[];
+  const lotMap: Record<number, string> = {};
+  if (lotIds.length) {
+    const lots: any[] = await searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "name"], lotIds.length);
+    for (const l of lots) lotMap[l.id] = l.name;
   }
 
-  // Ajouter les quants orphelins (affichés comme type spécial, id négatif pour différencier)
-  for (const q of orphanQuants) {
+  // 6. Calculer qté non couverte par un picking actif
+  const result: {
+    id: number; productId: number; ref: string; name: string; lotName: string;
+    qty: number; reservedQty: number; uncoveredQty: number; state: string; date: string;
+    locationName: string; locationDestName: string; pickingState: string; reason: string; quantId: number;
+  }[] = [];
+
+  for (const q of quants) {
+    const k = `${q.product_id[0]}_${q.location_id[0]}_${q.lot_id ? q.lot_id[0] : 0}`;
+    const covered = coveredQty[k] || 0;
+    const uncovered = Math.max(0, q.quantity - covered);
+    if (uncovered <= 0) continue; // entièrement couvert par un picking actif
     const prod = prodMap[q.product_id[0]];
     result.push({
-      id: -q.id, // id négatif = quant orphelin
+      id: q.id,
+      quantId: q.id,
       productId: q.product_id[0],
       ref: prod?.default_code || "",
       name: prod?.name || q.product_id[1] || "",
-      qty: q.reserved_quantity,
-      reservedQty: q.reserved_quantity,
-      state: "quant_orphan",
+      lotName: q.lot_id ? (lotMap[q.lot_id[0]] || q.lot_id[1] || "") : "",
+      qty: q.quantity,
+      reservedQty: q.reserved_quantity || 0,
+      uncoveredQty: uncovered,
+      state: "stranded",
       date: "",
       locationName: Array.isArray(q.location_id) ? q.location_id[1] : "",
       locationDestName: "",
       pickingState: "",
-      reason: "Réservation fantôme (quant sans move actif)",
+      reason: covered > 0 ? `${Math.round(covered)} couverts / ${Math.round(uncovered)} sans livraison` : "Aucune livraison active",
     });
   }
 
+  result.sort((a, b) => b.uncoveredQty - a.uncoveredQty);
   return result;
 }
 
