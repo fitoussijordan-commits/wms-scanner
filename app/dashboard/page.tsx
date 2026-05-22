@@ -467,7 +467,7 @@ export default function Dashboard() {
   const [dlvRows, setDlvRows] = useState<DlvRow[]>([]);
   const [dlvLoading, setDlvLoading] = useState(false);
   const [dlvSearch, setDlvSearch] = useState("");
-  const [dlvFilter, setDlvFilter] = useState<"all" | "alert" | "ok">("alert");
+  const [dlvFilter, setDlvFilter] = useState<"all" | "alert" | "ok" | "perished" | "critical" | "risk" | "watch" | "ok-only" | "unknown">("alert");
   const DLV_SELL_MARGIN_MONTHS = 12; // règle : ne vendre que si DLV > 12 mois
   const [dlvColWidths, setDlvColWidths] = useState<Record<string, number>>({ "Statut": 115, "Ref": 100, "Produit": 210, "Lot": 120, "DLV": 120, "Sell-by": 120, "J. restants": 90, "Qté stock": 85, "Conso/mois": 92, "Vendable": 85, "À risque": 85 });
   const dlvResizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null);
@@ -3457,7 +3457,12 @@ export default function Dashboard() {
           const search = dlvSearch.trim().toLowerCase();
           const filtered = dlvRows.filter(r => {
             const matchSearch = !search || r.ref.toLowerCase().includes(search) || r.name.toLowerCase().includes(search) || r.lotName.toLowerCase().includes(search);
-            const matchFilter = dlvFilter === "all" || (dlvFilter === "alert" && ["perished","critical","risk","watch"].includes(r.status)) || (dlvFilter === "ok" && ["ok","unknown"].includes(r.status));
+            const matchFilter =
+              dlvFilter === "all" ||
+              (dlvFilter === "alert" && ["perished","critical","risk","watch"].includes(r.status)) ||
+              (dlvFilter === "ok" && ["ok","unknown"].includes(r.status)) ||
+              (dlvFilter === "ok-only" && r.status === "ok") ||
+              r.status === dlvFilter;
             return matchSearch && matchFilter;
           });
           const counts = { perished: 0, critical: 0, risk: 0, watch: 0, ok: 0, unknown: 0 };
@@ -3467,34 +3472,38 @@ export default function Dashboard() {
           return (
             <div style={{ animation: "fadeIn .3s ease both" }}>
               {/* Header */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
                 <div>
                   <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Suivi DLV</h2>
                   <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Règle : vente possible uniquement si DLV &gt; 12 mois — stock à risque si la conso ne couvre pas avant la deadline</p>
                 </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                    <button className="wms-btn" onClick={() => dlvFileRef.current?.click()} disabled={dlvConsoImporting} style={{ flexShrink: 0 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexDirection: "column" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button className="wms-btn" onClick={() => dlvFileRef.current?.click()} disabled={dlvConsoImporting}>
                       {dlvConsoImporting ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>} Importer conso DLV
                     </button>
-                    {dlvAvgSyncedAt && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Màj {dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
                     <input ref={dlvFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={e => { const f = e.target.files?.[0]; if (f) importDlvConso(f); e.target.value = ""; }} style={{ display: "none" }} />
+                    <button className="wms-btn" onClick={loadDlv} disabled={dlvLoading}>
+                      {dlvLoading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Charger les lots
+                    </button>
                   </div>
-                  <button className="wms-btn" onClick={loadDlv} disabled={dlvLoading} style={{ flexShrink: 0 }}>
-                    {dlvLoading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Charger les lots
-                  </button>
+                  {dlvAvgSyncedAt && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Màj conso {dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
                 </div>
               </div>
 
               {/* Stats summary */}
               {dlvRows.length > 0 && (
                 <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-                  {(["perished","critical","risk","watch","ok","unknown"] as DlvRow["status"][]).map(s => counts[s] > 0 && (
-                    <div key={s} style={{ background: STATUS_CFG[s].bg, border: `1px solid ${STATUS_CFG[s].border}`, borderRadius: 10, padding: "10px 16px", minWidth: 90, textAlign: "center" }}>
-                      <div style={{ fontSize: 20, fontWeight: 900, color: STATUS_CFG[s].color }}>{counts[s]}</div>
-                      <div style={{ fontSize: 11, color: STATUS_CFG[s].color, fontWeight: 600 }}>{STATUS_CFG[s].label}</div>
-                    </div>
-                  ))}
+                  {(["perished","critical","risk","watch","ok","unknown"] as DlvRow["status"][]).map(s => counts[s] > 0 && (() => {
+                    const active = dlvFilter === s || (s === "ok" && dlvFilter === "ok-only");
+                    return (
+                      <button key={s} onClick={() => setDlvFilter(active ? "all" : s as any)}
+                        style={{ background: active ? STATUS_CFG[s].color : STATUS_CFG[s].bg, border: `2px solid ${active ? STATUS_CFG[s].color : STATUS_CFG[s].border}`, borderRadius: 10, padding: "10px 16px", minWidth: 90, textAlign: "center", cursor: "pointer", fontFamily: "inherit", transition: "all .15s", transform: active ? "translateY(-2px)" : "none", boxShadow: active ? `0 4px 12px ${STATUS_CFG[s].border}` : "none" }}>
+                        <div style={{ fontSize: 20, fontWeight: 900, color: active ? "#fff" : STATUS_CFG[s].color }}>{counts[s]}</div>
+                        <div style={{ fontSize: 11, color: active ? "#fff" : STATUS_CFG[s].color, fontWeight: 600 }}>{STATUS_CFG[s].label}</div>
+                      </button>
+                    );
+                  })())}
                 </div>
               )}
 
@@ -3502,11 +3511,14 @@ export default function Dashboard() {
               {dlvRows.length > 0 && (
                 <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
                   <input value={dlvSearch} onChange={e => setDlvSearch(e.target.value)} placeholder="Rechercher ref, nom, lot…" style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", minWidth: 220, outline: "none", background: "var(--bg-surface)", color: "var(--text-primary)" }} />
-                  {(["all","alert","ok"] as const).map(f => (
-                    <button key={f} onClick={() => setDlvFilter(f)} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid var(--border)", background: dlvFilter === f ? "var(--accent)" : "var(--bg-surface)", color: dlvFilter === f ? "#fff" : "var(--text-primary)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-                      {f === "all" ? `Tous (${dlvRows.length})` : f === "alert" ? `⚠ Alertes (${nbAlert})` : `✓ OK (${counts.ok + counts.unknown})`}
-                    </button>
-                  ))}
+                  {(["all","alert","ok"] as const).map(f => {
+                    const active = dlvFilter === f || (f === "ok" && dlvFilter === "ok-only");
+                    return (
+                      <button key={f} onClick={() => setDlvFilter(f)} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid var(--border)", background: active ? "var(--accent)" : "var(--bg-surface)", color: active ? "#fff" : "var(--text-primary)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                        {f === "all" ? `Tous (${dlvRows.length})` : f === "alert" ? `⚠ Alertes (${nbAlert})` : `✓ OK (${counts.ok + counts.unknown})`}
+                      </button>
+                    );
+                  })}
                   <button onClick={() => exportDlvExcel(filtered)} className="wms-btn" style={{ marginLeft: "auto" }}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export Excel
                   </button>
