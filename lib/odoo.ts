@@ -2324,48 +2324,132 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
   ref: string;
   name: string;
   qty: number;
+  reservedQty: number;
   state: string;
   date: string;
   locationName: string;
   locationDestName: string;
+  pickingState: string;
+  reason: string;
 }[]> {
-  const moves: any[] = await searchRead(
+  // Cas 1 : moves actifs sans picking du tout
+  const movesNoPicking: any[] = await searchRead(
     session, "stock.move",
     [
       ["state", "in", ["confirmed", "waiting", "assigned", "partially_available"]],
       ["picking_id", "=", false],
       ["location_id.usage", "=", "internal"],
     ],
-    ["id", "product_id", "product_qty", "state", "date", "location_id", "location_dest_id"],
+    ["id", "product_id", "product_qty", "reserved_availability", "state", "date", "location_id", "location_dest_id"],
     500
   );
-  if (!moves?.length) return [];
+
+  // Cas 2 : moves actifs dont le picking est annulé ou déjà fait
+  const movesDeadPicking: any[] = await searchRead(
+    session, "stock.move",
+    [
+      ["state", "in", ["confirmed", "waiting", "assigned", "partially_available"]],
+      ["picking_id.state", "in", ["cancel", "done"]],
+      ["location_id.usage", "=", "internal"],
+    ],
+    ["id", "product_id", "product_qty", "reserved_availability", "state", "date", "location_id", "location_dest_id", "picking_id"],
+    500
+  );
+
+  // Cas 3 : quants avec reserved_quantity > 0 sans move.line actif associé
+  const quants: any[] = await searchRead(
+    session, "stock.quant",
+    [["location_id.usage", "=", "internal"], ["reserved_quantity", ">", 0]],
+    ["id", "product_id", "location_id", "reserved_quantity", "lot_id"],
+    1000
+  );
+  // Trouver les quants qui n'ont aucune move.line active
+  let orphanQuants: any[] = [];
+  if (quants.length) {
+    const productIds = Array.from(new Set(quants.map((q: any) => q.product_id[0]))) as number[];
+    const activeLines: any[] = await searchRead(
+      session, "stock.move.line",
+      [["state", "in", ["assigned", "partially_available"]], ["product_id", "in", productIds], ["location_id.usage", "=", "internal"]],
+      ["product_id", "location_id", "reserved_uom_qty", "lot_id"],
+      5000
+    );
+    // Somme des réservations actives par produit+emplacement
+    const activeMap: Record<string, number> = {};
+    for (const l of activeLines) {
+      const k = `${l.product_id[0]}_${l.location_id[0]}`;
+      activeMap[k] = (activeMap[k] || 0) + (l.reserved_uom_qty || 0);
+    }
+    orphanQuants = quants.filter((q: any) => {
+      const k = `${q.product_id[0]}_${q.location_id[0]}`;
+      return (activeMap[k] || 0) < q.reserved_quantity;
+    });
+  }
+
+  const allMoves = [
+    ...movesNoPicking.map((m: any) => ({ ...m, _pickingState: "", _reason: "Aucun BL associé" })),
+    ...movesDeadPicking.map((m: any) => ({ ...m, _pickingState: m.picking_id?.[1] || "", _reason: "BL annulé/terminé" })),
+  ];
+
+  if (!allMoves.length && !orphanQuants.length) return [];
 
   // Enrichir avec les default_code
-  const productIds = Array.from(new Set(moves.map((m: any) => m.product_id[0]))) as number[];
-  const products: any[] = await searchRead(
+  const allProductIds = Array.from(new Set([
+    ...allMoves.map((m: any) => m.product_id[0]),
+    ...orphanQuants.map((q: any) => q.product_id[0]),
+  ])) as number[];
+  const products: any[] = allProductIds.length ? await searchRead(
     session, "product.product",
-    [["id", "in", productIds]],
+    [["id", "in", allProductIds]],
     ["id", "default_code", "name"],
-    productIds.length
-  );
+    allProductIds.length
+  ) : [];
   const prodMap: Record<number, any> = {};
   for (const p of products) prodMap[p.id] = p;
 
-  return moves.map((m: any) => {
+  const result: ReturnType<typeof getOrphanMoves> extends Promise<infer T> ? T : never[] = [];
+
+  // Déduplique par id de move
+  const seenIds = new Set<number>();
+  for (const m of allMoves) {
+    if (seenIds.has(m.id)) continue;
+    seenIds.add(m.id);
     const prod = prodMap[m.product_id[0]];
-    return {
+    result.push({
       id: m.id,
       productId: m.product_id[0],
       ref: prod?.default_code || "",
       name: prod?.name || m.product_id[1] || "",
       qty: m.product_qty || 0,
+      reservedQty: m.reserved_availability || 0,
       state: m.state,
       date: m.date ? m.date.split(" ")[0] : "",
       locationName: Array.isArray(m.location_id) ? m.location_id[1] : "",
       locationDestName: Array.isArray(m.location_dest_id) ? m.location_dest_id[1] : "",
-    };
-  });
+      pickingState: m._pickingState || "",
+      reason: m._reason || "",
+    });
+  }
+
+  // Ajouter les quants orphelins (affichés comme type spécial, id négatif pour différencier)
+  for (const q of orphanQuants) {
+    const prod = prodMap[q.product_id[0]];
+    result.push({
+      id: -q.id, // id négatif = quant orphelin
+      productId: q.product_id[0],
+      ref: prod?.default_code || "",
+      name: prod?.name || q.product_id[1] || "",
+      qty: q.reserved_quantity,
+      reservedQty: q.reserved_quantity,
+      state: "quant_orphan",
+      date: "",
+      locationName: Array.isArray(q.location_id) ? q.location_id[1] : "",
+      locationDestName: "",
+      pickingState: "",
+      reason: "Réservation fantôme (quant sans move actif)",
+    });
+  }
+
+  return result;
 }
 
 /** Annule une liste de stock.move orphelins (passe à state=cancel + libère réservation) */

@@ -3565,7 +3565,7 @@ export default function Dashboard() {
                 return (
                   <div className="wms-card" style={{ padding: 0, overflow: "hidden" }}>
                     <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 360px)" }}>
-                      <table style={{ borderSpacing: 0, borderCollapse: "separate", fontSize: 13, tableLayout: "fixed", width: COLS.reduce((s, c) => s + (dlvColWidths[c.key] || 100), 0) }}>
+                      <table style={{ borderSpacing: 0, borderCollapse: "separate", fontSize: 13, tableLayout: "fixed", width: `max(100%, ${COLS.reduce((s, c) => s + (dlvColWidths[c.key] || 100), 0)}px)` }}>
                         <colgroup>{COLS.map(c => <col key={c.key} style={{ width: dlvColWidths[c.key] || 100 }} />)}</colgroup>
                         <thead>
                           <tr>
