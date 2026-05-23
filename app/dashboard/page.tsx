@@ -242,6 +242,17 @@ const I = {
   filter: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
   sortAsc: <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>,
   sortDesc: <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>,
+  // Icônes pour Suivi Stock (remplacent emojis)
+  calendar: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
+  package: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16.5 9.4l-9-5.19"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>,
+  inbox: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>,
+  trash: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1.5 14a2 2 0 0 1-2 1.84H8.5A2 2 0 0 1 6.5 20L5 6"/><path d="M10 11v6M14 11v6"/></svg>,
+  pencil: <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>,
+  ban: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>,
+  alertTri: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+  rotate: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>,
+  clock: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+  close: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
 };
 
 const TABS = [
@@ -2705,111 +2716,127 @@ export default function Dashboard() {
         {tab === "stock-monitor" && (
           <div style={{animation:"fadeIn .3s ease both"}}>
             {/* Supplier date modal */}
-            {smSupModal&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000}}>
-              <div style={{background:"#fff",borderRadius:14,padding:28,width:360,boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}}>
-                <div style={{fontSize:15,fontWeight:800,marginBottom:4}}>📅 Rupture fournisseur</div>
-                <div style={{fontSize:12,color:"var(--text-muted)",marginBottom:16}}>{smSupModal.ref} — {smSupModal.name}</div>
+            {smSupModal&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",backdropFilter:"blur(2px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,animation:"fadeIn .15s ease both"}}>
+              <div style={{background:"#fff",borderRadius:12,padding:24,width:380,boxShadow:"0 20px 60px rgba(0,0,0,0.2)",border:"1px solid var(--border)"}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+                  <span style={{width:32,height:32,borderRadius:8,background:"var(--bg)",display:"inline-flex",alignItems:"center",justifyContent:"center",color:"var(--text-muted)"}}>{I.calendar}</span>
+                  <div style={{fontSize:15,fontWeight:600,color:"#0f172a"}}>Rupture fournisseur</div>
+                </div>
+                <div style={{fontSize:12,color:"var(--text-muted)",marginBottom:18,marginLeft:42}}>{smSupModal.ref} — {smSupModal.name}</div>
                 {smSupModal.cur==="9999-12-31"&&(
-                  <div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"10px 12px",fontSize:12,color:"#dc2626",fontWeight:700,marginBottom:14}}>⛔ Ce produit est actuellement en rupture définitive</div>
+                  <div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"10px 12px",fontSize:12,color:"#dc2626",fontWeight:600,marginBottom:14,display:"flex",alignItems:"center",gap:8}}>{I.ban} Ce produit est actuellement en rupture définitive</div>
                 )}
-                <label style={{fontSize:12,fontWeight:600,display:"flex",flexDirection:"column",gap:6}}>
+                <label style={{fontSize:12,fontWeight:600,display:"flex",flexDirection:"column",gap:6,color:"#0f172a"}}>
                   Date de prochaine dispo fournisseur
-                  <input type="date" value={smSupInput==="9999-12-31"?"":smSupInput} onChange={e=>setSmSupInput(e.target.value)} style={{padding:"10px 12px",border:"1px solid var(--border)",borderRadius:8,fontSize:13,fontFamily:"inherit"}}/>
+                  <input type="date" value={smSupInput==="9999-12-31"?"":smSupInput} onChange={e=>setSmSupInput(e.target.value)} style={{padding:"9px 12px",border:"1px solid var(--border)",borderRadius:8,fontSize:13,fontFamily:"inherit"}}/>
                 </label>
-                <div style={{fontSize:11,color:"var(--text-muted)",marginTop:8}}>Laisse vide → livraison standard (15 du mois choisi).</div>
+                <div style={{fontSize:11,color:"var(--text-muted)",marginTop:8}}>Vide = livraison standard (15 du mois choisi)</div>
                 <div style={{display:"flex",gap:8,marginTop:18}}>
                   <button onClick={()=>{setSmSupModal(null);setSmSupInput("");}} className="wms-btn" style={{flex:1}}>Annuler</button>
-                  <button onClick={()=>smSaveSupDate()} className="wms-btn wms-btn-primary" style={{flex:2}}>Enregistrer date</button>
+                  <button onClick={()=>smSaveSupDate()} className="wms-btn wms-btn-primary" style={{flex:2}}>Enregistrer</button>
                 </div>
                 <div style={{display:"flex",gap:8,marginTop:8}}>
                   <button onClick={()=>smSaveSupDate("9999-12-31")}
-                    style={{flex:1,padding:"8px 0",background:"#111827",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700}}>
-                    ⛔ Rupture définitive
+                    style={{flex:1,padding:"8px 0",background:"#0f172a",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600,display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6}}>
+                    {I.ban} Rupture définitive
                   </button>
                   {smSupModal.cur&&<button onClick={()=>smSaveSupDate(null)}
-                    style={{flex:1,padding:"8px 0",background:"#fef2f2",color:"var(--danger)",border:"1px solid #fecaca",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>
-                    ✅ Effacer rupture
+                    style={{flex:1,padding:"8px 0",background:"#fff",color:"var(--text-muted)",border:"1px solid var(--border)",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit",display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6}}>
+                    {I.close} Effacer
                   </button>}
                 </div>
               </div>
             </div>}
 
             {/* Header */}
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24,flexWrap:"wrap",gap:16}}>
               <div>
-                <h2 style={{fontSize:22,fontWeight:800,letterSpacing:"-.3px",marginBottom:4}}>Suivi Stock</h2>
-                <p style={{fontSize:13,color:"var(--text-muted)"}}>Stock en temps réel · Conso moyenne 12 mois (OUT) · Livraison le 15 du mois suivant</p>
+                <h2 style={{fontSize:20,fontWeight:700,letterSpacing:"-.2px",marginBottom:4,color:"#0f172a"}}>Suivi stock</h2>
+                <p style={{fontSize:12.5,color:"var(--text-muted)",lineHeight:1.5}}>Stock temps réel · Conso moyenne 12 mois · Livraison standard le 15 du mois</p>
               </div>
-              <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-                <div style={{display:"flex",alignItems:"center",gap:6}}>
-                  <span style={{fontSize:12,color:"var(--text-muted)",whiteSpace:"nowrap"}}>📦 Prochaine récep.</span>
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,padding:"6px 10px",border:"1px solid var(--border)",borderRadius:8,background:"#fff"}}>
+                  <span style={{color:"var(--text-muted)",display:"inline-flex"}}>{I.package}</span>
+                  <span style={{fontSize:12,color:"var(--text-muted)",whiteSpace:"nowrap"}}>Prochaine récep.</span>
                   <select value={smDeliveryMonth} onChange={e=>smSetDeliveryMonth(e.target.value)}
-                    style={{padding:"7px 10px",border:"1px solid var(--border)",borderRadius:8,fontSize:13,fontFamily:"inherit",cursor:"pointer",outline:"none",background:"#fff"}}>
+                    style={{padding:"3px 4px",border:"none",fontSize:13,fontFamily:"inherit",cursor:"pointer",outline:"none",background:"transparent",fontWeight:600,color:"#0f172a"}}>
                     {smMonthOptions.map(o=><option key={o.val} value={o.val}>{o.label}</option>)}
                   </select>
                 </div>
                 <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth)} disabled={smLoading} title="Refresh stock Odoo — utilise la conso en cache">{smLoading?<Spinner/>:I.refresh} Actualiser</button>
                 <button className="wms-btn" onClick={()=>smLoad(smDeliveryMonth,true)} disabled={smLoading}
-                  title={consoSyncedAt ? `Sync conso 12 mois (màj ${consoSyncedAt.toLocaleDateString("fr-FR")})` : "Sync conso 12 mois depuis Odoo"}
-                  style={{borderColor:"#8b5cf6",color:"#7c3aed"}}>
-                  {smLoading?<Spinner/>:<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Sync conso{consoSyncedAt&&<span style={{fontSize:10,opacity:.7,marginLeft:4}}>{consoSyncedAt.toLocaleDateString("fr-FR")}</span>}
+                  title={consoSyncedAt ? `Sync conso 12 mois (màj ${consoSyncedAt.toLocaleDateString("fr-FR")})` : "Sync conso 12 mois depuis Odoo"}>
+                  {smLoading?<Spinner/>:I.rotate} Sync conso{consoSyncedAt&&<span style={{fontSize:10,opacity:.6,marginLeft:4,fontWeight:500}}>{consoSyncedAt.toLocaleDateString("fr-FR")}</span>}
                 </button>
                 <input ref={smFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={smImportExcel} style={{display:"none"}}/>
-                <button className="wms-btn wms-btn-primary" onClick={()=>smFileRef.current?.click()} disabled={smLoading}>📤 Importer refs</button>
+                <button className="wms-btn wms-btn-primary" onClick={()=>smFileRef.current?.click()} disabled={smLoading}>{I.upload} Importer refs</button>
                 <input ref={smOrderFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={smImportOrder} style={{display:"none"}}/>
-                <button className="wms-btn" onClick={()=>smOrderFileRef.current?.click()} disabled={smLoading} style={{borderColor:"#8b5cf6",color:"#7c3aed"}} title="Order confirmation fournisseur → colonne Attendu">📦 Order conf.</button>
+                <button className="wms-btn" onClick={()=>smOrderFileRef.current?.click()} disabled={smLoading} title="Order confirmation fournisseur → colonne Attendu">{I.package} Order conf.</button>
                 {Object.keys(smExpected).length>0&&(
-                  <button className="wms-btn" onClick={smClearOrderConf} title="Vider l'order confirmation" style={{borderColor:"#ef4444",color:"#ef4444"}}>🗑 Vider order</button>
+                  <button className="wms-btn" onClick={smClearOrderConf} title="Vider l'order confirmation" style={{color:"#dc2626"}}>{I.trash} Vider</button>
                 )}
               </div>
             </div>
 
-            {smMsg&&<div style={{fontSize:13,color:"var(--accent)",marginBottom:12}}>⏳ {smMsg}</div>}
+            {smMsg&&<div style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12.5,color:"var(--accent)",marginBottom:14,padding:"6px 12px",background:"var(--accent-soft)",borderRadius:6}}>{I.clock} {smMsg}</div>}
 
             {/* No refs */}
             {smRefs.length===0&&!smLoading&&(
-              <div style={{background:"var(--bg)",border:"1px solid var(--border)",borderRadius:14,padding:48,textAlign:"center"}}>
-                <div style={{fontSize:36,marginBottom:12}}>📋</div>
-                <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>Aucune référence chargée</div>
-                <p style={{fontSize:13,color:"var(--text-muted)",marginBottom:20}}>Importe ton fichier Excel avec tes ~350 références à surveiller.</p>
-                <p style={{fontSize:12,color:"var(--text-muted)",background:"#f8fafc",padding:"12px 16px",borderRadius:8,display:"inline-block",textAlign:"left"}}>
-                  <strong>Format :</strong> colonne "Ref" (ou "Code", "SKU"…) avec les références Odoo. Colonne "Nom" optionnelle.
+              <div style={{background:"#fff",border:"1px solid var(--border)",borderRadius:12,padding:56,textAlign:"center"}}>
+                <div style={{width:48,height:48,borderRadius:12,background:"var(--bg)",display:"inline-flex",alignItems:"center",justifyContent:"center",color:"var(--text-muted)",marginBottom:14}}>{I.inbox}</div>
+                <div style={{fontSize:15,fontWeight:600,marginBottom:6,color:"#0f172a"}}>Aucune référence chargée</div>
+                <p style={{fontSize:13,color:"var(--text-muted)",marginBottom:20}}>Importez votre fichier Excel avec les références à surveiller.</p>
+                <p style={{fontSize:12,color:"var(--text-muted)",background:"var(--bg)",padding:"10px 14px",borderRadius:8,display:"inline-block",textAlign:"left",border:"1px solid var(--border)"}}>
+                  <strong style={{color:"#0f172a"}}>Format :</strong> colonne "Ref" (ou "Code", "SKU"…) avec les références Odoo. Colonne "Nom" optionnelle.
                 </p>
               </div>
             )}
 
             {smRefs.length>0&&(
               <>
-                {/* KPIs */}
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:18}}>
+                {/* KPIs — design épuré, fond blanc, indicateur point coloré */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:18}}>
                   {([
-                    {label:"Références",val:smRefs.length,color:"#3b82f6",bg:"#eff6ff",f:null},
-                    {label:"🔴 Critiques",val:smCounts.critical,color:"#ef4444",bg:"#fef2f2",f:"critical"},
-                    {label:"🟡 Alertes",val:smCounts.alert,color:"#f59e0b",bg:"#fffbeb",f:"alert"},
-                    {label:"🟢 OK",val:smCounts.ok,color:"#22c55e",bg:"#f0fdf4",f:"ok"},
-                  ] as any[]).map(({label,val,color,bg,f})=>(
-                    <div key={label} onClick={()=>f&&setSmFilter((p:any)=>p===f?"all":f)} style={{background:bg,border:`1px solid ${color}22`,borderRadius:12,padding:"14px 18px",cursor:f?"pointer":"default",outline:smFilter===f?`2px solid ${color}`:"none"}}>
-                      <div style={{fontSize:11,fontWeight:700,color,textTransform:"uppercase",letterSpacing:.5}}>{label}</div>
-                      <div style={{fontSize:30,fontWeight:900,color,lineHeight:1.2}}>{val}</div>
-                    </div>
-                  ))}
+                    {label:"Références",val:smRefs.length,color:"#64748b",f:null},
+                    {label:"Critiques",val:smCounts.critical,color:"#dc2626",f:"critical"},
+                    {label:"Alertes",val:smCounts.alert,color:"#d97706",f:"alert"},
+                    {label:"OK",val:smCounts.ok,color:"#16a34a",f:"ok"},
+                  ] as any[]).map(({label,val,color,f})=>{
+                    const active=smFilter===f;
+                    return(
+                      <div key={label} onClick={()=>f&&setSmFilter((p:any)=>p===f?"all":f)}
+                        style={{background:"#fff",border:`1px solid ${active?color:"var(--border)"}`,borderRadius:10,padding:"12px 16px",cursor:f?"pointer":"default",transition:"border-color .15s, box-shadow .15s",boxShadow:active?`0 0 0 1px ${color}`:"none"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+                          <span style={{width:6,height:6,borderRadius:"50%",background:color,display:"inline-block"}}/>
+                          <div style={{fontSize:11.5,fontWeight:500,color:"var(--text-muted)",letterSpacing:.1}}>{label}</div>
+                        </div>
+                        <div style={{fontSize:22,fontWeight:700,color:"#0f172a",lineHeight:1.1,fontVariantNumeric:"tabular-nums"}}>{val}</div>
+                      </div>
+                    );
+                  })}
                 </div>
 
-                {/* Filters */}
+                {/* Filters — segmented control + search clean */}
                 <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
-                  {(["all","critical","alert","ok"] as const).map(f=>(
-                    <button key={f} onClick={()=>setSmFilter(f)} className="wms-btn" style={{borderRadius:20,background:smFilter===f?"var(--accent)":"#fff",color:smFilter===f?"#fff":"var(--text-muted)",border:`1px solid ${smFilter===f?"var(--accent)":"var(--border)"}`}}>
-                      {{all:"Tout",critical:"Critiques",alert:"Alertes",ok:"OK"}[f]}
-                    </button>
-                  ))}
-                  <input placeholder="🔍 Ref ou nom..." value={smSearch} onChange={e=>setSmSearch(e.target.value)}
-                    style={{marginLeft:"auto",padding:"7px 12px",border:"1px solid var(--border)",borderRadius:8,fontSize:13,fontFamily:"inherit",width:220,outline:"none"}}/>
-                  <span style={{fontSize:12,color:"var(--text-muted)"}}>{smFiltered.length} ligne{smFiltered.length!==1?"s":""}</span>
+                  <div style={{display:"inline-flex",background:"var(--bg)",borderRadius:8,padding:3,border:"1px solid var(--border)"}}>
+                    {(["all","critical","alert","ok"] as const).map(f=>(
+                      <button key={f} onClick={()=>setSmFilter(f)}
+                        style={{padding:"5px 14px",border:"none",background:smFilter===f?"#fff":"transparent",color:smFilter===f?"#0f172a":"var(--text-muted)",fontSize:12.5,fontWeight:smFilter===f?600:500,fontFamily:"inherit",borderRadius:6,cursor:"pointer",boxShadow:smFilter===f?"0 1px 2px rgba(0,0,0,.06)":"none",transition:"all .15s"}}>
+                        {{all:"Tout",critical:"Critiques",alert:"Alertes",ok:"OK"}[f]}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:6,padding:"6px 10px",border:"1px solid var(--border)",borderRadius:8,background:"#fff",width:240}}>
+                    <span style={{color:"var(--text-muted)",display:"inline-flex"}}>{I.search}</span>
+                    <input placeholder="Référence ou nom" value={smSearch} onChange={e=>setSmSearch(e.target.value)}
+                      style={{border:"none",fontSize:13,fontFamily:"inherit",outline:"none",flex:1,background:"transparent"}}/>
+                  </div>
+                  <span style={{fontSize:12,color:"var(--text-muted)",fontVariantNumeric:"tabular-nums"}}>{smFiltered.length} ligne{smFiltered.length!==1?"s":""}</span>
                   <button className="wms-btn" onClick={smExportExcel} style={{whiteSpace:"nowrap"}}>
-                    📥 {smSelected.size>0?`Exporter ${smSelected.size} sél.`:"Exporter tout"}
+                    {I.download} {smSelected.size>0?`Exporter ${smSelected.size}`:"Exporter tout"}
                   </button>
-                  <button className="wms-btn" onClick={smResetThresholds} title="Remet tous les seuils à 1× conso/mois" style={{whiteSpace:"nowrap",borderColor:"#f59e0b",color:"#b45309"}}>
-                    🔄 Seuils = conso
+                  <button className="wms-btn" onClick={smResetThresholds} title="Remet tous les seuils à 1× conso/mois" style={{whiteSpace:"nowrap"}}>
+                    {I.rotate} Seuils = conso
                   </button>
                 </div>
 
@@ -2862,7 +2889,7 @@ export default function Dashboard() {
                                 ):(
                                   <div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"flex-end"}}>
                                     {row.conso>0&&row.threshold>0&&(row.threshold<row.conso*0.5||row.threshold>row.conso*2)&&(
-                                      <span title={`Conso = ${row.conso} — seuil semble incorrect`} style={{fontSize:14,cursor:"default"}}>⚠️</span>
+                                      <span title={`Conso = ${row.conso} — seuil semble incorrect`} style={{cursor:"default",color:"#d97706",display:"inline-flex"}}>{I.alertTri}</span>
                                     )}
                                     <button onClick={()=>setSmEditThr({ref:row.ref,val:String(row.threshold)})}
                                       style={{background:"transparent",border:"1px dashed var(--border)",borderRadius:6,padding:"3px 10px",cursor:"pointer",fontSize:13,fontFamily:"inherit",minWidth:44}}>
@@ -2874,19 +2901,25 @@ export default function Dashboard() {
                               <td style={{padding:"10px 12px",textAlign:"right",fontWeight:700,color:sc[row.status]}}>
                                 {row.status==="not_found"?"—":row.daysLeft>=999?"∞":`${row.daysLeft}j`}
                               </td>
-                              <td style={{padding:"10px 12px",fontSize:12,color:row.supplierDate==="9999-12-31"?"#111827":row.supplierDate?"var(--danger)":"var(--text-muted)",fontWeight:row.supplierDate?700:400}}>
-                                {row.supplierDate==="9999-12-31"?"⛔ Rupture déf.":(row.supplierDate?"⚠️ ":"")+( row.status!=="not_found"?`${row.delivLabel} (${row.daysUntilDeliv}j)`:"-")}
+                              <td style={{padding:"10px 12px",fontSize:12,color:row.supplierDate==="9999-12-31"?"#0f172a":row.supplierDate?"var(--danger)":"var(--text-muted)",fontWeight:row.supplierDate?600:400}}>
+                                {row.supplierDate==="9999-12-31"
+                                  ? <span style={{display:"inline-flex",alignItems:"center",gap:5}}>{I.ban} Rupture déf.</span>
+                                  : row.supplierDate
+                                    ? <span style={{display:"inline-flex",alignItems:"center",gap:5}}>{I.alertTri} {row.delivLabel} ({row.daysUntilDeliv}j)</span>
+                                    : row.status!=="not_found" ? `${row.delivLabel} (${row.daysUntilDeliv}j)` : "—"}
                               </td>
                               <td style={{padding:"10px 12px"}}>
-                                <span style={{display:"inline-block",padding:"3px 10px",borderRadius:20,background:`${sc[row.status]}18`,color:sc[row.status],fontSize:11,fontWeight:700,border:`1px solid ${sc[row.status]}44`}}>
+                                <span style={{display:"inline-flex",alignItems:"center",gap:6,padding:"3px 9px 3px 8px",borderRadius:6,background:`${sc[row.status]}10`,color:sc[row.status],fontSize:11.5,fontWeight:600,border:`1px solid ${sc[row.status]}33`}}>
+                                  <span style={{width:5,height:5,borderRadius:"50%",background:sc[row.status],display:"inline-block"}}/>
                                   {{ok:"OK",alert:"Alerte",critical:"Critique",no_data:"Pas de données",not_found:"Introuvable"}[row.status]}
                                 </span>
                               </td>
                               <td style={{padding:"8px 12px"}}>
                                 {row.status!=="not_found"&&(
                                   <button onClick={()=>{setSmSupModal({ref:row.ref,name:row.name,cur:row.supplierDate||""});setSmSupInput(row.supplierDate||"");}}
-                                    style={{padding:"4px 10px",border:`1px solid ${row.supplierDate?"#ef4444":"var(--border)"}`,borderRadius:6,background:row.supplierDate?"#fef2f2":"#fff",color:row.supplierDate?"#ef4444":"var(--text-muted)",cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>
-                                    {row.supplierDate?"📅 Modif.":"📅 Rupture"}
+                                    title={row.supplierDate?"Modifier la rupture fournisseur":"Déclarer une rupture fournisseur"}
+                                    style={{display:"inline-flex",alignItems:"center",gap:5,padding:"4px 9px",border:`1px solid ${row.supplierDate?"#fecaca":"var(--border)"}`,borderRadius:6,background:row.supplierDate?"#fef2f2":"#fff",color:row.supplierDate?"#dc2626":"var(--text-muted)",cursor:"pointer",fontSize:11.5,fontFamily:"inherit",fontWeight:500}}>
+                                    {I.calendar}{row.supplierDate?"Modifier":"Rupture"}
                                   </button>
                                 )}
                               </td>
@@ -2900,11 +2933,11 @@ export default function Dashboard() {
                     </table>
                   </div>
                 </div>
-                <div style={{display:"flex",gap:20,marginTop:10,fontSize:11,color:"var(--text-muted)",flexWrap:"wrap"}}>
-                  <span>🔴 <strong>Critique</strong> : rupture avant la livraison</span>
-                  <span>🟡 <strong>Alerte</strong> : moins de 14j de marge ou sous le seuil</span>
-                  <span>🟢 <strong>OK</strong> : stock suffisant</span>
-                  <span style={{marginLeft:"auto"}}>Seuils cliquables · Livraison standard = 15 du mois suivant</span>
+                <div style={{display:"flex",gap:18,marginTop:12,fontSize:11.5,color:"var(--text-muted)",flexWrap:"wrap",alignItems:"center"}}>
+                  <span style={{display:"inline-flex",alignItems:"center",gap:6}}><span style={{width:6,height:6,borderRadius:"50%",background:"#dc2626"}}/><strong style={{color:"#0f172a",fontWeight:600}}>Critique</strong> : rupture avant la livraison</span>
+                  <span style={{display:"inline-flex",alignItems:"center",gap:6}}><span style={{width:6,height:6,borderRadius:"50%",background:"#d97706"}}/><strong style={{color:"#0f172a",fontWeight:600}}>Alerte</strong> : moins de 14j de marge ou sous le seuil</span>
+                  <span style={{display:"inline-flex",alignItems:"center",gap:6}}><span style={{width:6,height:6,borderRadius:"50%",background:"#16a34a"}}/><strong style={{color:"#0f172a",fontWeight:600}}>OK</strong> : stock suffisant</span>
+                  <span style={{marginLeft:"auto",opacity:.7}}>Seuils cliquables · Livraison standard = 15 du mois</span>
                 </div>
               </>
             )}
