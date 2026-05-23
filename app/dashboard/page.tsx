@@ -3691,13 +3691,23 @@ export default function Dashboard() {
         {tab === "dlv" && (() => {
           const fmtDate = (d: Date) => d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
           const fmtDays = (n: number) => n <= 0 ? "Dépassé" : n < 30 ? `${n}j` : n < 365 ? `${Math.round(n / 30)}mois` : `${(n / 365).toFixed(1)}ans`;
-          const STATUS_CFG: Record<DlvRow["status"], { label: string; color: string; bg: string; border: string }> = {
-            overdue:  { label: "⛔ Hors délai", color: "#7c2d12", bg: "#fef2f2", border: "#fca5a5" },
-            critical: { label: "🔴 Critique",   color: "#dc2626", bg: "#fef2f2", border: "#fca5a5" },
-            risk:     { label: "🟠 Risque",    color: "#c2410c", bg: "#fff7ed", border: "#fed7aa" },
-            watch:    { label: "🟡 Attention", color: "#b45309", bg: "#fefce8", border: "#fde68a" },
-            ok:       { label: "🟢 OK",        color: "#15803d", bg: "#f0fdf4", border: "#bbf7d0" },
-            unknown:  { label: "⚪ Sans conso", color: "#64748b", bg: "#f8fafc", border: "#e2e8f0" },
+          // Palette epuree — couleurs plus sourdes, badges avec point colore (pas d'emojis)
+          const STATUS_CFG: Record<DlvRow["status"], { label: string; color: string }> = {
+            overdue:  { label: "Hors delai",  color: "#7c2d12" },
+            critical: { label: "Critique",    color: "#dc2626" },
+            risk:     { label: "Risque",      color: "#c2410c" },
+            watch:    { label: "Attention",   color: "#b45309" },
+            ok:       { label: "OK",          color: "#16a34a" },
+            unknown:  { label: "Sans conso",  color: "#64748b" },
+          };
+          const statusBadge = (s: DlvRow["status"]) => {
+            const cfg = STATUS_CFG[s];
+            return (
+              <span style={{display:"inline-flex",alignItems:"center",gap:6,padding:"3px 9px 3px 8px",borderRadius:6,background:`${cfg.color}10`,color:cfg.color,fontSize:11.5,fontWeight:600,border:`1px solid ${cfg.color}33`,whiteSpace:"nowrap"}}>
+                <span style={{width:5,height:5,borderRadius:"50%",background:cfg.color,display:"inline-block"}}/>
+                {cfg.label}
+              </span>
+            );
           };
           const search = dlvSearch.trim().toLowerCase();
           const filtered = dlvRows.filter(r => {
@@ -3717,64 +3727,80 @@ export default function Dashboard() {
           return (
             <div style={{ animation: "fadeIn .3s ease both" }}>
               {/* Header */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 16 }}>
                 <div>
-                  <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Suivi DLV</h2>
-                  <p style={{ fontSize: 13, color: "var(--text-muted)" }}>Règle standard : DLV &minus; 12 mois · Souplesse (échantillons / miniatures / testeurs) : DLV &minus; 4 mois · Minimum {DLV_MIN_MONTHS} mois d&apos;historique requis</p>
+                  <h2 style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-.2px", marginBottom: 4, color: "#0f172a" }}>Suivi DLV</h2>
+                  <p style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>Regle standard : DLV &minus; 12 mois · Souplesse (echantillons / miniatures / testeurs) : DLV &minus; 4 mois · Min. {DLV_MIN_MONTHS} mois d&apos;historique requis</p>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
                   <button className="wms-btn" onClick={syncDlvConsoFromOdoo} disabled={dlvConsoImporting}
-                    title={dlvAvgSyncedAt ? `Sync conso 12 mois (màj ${dlvAvgSyncedAt.toLocaleDateString("fr-FR")})` : "Sync conso 12 mois depuis Odoo"}
-                    style={{borderColor:"#8b5cf6",color:"#7c3aed"}}>
-                    {dlvConsoImporting ? <Spinner /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Sync conso{dlvAvgSyncedAt&&<span style={{fontSize:10,opacity:.7,marginLeft:4}}>{dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
+                    title={dlvAvgSyncedAt ? `Sync conso 12 mois (maj ${dlvAvgSyncedAt.toLocaleDateString("fr-FR")})` : "Sync conso 12 mois depuis Odoo"}>
+                    {dlvConsoImporting ? <Spinner /> : I.rotate} Sync conso{dlvAvgSyncedAt && <span style={{ fontSize: 10, opacity: .6, marginLeft: 4, fontWeight: 500 }}>{dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
                   </button>
-                  <button className="wms-btn" onClick={loadDlv} disabled={dlvLoading}>
-                    {dlvLoading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>} Charger les lots
+                  <button className="wms-btn wms-btn-primary" onClick={loadDlv} disabled={dlvLoading}>
+                    {dlvLoading ? <Spinner /> : I.refresh} Charger les lots
                   </button>
                 </div>
               </div>
 
-              {/* Stats summary */}
+              {/* KPI cards — design epure, fond blanc, point colore */}
               {dlvRows.length > 0 && (
-                <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-                  {(["overdue","critical","risk","watch","ok","unknown"] as DlvRow["status"][]).map(s => counts[s] > 0 && (() => {
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 18 }}>
+                  {(["overdue","critical","risk","watch","ok","unknown"] as DlvRow["status"][]).map(s => {
                     const active = dlvFilter === s || (s === "ok" && dlvFilter === "ok-only");
+                    const color = STATUS_CFG[s].color;
+                    const isEmpty = counts[s] === 0;
                     return (
-                      <button key={s} onClick={() => setDlvFilter(active ? "all" : s as any)}
-                        style={{ background: active ? STATUS_CFG[s].color : STATUS_CFG[s].bg, border: `2px solid ${active ? STATUS_CFG[s].color : STATUS_CFG[s].border}`, borderRadius: 10, padding: "10px 16px", minWidth: 90, textAlign: "center", cursor: "pointer", fontFamily: "inherit", transition: "all .15s", transform: active ? "translateY(-2px)" : "none", boxShadow: active ? `0 4px 12px ${STATUS_CFG[s].border}` : "none" }}>
-                        <div style={{ fontSize: 20, fontWeight: 900, color: active ? "#fff" : STATUS_CFG[s].color }}>{counts[s]}</div>
-                        <div style={{ fontSize: 11, color: active ? "#fff" : STATUS_CFG[s].color, fontWeight: 600 }}>{STATUS_CFG[s].label}</div>
-                      </button>
+                      <div key={s} onClick={() => !isEmpty && setDlvFilter(active ? "all" : s as any)}
+                        style={{ background: "#fff", border: `1px solid ${active ? color : "var(--border)"}`, borderRadius: 10, padding: "12px 16px", cursor: isEmpty ? "default" : "pointer", opacity: isEmpty ? .5 : 1, transition: "border-color .15s, box-shadow .15s", boxShadow: active ? `0 0 0 1px ${color}` : "none" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, display: "inline-block" }} />
+                          <div style={{ fontSize: 11.5, fontWeight: 500, color: "var(--text-muted)" }}>{STATUS_CFG[s].label}</div>
+                        </div>
+                        <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", lineHeight: 1.1, fontVariantNumeric: "tabular-nums" }}>{counts[s]}</div>
+                      </div>
                     );
-                  })())}
+                  })}
                 </div>
               )}
 
-              {/* Filters */}
+              {/* Filtres + recherche — segmented control + search clean */}
               {dlvRows.length > 0 && (
-                <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-                  <input value={dlvSearch} onChange={e => setDlvSearch(e.target.value)} placeholder="Rechercher ref, nom, lot…" style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", minWidth: 220, outline: "none", background: "var(--bg-surface)", color: "var(--text-primary)" }} />
-                  {(["all","alert","ok"] as const).map(f => {
-                    const active = dlvFilter === f || (f === "ok" && dlvFilter === "ok-only");
-                    return (
-                      <button key={f} onClick={() => setDlvFilter(f)} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid var(--border)", background: active ? "var(--accent)" : "var(--bg-surface)", color: active ? "#fff" : "var(--text-primary)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-                        {f === "all" ? `Tous (${dlvRows.length})` : f === "alert" ? `⚠ Alertes (${nbAlert})` : `✓ OK (${counts.ok + counts.unknown})`}
-                      </button>
-                    );
-                  })}
+                <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+                  <div style={{ display: "inline-flex", background: "var(--bg)", borderRadius: 8, padding: 3, border: "1px solid var(--border)" }}>
+                    {(["all","alert","ok"] as const).map(f => {
+                      const active = dlvFilter === f || (f === "ok" && dlvFilter === "ok-only");
+                      return (
+                        <button key={f} onClick={() => setDlvFilter(f)}
+                          style={{ padding: "5px 14px", border: "none", background: active ? "#fff" : "transparent", color: active ? "#0f172a" : "var(--text-muted)", fontSize: 12.5, fontWeight: active ? 600 : 500, fontFamily: "inherit", borderRadius: 6, cursor: "pointer", boxShadow: active ? "0 1px 2px rgba(0,0,0,.06)" : "none", transition: "all .15s" }}>
+                          {f === "all" ? `Tous (${dlvRows.length})` : f === "alert" ? `Alertes (${nbAlert})` : `OK (${counts.ok + counts.unknown})`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 8, background: "#fff", width: 260 }}>
+                    <span style={{ color: "var(--text-muted)", display: "inline-flex" }}>{I.search}</span>
+                    <input value={dlvSearch} onChange={e => setDlvSearch(e.target.value)} placeholder="Reference, nom ou lot"
+                      style={{ border: "none", fontSize: 13, fontFamily: "inherit", outline: "none", flex: 1, background: "transparent" }} />
+                  </div>
+                  <span style={{ fontSize: 12, color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>{filtered.length} lot{filtered.length !== 1 ? "s" : ""}</span>
                   <button onClick={() => exportDlvExcel(filtered)} className="wms-btn" style={{ marginLeft: "auto" }}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export Excel
+                    {I.download} Export Excel
                   </button>
                 </div>
               )}
 
               {/* Empty state */}
               {dlvRows.length === 0 && !dlvLoading && (
-                <div style={{ textAlign: "center", padding: "60px 20px", color: "var(--text-muted)" }}>
-                  <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Aucune donnée chargée</div>
-                  <div style={{ fontSize: 13 }}>Clique sur «&nbsp;Charger les lots&nbsp;» pour récupérer les DLV depuis Odoo.</div>
-                  {Object.keys(dlvAvgMonthlyByRef).length === 0 && <div style={{ fontSize: 12, color: "var(--warning)", marginTop: 10 }}>⚠ Clique sur «&nbsp;Sync conso&nbsp;» pour charger les consommations depuis Odoo.</div>}
+                <div style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 12, padding: 56, textAlign: "center" }}>
+                  <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--bg)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", marginBottom: 14 }}>{I.calendar}</div>
+                  <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6, color: "#0f172a" }}>Aucune donnee chargee</div>
+                  <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Cliquez sur «&nbsp;Charger les lots&nbsp;» pour recuperer les DLV depuis Odoo.</div>
+                  {Object.keys(dlvAvgMonthlyByRef).length === 0 && (
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#b45309", marginTop: 14, padding: "6px 12px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6 }}>
+                      {I.alertTri} Cliquez d&apos;abord sur «&nbsp;Sync conso&nbsp;» pour charger les consommations depuis Odoo.
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -3827,10 +3853,10 @@ export default function Dashboard() {
                             return (
                               <tr key={`${r.productId}_${r.lotId}`} style={{ borderBottom: "1px solid var(--border)", background: i % 2 === 0 ? (rowBg || "var(--bg-surface)") : (rowBg || "var(--bg-raised)") }}>
                                 <td style={{ padding: "10px 14px", overflow: "hidden" }}>
-                                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                                    <span style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{cfg.label}</span>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-start" }}>
+                                    {statusBadge(r.status)}
                                     {r.marginMonths < DLV_SELL_MARGIN_MONTHS && (
-                                      <span style={{ background: "#ede9fe", color: "#7c3aed", border: "1px solid #c4b5fd", borderRadius: 5, padding: "1px 6px", fontSize: 10, fontWeight: 600, whiteSpace: "nowrap" }}>✦ souple {r.marginMonths}m</span>
+                                      <span style={{ background: "#f5f3ff", color: "#6d28d9", border: "1px solid #ddd6fe", borderRadius: 5, padding: "1px 6px", fontSize: 10, fontWeight: 500, whiteSpace: "nowrap" }}>souple {r.marginMonths}m</span>
                                     )}
                                   </div>
                                 </td>
@@ -3857,9 +3883,9 @@ export default function Dashboard() {
                                 <td style={{ padding: "10px 14px", textAlign: "right", overflow: "hidden" }}>
                                   {r.avgMonthly === 0 ? <span style={{ color: "var(--text-muted)" }}>—</span> : (
                                     <div>
-                                      <span style={{ color: "var(--text-primary)" }}>{r.avgMonthly}</span>
+                                      <span style={{ color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>{r.avgMonthly}</span>
                                       {r.nbMonths > 0 && r.nbMonths < DLV_MIN_MONTHS && (
-                                        <div style={{ fontSize: 10, color: "#f59e0b", marginTop: 1 }}>⚠ {r.nbMonths} mois seul.</div>
+                                        <div style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, color: "#d97706", marginTop: 1, justifyContent: "flex-end", width: "100%" }}>{I.alertTri}{r.nbMonths} mois seul.</div>
                                       )}
                                       {r.nbMonths >= DLV_MIN_MONTHS && (
                                         <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 1 }}>{r.nbMonths} mois</div>
@@ -3868,8 +3894,12 @@ export default function Dashboard() {
                                   )}
                                 </td>
                                 <td style={{ padding: "10px 14px", textAlign: "right", overflow: "hidden", color: "var(--text-muted)" }}>{r.avgMonthly === 0 ? "?" : r.unitsSellable}</td>
-                                <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, overflow: "hidden", color: r.unitsAtRisk > 0 ? "#dc2626" : r.status === "unknown" ? "var(--text-muted)" : "#15803d" }}>
-                                  {r.status === "unknown" ? "?" : r.unitsAtRisk > 0 ? `⚠ ${Math.round(r.unitsAtRisk)}` : "✓ 0"}
+                                <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 600, overflow: "hidden", color: r.unitsAtRisk > 0 ? "#dc2626" : r.status === "unknown" ? "var(--text-muted)" : "#16a34a" }}>
+                                  {r.status === "unknown"
+                                    ? <span style={{ fontWeight: 500 }}>—</span>
+                                    : r.unitsAtRisk > 0
+                                      ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, justifyContent: "flex-end", fontVariantNumeric: "tabular-nums" }}>{I.alertTri}{Math.round(r.unitsAtRisk)}</span>
+                                      : <span style={{ fontVariantNumeric: "tabular-nums" }}>0</span>}
                                 </td>
                               </tr>
                             );
@@ -3898,30 +3928,21 @@ export default function Dashboard() {
                         <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", letterSpacing: ".05em", textTransform: "uppercase", marginBottom: 4 }}>{dlvDetailProduct.ref}</div>
                         <div style={{ fontSize: 17, fontWeight: 800, color: "var(--text-primary)", lineHeight: 1.3 }}>{dlvDetailProduct.name}</div>
                       </div>
-                      <button onClick={() => setDlvDetailProduct(null)} style={{ background: "var(--bg-raised)", border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", flexShrink: 0 }}>✕</button>
+                      <button onClick={() => setDlvDetailProduct(null)} style={{ background: "var(--bg-raised)", border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", flexShrink: 0 }}>{I.close}</button>
                     </div>
 
                     {/* Lots DLV pour ce produit (depuis les données déjà chargées) */}
                     {(() => {
                       const productLots = dlvRows.filter(r => r.productId === dlvDetailProduct.productId);
                       if (!productLots.length) return null;
-                      const STATUS_CFG2: Record<string, { label: string; color: string; bg: string; border: string }> = {
-                        overdue:  { label: "⛔ Hors délai", color: "#7c2d12", bg: "#fef2f2", border: "#fca5a5" },
-                        critical: { label: "🔴 Critique",  color: "#dc2626", bg: "#fef2f2", border: "#fca5a5" },
-                        risk:     { label: "🟠 Risque",    color: "#c2410c", bg: "#fff7ed", border: "#fed7aa" },
-                        watch:    { label: "🟡 Attention", color: "#b45309", bg: "#fefce8", border: "#fde68a" },
-                        ok:       { label: "🟢 OK",        color: "#15803d", bg: "#f0fdf4", border: "#bbf7d0" },
-                        unknown:  { label: "⚪ Sans conso", color: "#64748b", bg: "#f8fafc", border: "#e2e8f0" },
-                      };
                       return (
                         <div style={{ padding: "16px 24px 0" }}>
                           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 10 }}>Lots &amp; DLV</div>
                           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
                             {productLots.map(lot => {
-                              const cfg = STATUS_CFG2[lot.status];
                               return (
                                 <div key={lot.lotId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, background: "var(--bg-raised)", border: "1px solid var(--border)" }}>
-                                  <span style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`, borderRadius: 5, padding: "2px 7px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{cfg.label}</span>
+                                  {statusBadge(lot.status)}
                                   <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--text-muted)", minWidth: 100 }}>{lot.lotName}</span>
                                   <span style={{ fontSize: 13, fontWeight: 600 }}>DLV {fmtDate(new Date(lot.dlvDate.split(" ")[0] + "T00:00:00"))}</span>
                                   <span style={{ fontSize: 12, color: "var(--text-muted)" }}>→ sell-by {fmtDate(lot.sellByDate)}</span>
