@@ -6,6 +6,29 @@ const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 export const sb = createClient(url, key);
 
+// ── Helper: paginated select pour contourner le cap 1000 lignes de Supabase ─────
+// Usage: await fetchAllPaginated(() => sb.from("wms_conso_cache").select("..."))
+//        await fetchAllPaginated((from,to) => sb.from("...").select("...").in("month",x).order("odoo_ref").range(from,to))
+async function fetchAllPaginated<T = any>(
+  builder: (from: number, to: number) => any,
+  pageSize = 1000,
+): Promise<T[]> {
+  const out: T[] = [];
+  let from = 0;
+  // Boucle jusqu'à ce que la dernière page soit < pageSize (= fin)
+  while (true) {
+    const to = from + pageSize - 1;
+    const { data, error } = await builder(from, to);
+    if (error) throw new Error(error.message);
+    const rows: T[] = data || [];
+    out.push(...rows);
+    if (rows.length < pageSize) break;
+    from += pageSize;
+    if (from > 100000) break; // garde-fou — jamais plus de 100k lignes
+  }
+  return out;
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 export interface WmsThreshold {
   odoo_ref: string;
@@ -33,9 +56,11 @@ export interface WmsConsoCache {
 // ══════════════════════════════════════════
 
 export async function loadThresholds(): Promise<Record<string, number>> {
-  const { data, error } = await sb.from("wms_thresholds").select("odoo_ref, threshold");
-  if (error) throw new Error(error.message);
-  return Object.fromEntries((data || []).map((r) => [r.odoo_ref, r.threshold]));
+  // Paginé : Supabase cape à 1000 lignes par défaut
+  const rows = await fetchAllPaginated<{ odoo_ref: string; threshold: number }>(
+    (from, to) => sb.from("wms_thresholds").select("odoo_ref, threshold").order("odoo_ref").range(from, to)
+  );
+  return Object.fromEntries(rows.map((r) => [r.odoo_ref, r.threshold]));
 }
 
 export async function saveThreshold(odoo_ref: string, threshold: number, product_name: string): Promise<void> {
@@ -66,9 +91,9 @@ export async function saveThresholdsBulk(thresholds: WmsThreshold[]): Promise<vo
 // ══════════════════════════════════════════
 
 export async function loadStockCache(): Promise<WmsStockCache[]> {
-  const { data, error } = await sb.from("wms_stock_cache").select("*").order("odoo_ref");
-  if (error) throw new Error(error.message);
-  return data || [];
+  return await fetchAllPaginated<WmsStockCache>(
+    (from, to) => sb.from("wms_stock_cache").select("*").order("odoo_ref").range(from, to)
+  );
 }
 
 export async function getStockCacheAge(): Promise<Date | null> {
@@ -104,9 +129,10 @@ export async function getCachedConsoMonthsCount(): Promise<number> {
 }
 
 export async function loadConsoCache(months: string[]): Promise<WmsConsoCache[]> {
-  const { data, error } = await sb.from("wms_conso_cache").select("*").in("month", months);
-  if (error) throw new Error(error.message);
-  return data || [];
+  // Paginé : avec 308 refs × 12 mois ≈ 3500 lignes, le cap 1000 de Supabase tronque
+  return await fetchAllPaginated<WmsConsoCache>(
+    (from, to) => sb.from("wms_conso_cache").select("*").in("month", months).order("odoo_ref").range(from, to)
+  );
 }
 
 export async function getConsoCacheAge(): Promise<Date | null> {
@@ -265,10 +291,13 @@ export async function loadAvgMonthly(): Promise<{ avg: Record<string, number>; n
     const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
     validMonths.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   }
-  const { data, error } = await sb.from("wms_conso_cache").select("odoo_ref, month, qty").in("month", Array.from(validMonths));
-  if (error) throw new Error(error.message);
+  // Paginé : Supabase cape à 1000 lignes par défaut, et avec 308 refs × 12 mois ≈ 3500 lignes
+  // la moyenne calculée tombait à 0 pour les refs hors des 1000 premières lignes → conso "n/a"
+  const data = await fetchAllPaginated<{ odoo_ref: string; month: string; qty: number }>(
+    (from, to) => sb.from("wms_conso_cache").select("odoo_ref, month, qty").in("month", Array.from(validMonths)).order("odoo_ref").range(from, to)
+  );
   const byRef: Record<string, { total: number; months: Set<string> }> = {};
-  for (const r of (data || [])) {
+  for (const r of data) {
     if (!byRef[r.odoo_ref]) byRef[r.odoo_ref] = { total: 0, months: new Set() };
     byRef[r.odoo_ref].total += (r.qty || 0);
     byRef[r.odoo_ref].months.add(r.month);
@@ -352,9 +381,10 @@ export async function saveDlvAvg(items: WmsDlvAvg[]): Promise<void> {
 }
 
 export async function loadDlvAvg(): Promise<Record<string, number>> {
-  const { data, error } = await sb.from("wms_dlv_avg").select("odoo_ref, avg_monthly");
-  if (error) throw new Error(error.message);
-  return Object.fromEntries((data || []).map(r => [r.odoo_ref, r.avg_monthly || 0]));
+  const rows = await fetchAllPaginated<{ odoo_ref: string; avg_monthly: number }>(
+    (from, to) => sb.from("wms_dlv_avg").select("odoo_ref, avg_monthly").order("odoo_ref").range(from, to)
+  );
+  return Object.fromEntries(rows.map(r => [r.odoo_ref, r.avg_monthly || 0]));
 }
 
 export async function getDlvAvgAge(): Promise<Date | null> {

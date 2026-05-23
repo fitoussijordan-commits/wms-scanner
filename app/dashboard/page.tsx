@@ -2109,9 +2109,18 @@ export default function Dashboard() {
   // Structure : odoo_ref, threshold, product_name, supplier_date (colonne à ajouter)
 
   const smLoadAll = async (): Promise<{refs:{ref:string;name:string}[];thrMap:Record<string,number>;supMap:Record<string,string|null>;expectedMap:Record<string,number>}> => {
-    const {data,error}=await supa.sb.from("wms_thresholds").select("odoo_ref,threshold,product_name,supplier_date,expected_qty").order("odoo_ref");
-    if (error) throw new Error("wms_thresholds: "+error.message);
-    const rows=data||[];
+    // Paginé : Supabase cape les select() à 1000 lignes par défaut → au-dessus, refs invisibles
+    const rows:any[]=[];
+    let offset=0; const pageSize=1000;
+    while(true){
+      const {data,error}=await supa.sb.from("wms_thresholds").select("odoo_ref,threshold,product_name,supplier_date,expected_qty").order("odoo_ref").range(offset,offset+pageSize-1);
+      if (error) throw new Error("wms_thresholds: "+error.message);
+      const batch=data||[];
+      rows.push(...batch);
+      if(batch.length<pageSize) break;
+      offset+=pageSize;
+      if(offset>100000) break;
+    }
     const refs=rows.map((r:any)=>({ref:r.odoo_ref,name:r.product_name||r.odoo_ref}));
     const thrMap:Record<string,number>=Object.fromEntries(rows.map((r:any)=>[r.odoo_ref,r.threshold]));
     const supMap:Record<string,string|null>=Object.fromEntries(rows.filter((r:any)=>r.supplier_date).map((r:any)=>[r.odoo_ref,r.supplier_date]));
