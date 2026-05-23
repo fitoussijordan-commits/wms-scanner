@@ -1852,6 +1852,47 @@ export default function Dashboard() {
         if(consoItems.length) supa.saveConsoCache(consoItems).then(()=>supa.getConsoCacheAge().then(d=>{if(d)setConsoSyncedAt(d);})).catch(()=>{});
         // Mettre à jour avgMonthlyByRef en mémoire
         setAvgMonthlyByRef(prev=>({...prev,...consoByRef}));
+
+        // ── Persister les seuils dans wms_thresholds : seuil = moyenne mensuelle (12 mois)
+        // C'est CE bloc qui manquait : sans ça, le seuil affiché à l'écran (fallback
+        // sur la conso en mémoire) disparaissait au reload, puisque wms_thresholds
+        // n'était jamais mis à jour par cette fonction.
+        try {
+          setSmMsg("Sauvegarde seuils Supabase...");
+          // On préserve supplier_date / expected_qty existants pour ne pas écraser
+          // les saisies utilisateur dans la table wms_thresholds.
+          const refsToSave = Object.keys(stockByRef);
+          const existMap:Record<string,{supplier_date:string|null;expected_qty:number}>={};
+          for(let i=0;i<refsToSave.length;i+=500){
+            const slice=refsToSave.slice(i,i+500);
+            const {data:existing}=await supa.sb.from("wms_thresholds")
+              .select("odoo_ref,supplier_date,expected_qty").in("odoo_ref",slice);
+            for(const r of (existing||[])) existMap[r.odoo_ref]={supplier_date:r.supplier_date,expected_qty:r.expected_qty??0};
+          }
+          const now=new Date().toISOString();
+          const thresholdItems=Object.entries(stockByRef).map(([ref,info])=>({
+            odoo_ref:ref,
+            // seuil = conso mensuelle moyenne (12 mois) — minimum 1 pour articles sans historique
+            threshold:Math.max(1,consoByRef[ref]||0),
+            product_name:info.name,
+            supplier_date:existMap[ref]?.supplier_date??null,
+            expected_qty:existMap[ref]?.expected_qty??0,
+            updated_at:now,
+          }));
+          for(let i=0;i<thresholdItems.length;i+=500){
+            const {error}=await supa.sb.from("wms_thresholds")
+              .upsert(thresholdItems.slice(i,i+500),{onConflict:"odoo_ref"});
+            if(error) throw new Error(error.message);
+          }
+          // Mettre à jour thrMap (passé par référence) pour que smBuildRows utilise
+          // les nouvelles valeurs sauvegardées, et l'état global pour les alertes.
+          for(const it of thresholdItems) thrMap[it.odoo_ref]=it.threshold;
+          const updatesByRef=Object.fromEntries(thresholdItems.map(t=>[t.odoo_ref,t.threshold]));
+          setThresholdsByRef(prev=>({...prev,...updatesByRef}));
+        } catch(e:any) {
+          console.warn("Save thresholds failed:",e.message);
+          setError("Seuils non sauvegardés : "+e.message);
+        }
       }
     }
     const hasOrderConf=Object.keys(expectedMap||{}).length>0;
