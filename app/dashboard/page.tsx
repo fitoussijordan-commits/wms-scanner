@@ -472,6 +472,14 @@ export default function Dashboard() {
     try {
       const buf = await file.arrayBuffer();
       const res = await fetch("/api/extract", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: buf });
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const txt = (await res.text()).slice(0, 200);
+        setCarError(res.status === 404
+          ? "L'extraction PDF n'est disponible qu'en ligne (Vercel), pas en local. Teste depuis l'URL déployée."
+          : `Réponse inattendue du serveur (HTTP ${res.status}) : ${txt}`);
+        return;
+      }
       const data = await res.json();
       if (data.error) { setCarError("Erreur extraction : " + data.error); return; }
       setCarLignes(data.lignes); setCarCommandes(data.commandes); setCarStats(data.stats);
