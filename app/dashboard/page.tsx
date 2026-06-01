@@ -613,12 +613,14 @@ export default function Dashboard() {
       wsS.addRow([]);
       const sep = wsS.addRow(["── CROISEMENT ODOO ──", ""]);
       sep.getCell(1).font = { bold: true, color: { argb: C.accent } };
-      kpi("Commandes trouvées dans Odoo", `${matched.length} / ${carCommandes.length}`);
-      kpi("Commandes absentes d'Odoo", carCommandes.length - carCroise.filter(c => c.matched).length, true);
+      const foundCount = carCroise.filter(c => c.matched).length;
+      kpi("Commandes trouvées dans Odoo", `${foundCount} / ${carCommandes.length}`, false, foundCount === carCommandes.length);
+      kpi("Commandes absentes d'Odoo", carCommandes.length - foundCount, carCommandes.length - foundCount > 0);
+      kpi("dont avec un montant valide", matched.length);
       kpi("Commandes SANS montant (à perte)", anomalies.length, anomalies.length > 0);
       kpi("Transport payé à perte", round2(coutAnomalies), coutAnomalies > 0).getCell(2).numFmt = eurFmt;
       kpi("Montant commandes HT total", round2(totalHT), false, true).getCell(2).numFmt = eurFmt;
-      kpi("% transport / CA moyen (pondéré)", round2(pctMoyen * 100) / 100).getCell(2).numFmt = pctNumFmt;
+      kpi("% transport / CA moyen (pondéré)", round2(pctMoyen * 100)).getCell(2).numFmt = pctNumFmt;
     }
 
     // ── Feuille CROISÉ ODOO (ou COMMANDES) ──────────────────────────
@@ -636,7 +638,7 @@ export default function Dashboard() {
         ws.addRow({
           ref: c.ref, client: c.client || "(absent Odoo)", date: c.date, zone: c.zone, colis: c.colis,
           weight: c.weight, transport: round2(c.transport), ht: c.montantHT || null, ttc: c.montantTTC || null,
-          pct: c.pct !== null ? round2(c.pct * 100) / 100 : null,
+          pct: c.pct !== null ? round2(c.pct * 100) : null,
           statut: !c.matched ? "ABSENT" : c.alert ? "À PERTE (0 €)" : c.pct! > 0.15 ? "⚠ ÉLEVÉ" : c.pct! > 0.08 ? "Moyen" : "OK",
         });
       }
@@ -706,7 +708,7 @@ export default function Dashboard() {
         { header: "Montant HT €", key: "ht", width: 15 }, { header: "% Transp.", key: "pct", width: 11 },
       ];
       for (const g of Array.from(byClient.values()).sort((a, b) => b.transport - a.transport)) {
-        ws.addRow({ client: g.client, cdes: g.cdes, colis: g.colis, transport: g.transport, ht: g.ht || null, pct: g.ht > 0 ? round2((g.transport / g.ht) * 100) / 100 : null });
+        ws.addRow({ client: g.client, cdes: g.cdes, colis: g.colis, transport: g.transport, ht: g.ht || null, pct: g.ht > 0 ? round2((g.transport / g.ht) * 100) : null });
       }
       styleHeader(ws); zebra(ws);
       ws.getColumn("transport").numFmt = eurFmt; ws.getColumn("ht").numFmt = eurFmt; ws.getColumn("pct").numFmt = pctNumFmt;
