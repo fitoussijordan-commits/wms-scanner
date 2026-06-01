@@ -2631,34 +2631,51 @@ export async function fetchCarrierSaleOrders(
   if (!uniqueRefs.length) return [];
 
   const fields = ["name", "partner_id", "amount_untaxed", "amount_total", "date_order", "state"];
-  const out: CarrierSaleOrder[] = [];
 
-  // On découpe en lots pour éviter des domaines trop volumineux côté Odoo.
-  const CHUNK = 200;
-  for (let i = 0; i < uniqueRefs.length; i += CHUNK) {
-    const chunk = uniqueRefs.slice(i, i + CHUNK);
-    const domain: any[] = [["name", "in", chunk]];
-    if (dateStart) domain.push(["date_order", ">=", `${dateStart} 00:00:00`]);
-    if (dateEnd) domain.push(["date_order", "<=", `${dateEnd} 23:59:59`]);
+  const toRow = (r: any): CarrierSaleOrder => ({
+    ref: r.name,
+    client: Array.isArray(r.partner_id) ? r.partner_id[1] : "",
+    montantHT: r.amount_untaxed || 0,
+    montantTTC: r.amount_total || 0,
+    dateOrder: r.date_order ? String(r.date_order).split(" ")[0] : "",
+    state: r.state || "",
+  });
 
-    const rows = await searchRead(session, "sale.order", domain, fields, 0, "date_order desc");
-    for (const r of rows) {
-      out.push({
-        ref: r.name,
-        client: Array.isArray(r.partner_id) ? r.partner_id[1] : "",
-        montantHT: r.amount_untaxed || 0,
-        montantTTC: r.amount_total || 0,
-        dateOrder: r.date_order ? String(r.date_order).split(" ")[0] : "",
-        state: r.state || "",
-      });
+  // Recherche par lots (évite des domaines trop volumineux côté Odoo).
+  async function searchByNames(names: string[], useDate: boolean): Promise<CarrierSaleOrder[]> {
+    const res: CarrierSaleOrder[] = [];
+    const CHUNK = 200;
+    for (let i = 0; i < names.length; i += CHUNK) {
+      const chunk = names.slice(i, i + CHUNK);
+      const domain: any[] = [["name", "in", chunk]];
+      if (useDate && dateStart) domain.push(["date_order", ">=", `${dateStart} 00:00:00`]);
+      if (useDate && dateEnd) domain.push(["date_order", "<=", `${dateEnd} 23:59:59`]);
+      const rows = await searchRead(session, "sale.order", domain, fields, 0, "date_order desc");
+      for (const r of rows) res.push(toRow(r));
     }
+    return res;
   }
 
-  // En cas de doublons (rare), on garde la commande au montant le plus élevé.
+  // En cas de doublons, on garde la commande au montant le plus élevé.
   const byRef = new Map<string, CarrierSaleOrder>();
-  for (const o of out) {
-    const ex = byRef.get(o.ref);
-    if (!ex || o.montantHT > ex.montantHT) byRef.set(o.ref, o);
+  const collect = (rows: CarrierSaleOrder[]) => {
+    for (const o of rows) {
+      const ex = byRef.get(o.ref);
+      if (!ex || o.montantHT > ex.montantHT) byRef.set(o.ref, o);
+    }
+  };
+
+  // Passe 1 : nom + bornage date (commandes dont date_order tombe dans la plage).
+  collect(await searchByNames(uniqueRefs, true));
+
+  // Passe 2 (rattrapage) : pour les réfs encore introuvables, on cherche par
+  // nom SANS contrainte de date. Indispensable car la date d'expédition de la
+  // facture ≠ date_order : une commande expédiée en avril a pu être passée en
+  // mars. Le nom étant unique, ce rattrapage est sûr.
+  if (dateStart || dateEnd) {
+    const missing = uniqueRefs.filter(r => !byRef.has(r));
+    if (missing.length) collect(await searchByNames(missing, false));
   }
+
   return Array.from(byRef.values());
 }
