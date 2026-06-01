@@ -475,11 +475,19 @@ export default function Dashboard() {
       const data = await res.json();
       if (data.error) { setCarError("Erreur extraction : " + data.error); return; }
       setCarLignes(data.lignes); setCarCommandes(data.commandes); setCarStats(data.stats);
-      // Pré-remplir les bornes de dates à partir du min/max des dates de la facture
+      // Bornes de dates (juste pour l'entête de l'export, plus de filtre)
       const isoDates = (data.lignes as CarrierLigne[]).map(l => carParseDate(l.date)).filter(Boolean) as string[];
-      if (isoDates.length) {
-        isoDates.sort();
-        setCarStart(isoDates[0]); setCarEnd(isoDates[isoDates.length - 1]);
+      if (isoDates.length) { isoDates.sort(); setCarStart(isoDates[0]); setCarEnd(isoDates[isoDates.length - 1]); }
+      // Recherche Odoo automatique par référence (S…), sans filtre de date
+      const refs = (data.commandes as CarrierCommande[]).map(c => c.ref);
+      if (session && refs.length) {
+        setCarSearching(true);
+        try {
+          const rows = await odoo.fetchCarrierSaleOrders(session, refs);
+          setCarOdoo(rows); setCarOdooLoaded(true); setCarView("croise");
+        } catch (e: any) {
+          setCarError("Erreur recherche Odoo : " + (e?.message || String(e)));
+        } finally { setCarSearching(false); }
       }
     } catch (e) { setCarError("Erreur réseau : " + String(e)); } finally { setCarLoading(false); }
   }
@@ -489,7 +497,7 @@ export default function Dashboard() {
     setCarSearching(true); setCarError("");
     try {
       const refs = carCommandes.map(c => c.ref);
-      const rows = await odoo.fetchCarrierSaleOrders(session, refs, carStart || undefined, carEnd || undefined);
+      const rows = await odoo.fetchCarrierSaleOrders(session, refs);
       setCarOdoo(rows); setCarOdooLoaded(true); setCarView("croise");
     } catch (e: any) {
       setCarError("Erreur recherche Odoo : " + (e?.message || String(e)));
@@ -4437,18 +4445,13 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  {/* Barre bornage + recherche Odoo */}
-                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 12, padding: 14, borderRadius: 12, border: "1px solid var(--border)", background: "var(--bg-raised)" }}>
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 5 }}>Date début</div>
-                      <input type="date" value={carStart} onChange={e => setCarStart(e.target.value)} style={{ padding: "8px 10px", border: "1.5px solid var(--border)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)" }} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 5 }}>Date fin</div>
-                      <input type="date" value={carEnd} onChange={e => setCarEnd(e.target.value)} style={{ padding: "8px 10px", border: "1.5px solid var(--border)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)" }} />
+                  {/* Recherche Odoo (par réf S…, sans filtre de date) */}
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, padding: 14, borderRadius: 12, border: "1px solid var(--border)", background: "var(--bg-raised)" }}>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                      {carOdooLoaded ? <>Croisement Odoo effectué par référence — <b style={{ color: "var(--text-primary)" }}>{nbMatched}/{carCommandes.length}</b> trouvées</> : "Le croisement Odoo se lance automatiquement après le dépôt."}
                     </div>
                     <button onClick={carSearchOdoo} disabled={carSearching || !session} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: carSearching ? "wait" : "pointer", opacity: carSearching || !session ? 0.6 : 1, fontFamily: "inherit" }}>
-                      {carSearching ? "Recherche…" : <>{I.search} Rechercher dans Odoo</>}
+                      {carSearching ? "Recherche…" : <>{I.search} {carOdooLoaded ? "Relancer" : "Rechercher dans Odoo"}</>}
                     </button>
                     <div style={{ flex: 1 }} />
                     <button onClick={carExportXlsx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
