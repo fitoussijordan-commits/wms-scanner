@@ -2594,3 +2594,71 @@ export async function bulkUpdateMinQuantity(
     updates.map(u => write(session, "product.template", [u.id], { temp_min_quantity: u.value }))
   );
 }
+
+// ============================================
+// ANALYSE TRANSPORTEURS — croisement facture transporteur × commandes Odoo
+// ============================================
+
+export interface CarrierSaleOrder {
+  ref: string;          // name de la commande (S####)
+  client: string;       // nom du partenaire
+  montantHT: number;    // amount_untaxed
+  montantTTC: number;   // amount_total
+  dateOrder: string;    // date_order (YYYY-MM-DD)
+  state: string;
+}
+
+/**
+ * Recherche dans Odoo les commandes client (sale.order) correspondant aux
+ * références extraites d'une facture transporteur.
+ *
+ * Logique "Filtre + match réf" : on borne la recherche sur date_order entre
+ * dateStart et dateEnd (inclus) ET on matche les noms de commandes présents
+ * dans la facture. Le bornage par date réduit fortement le volume scanné et
+ * sécurise le matching (deux commandes ne peuvent pas partager le même nom).
+ *
+ * @param refs        liste de références S#### extraites de la facture
+ * @param dateStart   borne basse "YYYY-MM-DD" (optionnelle)
+ * @param dateEnd     borne haute "YYYY-MM-DD" (optionnelle, incluse)
+ */
+export async function fetchCarrierSaleOrders(
+  session: OdooSession,
+  refs: string[],
+  dateStart?: string,
+  dateEnd?: string
+): Promise<CarrierSaleOrder[]> {
+  const uniqueRefs = Array.from(new Set(refs.map(r => r.trim()).filter(Boolean)));
+  if (!uniqueRefs.length) return [];
+
+  const fields = ["name", "partner_id", "amount_untaxed", "amount_total", "date_order", "state"];
+  const out: CarrierSaleOrder[] = [];
+
+  // On découpe en lots pour éviter des domaines trop volumineux côté Odoo.
+  const CHUNK = 200;
+  for (let i = 0; i < uniqueRefs.length; i += CHUNK) {
+    const chunk = uniqueRefs.slice(i, i + CHUNK);
+    const domain: any[] = [["name", "in", chunk]];
+    if (dateStart) domain.push(["date_order", ">=", `${dateStart} 00:00:00`]);
+    if (dateEnd) domain.push(["date_order", "<=", `${dateEnd} 23:59:59`]);
+
+    const rows = await searchRead(session, "sale.order", domain, fields, 0, "date_order desc");
+    for (const r of rows) {
+      out.push({
+        ref: r.name,
+        client: Array.isArray(r.partner_id) ? r.partner_id[1] : "",
+        montantHT: r.amount_untaxed || 0,
+        montantTTC: r.amount_total || 0,
+        dateOrder: r.date_order ? String(r.date_order).split(" ")[0] : "",
+        state: r.state || "",
+      });
+    }
+  }
+
+  // En cas de doublons (rare), on garde la commande au montant le plus élevé.
+  const byRef = new Map<string, CarrierSaleOrder>();
+  for (const o of out) {
+    const ex = byRef.get(o.ref);
+    if (!ex || o.montantHT > ex.montantHT) byRef.set(o.ref, o);
+  }
+  return Array.from(byRef.values());
+}

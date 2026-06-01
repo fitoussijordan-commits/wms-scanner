@@ -263,6 +263,7 @@ const TABS = [
   { key: "catalogue", label: "Catalogue", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> },
   { key: "libre", label: "Mode Libre", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> },
   { key: "dlv", label: "Suivi DLV", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><circle cx="12" cy="16" r="2" fill="currentColor"/></svg> },
+  { key: "transporteurs", label: "Analyse transporteurs", icon: I.truck },
 ] as const;
 
 // ─── CATALOGUE — définition des colonnes disponibles ────────────────────────
@@ -433,6 +434,171 @@ export default function Dashboard() {
   const [tab, setTab] = useState<string>("stock-monitor");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // ─── Analyse transporteurs ───────────────────────────────────────────────
+  interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; total: number }
+  interface CarrierCommande { ref: string; date: string; zone: string; colis: number; weight: number; transport: number; total: number }
+  interface CarrierStats { nb_lignes: number; nb_commandes: number; total_transport: number; total_facture: number }
+  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean }
+  const [carLoading, setCarLoading] = useState(false);
+  const [carPdfName, setCarPdfName] = useState("");
+  const [carLignes, setCarLignes] = useState<CarrierLigne[]>([]);
+  const [carCommandes, setCarCommandes] = useState<CarrierCommande[]>([]);
+  const [carStats, setCarStats] = useState<CarrierStats | null>(null);
+  const [carOdoo, setCarOdoo] = useState<odoo.CarrierSaleOrder[]>([]);
+  const [carOdooLoaded, setCarOdooLoaded] = useState(false);
+  const [carSearching, setCarSearching] = useState(false);
+  const [carSearch, setCarSearch] = useState("");
+  const [carView, setCarView] = useState<"commandes" | "lignes" | "croise">("commandes");
+  const [carStart, setCarStart] = useState("");
+  const [carEnd, setCarEnd] = useState("");
+  const [carError, setCarError] = useState("");
+  const [carDrag, setCarDrag] = useState(false);
+  const carPdfInput = useRef<HTMLInputElement>(null);
+
+  // Convertit une date FedEx "jj/mm" (année courante) en "YYYY-MM-DD"
+  const carParseDate = (d: string): string | null => {
+    const m = d.match(/^(\d{2})\/(\d{2})(?:\/(\d{2,4}))?$/);
+    if (!m) return null;
+    const [, dd, mm, yy] = m;
+    let year = new Date().getFullYear();
+    if (yy) year = yy.length === 2 ? 2000 + parseInt(yy, 10) : parseInt(yy, 10);
+    return `${year}-${mm}-${dd}`;
+  };
+
+  async function carHandlePdf(file: File) {
+    setCarLoading(true); setCarError(""); setCarPdfName(file.name);
+    setCarOdoo([]); setCarOdooLoaded(false); setCarView("commandes");
+    try {
+      const buf = await file.arrayBuffer();
+      const res = await fetch("/api/extract", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: buf });
+      const data = await res.json();
+      if (data.error) { setCarError("Erreur extraction : " + data.error); return; }
+      setCarLignes(data.lignes); setCarCommandes(data.commandes); setCarStats(data.stats);
+      // Pré-remplir les bornes de dates à partir du min/max des dates de la facture
+      const isoDates = (data.lignes as CarrierLigne[]).map(l => carParseDate(l.date)).filter(Boolean) as string[];
+      if (isoDates.length) {
+        isoDates.sort();
+        setCarStart(isoDates[0]); setCarEnd(isoDates[isoDates.length - 1]);
+      }
+    } catch (e) { setCarError("Erreur réseau : " + String(e)); } finally { setCarLoading(false); }
+  }
+
+  async function carSearchOdoo() {
+    if (!session || !carCommandes.length) return;
+    setCarSearching(true); setCarError("");
+    try {
+      const refs = carCommandes.map(c => c.ref);
+      const rows = await odoo.fetchCarrierSaleOrders(session, refs, carStart || undefined, carEnd || undefined);
+      setCarOdoo(rows); setCarOdooLoaded(true); setCarView("croise");
+    } catch (e: any) {
+      setCarError("Erreur recherche Odoo : " + (e?.message || String(e)));
+    } finally { setCarSearching(false); }
+  }
+
+  const carCroise: CarrierCrossed[] = useMemo(() => {
+    if (!carCommandes.length) return [];
+    const map = new Map(carOdoo.map(o => [o.ref, o]));
+    return carCommandes.map(c => {
+      const o = map.get(c.ref);
+      const montantHT = o?.montantHT ?? 0;
+      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, matched: !!o, pct: montantHT > 0 ? c.transport / montantHT : null };
+    });
+  }, [carCommandes, carOdoo]);
+
+  const carFiltered = useMemo(() => {
+    const q = carSearch.trim().toLowerCase();
+    const filt = <T extends { ref: string }>(arr: T[]) => (q ? arr.filter(r => r.ref.toLowerCase().includes(q)) : arr);
+    if (carView === "lignes") return filt(carLignes);
+    if (carView === "croise") return filt(carCroise);
+    return filt(carCommandes);
+  }, [carView, carSearch, carLignes, carCommandes, carCroise]);
+
+  const carInsights = useMemo(() => {
+    const withPct = carCroise.filter(c => c.pct !== null && c.montantHT > 0);
+    if (!withPct.length) return null;
+    const topPct = [...withPct].sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0))[0];
+    const matched = carCroise.filter(c => c.matched && c.montantHT > 0);
+    const totT = matched.reduce((s, c) => s + c.transport, 0);
+    const totHT = matched.reduce((s, c) => s + c.montantHT, 0);
+    const pctGlobal = totHT > 0 ? totT / totHT : 0;
+    const byClient = new Map<string, number>();
+    for (const c of carCroise) if (c.client) byClient.set(c.client, (byClient.get(c.client) ?? 0) + c.transport);
+    const topClient = Array.from(byClient.entries()).sort((a, b) => b[1] - a[1])[0];
+    return { topPct, pctGlobal, topClient };
+  }, [carCroise]);
+
+  function carReset() {
+    setCarLignes([]); setCarCommandes([]); setCarStats(null); setCarOdoo([]); setCarOdooLoaded(false);
+    setCarPdfName(""); setCarSearch(""); setCarView("commandes"); setCarStart(""); setCarEnd(""); setCarError("");
+  }
+
+  async function carExportXlsx() {
+    const XLSX = await import("xlsx");
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const wb = XLSX.utils.book_new();
+    if (carOdooLoaded) {
+      const cr = carCroise.map(c => ({
+        "Référence": c.ref, "Client": c.client || "(non trouvé)", "Date": c.date, "Zone": c.zone, "Colis": c.colis,
+        "Poids (kg)": c.weight, "Coût transport (€)": c.transport, "Montant cde HT (€)": c.montantHT || "",
+        "Montant cde TTC (€)": c.montantTTC || "",
+        "% Transport / HT": c.pct !== null ? +(c.pct * 100).toFixed(1) : "",
+        "Alerte": c.pct === null ? "" : c.pct > 0.15 ? "⚠ ÉLEVÉ" : c.pct > 0.08 ? "Moyen" : "OK",
+        "Trouvé Odoo": c.matched ? "Oui" : "NON",
+      }));
+      const ws = XLSX.utils.json_to_sheet(cr);
+      ws["!cols"] = [{ wch: 12 }, { wch: 28 }, { wch: 8 }, { wch: 6 }, { wch: 7 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 17 }, { wch: 14 }, { wch: 10 }, { wch: 12 }];
+      XLSX.utils.book_append_sheet(wb, ws, "Croisé Odoo");
+    } else {
+      const cmd = carCommandes.map(c => ({ "Référence": c.ref, "Date": c.date, "Zone": c.zone, "Colis": c.colis, "Poids (kg)": c.weight, "Coût transport (€)": c.transport, "Total facturé (€)": c.total }));
+      const ws = XLSX.utils.json_to_sheet(cmd);
+      ws["!cols"] = [{ wch: 12 }, { wch: 8 }, { wch: 6 }, { wch: 7 }, { wch: 10 }, { wch: 16 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, ws, "Commandes");
+    }
+    const matched = carCroise.filter(c => c.matched && c.montantHT > 0);
+    const totalTransp = carStats?.total_transport ?? 0;
+    const totalHT = matched.reduce((s, c) => s + c.montantHT, 0);
+    const synth: Array<[string, string | number]> = [
+      ["SYNTHÈSE GLOBALE", ""], ["", ""],
+      ["Période analysée", `${carStart || "—"} → ${carEnd || "—"}`],
+      ["Nombre de commandes", carStats?.nb_commandes ?? 0],
+      ["Nombre de colis", carStats?.nb_lignes ?? 0],
+      ["Coût transport total (€)", round2(totalTransp)],
+      ["Total facturé transporteur (€)", round2(carStats?.total_facture ?? 0)], ["", ""],
+    ];
+    if (carOdooLoaded) {
+      const pctMoyen = totalHT > 0 ? (totalTransp / totalHT) * 100 : 0;
+      synth.push(
+        ["── CROISEMENT ODOO ──", ""],
+        ["Commandes trouvées dans Odoo", `${matched.length} / ${carCommandes.length}`],
+        ["Commandes absentes Odoo", carCommandes.length - carCroise.filter(c => c.matched).length],
+        ["Montant commandes HT total (€)", round2(totalHT)],
+        ["% transport / CA moyen (pondéré)", +pctMoyen.toFixed(2) + " %"],
+      );
+    }
+    const wsS = XLSX.utils.aoa_to_sheet(synth);
+    wsS["!cols"] = [{ wch: 36 }, { wch: 24 }];
+    XLSX.utils.book_append_sheet(wb, wsS, "Synthèse");
+    if (carOdooLoaded) {
+      const byClient = new Map<string, { client: string; cdes: number; colis: number; transport: number; ht: number }>();
+      for (const c of carCroise) {
+        const key = c.client || "(non trouvé)";
+        if (!byClient.has(key)) byClient.set(key, { client: key, cdes: 0, colis: 0, transport: 0, ht: 0 });
+        const g = byClient.get(key)!;
+        g.cdes += 1; g.colis += c.colis; g.transport = round2(g.transport + c.transport); g.ht = round2(g.ht + c.montantHT);
+      }
+      const clientRows = Array.from(byClient.values()).sort((a, b) => b.transport - a.transport)
+        .map(g => ({ "Client": g.client, "Commandes": g.cdes, "Colis": g.colis, "Transport total (€)": g.transport, "Montant cdes HT (€)": g.ht || "", "% Transport / CA": g.ht > 0 ? +((g.transport / g.ht) * 100).toFixed(1) : "" }));
+      const wsC = XLSX.utils.json_to_sheet(clientRows);
+      wsC["!cols"] = [{ wch: 30 }, { wch: 11 }, { wch: 7 }, { wch: 18 }, { wch: 18 }, { wch: 16 }];
+      XLSX.utils.book_append_sheet(wb, wsC, "Par client");
+    }
+    const det = carLignes.map(l => ({ "Référence": l.ref, "Date": l.date, "Zone": l.zone, "Tracking": l.tracking, "Poids (kg)": l.weight, "Transport (€)": l.transport, "Total (€)": l.total }));
+    const wsD = XLSX.utils.json_to_sheet(det);
+    wsD["!cols"] = [{ wch: 12 }, { wch: 8 }, { wch: 6 }, { wch: 20 }, { wch: 10 }, { wch: 13 }, { wch: 11 }];
+    XLSX.utils.book_append_sheet(wb, wsD, "Lignes détail");
+    XLSX.writeFile(wb, `analyse_transport_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
   const [alerts, setAlerts] = useState<StockAlert[]>([]);
   const [thresholds, setThresholds] = useState<Record<number, number>>({});
   const [conso, setConso] = useState<ConsoRow[]>([]);
@@ -4022,6 +4188,189 @@ export default function Dashboard() {
                           </div>
                         );
                       })()}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* ══════════════════ ANALYSE TRANSPORTEURS ══════════════════ */}
+        {tab === "transporteurs" && (() => {
+          const eur = (n: number) => n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+          const pctFmt = (n: number | null) => (n === null ? "—" : (n * 100).toFixed(1) + " %");
+          const pctColor = (p: number) => (p > 0.15 ? "var(--danger, #dc2626)" : p > 0.08 ? "#d97706" : "#16a34a");
+          const hasData = carCommandes.length > 0;
+          const nbMatched = carCroise.filter(c => c.matched).length;
+          const nbAlertes = carCroise.filter(c => c.pct !== null && c.pct > 0.15).length;
+          return (
+            <div style={{ maxWidth: 1200, margin: "0 auto" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 0 16px" }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 17, color: "var(--text-primary)" }}>Analyse transporteurs</div>
+                  <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Facture transporteur (FedEx / TNT) croisée avec tes commandes Odoo</div>
+                </div>
+                {hasData && (
+                  <button onClick={carReset} style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 14px", border: "1.5px solid var(--border)", borderRadius: 8, background: "var(--bg-raised)", color: "var(--text-secondary)", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                    {I.rotate} Nouvelle facture
+                  </button>
+                )}
+              </div>
+
+              {carError && (
+                <div style={{ marginBottom: 14, padding: "10px 14px", borderRadius: 10, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#dc2626", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+                  {I.alertTri} {carError}
+                </div>
+              )}
+
+              {!hasData && (
+                <div
+                  onClick={() => carPdfInput.current?.click()}
+                  onDragOver={e => { e.preventDefault(); setCarDrag(true); }}
+                  onDragLeave={() => setCarDrag(false)}
+                  onDrop={e => { e.preventDefault(); setCarDrag(false); const f = e.dataTransfer.files[0]; if (f) carHandlePdf(f); }}
+                  style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, padding: "70px 24px", border: `2px dashed ${carDrag ? "var(--accent)" : "var(--border)"}`, borderRadius: 16, background: carDrag ? "var(--accent-soft)" : "var(--bg-raised)", cursor: "pointer", transition: "all .2s" }}
+                >
+                  <input ref={carPdfInput} type="file" accept="application/pdf" hidden onChange={e => e.target.files?.[0] && carHandlePdf(e.target.files[0])} />
+                  {carLoading ? (
+                    <>
+                      <div style={{ width: 44, height: 44, border: "3px solid var(--border)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)" }}>Extraction en cours…</div>
+                        <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 3 }}>Analyse du PDF page par page</div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ width: 60, height: 60, borderRadius: 16, background: "var(--accent-soft)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>{I.upload}</div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Dépose ta facture transporteur</div>
+                        <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 3 }}>Format PDF — ou clique pour parcourir</div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Étape suivante : bornage par date + recherche directe dans Odoo</div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {hasData && carStats && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                  {/* Cartes stats */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+                    {[
+                      { label: "Commandes", value: String(carStats.nb_commandes), sub: `${carStats.nb_lignes} colis`, accent: false },
+                      { label: "Transport total", value: eur(carStats.total_transport), sub: "coût pur", accent: true },
+                      { label: "Total facturé", value: eur(carStats.total_facture), sub: "transporteur", accent: false },
+                      { label: "Croisé Odoo", value: carOdooLoaded ? `${nbMatched}/${carCommandes.length}` : "—", sub: carOdooLoaded ? `${nbAlertes} alerte${nbAlertes > 1 ? "s" : ""} >15%` : "lance la recherche", accent: false },
+                    ].map((s, i) => (
+                      <div key={i} style={{ padding: 16, borderRadius: 14, border: "1px solid var(--border)", background: "var(--bg-raised)" }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8 }}>{s.label}</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: s.accent ? "var(--accent)" : "var(--text-primary)" }}>{s.value}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>{s.sub}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Insights */}
+                  {carInsights && (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+                      <div style={{ padding: 14, borderRadius: 12, border: "1px solid var(--border)", background: "var(--bg-raised)" }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>% transport / CA global</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--accent)", marginTop: 2 }}>{(carInsights.pctGlobal * 100).toFixed(1)} %</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>sur les commandes croisées</div>
+                      </div>
+                      <div style={{ padding: 14, borderRadius: 12, border: "1px solid var(--border)", background: "var(--bg-raised)" }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>Commande la + coûteuse</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: "#dc2626", marginTop: 2 }}>{carInsights.topPct.ref}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{(carInsights.topPct.pct! * 100).toFixed(0)} % · {carInsights.topPct.client || "—"}</div>
+                      </div>
+                      {carInsights.topClient && (
+                        <div style={{ padding: 14, borderRadius: 12, border: "1px solid var(--border)", background: "var(--bg-raised)" }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>Client le + coûteux</div>
+                          <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text-primary)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{carInsights.topClient[0]}</div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{eur(carInsights.topClient[1])} de transport</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Barre bornage + recherche Odoo */}
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 12, padding: 14, borderRadius: 12, border: "1px solid var(--border)", background: "var(--bg-raised)" }}>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 5 }}>Date début</div>
+                      <input type="date" value={carStart} onChange={e => setCarStart(e.target.value)} style={{ padding: "8px 10px", border: "1.5px solid var(--border)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)" }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 5 }}>Date fin</div>
+                      <input type="date" value={carEnd} onChange={e => setCarEnd(e.target.value)} style={{ padding: "8px 10px", border: "1.5px solid var(--border)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)" }} />
+                    </div>
+                    <button onClick={carSearchOdoo} disabled={carSearching || !session} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: carSearching ? "wait" : "pointer", opacity: carSearching || !session ? 0.6 : 1, fontFamily: "inherit" }}>
+                      {carSearching ? "Recherche…" : <>{I.search} Rechercher dans Odoo</>}
+                    </button>
+                    <div style={{ flex: 1 }} />
+                    <button onClick={carExportXlsx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+                      {I.download} Export Excel
+                    </button>
+                  </div>
+
+                  {/* Vues + recherche */}
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+                    <div style={{ display: "flex", gap: 4, padding: 4, border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-raised)" }}>
+                      {(["commandes", "lignes", "croise"] as const).map(v => (
+                        <button key={v} onClick={() => setCarView(v)} style={{ padding: "6px 14px", borderRadius: 7, border: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize", background: carView === v ? "var(--accent)" : "transparent", color: carView === v ? "#fff" : "var(--text-secondary)" }}>
+                          {v === "croise" ? "Croisé Odoo" : v}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 180, position: "relative" }}>
+                      <input value={carSearch} onChange={e => setCarSearch(e.target.value)} placeholder="Rechercher une réf (S…)" style={{ width: "100%", padding: "8px 12px", border: "1.5px solid var(--border)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)" }} />
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{carFiltered.length} ligne{carFiltered.length > 1 ? "s" : ""}{carPdfName ? ` · ${carPdfName}` : ""}</div>
+                  </div>
+
+                  {/* Tableau */}
+                  <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+                    <div style={{ maxHeight: "58vh", overflow: "auto" }}>
+                      <table className="wms-table">
+                        <thead>
+                          <tr>
+                            {carView === "lignes" ? (
+                              <><th><div className="th-inner">Réf</div></th><th><div className="th-inner">Date</div></th><th><div className="th-inner">Zone</div></th><th><div className="th-inner">Tracking</div></th><th><div className="th-inner">Poids</div></th><th><div className="th-inner">Transport</div></th><th><div className="th-inner">Total</div></th></>
+                            ) : carView === "croise" ? (
+                              <><th><div className="th-inner">Réf</div></th><th><div className="th-inner">Client</div></th><th><div className="th-inner">Colis</div></th><th><div className="th-inner">Transport</div></th><th><div className="th-inner">Montant HT</div></th><th><div className="th-inner">Montant TTC</div></th><th><div className="th-inner">% Transp.</div></th><th><div className="th-inner">Odoo</div></th></>
+                            ) : (
+                              <><th><div className="th-inner">Réf</div></th><th><div className="th-inner">Date</div></th><th><div className="th-inner">Zone</div></th><th><div className="th-inner">Colis</div></th><th><div className="th-inner">Poids</div></th><th><div className="th-inner">Transport</div></th><th><div className="th-inner">Total</div></th></>
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {carView === "lignes" && (carFiltered as CarrierLigne[]).map((r, i) => (
+                            <tr key={i}><td style={{ fontWeight: 600, color: "var(--accent)" }}>{r.ref}</td><td>{r.date}</td><td>{r.zone}</td><td style={{ color: "var(--text-muted)", fontFamily: "monospace", fontSize: 12 }}>{r.tracking}</td><td style={{ textAlign: "right" }}>{r.weight}</td><td style={{ textAlign: "right" }}>{eur(r.transport)}</td><td style={{ textAlign: "right" }}>{eur(r.total)}</td></tr>
+                          ))}
+                          {carView === "commandes" && (carFiltered as CarrierCommande[]).map((r, i) => (
+                            <tr key={i}><td style={{ fontWeight: 600, color: "var(--accent)" }}>{r.ref}</td><td>{r.date}</td><td>{r.zone}</td><td style={{ textAlign: "right" }}>{r.colis}</td><td style={{ textAlign: "right" }}>{r.weight}</td><td style={{ textAlign: "right" }}>{eur(r.transport)}</td><td style={{ textAlign: "right" }}>{eur(r.total)}</td></tr>
+                          ))}
+                          {carView === "croise" && (carFiltered as CarrierCrossed[]).map((r, i) => (
+                            <tr key={i}>
+                              <td style={{ fontWeight: 600, color: "var(--accent)" }}>{r.ref}</td>
+                              <td>{r.client || <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
+                              <td style={{ textAlign: "right" }}>{r.colis}</td>
+                              <td style={{ textAlign: "right" }}>{eur(r.transport)}</td>
+                              <td style={{ textAlign: "right" }}>{r.montantHT ? eur(r.montantHT) : <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
+                              <td style={{ textAlign: "right" }}>{r.montantTTC ? eur(r.montantTTC) : <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
+                              <td style={{ textAlign: "right" }}>
+                                {r.pct === null ? <span style={{ color: "var(--text-muted)" }}>—</span> : (
+                                  <span style={{ fontWeight: 700, color: pctColor(r.pct) }}>{pctFmt(r.pct)}</span>
+                                )}
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                {r.matched ? <span style={{ color: "#16a34a", fontWeight: 700 }}>✓</span> : <span style={{ color: "#dc2626", fontSize: 11, fontWeight: 600 }}>absent</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 </div>

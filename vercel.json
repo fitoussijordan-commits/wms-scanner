@@ -4,5 +4,11 @@
       "path": "/api/stock-exit-cron",
       "schedule": "0 20 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "api/extract.py": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  }
 }
