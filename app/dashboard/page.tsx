@@ -439,7 +439,7 @@ export default function Dashboard() {
   interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; total: number }
   interface CarrierCommande { ref: string; date: string; zone: string; colis: number; weight: number; transport: number; total: number }
   interface CarrierStats { nb_lignes: number; nb_commandes: number; total_transport: number; total_facture: number }
-  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean }
+  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; alert: boolean }
   const [carLoading, setCarLoading] = useState(false);
   const [carPdfName, setCarPdfName] = useState("");
   const [carLignes, setCarLignes] = useState<CarrierLigne[]>([]);
@@ -502,7 +502,9 @@ export default function Dashboard() {
     return carCommandes.map(c => {
       const o = map.get(c.ref);
       const montantHT = o?.montantHT ?? 0;
-      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, matched: !!o, pct: montantHT > 0 ? c.transport / montantHT : null };
+      // Anomalie : on a payé du transport mais la commande n'a aucun montant (absente Odoo ou montant 0)
+      const alert = c.transport > 0 && montantHT <= 0;
+      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, matched: !!o, alert, pct: montantHT > 0 ? c.transport / montantHT : null };
     });
   }, [carCommandes, carOdoo]);
 
@@ -534,70 +536,204 @@ export default function Dashboard() {
   }
 
   async function carExportXlsx() {
-    const XLSX = await import("xlsx");
+    const ExcelJS = (await import("exceljs")).default;
     const round2 = (n: number) => Math.round(n * 100) / 100;
-    const wb = XLSX.utils.book_new();
-    if (carOdooLoaded) {
-      const cr = carCroise.map(c => ({
-        "Référence": c.ref, "Client": c.client || "(non trouvé)", "Date": c.date, "Zone": c.zone, "Colis": c.colis,
-        "Poids (kg)": c.weight, "Coût transport (€)": c.transport, "Montant cde HT (€)": c.montantHT || "",
-        "Montant cde TTC (€)": c.montantTTC || "",
-        "% Transport / HT": c.pct !== null ? +(c.pct * 100).toFixed(1) : "",
-        "Alerte": c.pct === null ? "" : c.pct > 0.15 ? "⚠ ÉLEVÉ" : c.pct > 0.08 ? "Moyen" : "OK",
-        "Trouvé Odoo": c.matched ? "Oui" : "NON",
-      }));
-      const ws = XLSX.utils.json_to_sheet(cr);
-      ws["!cols"] = [{ wch: 12 }, { wch: 28 }, { wch: 8 }, { wch: 6 }, { wch: 7 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 17 }, { wch: 14 }, { wch: 10 }, { wch: 12 }];
-      XLSX.utils.book_append_sheet(wb, ws, "Croisé Odoo");
-    } else {
-      const cmd = carCommandes.map(c => ({ "Référence": c.ref, "Date": c.date, "Zone": c.zone, "Colis": c.colis, "Poids (kg)": c.weight, "Coût transport (€)": c.transport, "Total facturé (€)": c.total }));
-      const ws = XLSX.utils.json_to_sheet(cmd);
-      ws["!cols"] = [{ wch: 12 }, { wch: 8 }, { wch: 6 }, { wch: 7 }, { wch: 10 }, { wch: 16 }, { wch: 14 }];
-      XLSX.utils.book_append_sheet(wb, ws, "Commandes");
-    }
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "WMS Scanner"; wb.created = new Date();
+
+    // Palette
+    const C = {
+      dark: "FF1E293B", accent: "FF2563EB", white: "FFFFFFFF",
+      zebra: "FFF1F5F9", green: "FFDCFCE7", greenT: "FF166534",
+      amber: "FFFEF3C7", amberT: "FF92400E", red: "FFFEE2E2", redT: "FFB91C1C",
+      kpiBg: "FFEFF6FF", border: "FFE2E8F0",
+    };
+    const thin = { style: "thin" as const, color: { argb: C.border } };
+    const allBorders = { top: thin, left: thin, bottom: thin, right: thin };
+    const eurFmt = '#,##0.00 €';
+    const pctNumFmt = '0.0 "%"';
+
+    // Style l'entête d'une feuille
+    const styleHeader = (ws: any) => {
+      const h = ws.getRow(1); h.height = 22;
+      h.eachCell((cell: any) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.dark } };
+        cell.font = { bold: true, color: { argb: C.white }, size: 11 };
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+        cell.border = allBorders;
+      });
+      ws.views = [{ state: "frozen", ySplit: 1 }];
+    };
+    const zebra = (ws: any) => {
+      for (let r = 2; r <= ws.rowCount; r++) {
+        const row = ws.getRow(r);
+        if (r % 2 === 0) row.eachCell((c: any) => { if (!c.fill || c.fill.type !== "pattern" || c.fill.fgColor?.argb === undefined) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.zebra } }; });
+        row.eachCell((c: any) => { c.border = allBorders; });
+      }
+    };
+
+    // ── Feuille SYNTHÈSE ────────────────────────────────────────────
     const matched = carCroise.filter(c => c.matched && c.montantHT > 0);
     const totalTransp = carStats?.total_transport ?? 0;
     const totalHT = matched.reduce((s, c) => s + c.montantHT, 0);
-    const synth: Array<[string, string | number]> = [
-      ["SYNTHÈSE GLOBALE", ""], ["", ""],
-      ["Période analysée", `${carStart || "—"} → ${carEnd || "—"}`],
-      ["Nombre de commandes", carStats?.nb_commandes ?? 0],
-      ["Nombre de colis", carStats?.nb_lignes ?? 0],
-      ["Coût transport total (€)", round2(totalTransp)],
-      ["Total facturé transporteur (€)", round2(carStats?.total_facture ?? 0)], ["", ""],
-    ];
+    const anomalies = carCroise.filter(c => c.alert);
+    const coutAnomalies = anomalies.reduce((s, c) => s + c.transport, 0);
+    const pctMoyen = totalHT > 0 ? (totalTransp / totalHT) : 0;
+
+    const wsS = wb.addWorksheet("Synthèse");
+    wsS.columns = [{ width: 40 }, { width: 26 }];
+    wsS.mergeCells("A1:B1");
+    const title = wsS.getCell("A1");
+    title.value = "ANALYSE TRANSPORTEURS"; title.font = { bold: true, size: 16, color: { argb: C.white } };
+    title.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.accent } };
+    title.alignment = { vertical: "middle", horizontal: "center" };
+    wsS.getRow(1).height = 30;
+    wsS.mergeCells("A2:B2");
+    const sub = wsS.getCell("A2");
+    sub.value = `Période : ${carStart || "—"}  →  ${carEnd || "—"}`;
+    sub.font = { italic: true, color: { argb: "FF64748B" } }; sub.alignment = { horizontal: "center" };
+
+    const kpi = (label: string, value: string | number, danger = false, good = false) => {
+      const row = wsS.addRow([label, value]);
+      const lc = row.getCell(1), vc = row.getCell(2);
+      lc.font = { bold: true, color: { argb: "FF334155" } };
+      lc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.kpiBg } };
+      vc.font = { bold: true, size: 12, color: { argb: danger ? C.redT : good ? C.greenT : "FF0F172A" } };
+      if (danger) vc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.red } };
+      vc.alignment = { horizontal: "right" };
+      lc.border = allBorders; vc.border = allBorders;
+      return row;
+    };
+    wsS.addRow([]);
+    kpi("Nombre de commandes", carStats?.nb_commandes ?? 0);
+    kpi("Nombre de colis", carStats?.nb_lignes ?? 0);
+    kpi("Coût transport total", round2(totalTransp)).getCell(2).numFmt = eurFmt;
+    kpi("Total facturé transporteur", round2(carStats?.total_facture ?? 0)).getCell(2).numFmt = eurFmt;
     if (carOdooLoaded) {
-      const pctMoyen = totalHT > 0 ? (totalTransp / totalHT) * 100 : 0;
-      synth.push(
-        ["── CROISEMENT ODOO ──", ""],
-        ["Commandes trouvées dans Odoo", `${matched.length} / ${carCommandes.length}`],
-        ["Commandes absentes Odoo", carCommandes.length - carCroise.filter(c => c.matched).length],
-        ["Montant commandes HT total (€)", round2(totalHT)],
-        ["% transport / CA moyen (pondéré)", +pctMoyen.toFixed(2) + " %"],
-      );
+      wsS.addRow([]);
+      const sep = wsS.addRow(["── CROISEMENT ODOO ──", ""]);
+      sep.getCell(1).font = { bold: true, color: { argb: C.accent } };
+      kpi("Commandes trouvées dans Odoo", `${matched.length} / ${carCommandes.length}`);
+      kpi("Commandes absentes d'Odoo", carCommandes.length - carCroise.filter(c => c.matched).length, true);
+      kpi("Commandes SANS montant (à perte)", anomalies.length, anomalies.length > 0);
+      kpi("Transport payé à perte", round2(coutAnomalies), coutAnomalies > 0).getCell(2).numFmt = eurFmt;
+      kpi("Montant commandes HT total", round2(totalHT), false, true).getCell(2).numFmt = eurFmt;
+      kpi("% transport / CA moyen (pondéré)", round2(pctMoyen * 100) / 100).getCell(2).numFmt = pctNumFmt;
     }
-    const wsS = XLSX.utils.aoa_to_sheet(synth);
-    wsS["!cols"] = [{ wch: 36 }, { wch: 24 }];
-    XLSX.utils.book_append_sheet(wb, wsS, "Synthèse");
+
+    // ── Feuille CROISÉ ODOO (ou COMMANDES) ──────────────────────────
+    if (carOdooLoaded) {
+      const ws = wb.addWorksheet("Croisé Odoo");
+      ws.columns = [
+        { header: "Référence", key: "ref", width: 12 }, { header: "Client", key: "client", width: 30 },
+        { header: "Date", key: "date", width: 9 }, { header: "Zone", key: "zone", width: 6 },
+        { header: "Colis", key: "colis", width: 7 }, { header: "Poids (kg)", key: "weight", width: 10 },
+        { header: "Transport €", key: "transport", width: 13 }, { header: "Montant HT €", key: "ht", width: 14 },
+        { header: "Montant TTC €", key: "ttc", width: 14 }, { header: "% Transp.", key: "pct", width: 11 },
+        { header: "Statut", key: "statut", width: 16 },
+      ];
+      for (const c of carCroise) {
+        ws.addRow({
+          ref: c.ref, client: c.client || "(absent Odoo)", date: c.date, zone: c.zone, colis: c.colis,
+          weight: c.weight, transport: round2(c.transport), ht: c.montantHT || null, ttc: c.montantTTC || null,
+          pct: c.pct !== null ? round2(c.pct * 100) / 100 : null,
+          statut: !c.matched ? "ABSENT" : c.alert ? "À PERTE (0 €)" : c.pct! > 0.15 ? "⚠ ÉLEVÉ" : c.pct! > 0.08 ? "Moyen" : "OK",
+        });
+      }
+      styleHeader(ws); zebra(ws);
+      ws.getColumn("transport").numFmt = eurFmt; ws.getColumn("ht").numFmt = eurFmt;
+      ws.getColumn("ttc").numFmt = eurFmt; ws.getColumn("pct").numFmt = pctNumFmt;
+      // Coloration conditionnelle ligne par ligne
+      for (let r = 2; r <= ws.rowCount; r++) {
+        const c = carCroise[r - 2];
+        const pctCell = ws.getCell(r, 10); const statCell = ws.getCell(r, 11);
+        let bg = "", fg = "";
+        if (!c.matched || c.alert) { bg = C.red; fg = C.redT; }
+        else if (c.pct! > 0.15) { bg = C.red; fg = C.redT; }
+        else if (c.pct! > 0.08) { bg = C.amber; fg = C.amberT; }
+        else { bg = C.green; fg = C.greenT; }
+        for (const cell of [pctCell, statCell]) {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+          cell.font = { bold: true, color: { argb: fg } };
+          cell.alignment = { horizontal: "center" };
+          cell.border = allBorders;
+        }
+        if (c.alert) {
+          // surligne montant HT/TTC en rouge pour les "à perte"
+          for (const ci of [8, 9]) { const cc = ws.getCell(r, ci); cc.font = { bold: true, color: { argb: C.redT } }; cc.value = cc.value ?? 0; }
+        }
+      }
+    } else {
+      const ws = wb.addWorksheet("Commandes");
+      ws.columns = [
+        { header: "Référence", key: "ref", width: 12 }, { header: "Date", key: "date", width: 9 },
+        { header: "Zone", key: "zone", width: 6 }, { header: "Colis", key: "colis", width: 7 },
+        { header: "Poids (kg)", key: "weight", width: 10 }, { header: "Transport €", key: "transport", width: 13 },
+        { header: "Total facturé €", key: "total", width: 14 },
+      ];
+      for (const c of carCommandes) ws.addRow({ ref: c.ref, date: c.date, zone: c.zone, colis: c.colis, weight: c.weight, transport: round2(c.transport), total: round2(c.total) });
+      styleHeader(ws); zebra(ws);
+      ws.getColumn("transport").numFmt = eurFmt; ws.getColumn("total").numFmt = eurFmt;
+    }
+
+    // ── Feuille ANOMALIES (transport à perte) ───────────────────────
+    if (carOdooLoaded && anomalies.length) {
+      const ws = wb.addWorksheet("⚠ À perte");
+      ws.columns = [
+        { header: "Référence", key: "ref", width: 12 }, { header: "Client", key: "client", width: 30 },
+        { header: "Date", key: "date", width: 9 }, { header: "Colis", key: "colis", width: 7 },
+        { header: "Transport payé €", key: "transport", width: 16 }, { header: "Montant cde", key: "ht", width: 14 },
+        { header: "Statut Odoo", key: "statut", width: 16 },
+      ];
+      for (const c of anomalies) ws.addRow({ ref: c.ref, client: c.client || "(absent Odoo)", date: c.date, colis: c.colis, transport: round2(c.transport), ht: 0, statut: c.matched ? "Trouvée, montant 0" : "Absente d'Odoo" });
+      styleHeader(ws); zebra(ws);
+      ws.getColumn("transport").numFmt = eurFmt; ws.getColumn("ht").numFmt = eurFmt;
+      for (let r = 2; r <= ws.rowCount; r++) ws.getRow(r).eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.red } }; c.font = { color: { argb: C.redT }, bold: false }; c.border = allBorders; });
+    }
+
+    // ── Feuille PAR CLIENT ──────────────────────────────────────────
     if (carOdooLoaded) {
       const byClient = new Map<string, { client: string; cdes: number; colis: number; transport: number; ht: number }>();
       for (const c of carCroise) {
-        const key = c.client || "(non trouvé)";
+        const key = c.client || "(absent Odoo)";
         if (!byClient.has(key)) byClient.set(key, { client: key, cdes: 0, colis: 0, transport: 0, ht: 0 });
-        const g = byClient.get(key)!;
-        g.cdes += 1; g.colis += c.colis; g.transport = round2(g.transport + c.transport); g.ht = round2(g.ht + c.montantHT);
+        const g = byClient.get(key)!; g.cdes += 1; g.colis += c.colis; g.transport = round2(g.transport + c.transport); g.ht = round2(g.ht + c.montantHT);
       }
-      const clientRows = Array.from(byClient.values()).sort((a, b) => b.transport - a.transport)
-        .map(g => ({ "Client": g.client, "Commandes": g.cdes, "Colis": g.colis, "Transport total (€)": g.transport, "Montant cdes HT (€)": g.ht || "", "% Transport / CA": g.ht > 0 ? +((g.transport / g.ht) * 100).toFixed(1) : "" }));
-      const wsC = XLSX.utils.json_to_sheet(clientRows);
-      wsC["!cols"] = [{ wch: 30 }, { wch: 11 }, { wch: 7 }, { wch: 18 }, { wch: 18 }, { wch: 16 }];
-      XLSX.utils.book_append_sheet(wb, wsC, "Par client");
+      const ws = wb.addWorksheet("Par client");
+      ws.columns = [
+        { header: "Client", key: "client", width: 32 }, { header: "Cdes", key: "cdes", width: 8 },
+        { header: "Colis", key: "colis", width: 8 }, { header: "Transport €", key: "transport", width: 14 },
+        { header: "Montant HT €", key: "ht", width: 15 }, { header: "% Transp.", key: "pct", width: 11 },
+      ];
+      for (const g of Array.from(byClient.values()).sort((a, b) => b.transport - a.transport)) {
+        ws.addRow({ client: g.client, cdes: g.cdes, colis: g.colis, transport: g.transport, ht: g.ht || null, pct: g.ht > 0 ? round2((g.transport / g.ht) * 100) / 100 : null });
+      }
+      styleHeader(ws); zebra(ws);
+      ws.getColumn("transport").numFmt = eurFmt; ws.getColumn("ht").numFmt = eurFmt; ws.getColumn("pct").numFmt = pctNumFmt;
+      for (let r = 2; r <= ws.rowCount; r++) {
+        const pc = ws.getCell(r, 6); const v = typeof pc.value === "number" ? pc.value / 100 : null;
+        if (v !== null) { const bg = v > 0.15 ? C.red : v > 0.08 ? C.amber : C.green; const fg = v > 0.15 ? C.redT : v > 0.08 ? C.amberT : C.greenT; pc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } }; pc.font = { bold: true, color: { argb: fg } }; pc.alignment = { horizontal: "center" }; pc.border = allBorders; }
+      }
     }
-    const det = carLignes.map(l => ({ "Référence": l.ref, "Date": l.date, "Zone": l.zone, "Tracking": l.tracking, "Poids (kg)": l.weight, "Transport (€)": l.transport, "Total (€)": l.total }));
-    const wsD = XLSX.utils.json_to_sheet(det);
-    wsD["!cols"] = [{ wch: 12 }, { wch: 8 }, { wch: 6 }, { wch: 20 }, { wch: 10 }, { wch: 13 }, { wch: 11 }];
-    XLSX.utils.book_append_sheet(wb, wsD, "Lignes détail");
-    XLSX.writeFile(wb, `analyse_transport_${new Date().toISOString().slice(0, 10)}.xlsx`);
+
+    // ── Feuille LIGNES DÉTAIL ───────────────────────────────────────
+    const wsD = wb.addWorksheet("Lignes détail");
+    wsD.columns = [
+      { header: "Référence", key: "ref", width: 12 }, { header: "Date", key: "date", width: 9 },
+      { header: "Zone", key: "zone", width: 6 }, { header: "Tracking", key: "tracking", width: 22 },
+      { header: "Poids (kg)", key: "weight", width: 10 }, { header: "Transport €", key: "transport", width: 13 },
+      { header: "Total €", key: "total", width: 12 },
+    ];
+    for (const l of carLignes) wsD.addRow({ ref: l.ref, date: l.date, zone: l.zone, tracking: l.tracking, weight: l.weight, transport: round2(l.transport), total: round2(l.total) });
+    styleHeader(wsD); zebra(wsD);
+    wsD.getColumn("transport").numFmt = eurFmt; wsD.getColumn("total").numFmt = eurFmt;
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `analyse_transport_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }
   const [alerts, setAlerts] = useState<StockAlert[]>([]);
   const [thresholds, setThresholds] = useState<Record<number, number>>({});
@@ -4204,6 +4340,9 @@ export default function Dashboard() {
           const hasData = carCommandes.length > 0;
           const nbMatched = carCroise.filter(c => c.matched).length;
           const nbAlertes = carCroise.filter(c => c.pct !== null && c.pct > 0.15).length;
+          const anomalies = carCroise.filter(c => c.alert);
+          const nbAnomalies = anomalies.length;
+          const coutAnomalies = anomalies.reduce((s, c) => s + c.transport, 0);
           return (
             <div style={{ maxWidth: 1200, margin: "0 auto" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 0 16px" }}>
@@ -4257,16 +4396,17 @@ export default function Dashboard() {
               {hasData && carStats && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                   {/* Cartes stats */}
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: `repeat(${carOdooLoaded ? 5 : 4}, 1fr)`, gap: 12 }}>
                     {[
-                      { label: "Commandes", value: String(carStats.nb_commandes), sub: `${carStats.nb_lignes} colis`, accent: false },
-                      { label: "Transport total", value: eur(carStats.total_transport), sub: "coût pur", accent: true },
-                      { label: "Total facturé", value: eur(carStats.total_facture), sub: "transporteur", accent: false },
-                      { label: "Croisé Odoo", value: carOdooLoaded ? `${nbMatched}/${carCommandes.length}` : "—", sub: carOdooLoaded ? `${nbAlertes} alerte${nbAlertes > 1 ? "s" : ""} >15%` : "lance la recherche", accent: false },
+                      { label: "Commandes", value: String(carStats.nb_commandes), sub: `${carStats.nb_lignes} colis`, accent: false, danger: false },
+                      { label: "Transport total", value: eur(carStats.total_transport), sub: "coût pur", accent: true, danger: false },
+                      { label: "Total facturé", value: eur(carStats.total_facture), sub: "transporteur", accent: false, danger: false },
+                      { label: "Croisé Odoo", value: carOdooLoaded ? `${nbMatched}/${carCommandes.length}` : "—", sub: carOdooLoaded ? `${nbAlertes} alerte${nbAlertes > 1 ? "s" : ""} >15%` : "lance la recherche", accent: false, danger: false },
+                      ...(carOdooLoaded ? [{ label: "Sans montant", value: String(nbAnomalies), sub: `${eur(coutAnomalies)} de transport à perte`, accent: false, danger: nbAnomalies > 0 }] : []),
                     ].map((s, i) => (
-                      <div key={i} style={{ padding: 16, borderRadius: 14, border: "1px solid var(--border)", background: "var(--bg-raised)" }}>
+                      <div key={i} style={{ padding: 16, borderRadius: 14, border: `1px solid ${s.danger ? "#dc2626" : "var(--border)"}`, background: s.danger ? "rgba(220,38,38,0.06)" : "var(--bg-raised)" }}>
                         <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8 }}>{s.label}</div>
-                        <div style={{ fontSize: 22, fontWeight: 800, color: s.accent ? "var(--accent)" : "var(--text-primary)" }}>{s.value}</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: s.danger ? "#dc2626" : s.accent ? "var(--accent)" : "var(--text-primary)" }}>{s.value}</div>
                         <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>{s.sub}</div>
                       </div>
                     ))}
@@ -4352,20 +4492,20 @@ export default function Dashboard() {
                             <tr key={i}><td style={{ fontWeight: 600, color: "var(--accent)" }}>{r.ref}</td><td>{r.date}</td><td>{r.zone}</td><td style={{ textAlign: "right" }}>{r.colis}</td><td style={{ textAlign: "right" }}>{r.weight}</td><td style={{ textAlign: "right" }}>{eur(r.transport)}</td><td style={{ textAlign: "right" }}>{eur(r.total)}</td></tr>
                           ))}
                           {carView === "croise" && (carFiltered as CarrierCrossed[]).map((r, i) => (
-                            <tr key={i}>
+                            <tr key={i} style={r.alert ? { background: "rgba(220,38,38,0.07)" } : undefined}>
                               <td style={{ fontWeight: 600, color: "var(--accent)" }}>{r.ref}</td>
                               <td>{r.client || <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
                               <td style={{ textAlign: "right" }}>{r.colis}</td>
                               <td style={{ textAlign: "right" }}>{eur(r.transport)}</td>
-                              <td style={{ textAlign: "right" }}>{r.montantHT ? eur(r.montantHT) : <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
-                              <td style={{ textAlign: "right" }}>{r.montantTTC ? eur(r.montantTTC) : <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
+                              <td style={{ textAlign: "right" }}>{r.montantHT ? eur(r.montantHT) : <span style={{ color: "#dc2626", fontWeight: 700 }}>0,00 €</span>}</td>
+                              <td style={{ textAlign: "right" }}>{r.montantTTC ? eur(r.montantTTC) : <span style={{ color: "#dc2626", fontWeight: 700 }}>0,00 €</span>}</td>
                               <td style={{ textAlign: "right" }}>
-                                {r.pct === null ? <span style={{ color: "var(--text-muted)" }}>—</span> : (
+                                {r.alert ? <span style={{ color: "#dc2626", fontWeight: 800 }}>⚠ à perte</span> : r.pct === null ? <span style={{ color: "var(--text-muted)" }}>—</span> : (
                                   <span style={{ fontWeight: 700, color: pctColor(r.pct) }}>{pctFmt(r.pct)}</span>
                                 )}
                               </td>
                               <td style={{ textAlign: "center" }}>
-                                {r.matched ? <span style={{ color: "#16a34a", fontWeight: 700 }}>✓</span> : <span style={{ color: "#dc2626", fontSize: 11, fontWeight: 600 }}>absent</span>}
+                                {!r.matched ? <span style={{ color: "#dc2626", fontSize: 11, fontWeight: 600 }}>absent</span> : r.alert ? <span style={{ color: "#dc2626", fontWeight: 700 }}>0 €</span> : <span style={{ color: "#16a34a", fontWeight: 700 }}>✓</span>}
                               </td>
                             </tr>
                           ))}
