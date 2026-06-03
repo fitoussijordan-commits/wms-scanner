@@ -101,36 +101,51 @@ def aggregate(rows):
 
 
 def parse_summary_text(txt):
+    """Renvoie (carburant_reel, taux, total_general_ht).
+
+    Le montant carburant réel = somme des lignes par COMPTE :
+    'NNNNNNNN : Surcharge Carburant 17,15% taux officiel 1.064,42'
+    (une par compte, sans doublon — la ligne récap non préfixée est ignorée)."""
     taux = total_ht = 0.0
+    carb = 0.0
+    for line in txt.split("\n"):
+        m = re.match(r"\s*\d+\s*:\s*Surcharge Carburant\s*([\d.]+,\d{1,2})\s*%.*?taux officiel\s*([\d.]+,\d{2})", line)
+        if m:
+            if not taux:
+                taux = to_float(m.group(1))
+            carb += to_float(m.group(2))
     mt = re.search(r"Surcharge Carburant\s*([\d.]+,\d{1,2})\s*%", txt)
-    if mt:
+    if mt and not taux:
         taux = to_float(mt.group(1))
     m2 = re.search(r"TOTAL GENERAL.*?([\d.]+,\d{2})\s*E\s*UR", txt)
     if m2:
         total_ht = to_float(m2.group(1))
-    return round(taux, 2), round(total_ht, 2)
+    return round(carb, 2), round(taux, 2), round(total_ht, 2)
 
 
-def _stats_for(lignes, taux, total_ht):
+def _stats_for(lignes, carb_reel, taux, total_ht):
     commandes = aggregate(lignes)
     tt = round(sum(r["transport"] for r in lignes), 2)
     to = round(sum(r["options"] for r in lignes), 2)
     tl = round(sum(r["total"] for r in lignes), 2)
-    total_general = total_ht or tl
-    # Surcharge à répartir = écart TOTAL GÉNÉRAL − somme des totaux de lignes.
-    carb = round(total_general - tl, 2)
-    if carb < 0:
-        carb = 0.0
+    total_general = total_ht or round(tl + carb_reel, 2)
+    # Montant carburant AFFICHÉ = valeur réelle lue par compte sur la facture.
+    carb_aff = carb_reel
+    # Montant carburant RÉPARTI pour le coût réel = écart au TOTAL GÉNÉRAL, afin que
+    # la somme des coûts réels réconcilie au centime (absorbe les petits écarts de parsing).
+    carb_dist = round(total_general - tl, 2)
+    if carb_dist < 0:
+        carb_dist = carb_reel
     for c in commandes:
-        share = carb * (c["transport"] / tt) if tt else 0.0
+        share = carb_dist * (c["transport"] / tt) if tt else 0.0
         c["coutReel"] = round(c["total"] + share, 2)
     for l in lignes:
-        share = carb * (l["transport"] / tt) if tt else 0.0
+        share = carb_dist * (l["transport"] / tt) if tt else 0.0
         l["coutReel"] = round(l["total"] + share, 2)
     return commandes, {
         "nb_lignes": len(lignes), "nb_commandes": len(commandes),
         "total_transport": tt, "total_options": to, "total_facture": tl,
-        "surcharge_carburant": carb, "surcharge_taux": taux,
+        "surcharge_carburant": carb_aff, "surcharge_taux": taux,
         "total_general_ht": round(total_general, 2),
     }
 
@@ -179,8 +194,8 @@ def extract_all(pdf_bytes):
     all_lignes = []
     out_factures = []
     for f in factures:
-        taux, tot = parse_summary_text(f["_text"])
-        commandes, stats = _stats_for(f["lignes"], taux, tot)
+        carb_reel, taux, tot = parse_summary_text(f["_text"])
+        commandes, stats = _stats_for(f["lignes"], carb_reel, taux, tot)
         all_lignes.extend(f["lignes"])
         out_factures.append({
             "num": f["num"], "mois_label": f["mois_label"], "mois_key": f["mois_key"],
