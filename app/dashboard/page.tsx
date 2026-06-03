@@ -436,10 +436,11 @@ export default function Dashboard() {
   const [error, setError] = useState("");
 
   // ─── Analyse transporteurs ───────────────────────────────────────────────
-  interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; total: number }
-  interface CarrierCommande { ref: string; date: string; zone: string; colis: number; weight: number; transport: number; total: number }
-  interface CarrierStats { nb_lignes: number; nb_commandes: number; total_transport: number; total_facture: number }
-  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; alert: boolean; groupe?: string[]; groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[] }
+  interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; options?: number; total: number }
+  interface CarrierCommande { ref: string; date: string; zone: string; colis: number; weight: number; transport: number; options?: number; total: number }
+  interface CarrierStats { nb_lignes: number; nb_commandes: number; total_transport: number; total_facture: number; total_options?: number; surcharge_carburant?: number; surcharge_taux?: number; total_general_ht?: number }
+  // coutReel = transport + options + quote-part de surcharge carburant (coût réel tout compris)
+  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; coutReel: number; pct: number | null; matched: boolean; alert: boolean; groupe?: string[]; groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[] }
   const [carLoading, setCarLoading] = useState(false);
   const [carPdfName, setCarPdfName] = useState("");
   const [carLignes, setCarLignes] = useState<CarrierLigne[]>([]);
@@ -516,14 +517,21 @@ export default function Dashboard() {
   const carCroise: CarrierCrossed[] = useMemo(() => {
     if (!carCommandes.length) return [];
     const map = new Map(carOdoo.map(o => [o.ref, o]));
+    // Répartition de la surcharge carburant proportionnellement au transport de chaque commande,
+    // pour un coût réel tout compris qui réconcilie au centime avec le total HT de la facture.
+    const totT = carStats?.total_transport || 0;
+    const surch = carStats?.surcharge_carburant || 0;
     return carCommandes.map(c => {
       const o = map.get(c.ref);
       const montantHT = o?.montantHT ?? 0;
+      const carbShare = totT > 0 ? surch * (c.transport / totT) : 0;
+      // coût réel = transport + options (= c.total) + quote-part carburant
+      const coutReel = Math.round((c.total + carbShare) * 100) / 100;
       // Anomalie : on a payé du transport mais la commande n'a aucun montant (absente Odoo ou montant 0)
-      const alert = c.transport > 0 && montantHT <= 0;
-      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, matched: !!o, alert, groupe: o?.groupe, groupeDetail: o?.groupeDetail, pct: montantHT > 0 ? c.transport / montantHT : null };
+      const alert = coutReel > 0 && montantHT <= 0;
+      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, coutReel, matched: !!o, alert, groupe: o?.groupe, groupeDetail: o?.groupeDetail, pct: montantHT > 0 ? coutReel / montantHT : null };
     });
-  }, [carCommandes, carOdoo]);
+  }, [carCommandes, carOdoo, carStats]);
 
   const carFiltered = useMemo(() => {
     const q = carSearch.trim().toLowerCase();
@@ -538,11 +546,11 @@ export default function Dashboard() {
     if (!withPct.length) return null;
     const topPct = [...withPct].sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0))[0];
     const matched = carCroise.filter(c => c.matched && c.montantHT > 0);
-    const totT = matched.reduce((s, c) => s + c.transport, 0);
+    const totT = matched.reduce((s, c) => s + c.coutReel, 0);
     const totHT = matched.reduce((s, c) => s + c.montantHT, 0);
     const pctGlobal = totHT > 0 ? totT / totHT : 0;
     const byClient = new Map<string, number>();
-    for (const c of carCroise) if (c.client) byClient.set(c.client, (byClient.get(c.client) ?? 0) + c.transport);
+    for (const c of carCroise) if (c.client) byClient.set(c.client, (byClient.get(c.client) ?? 0) + c.coutReel);
     const topClient = Array.from(byClient.entries()).sort((a, b) => b[1] - a[1])[0];
     return { topPct, pctGlobal, topClient };
   }, [carCroise]);
@@ -594,8 +602,9 @@ export default function Dashboard() {
     const totalTransp = carStats?.total_transport ?? 0;
     const totalHT = matched.reduce((s, c) => s + c.montantHT, 0);
     const anomalies = carCroise.filter(c => c.alert);
-    const coutAnomalies = anomalies.reduce((s, c) => s + c.transport, 0);
-    const pctMoyen = totalHT > 0 ? (totalTransp / totalHT) : 0;
+    const coutAnomalies = anomalies.reduce((s, c) => s + c.coutReel, 0);
+    const coutReelMatched = matched.reduce((s, c) => s + c.coutReel, 0);
+    const pctMoyen = totalHT > 0 ? (coutReelMatched / totalHT) : 0;
 
     const wsS = wb.addWorksheet("Synthèse");
     wsS.columns = [{ width: 40 }, { width: 26 }];
@@ -624,8 +633,10 @@ export default function Dashboard() {
     wsS.addRow([]);
     kpi("Nombre de commandes", carStats?.nb_commandes ?? 0);
     kpi("Nombre de colis", carStats?.nb_lignes ?? 0);
-    kpi("Coût transport total", round2(totalTransp)).getCell(2).numFmt = eurFmt;
-    kpi("Total facturé transporteur", round2(carStats?.total_facture ?? 0)).getCell(2).numFmt = eurFmt;
+    kpi("Coût transport pur", round2(totalTransp)).getCell(2).numFmt = eurFmt;
+    if (carStats?.total_options) kpi("Options & services", round2(carStats.total_options)).getCell(2).numFmt = eurFmt;
+    if (carStats?.surcharge_carburant) kpi("Surcharge carburant", round2(carStats.surcharge_carburant)).getCell(2).numFmt = eurFmt;
+    kpi("TOTAL FACTURÉ HT", round2(carStats?.total_general_ht ?? carStats?.total_facture ?? 0), false, true).getCell(2).numFmt = eurFmt;
     if (carOdooLoaded) {
       wsS.addRow([]);
       const sep = wsS.addRow(["── CROISEMENT ODOO ──", ""]);
@@ -647,26 +658,27 @@ export default function Dashboard() {
         { header: "Référence", key: "ref", width: 12 }, { header: "Client", key: "client", width: 30 },
         { header: "Date", key: "date", width: 9 }, { header: "Zone", key: "zone", width: 6 },
         { header: "Colis", key: "colis", width: 7 }, { header: "Poids (kg)", key: "weight", width: 10 },
-        { header: "Transport €", key: "transport", width: 13 }, { header: "Montant HT €", key: "ht", width: 14 },
+        { header: "Transport nu €", key: "transport", width: 13 }, { header: "Coût réel €", key: "coutreel", width: 13 },
+        { header: "Montant HT €", key: "ht", width: 14 },
         { header: "Montant TTC €", key: "ttc", width: 14 }, { header: "% Transp.", key: "pct", width: 11 },
         { header: "Cdes jointes", key: "groupe", width: 20 }, { header: "Statut", key: "statut", width: 16 },
       ];
       for (const c of carCroise) {
         ws.addRow({
           ref: c.ref, client: c.client || "(absent Odoo)", date: c.date, zone: c.zone, colis: c.colis,
-          weight: c.weight, transport: round2(c.transport), ht: c.montantHT || null, ttc: c.montantTTC || null,
+          weight: c.weight, transport: round2(c.transport), coutreel: round2(c.coutReel), ht: c.montantHT || null, ttc: c.montantTTC || null,
           pct: c.pct !== null ? round2(c.pct * 100) : null,
           groupe: c.groupe && c.groupe.length > 1 ? c.groupe.join(" + ") : "",
           statut: !c.matched ? "ABSENT" : c.alert ? "À PERTE (0 €)" : c.pct! > 0.15 ? "⚠ ÉLEVÉ" : c.pct! > 0.08 ? "Moyen" : "OK",
         });
       }
       styleHeader(ws); zebra(ws);
-      ws.getColumn("transport").numFmt = eurFmt; ws.getColumn("ht").numFmt = eurFmt;
+      ws.getColumn("transport").numFmt = eurFmt; ws.getColumn("coutreel").numFmt = eurFmt; ws.getColumn("ht").numFmt = eurFmt;
       ws.getColumn("ttc").numFmt = eurFmt; ws.getColumn("pct").numFmt = pctNumFmt;
       // Coloration conditionnelle ligne par ligne
       for (let r = 2; r <= ws.rowCount; r++) {
         const c = carCroise[r - 2];
-        const pctCell = ws.getCell(r, 10); const statCell = ws.getCell(r, 12);
+        const pctCell = ws.getCell(r, 11); const statCell = ws.getCell(r, 13);
         let bg = "", fg = "";
         if (!c.matched || c.alert) { bg = C.red; fg = C.redT; }
         else if (c.pct! > 0.15) { bg = C.red; fg = C.redT; }
@@ -680,7 +692,7 @@ export default function Dashboard() {
         }
         if (c.alert) {
           // surligne montant HT/TTC en rouge pour les "à perte"
-          for (const ci of [8, 9]) { const cc = ws.getCell(r, ci); cc.font = { bold: true, color: { argb: C.redT } }; cc.value = cc.value ?? 0; }
+          for (const ci of [9, 10]) { const cc = ws.getCell(r, ci); cc.font = { bold: true, color: { argb: C.redT } }; cc.value = cc.value ?? 0; }
         }
       }
     } else {
@@ -705,7 +717,7 @@ export default function Dashboard() {
         { header: "Transport payé €", key: "transport", width: 16 }, { header: "Montant cde", key: "ht", width: 14 },
         { header: "Statut Odoo", key: "statut", width: 16 },
       ];
-      for (const c of anomalies) ws.addRow({ ref: c.ref, client: c.client || "(absent Odoo)", date: c.date, colis: c.colis, transport: round2(c.transport), ht: 0, statut: c.matched ? "Trouvée, montant 0" : "Absente d'Odoo" });
+      for (const c of anomalies) ws.addRow({ ref: c.ref, client: c.client || "(absent Odoo)", date: c.date, colis: c.colis, transport: round2(c.coutReel), ht: 0, statut: c.matched ? "Trouvée, montant 0" : "Absente d'Odoo" });
       styleHeader(ws); zebra(ws);
       ws.getColumn("transport").numFmt = eurFmt; ws.getColumn("ht").numFmt = eurFmt;
       for (let r = 2; r <= ws.rowCount; r++) ws.getRow(r).eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.red } }; c.font = { color: { argb: C.redT }, bold: false }; c.border = allBorders; });
@@ -725,7 +737,7 @@ export default function Dashboard() {
         for (const c of grouped) {
           c.groupeDetail!.forEach((d, idx) => {
             ws.addRow({
-              parent: idx === 0 ? c.ref : "", client: idx === 0 ? c.client : "", transport: idx === 0 ? round2(c.transport) : null,
+              parent: idx === 0 ? c.ref : "", client: idx === 0 ? c.client : "", transport: idx === 0 ? round2(c.coutReel) : null,
               ref: d.ref, type: d.ref === c.ref ? "facturée" : "jointe", ht: d.montantHT, ttc: d.montantTTC,
               pct: idx === 0 && c.pct !== null ? round2(c.pct * 100) : null,
             });
@@ -748,7 +760,7 @@ export default function Dashboard() {
       for (const c of carCroise) {
         const key = c.client || "(absent Odoo)";
         if (!byClient.has(key)) byClient.set(key, { client: key, cdes: 0, colis: 0, transport: 0, ht: 0 });
-        const g = byClient.get(key)!; g.cdes += 1; g.colis += c.colis; g.transport = round2(g.transport + c.transport); g.ht = round2(g.ht + c.montantHT);
+        const g = byClient.get(key)!; g.cdes += 1; g.colis += c.colis; g.transport = round2(g.transport + c.coutReel); g.ht = round2(g.ht + c.montantHT);
       }
       const ws = wb.addWorksheet("Par client");
       ws.columns = [
@@ -4394,7 +4406,7 @@ export default function Dashboard() {
           const nbAlertes = carCroise.filter(c => c.pct !== null && c.pct > 0.15).length;
           const anomalies = carCroise.filter(c => c.alert);
           const nbAnomalies = anomalies.length;
-          const coutAnomalies = anomalies.reduce((s, c) => s + c.transport, 0);
+          const coutAnomalies = anomalies.reduce((s, c) => s + c.coutReel, 0);
           return (
             <div style={{ maxWidth: 1200, margin: "0 auto" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 0 16px" }}>
@@ -4452,7 +4464,7 @@ export default function Dashboard() {
                     {[
                       { label: "Commandes", value: String(carStats.nb_commandes), sub: `${carStats.nb_lignes} colis`, accent: false, danger: false },
                       { label: "Transport total", value: eur(carStats.total_transport), sub: "coût pur", accent: true, danger: false },
-                      { label: "Total facturé", value: eur(carStats.total_facture), sub: "transporteur", accent: false, danger: false },
+                      { label: "Total facturé HT", value: eur(carStats.total_general_ht ?? carStats.total_facture), sub: carStats.surcharge_carburant ? `dont ${eur(carStats.surcharge_carburant)} carburant` : "transporteur", accent: false, danger: false },
                       { label: "Croisé Odoo", value: carOdooLoaded ? `${nbMatched}/${carCommandes.length}` : "—", sub: carOdooLoaded ? `${nbAlertes} alerte${nbAlertes > 1 ? "s" : ""} >15%` : "lance la recherche", accent: false, danger: false },
                       ...(carOdooLoaded ? [{ label: "Sans montant", value: String(nbAnomalies), sub: `${eur(coutAnomalies)} de transport à perte`, accent: false, danger: nbAnomalies > 0 }] : []),
                     ].map((s, i) => (
@@ -4525,7 +4537,7 @@ export default function Dashboard() {
                             {carView === "lignes" ? (
                               <><th><div className="th-inner">Réf</div></th><th><div className="th-inner">Date</div></th><th><div className="th-inner">Zone</div></th><th><div className="th-inner">Tracking</div></th><th><div className="th-inner">Poids</div></th><th><div className="th-inner">Transport</div></th><th><div className="th-inner">Total</div></th></>
                             ) : carView === "croise" ? (
-                              <><th><div className="th-inner">Réf</div></th><th><div className="th-inner">Client</div></th><th><div className="th-inner">Colis</div></th><th><div className="th-inner">Transport</div></th><th><div className="th-inner">Montant HT</div></th><th><div className="th-inner">Montant TTC</div></th><th><div className="th-inner">% Transp.</div></th><th><div className="th-inner">Odoo</div></th></>
+                              <><th><div className="th-inner">Réf</div></th><th><div className="th-inner">Client</div></th><th><div className="th-inner">Colis</div></th><th><div className="th-inner" title="Total facturé de la ligne (transport + options/frais) + quote-part surcharge carburant">Coût réel</div></th><th><div className="th-inner">Montant HT</div></th><th><div className="th-inner">Montant TTC</div></th><th><div className="th-inner">% Transp.</div></th><th><div className="th-inner">Odoo</div></th></>
                             ) : (
                               <><th><div className="th-inner">Réf</div></th><th><div className="th-inner">Date</div></th><th><div className="th-inner">Zone</div></th><th><div className="th-inner">Colis</div></th><th><div className="th-inner">Poids</div></th><th><div className="th-inner">Transport</div></th><th><div className="th-inner">Total</div></th></>
                             )}
@@ -4556,7 +4568,7 @@ export default function Dashboard() {
                               </td>
                               <td>{r.client || <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
                               <td style={{ textAlign: "right" }}>{r.colis}</td>
-                              <td style={{ textAlign: "right" }}>{eur(r.transport)}</td>
+                              <td style={{ textAlign: "right" }} title={`Transport ${eur(r.transport)}${r.options ? ` + options ${eur(r.options)}` : ""} + carburant`}>{eur(r.coutReel)}</td>
                               <td style={{ textAlign: "right" }}>{r.montantHT ? eur(r.montantHT) : <span style={{ color: "#dc2626", fontWeight: 700 }}>0,00 €</span>}</td>
                               <td style={{ textAlign: "right" }}>{r.montantTTC ? eur(r.montantTTC) : <span style={{ color: "#dc2626", fontWeight: 700 }}>0,00 €</span>}</td>
                               <td style={{ textAlign: "right" }}>
