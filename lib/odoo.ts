@@ -2602,10 +2602,30 @@ export async function bulkUpdateMinQuantity(
 export interface CarrierSaleOrder {
   ref: string;          // name de la commande (S####)
   client: string;       // nom du partenaire
-  montantHT: number;    // amount_untaxed
-  montantTTC: number;   // amount_total
+  montantHT: number;    // amount_untaxed (CUMULÉ avec les commandes jointes)
+  montantTTC: number;   // amount_total  (CUMULÉ avec les commandes jointes)
   dateOrder: string;    // date_order (YYYY-MM-DD)
   state: string;
+  groupe?: string[];    // réfs des commandes jointes incluses dans le montant (self compris si groupé)
+}
+
+/**
+ * Découvre le nom technique du champ "Commandes jointes" sur sale.order
+ * (libellé saisi par l'utilisateur, nom technique inconnu et variable).
+ * Renvoie { name, type } ou null si introuvable.
+ */
+async function discoverJoinedField(session: OdooSession): Promise<{ name: string; type: string } | null> {
+  try {
+    const fg = await callMethod(session, "sale.order", "fields_get", [], { attributes: ["string", "type", "relation"] });
+    const norm = (s: string) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    for (const [name, def] of Object.entries<any>(fg)) {
+      const label = norm(def?.string);
+      if (label === "commandes jointes" || (label.includes("command") && label.includes("joint"))) {
+        return { name, type: def?.type || "" };
+      }
+    }
+  } catch { /* champ non dispo → on ignore le groupage */ }
+  return null;
 }
 
 /**
@@ -2630,16 +2650,28 @@ export async function fetchCarrierSaleOrders(
   const uniqueRefs = Array.from(new Set(refs.map(r => r.trim()).filter(Boolean)));
   if (!uniqueRefs.length) return [];
 
-  const fields = ["name", "partner_id", "amount_untaxed", "amount_total", "date_order", "state"];
+  // Champ "Commandes jointes" (nom technique découvert dynamiquement).
+  const joined = await discoverJoinedField(session);
+  const joinedName = joined?.name;
+  const joinedRelational = joined ? ["many2many", "one2many", "many2one"].includes(joined.type) : false;
 
-  const toRow = (r: any): CarrierSaleOrder => ({
-    ref: r.name,
-    client: Array.isArray(r.partner_id) ? r.partner_id[1] : "",
-    montantHT: r.amount_untaxed || 0,
-    montantTTC: r.amount_total || 0,
-    dateOrder: r.date_order ? String(r.date_order).split(" ")[0] : "",
-    state: r.state || "",
-  });
+  const fields = ["name", "partner_id", "amount_untaxed", "amount_total", "date_order", "state"];
+  if (joinedName) fields.push(joinedName);
+
+  // Stocke la valeur brute du champ joint par réf (ids ou texte) pour résolution ultérieure.
+  const rawJoined = new Map<string, any>();
+
+  const toRow = (r: any): CarrierSaleOrder => {
+    if (joinedName) rawJoined.set(r.name, r[joinedName]);
+    return {
+      ref: r.name,
+      client: Array.isArray(r.partner_id) ? r.partner_id[1] : "",
+      montantHT: r.amount_untaxed || 0,
+      montantTTC: r.amount_total || 0,
+      dateOrder: r.date_order ? String(r.date_order).split(" ")[0] : "",
+      state: r.state || "",
+    };
+  };
 
   // Recherche par lots (évite des domaines trop volumineux côté Odoo).
   async function searchByNames(names: string[], useDate: boolean): Promise<CarrierSaleOrder[]> {
@@ -2675,6 +2707,65 @@ export async function fetchCarrierSaleOrders(
   if (dateStart || dateEnd) {
     const missing = uniqueRefs.filter(r => !byRef.has(r));
     if (missing.length) collect(await searchByNames(missing, false));
+  }
+
+  // ── Cumul des commandes jointes ────────────────────────────────────────
+  // Pour les livraisons groupées, la facture transporteur ne porte qu'une
+  // seule réf (ex : S67223) alors que le colis couvre plusieurs commandes
+  // (S67223 + S66983). On ajoute le montant des commandes jointes.
+  if (joinedName) {
+    try {
+      // 1. Récolte des identifiants joints (ids si relationnel, sinon noms texte).
+      const joinedIds = new Set<number>();
+      const joinedNames = new Set<string>();
+      for (const ref of byRef.keys()) {
+        const v = rawJoined.get(ref);
+        if (v == null || v === false) continue;
+        if (joinedRelational && Array.isArray(v)) {
+          // many2one => [id, "S####"] ; m2m/o2m => [id, id, ...]
+          if (v.length === 2 && typeof v[1] === "string") joinedIds.add(v[0]);
+          else for (const id of v) if (typeof id === "number") joinedIds.add(id);
+        } else if (typeof v === "string") {
+          for (const m of v.match(/S\d{4,}/g) || []) joinedNames.add(m);
+        }
+      }
+
+      // 2. Résolution des montants des commandes jointes (par id puis par nom).
+      const amtByName = new Map<string, { ht: number; ttc: number }>();
+      const idToName = new Map<number, string>();
+      const readJoined = async (domain: any[]) => {
+        const rows = await searchRead(session, "sale.order", domain, ["id", "name", "amount_untaxed", "amount_total"], 0, "");
+        for (const r of rows) { amtByName.set(r.name, { ht: r.amount_untaxed || 0, ttc: r.amount_total || 0 }); idToName.set(r.id, r.name); }
+      };
+      const idList = Array.from(joinedIds);
+      for (let i = 0; i < idList.length; i += 200) await readJoined([["id", "in", idList.slice(i, i + 200)]]);
+      const nameList = Array.from(joinedNames);
+      for (let i = 0; i < nameList.length; i += 200) await readJoined([["name", "in", nameList.slice(i, i + 200)]]);
+      // On a aussi les montants des commandes facturées elles-mêmes.
+      for (const o of byRef.values()) amtByName.set(o.ref, { ht: o.montantHT, ttc: o.montantTTC });
+
+      // 3. Cumul sur chaque commande facturée (dédoublonné, self inclus).
+      for (const [ref, o] of byRef) {
+        const v = rawJoined.get(ref);
+        const siblings: string[] = [];
+        if (v != null && v !== false) {
+          if (joinedRelational && Array.isArray(v)) {
+            const ids = (v.length === 2 && typeof v[1] === "string") ? [v[0]] : v.filter((x: any) => typeof x === "number");
+            for (const id of ids) { const nm = idToName.get(id); if (nm) siblings.push(nm); }
+          } else if (typeof v === "string") {
+            for (const m of v.match(/S\d{4,}/g) || []) siblings.push(m);
+          }
+        }
+        const groupe = Array.from(new Set([ref, ...siblings])).filter(n => amtByName.has(n));
+        if (groupe.length > 1) {
+          let ht = 0, ttc = 0;
+          for (const n of groupe) { const a = amtByName.get(n)!; ht += a.ht; ttc += a.ttc; }
+          o.montantHT = Math.round(ht * 100) / 100;
+          o.montantTTC = Math.round(ttc * 100) / 100;
+          o.groupe = groupe;
+        }
+      }
+    } catch { /* en cas d'échec on garde les montants simples */ }
   }
 
   return Array.from(byRef.values());

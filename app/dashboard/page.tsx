@@ -439,7 +439,7 @@ export default function Dashboard() {
   interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; total: number }
   interface CarrierCommande { ref: string; date: string; zone: string; colis: number; weight: number; transport: number; total: number }
   interface CarrierStats { nb_lignes: number; nb_commandes: number; total_transport: number; total_facture: number }
-  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; alert: boolean }
+  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; alert: boolean; groupe?: string[] }
   const [carLoading, setCarLoading] = useState(false);
   const [carPdfName, setCarPdfName] = useState("");
   const [carLignes, setCarLignes] = useState<CarrierLigne[]>([]);
@@ -520,7 +520,7 @@ export default function Dashboard() {
       const montantHT = o?.montantHT ?? 0;
       // Anomalie : on a payé du transport mais la commande n'a aucun montant (absente Odoo ou montant 0)
       const alert = c.transport > 0 && montantHT <= 0;
-      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, matched: !!o, alert, pct: montantHT > 0 ? c.transport / montantHT : null };
+      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, matched: !!o, alert, groupe: o?.groupe, pct: montantHT > 0 ? c.transport / montantHT : null };
     });
   }, [carCommandes, carOdoo]);
 
@@ -648,13 +648,14 @@ export default function Dashboard() {
         { header: "Colis", key: "colis", width: 7 }, { header: "Poids (kg)", key: "weight", width: 10 },
         { header: "Transport €", key: "transport", width: 13 }, { header: "Montant HT €", key: "ht", width: 14 },
         { header: "Montant TTC €", key: "ttc", width: 14 }, { header: "% Transp.", key: "pct", width: 11 },
-        { header: "Statut", key: "statut", width: 16 },
+        { header: "Cdes jointes", key: "groupe", width: 20 }, { header: "Statut", key: "statut", width: 16 },
       ];
       for (const c of carCroise) {
         ws.addRow({
           ref: c.ref, client: c.client || "(absent Odoo)", date: c.date, zone: c.zone, colis: c.colis,
           weight: c.weight, transport: round2(c.transport), ht: c.montantHT || null, ttc: c.montantTTC || null,
           pct: c.pct !== null ? round2(c.pct * 100) : null,
+          groupe: c.groupe && c.groupe.length > 1 ? c.groupe.join(" + ") : "",
           statut: !c.matched ? "ABSENT" : c.alert ? "À PERTE (0 €)" : c.pct! > 0.15 ? "⚠ ÉLEVÉ" : c.pct! > 0.08 ? "Moyen" : "OK",
         });
       }
@@ -664,7 +665,7 @@ export default function Dashboard() {
       // Coloration conditionnelle ligne par ligne
       for (let r = 2; r <= ws.rowCount; r++) {
         const c = carCroise[r - 2];
-        const pctCell = ws.getCell(r, 10); const statCell = ws.getCell(r, 11);
+        const pctCell = ws.getCell(r, 10); const statCell = ws.getCell(r, 12);
         let bg = "", fg = "";
         if (!c.matched || c.alert) { bg = C.red; fg = C.redT; }
         else if (c.pct! > 0.15) { bg = C.red; fg = C.redT; }
@@ -4506,7 +4507,12 @@ export default function Dashboard() {
                           ))}
                           {carView === "croise" && (carFiltered as CarrierCrossed[]).map((r, i) => (
                             <tr key={i} style={r.alert ? { background: "rgba(220,38,38,0.07)" } : undefined}>
-                              <td style={{ fontWeight: 600, color: "var(--accent)" }}>{r.ref}</td>
+                              <td style={{ fontWeight: 600, color: "var(--accent)" }}>
+                                {r.ref}
+                                {r.groupe && r.groupe.length > 1 && (
+                                  <span title={`Montant cumulé : ${r.groupe.join(" + ")}`} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#7c3aed", background: "rgba(124,58,237,0.12)", padding: "1px 6px", borderRadius: 10 }}>+{r.groupe.length - 1} jointe{r.groupe.length - 1 > 1 ? "s" : ""}</span>
+                                )}
+                              </td>
                               <td>{r.client || <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
                               <td style={{ textAlign: "right" }}>{r.colis}</td>
                               <td style={{ textAlign: "right" }}>{eur(r.transport)}</td>
