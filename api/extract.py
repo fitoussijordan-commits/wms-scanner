@@ -145,7 +145,17 @@ def extract_all(pdf_bytes):
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         cur = None
         for page in pdf.pages:
-            txt = page.extract_text() or ""
+            # Un seul parsing de la page (extract_words) ; le texte est reconstruit
+            # depuis les mots pour éviter un second passage coûteux (extract_text).
+            lines = defaultdict(list)
+            for w in page.extract_words():
+                lines[round(w["top"])].append(w)
+            sorted_tops = sorted(lines.keys())
+            text_rows = []
+            for top in sorted_tops:
+                row = sorted(lines[top], key=lambda w: w["x0"])
+                text_rows.append(" ".join(w["text"] for w in row))
+            txt = "\n".join(text_rows)
             mper = re.search(r"Période facturée : du (\d+)/(\d+)/(\d+) au (\d+)/(\d+)/(\d+)", txt)
             mnum = re.search(r"FACTURE N°\s*([0-9 ]+)", txt)
             if mper:
@@ -163,10 +173,7 @@ def extract_all(pdf_bytes):
             if cur is None:
                 continue
             cur["_text"] += "\n" + txt
-            lines = defaultdict(list)
-            for w in page.extract_words():
-                lines[round(w["top"])].append(w)
-            for top in sorted(lines.keys()):
+            for top in sorted_tops:
                 row = sorted(lines[top], key=lambda w: w["x0"])
                 r = _row_from_words(row)
                 if r:
