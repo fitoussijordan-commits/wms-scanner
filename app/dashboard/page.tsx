@@ -2987,6 +2987,16 @@ export default function Dashboard() {
   const MONO = "'JetBrains Mono', monospace";
 
   // ═══════════════════════════════════════
+  // Bloquer le render tant que localStorage n'a pas été lu (évite le flash FOUC)
+  // DOIT être avant le garde !session, sinon l'écran de login flashe une frame.
+  if (!mounted) return (
+    <div className="wms-root" data-theme="light" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "var(--bg)" }}>
+      <style>{GLOBAL_CSS}</style>
+      <Spinner size={32} />
+    </div>
+  );
+
+  // ═══════════════════════════════════════
   // LOGIN
   // ═══════════════════════════════════════
   if (!session) return (
@@ -3015,15 +3025,6 @@ export default function Dashboard() {
 
   // ═══════════════════════════════════════
   // MAIN
-  // ═══════════════════════════════════════
-  // Bloquer le render tant que localStorage n'a pas été lu (évite le flash FOUC)
-  if (!mounted) return (
-    <div className="wms-root" data-theme="light" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "var(--bg)" }}>
-      <style>{GLOBAL_CSS}</style>
-      <Spinner size={32} />
-    </div>
-  );
-
   return (
     <div className="wms-root" data-theme="light"><style>{GLOBAL_CSS}</style>
 
