@@ -473,6 +473,7 @@ export default function Dashboard() {
   const [carCommandes, setCarCommandes] = useState<CarrierCommande[]>([]);
   const [carStats, setCarStats] = useState<CarrierStats | null>(null);
   const [carFactures, setCarFactures] = useState<CarrierFacture[]>([]);
+  const [carLignesOmises, setCarLignesOmises] = useState(false);
   const [carOdoo, setCarOdoo] = useState<odoo.CarrierSaleOrder[]>([]);
   const [carOdooLoaded, setCarOdooLoaded] = useState(false);
   const [carSearching, setCarSearching] = useState(false);
@@ -513,6 +514,7 @@ export default function Dashboard() {
       if (data.error) { setCarError("Erreur extraction : " + data.error); return; }
       setCarLignes(data.lignes); setCarCommandes(data.commandes); setCarStats(data.stats);
       setCarFactures(data.factures || []);
+      setCarLignesOmises(!!data.lignes_omises);
       // Bornes de dates (juste pour l'entête de l'export, plus de filtre)
       const isoDates = (data.lignes as CarrierLigne[]).map(l => carParseDate(l.date)).filter(Boolean) as string[];
       if (isoDates.length) { isoDates.sort(); setCarStart(isoDates[0]); setCarEnd(isoDates[isoDates.length - 1]); }
@@ -584,7 +586,7 @@ export default function Dashboard() {
   }, [carCroise]);
 
   function carReset() {
-    setCarLignes([]); setCarCommandes([]); setCarStats(null); setCarFactures([]); setCarOdoo([]); setCarOdooLoaded(false);
+    setCarLignes([]); setCarCommandes([]); setCarStats(null); setCarFactures([]); setCarLignesOmises(false); setCarOdoo([]); setCarOdooLoaded(false);
     setCarPdfName(""); setCarSearch(""); setCarView("commandes"); setCarStart(""); setCarEnd(""); setCarError("");
   }
 
@@ -892,17 +894,19 @@ export default function Dashboard() {
       }
     }
 
-    // ── Feuille LIGNES DÉTAIL ───────────────────────────────────────
-    const wsD = wb.addWorksheet("Lignes détail");
-    wsD.columns = [
-      { header: "Référence", key: "ref", width: 12 }, { header: "Date", key: "date", width: 9 },
-      { header: "Zone", key: "zone", width: 6 }, { header: "Tracking", key: "tracking", width: 22 },
-      { header: "Poids (kg)", key: "weight", width: 10 }, { header: "Transport €", key: "transport", width: 13 },
-      { header: "Total €", key: "total", width: 12 },
-    ];
-    for (const l of carLignes) wsD.addRow({ ref: l.ref, date: l.date, zone: l.zone, tracking: l.tracking, weight: l.weight, transport: round2(l.transport), total: round2(l.total) });
-    styleHeader(wsD); zebra(wsD);
-    wsD.getColumn("transport").numFmt = eurFmt; wsD.getColumn("total").numFmt = eurFmt;
+    // ── Feuille LIGNES DÉTAIL (omise sur les très gros fichiers) ────
+    if (carLignes.length) {
+      const wsD = wb.addWorksheet("Lignes détail");
+      wsD.columns = [
+        { header: "Référence", key: "ref", width: 12 }, { header: "Date", key: "date", width: 9 },
+        { header: "Zone", key: "zone", width: 6 }, { header: "Tracking", key: "tracking", width: 22 },
+        { header: "Poids (kg)", key: "weight", width: 10 }, { header: "Transport €", key: "transport", width: 13 },
+        { header: "Total €", key: "total", width: 12 },
+      ];
+      for (const l of carLignes) wsD.addRow({ ref: l.ref, date: l.date, zone: l.zone, tracking: l.tracking, weight: l.weight, transport: round2(l.transport), total: round2(l.total) });
+      styleHeader(wsD); zebra(wsD);
+      wsD.getColumn("transport").numFmt = eurFmt; wsD.getColumn("total").numFmt = eurFmt;
+    }
 
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
@@ -4752,6 +4756,12 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                     </div>
                     <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{carFiltered.length} ligne{carFiltered.length > 1 ? "s" : ""}{carPdfName ? ` · ${carPdfName}` : ""}</div>
                   </div>
+
+                  {carView === "lignes" && carLignesOmises && (
+                    <div style={{ padding: "10px 14px", borderRadius: 10, background: "rgba(217,119,6,.08)", border: "1px solid rgba(217,119,6,.25)", color: "#92400e", fontSize: 12.5 }}>
+                      Le détail par colis est masqué sur les gros fichiers (&gt; 8 000 colis) pour rester rapide. L'analyse par commande et le croisement Odoo restent complets ; utilise la vue « Commandes » ou « Croisé Odoo ».
+                    </div>
+                  )}
 
                   {/* Tableau */}
                   <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>

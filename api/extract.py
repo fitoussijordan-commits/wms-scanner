@@ -213,10 +213,16 @@ def extract_all(pdf_bytes):
         "surcharge_carburant": comb_surch, "surcharge_taux": 0.0,
         "total_general_ht": comb_total,
     }
+    # La réponse Vercel est limitée à ~4,5 Mo. Le détail par colis (lignes) est
+    # le plus volumineux : on l'omet au-delà d'un seuil (l'analyse reste au niveau
+    # commande). ~8000 colis ≈ 2,5 Mo de payload, marge confortable.
+    LIGNES_MAX = 8000
+    lignes_omises = len(all_lignes) > LIGNES_MAX
     return {
         "multi": len(out_factures) > 1,
         "factures": out_factures,
-        "lignes": all_lignes,
+        "lignes": [] if lignes_omises else all_lignes,
+        "lignes_omises": lignes_omises,
         "commandes": commandes_comb,
         "stats": stats_comb,
     }
