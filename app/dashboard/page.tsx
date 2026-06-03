@@ -461,8 +461,9 @@ export default function Dashboard() {
   const [error, setError] = useState("");
 
   // ─── Analyse transporteurs ───────────────────────────────────────────────
-  interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; options?: number; total: number }
-  interface CarrierCommande { ref: string; date: string; zone: string; colis: number; weight: number; transport: number; options?: number; total: number }
+  interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; options?: number; total: number; coutReel?: number; mois?: string }
+  interface CarrierCommande { ref: string; date: string; zone: string; colis: number; weight: number; transport: number; options?: number; total: number; coutReel?: number; mois?: string }
+  interface CarrierFacture { num: string; mois_label: string; mois_key: string; periode_debut: string; periode_fin: string; stats: CarrierStats }
   interface CarrierStats { nb_lignes: number; nb_commandes: number; total_transport: number; total_facture: number; total_options?: number; surcharge_carburant?: number; surcharge_taux?: number; total_general_ht?: number }
   // coutReel = transport + options + quote-part de surcharge carburant (coût réel tout compris)
   interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; coutReel: number; pct: number | null; matched: boolean; alert: boolean; cp?: string; ville?: string; dept?: string; groupe?: string[]; groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[] }
@@ -471,6 +472,7 @@ export default function Dashboard() {
   const [carLignes, setCarLignes] = useState<CarrierLigne[]>([]);
   const [carCommandes, setCarCommandes] = useState<CarrierCommande[]>([]);
   const [carStats, setCarStats] = useState<CarrierStats | null>(null);
+  const [carFactures, setCarFactures] = useState<CarrierFacture[]>([]);
   const [carOdoo, setCarOdoo] = useState<odoo.CarrierSaleOrder[]>([]);
   const [carOdooLoaded, setCarOdooLoaded] = useState(false);
   const [carSearching, setCarSearching] = useState(false);
@@ -510,6 +512,7 @@ export default function Dashboard() {
       const data = await res.json();
       if (data.error) { setCarError("Erreur extraction : " + data.error); return; }
       setCarLignes(data.lignes); setCarCommandes(data.commandes); setCarStats(data.stats);
+      setCarFactures(data.factures || []);
       // Bornes de dates (juste pour l'entête de l'export, plus de filtre)
       const isoDates = (data.lignes as CarrierLigne[]).map(l => carParseDate(l.date)).filter(Boolean) as string[];
       if (isoDates.length) { isoDates.sort(); setCarStart(isoDates[0]); setCarEnd(isoDates[isoDates.length - 1]); }
@@ -549,9 +552,9 @@ export default function Dashboard() {
     return carCommandes.map(c => {
       const o = map.get(c.ref);
       const montantHT = o?.montantHT ?? 0;
+      // coutReel fourni par le parser (réparti par mois) ; fallback calcul global si absent.
       const carbShare = totT > 0 ? surch * (c.transport / totT) : 0;
-      // coût réel = transport + options (= c.total) + quote-part carburant
-      const coutReel = Math.round((c.total + carbShare) * 100) / 100;
+      const coutReel = c.coutReel ?? Math.round((c.total + carbShare) * 100) / 100;
       // Anomalie : on a payé du transport mais la commande n'a aucun montant (absente Odoo ou montant 0)
       const alert = coutReel > 0 && montantHT <= 0;
       return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, coutReel, matched: !!o, alert, cp: o?.cp, ville: o?.ville, dept: o?.dept, groupe: o?.groupe, groupeDetail: o?.groupeDetail, pct: montantHT > 0 ? coutReel / montantHT : null };
@@ -581,7 +584,7 @@ export default function Dashboard() {
   }, [carCroise]);
 
   function carReset() {
-    setCarLignes([]); setCarCommandes([]); setCarStats(null); setCarOdoo([]); setCarOdooLoaded(false);
+    setCarLignes([]); setCarCommandes([]); setCarStats(null); setCarFactures([]); setCarOdoo([]); setCarOdooLoaded(false);
     setCarPdfName(""); setCarSearch(""); setCarView("commandes"); setCarStart(""); setCarEnd(""); setCarError("");
   }
 
@@ -861,6 +864,32 @@ export default function Dashboard() {
       styleHeader(ws); zebra(ws);
       ws.getColumn("ht").numFmt = eurFmt; ws.getColumn("cout").numFmt = eurFmt; ws.getColumn("pct").numFmt = pctNumFmt;
       if (ws.rowCount > 1) ws.addConditionalFormatting({ ref: `C2:C${ws.rowCount}`, rules: [{ type: "dataBar", cfvo: [{ type: "num", value: 0 }, { type: "max" }], color: { argb: "FF16A34A" } } as any] });
+    }
+
+    // ── Feuilles PAR MOIS (fichier multi-factures) ──────────────────
+    if (carFactures.length > 1) {
+      for (const f of carFactures) {
+        const rowsM = carCroise.filter(c => c.mois === f.mois_label);
+        if (!rowsM.length) continue;
+        const safe = f.mois_label.replace(/[\\/?*[\]:]/g, "").slice(0, 31);
+        const ws = wb.addWorksheet(safe, { properties: { tabColor: { argb: "FF7C3AED" } } });
+        ws.columns = [
+          { header: "Référence", key: "ref", width: 12 }, { header: "Client", key: "client", width: 28 },
+          { header: "Colis", key: "colis", width: 7 }, { header: "Coût réel €", key: "cout", width: 13 },
+          { header: "Montant HT €", key: "ht", width: 14 }, { header: "% Transp.", key: "pct", width: 11 },
+          { header: "Statut", key: "statut", width: 15 },
+        ];
+        for (const c of rowsM) ws.addRow({
+          ref: c.ref, client: c.client || "(absent Odoo)", colis: c.colis, cout: round2(c.coutReel),
+          ht: c.montantHT || null, pct: c.pct !== null ? round2(c.pct * 100) : null,
+          statut: !c.matched ? "ABSENT" : c.alert ? "À PERTE" : c.pct! > 0.15 ? "⚠ ÉLEVÉ" : c.pct! > 0.08 ? "Moyen" : "OK",
+        });
+        styleHeader(ws); zebra(ws);
+        ws.getColumn("cout").numFmt = eurFmt; ws.getColumn("ht").numFmt = eurFmt; ws.getColumn("pct").numFmt = pctNumFmt;
+        // ligne total du mois
+        const tot = ws.addRow({ ref: "TOTAL", client: f.mois_label, colis: rowsM.reduce((s, c) => s + c.colis, 0), cout: round2(f.stats.total_general_ht || rowsM.reduce((s, c) => s + c.coutReel, 0)) });
+        tot.eachCell((cc: any) => { cc.font = { bold: true }; cc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEDE9FE" } }; });
+      }
     }
 
     // ── Feuille LIGNES DÉTAIL ───────────────────────────────────────
@@ -4649,6 +4678,44 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                           <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{eur(carInsights.topClient[1])} de transport</div>
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {/* Détail par mois (fichier multi-factures) */}
+                  {carFactures.length > 1 && (
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+                      <div style={{ padding: "10px 14px", background: "var(--bg-raised)", fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 8 }}>
+                        📅 {carFactures.length} factures · vue annuelle — les cartes ci-dessus cumulent tous les mois
+                      </div>
+                      <table className="wms-table">
+                        <thead><tr><th><div className="th-inner">Mois</div></th><th><div className="th-inner">Commandes</div></th><th><div className="th-inner">Colis</div></th><th><div className="th-inner">Transport</div></th><th><div className="th-inner">Carburant</div></th><th><div className="th-inner">Total HT</div></th><th><div className="th-inner">Part</div></th></tr></thead>
+                        <tbody>
+                          {carFactures.map((f, i) => {
+                            const totAn = carStats?.total_general_ht || 1;
+                            const part = (f.stats.total_general_ht || 0) / totAn;
+                            return (
+                              <tr key={i}>
+                                <td style={{ fontWeight: 700, color: "var(--accent)" }}>{f.mois_label}</td>
+                                <td style={{ textAlign: "right" }}>{f.stats.nb_commandes}</td>
+                                <td style={{ textAlign: "right" }}>{f.stats.nb_lignes}</td>
+                                <td style={{ textAlign: "right" }}>{eur(f.stats.total_transport)}</td>
+                                <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{eur(f.stats.surcharge_carburant || 0)}</td>
+                                <td style={{ textAlign: "right", fontWeight: 700 }}>{eur(f.stats.total_general_ht || 0)}</td>
+                                <td style={{ textAlign: "right" }}>{(part * 100).toFixed(0)} %</td>
+                              </tr>
+                            );
+                          })}
+                          <tr style={{ background: "var(--bg-raised)", fontWeight: 800 }}>
+                            <td>ANNÉE</td>
+                            <td style={{ textAlign: "right" }}>{carStats?.nb_commandes}</td>
+                            <td style={{ textAlign: "right" }}>{carStats?.nb_lignes}</td>
+                            <td style={{ textAlign: "right" }}>{eur(carStats?.total_transport || 0)}</td>
+                            <td style={{ textAlign: "right" }}>{eur(carStats?.surcharge_carburant || 0)}</td>
+                            <td style={{ textAlign: "right" }}>{eur(carStats?.total_general_ht || 0)}</td>
+                            <td style={{ textAlign: "right" }}>100 %</td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
                   )}
 
