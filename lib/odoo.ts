@@ -2606,7 +2606,8 @@ export interface CarrierSaleOrder {
   montantTTC: number;   // amount_total  (CUMULÉ avec les commandes jointes)
   dateOrder: string;    // date_order (YYYY-MM-DD)
   state: string;
-  groupe?: string[];    // réfs des commandes jointes incluses dans le montant (self compris si groupé)
+  groupe?: string[];    // réfs des commandes du groupe incluses dans le montant (self compris si groupé)
+  groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[]; // détail par commande du groupe
 }
 
 /**
@@ -2759,10 +2760,12 @@ export async function fetchCarrierSaleOrders(
         const groupe = Array.from(new Set([ref, ...siblings])).filter(n => amtByName.has(n));
         if (groupe.length > 1) {
           let ht = 0, ttc = 0;
-          for (const n of groupe) { const a = amtByName.get(n)!; ht += a.ht; ttc += a.ttc; }
+          const detail: { ref: string; montantHT: number; montantTTC: number }[] = [];
+          for (const n of groupe) { const a = amtByName.get(n)!; ht += a.ht; ttc += a.ttc; detail.push({ ref: n, montantHT: a.ht, montantTTC: a.ttc }); }
           o.montantHT = Math.round(ht * 100) / 100;
           o.montantTTC = Math.round(ttc * 100) / 100;
           o.groupe = groupe;
+          o.groupeDetail = detail;
         }
       }
     } catch { /* en cas d'échec on garde les montants simples */ }

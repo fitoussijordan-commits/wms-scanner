@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react";
 import * as odoo from "@/lib/odoo";
 import * as supa from "@/lib/supabase";
 import type { WmsPendingOrder } from "@/lib/supabase";
@@ -439,7 +439,7 @@ export default function Dashboard() {
   interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; total: number }
   interface CarrierCommande { ref: string; date: string; zone: string; colis: number; weight: number; transport: number; total: number }
   interface CarrierStats { nb_lignes: number; nb_commandes: number; total_transport: number; total_facture: number }
-  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; alert: boolean; groupe?: string[] }
+  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; alert: boolean; groupe?: string[]; groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[] }
   const [carLoading, setCarLoading] = useState(false);
   const [carPdfName, setCarPdfName] = useState("");
   const [carLignes, setCarLignes] = useState<CarrierLigne[]>([]);
@@ -454,6 +454,7 @@ export default function Dashboard() {
   const [carEnd, setCarEnd] = useState("");
   const [carError, setCarError] = useState("");
   const [carDrag, setCarDrag] = useState(false);
+  const [carExpanded, setCarExpanded] = useState<Set<string>>(new Set());
   const carPdfInput = useRef<HTMLInputElement>(null);
 
   // Convertit une date FedEx "jj/mm" (année courante) en "YYYY-MM-DD"
@@ -520,7 +521,7 @@ export default function Dashboard() {
       const montantHT = o?.montantHT ?? 0;
       // Anomalie : on a payé du transport mais la commande n'a aucun montant (absente Odoo ou montant 0)
       const alert = c.transport > 0 && montantHT <= 0;
-      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, matched: !!o, alert, groupe: o?.groupe, pct: montantHT > 0 ? c.transport / montantHT : null };
+      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, matched: !!o, alert, groupe: o?.groupe, groupeDetail: o?.groupeDetail, pct: montantHT > 0 ? c.transport / montantHT : null };
     });
   }, [carCommandes, carOdoo]);
 
@@ -708,6 +709,37 @@ export default function Dashboard() {
       styleHeader(ws); zebra(ws);
       ws.getColumn("transport").numFmt = eurFmt; ws.getColumn("ht").numFmt = eurFmt;
       for (let r = 2; r <= ws.rowCount; r++) ws.getRow(r).eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.red } }; c.font = { color: { argb: C.redT }, bold: false }; c.border = allBorders; });
+    }
+
+    // ── Feuille DÉTAIL JOINTES (commandes groupées détaillées) ──────
+    if (carOdooLoaded) {
+      const grouped = carCroise.filter(c => c.groupeDetail && c.groupeDetail.length > 1);
+      if (grouped.length) {
+        const ws = wb.addWorksheet("Détail jointes");
+        ws.columns = [
+          { header: "Réf facturée", key: "parent", width: 13 }, { header: "Client", key: "client", width: 30 },
+          { header: "Transport €", key: "transport", width: 13 }, { header: "Cde du groupe", key: "ref", width: 14 },
+          { header: "Type", key: "type", width: 12 }, { header: "Montant HT €", key: "ht", width: 14 },
+          { header: "Montant TTC €", key: "ttc", width: 14 }, { header: "% Transp. cumulé", key: "pct", width: 15 },
+        ];
+        for (const c of grouped) {
+          c.groupeDetail!.forEach((d, idx) => {
+            ws.addRow({
+              parent: idx === 0 ? c.ref : "", client: idx === 0 ? c.client : "", transport: idx === 0 ? round2(c.transport) : null,
+              ref: d.ref, type: d.ref === c.ref ? "facturée" : "jointe", ht: d.montantHT, ttc: d.montantTTC,
+              pct: idx === 0 && c.pct !== null ? round2(c.pct * 100) : null,
+            });
+          });
+        }
+        styleHeader(ws); zebra(ws);
+        ws.getColumn("transport").numFmt = eurFmt; ws.getColumn("ht").numFmt = eurFmt; ws.getColumn("ttc").numFmt = eurFmt; ws.getColumn("pct").numFmt = pctNumFmt;
+        // surligne les lignes "facturée" (début de groupe)
+        for (let r = 2; r <= ws.rowCount; r++) {
+          const typeCell = ws.getCell(r, 5);
+          if (typeCell.value === "facturée") ws.getRow(r).eachCell((cc: any) => { cc.font = { bold: true, color: { argb: "FF5B21B6" } }; });
+          else { const rc = ws.getCell(r, 4); rc.font = { color: { argb: "FF7C3AED" } }; }
+        }
+      }
     }
 
     // ── Feuille PAR CLIENT ──────────────────────────────────────────
@@ -4505,13 +4537,21 @@ export default function Dashboard() {
                           {carView === "commandes" && (carFiltered as CarrierCommande[]).map((r, i) => (
                             <tr key={i}><td style={{ fontWeight: 600, color: "var(--accent)" }}>{r.ref}</td><td>{r.date}</td><td>{r.zone}</td><td style={{ textAlign: "right" }}>{r.colis}</td><td style={{ textAlign: "right" }}>{r.weight}</td><td style={{ textAlign: "right" }}>{eur(r.transport)}</td><td style={{ textAlign: "right" }}>{eur(r.total)}</td></tr>
                           ))}
-                          {carView === "croise" && (carFiltered as CarrierCrossed[]).map((r, i) => (
-                            <tr key={i} style={r.alert ? { background: "rgba(220,38,38,0.07)" } : undefined}>
+                          {carView === "croise" && (carFiltered as CarrierCrossed[]).map((r, i) => {
+                            const grouped = !!(r.groupeDetail && r.groupeDetail.length > 1);
+                            const open = carExpanded.has(r.ref);
+                            const toggle = () => { if (!grouped) return; setCarExpanded(prev => { const n = new Set(prev); n.has(r.ref) ? n.delete(r.ref) : n.add(r.ref); return n; }); };
+                            return (
+                            <Fragment key={i}>
+                            <tr style={r.alert ? { background: "rgba(220,38,38,0.07)" } : undefined}>
                               <td style={{ fontWeight: 600, color: "var(--accent)" }}>
-                                {r.ref}
-                                {r.groupe && r.groupe.length > 1 && (
-                                  <span title={`Montant cumulé : ${r.groupe.join(" + ")}`} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#7c3aed", background: "rgba(124,58,237,0.12)", padding: "1px 6px", borderRadius: 10 }}>+{r.groupe.length - 1} jointe{r.groupe.length - 1 > 1 ? "s" : ""}</span>
-                                )}
+                                <span onClick={toggle} style={grouped ? { cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 } : undefined}>
+                                  {grouped && <span style={{ fontSize: 10, color: "#7c3aed", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>}
+                                  {r.ref}
+                                  {grouped && (
+                                    <span title={`Montant cumulé : ${r.groupe!.join(" + ")}`} style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", background: "rgba(124,58,237,0.12)", padding: "1px 6px", borderRadius: 10 }}>+{r.groupe!.length - 1} jointe{r.groupe!.length - 1 > 1 ? "s" : ""}</span>
+                                  )}
+                                </span>
                               </td>
                               <td>{r.client || <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
                               <td style={{ textAlign: "right" }}>{r.colis}</td>
@@ -4527,7 +4567,18 @@ export default function Dashboard() {
                                 {!r.matched ? <span style={{ color: "#dc2626", fontSize: 11, fontWeight: 600 }}>absent</span> : r.alert ? <span style={{ color: "#dc2626", fontWeight: 700 }}>0 €</span> : <span style={{ color: "#16a34a", fontWeight: 700 }}>✓</span>}
                               </td>
                             </tr>
-                          ))}
+                            {grouped && open && r.groupeDetail!.map((d, j) => (
+                              <tr key={`${i}-d-${j}`} style={{ background: "rgba(124,58,237,0.05)" }}>
+                                <td style={{ paddingLeft: 26, fontSize: 12, color: d.ref === r.ref ? "var(--text-secondary)" : "#7c3aed", fontWeight: 600 }}>↳ {d.ref}{d.ref === r.ref ? " (facturée)" : ""}</td>
+                                <td colSpan={3} style={{ fontSize: 12, color: "var(--text-muted)" }}>commande du groupe</td>
+                                <td style={{ textAlign: "right", fontSize: 12 }}>{eur(d.montantHT)}</td>
+                                <td style={{ textAlign: "right", fontSize: 12 }}>{eur(d.montantTTC)}</td>
+                                <td colSpan={2} />
+                              </tr>
+                            ))}
+                            </Fragment>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
