@@ -2606,6 +2606,9 @@ export interface CarrierSaleOrder {
   montantTTC: number;   // amount_total  (CUMULÉ avec les commandes jointes)
   dateOrder: string;    // date_order (YYYY-MM-DD)
   state: string;
+  cp?: string;          // code postal du client (livraison)
+  ville?: string;       // ville du client
+  dept?: string;        // n° de département (2 premiers chiffres du CP, FR)
   groupe?: string[];    // réfs des commandes du groupe incluses dans le montant (self compris si groupé)
   groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[]; // détail par commande du groupe
 }
@@ -2656,14 +2659,19 @@ export async function fetchCarrierSaleOrders(
   const joinedName = joined?.name;
   const joinedRelational = joined ? ["many2many", "one2many", "many2one"].includes(joined.type) : false;
 
-  const fields = ["name", "partner_id", "amount_untaxed", "amount_total", "date_order", "state"];
+  const fields = ["name", "partner_id", "partner_shipping_id", "amount_untaxed", "amount_total", "date_order", "state"];
   if (joinedName) fields.push(joinedName);
 
   // Stocke la valeur brute du champ joint par réf (ids ou texte) pour résolution ultérieure.
   const rawJoined = new Map<string, any>();
+  // Partenaire de livraison par réf → enrichissement CP/ville ensuite.
+  const refToShip = new Map<string, number>();
 
   const toRow = (r: any): CarrierSaleOrder => {
     if (joinedName) rawJoined.set(r.name, r[joinedName]);
+    const shipId = Array.isArray(r.partner_shipping_id) ? r.partner_shipping_id[0]
+      : Array.isArray(r.partner_id) ? r.partner_id[0] : null;
+    if (shipId) refToShip.set(r.name, shipId);
     return {
       ref: r.name,
       client: Array.isArray(r.partner_id) ? r.partner_id[1] : "",
@@ -2770,6 +2778,27 @@ export async function fetchCarrierSaleOrders(
       }
     } catch { /* en cas d'échec on garde les montants simples */ }
   }
+
+  // ── Enrichissement CP / ville / département (adresse de livraison) ──────
+  try {
+    const shipIds = Array.from(new Set(Array.from(byRef.keys()).map(ref => refToShip.get(ref)).filter((x): x is number => typeof x === "number")));
+    if (shipIds.length) {
+      const partById = new Map<number, { cp: string; ville: string }>();
+      for (let i = 0; i < shipIds.length; i += 200) {
+        const rows = await searchRead(session, "res.partner", [["id", "in", shipIds.slice(i, i + 200)]], ["id", "zip", "city"], 0, "");
+        for (const p of rows) partById.set(p.id, { cp: p.zip || "", ville: p.city || "" });
+      }
+      for (const [ref, o] of Array.from(byRef.entries())) {
+        const sid = refToShip.get(ref);
+        const p = sid != null ? partById.get(sid) : undefined;
+        if (p) {
+          o.cp = p.cp; o.ville = p.ville;
+          const m = (p.cp || "").trim().match(/^(\d{2})\d{3}$/);
+          o.dept = m ? m[1] : "";
+        }
+      }
+    }
+  } catch { /* enrichissement best-effort */ }
 
   return Array.from(byRef.values());
 }

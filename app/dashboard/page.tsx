@@ -5,6 +5,31 @@ import * as odoo from "@/lib/odoo";
 import * as supa from "@/lib/supabase";
 import type { WmsPendingOrder } from "@/lib/supabase";
 
+// Noms des départements français (métropole + DOM) pour le ranking transport
+const FR_DEPTS: Record<string, string> = {
+  "01": "Ain", "02": "Aisne", "03": "Allier", "04": "Alpes-de-Hte-Provence", "05": "Hautes-Alpes",
+  "06": "Alpes-Maritimes", "07": "Ardèche", "08": "Ardennes", "09": "Ariège", "10": "Aube",
+  "11": "Aude", "12": "Aveyron", "13": "Bouches-du-Rhône", "14": "Calvados", "15": "Cantal",
+  "16": "Charente", "17": "Charente-Maritime", "18": "Cher", "19": "Corrèze", "2A": "Corse-du-Sud",
+  "2B": "Haute-Corse", "21": "Côte-d'Or", "22": "Côtes-d'Armor", "23": "Creuse", "24": "Dordogne",
+  "25": "Doubs", "26": "Drôme", "27": "Eure", "28": "Eure-et-Loir", "29": "Finistère",
+  "30": "Gard", "31": "Haute-Garonne", "32": "Gers", "33": "Gironde", "34": "Hérault",
+  "35": "Ille-et-Vilaine", "36": "Indre", "37": "Indre-et-Loire", "38": "Isère", "39": "Jura",
+  "40": "Landes", "41": "Loir-et-Cher", "42": "Loire", "43": "Haute-Loire", "44": "Loire-Atlantique",
+  "45": "Loiret", "46": "Lot", "47": "Lot-et-Garonne", "48": "Lozère", "49": "Maine-et-Loire",
+  "50": "Manche", "51": "Marne", "52": "Haute-Marne", "53": "Mayenne", "54": "Meurthe-et-Moselle",
+  "55": "Meuse", "56": "Morbihan", "57": "Moselle", "58": "Nièvre", "59": "Nord",
+  "60": "Oise", "61": "Orne", "62": "Pas-de-Calais", "63": "Puy-de-Dôme", "64": "Pyrénées-Atlantiques",
+  "65": "Hautes-Pyrénées", "66": "Pyrénées-Orientales", "67": "Bas-Rhin", "68": "Haut-Rhin", "69": "Rhône",
+  "70": "Haute-Saône", "71": "Saône-et-Loire", "72": "Sarthe", "73": "Savoie", "74": "Haute-Savoie",
+  "75": "Paris", "76": "Seine-Maritime", "77": "Seine-et-Marne", "78": "Yvelines", "79": "Deux-Sèvres",
+  "80": "Somme", "81": "Tarn", "82": "Tarn-et-Garonne", "83": "Var", "84": "Vaucluse",
+  "85": "Vendée", "86": "Vienne", "87": "Haute-Vienne", "88": "Vosges", "89": "Yonne",
+  "90": "Territoire de Belfort", "91": "Essonne", "92": "Hauts-de-Seine", "93": "Seine-St-Denis",
+  "94": "Val-de-Marne", "95": "Val-d'Oise", "971": "Guadeloupe", "972": "Martinique",
+  "973": "Guyane", "974": "La Réunion", "976": "Mayotte",
+};
+
 // ─────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────
@@ -440,7 +465,7 @@ export default function Dashboard() {
   interface CarrierCommande { ref: string; date: string; zone: string; colis: number; weight: number; transport: number; options?: number; total: number }
   interface CarrierStats { nb_lignes: number; nb_commandes: number; total_transport: number; total_facture: number; total_options?: number; surcharge_carburant?: number; surcharge_taux?: number; total_general_ht?: number }
   // coutReel = transport + options + quote-part de surcharge carburant (coût réel tout compris)
-  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; coutReel: number; pct: number | null; matched: boolean; alert: boolean; groupe?: string[]; groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[] }
+  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; coutReel: number; pct: number | null; matched: boolean; alert: boolean; cp?: string; ville?: string; dept?: string; groupe?: string[]; groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[] }
   const [carLoading, setCarLoading] = useState(false);
   const [carPdfName, setCarPdfName] = useState("");
   const [carLignes, setCarLignes] = useState<CarrierLigne[]>([]);
@@ -529,7 +554,7 @@ export default function Dashboard() {
       const coutReel = Math.round((c.total + carbShare) * 100) / 100;
       // Anomalie : on a payé du transport mais la commande n'a aucun montant (absente Odoo ou montant 0)
       const alert = coutReel > 0 && montantHT <= 0;
-      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, coutReel, matched: !!o, alert, groupe: o?.groupe, groupeDetail: o?.groupeDetail, pct: montantHT > 0 ? coutReel / montantHT : null };
+      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, coutReel, matched: !!o, alert, cp: o?.cp, ville: o?.ville, dept: o?.dept, groupe: o?.groupe, groupeDetail: o?.groupeDetail, pct: montantHT > 0 ? coutReel / montantHT : null };
     });
   }, [carCommandes, carOdoo, carStats]);
 
@@ -637,6 +662,16 @@ export default function Dashboard() {
     if (carStats?.total_options) kpi("Options & services", round2(carStats.total_options)).getCell(2).numFmt = eurFmt;
     if (carStats?.surcharge_carburant) kpi("Surcharge carburant", round2(carStats.surcharge_carburant)).getCell(2).numFmt = eurFmt;
     kpi("TOTAL FACTURÉ HT", round2(carStats?.total_general_ht ?? carStats?.total_facture ?? 0), false, true).getCell(2).numFmt = eurFmt;
+    {
+      const tg = carStats?.total_general_ht ?? carStats?.total_facture ?? 0;
+      const nc = carStats?.nb_lignes || 0, ncmd = carStats?.nb_commandes || 0;
+      wsS.addRow([]);
+      const sep0 = wsS.addRow(["── INDICATEURS ──", ""]); sep0.getCell(1).font = { bold: true, color: { argb: C.accent } };
+      if (carStats?.surcharge_taux) kpi("Taux carburant du mois", `${carStats.surcharge_taux} %`);
+      kpi("Coût moyen / colis", nc ? round2(tg / nc) : 0).getCell(2).numFmt = eurFmt;
+      kpi("Coût moyen / commande", ncmd ? round2(tg / ncmd) : 0).getCell(2).numFmt = eurFmt;
+      kpi("Colis moyen / commande", ncmd ? round2(nc / ncmd) : 0);
+    }
     if (carOdooLoaded) {
       wsS.addRow([]);
       const sep = wsS.addRow(["── CROISEMENT ODOO ──", ""]);
@@ -779,6 +814,55 @@ export default function Dashboard() {
       }
     }
 
+    // ── Feuille TOP DÉPARTEMENTS (coût d'expédition) ────────────────
+    if (carOdooLoaded) {
+      const byDept = new Map<string, { dept: string; cdes: number; colis: number; cout: number; ht: number }>();
+      for (const c of carCroise) {
+        const key = c.dept || "??";
+        if (!byDept.has(key)) byDept.set(key, { dept: key, cdes: 0, colis: 0, cout: 0, ht: 0 });
+        const g = byDept.get(key)!; g.cdes += 1; g.colis += c.colis; g.cout = round2(g.cout + c.coutReel); g.ht = round2(g.ht + c.montantHT);
+      }
+      const totCout = Array.from(byDept.values()).reduce((s, g) => s + g.cout, 0) || 1;
+      const ws = wb.addWorksheet("Top départements");
+      ws.columns = [
+        { header: "Dépt", key: "dept", width: 7 }, { header: "Département", key: "nom", width: 24 },
+        { header: "Commandes", key: "cdes", width: 11 }, { header: "Colis", key: "colis", width: 8 },
+        { header: "Coût réel €", key: "cout", width: 14 }, { header: "% du coût", key: "part", width: 11 },
+        { header: "Coût / colis €", key: "cpc", width: 13 }, { header: "% transp/CA", key: "pct", width: 12 },
+      ];
+      for (const g of Array.from(byDept.values()).sort((a, b) => b.cout - a.cout)) {
+        ws.addRow({ dept: g.dept, nom: FR_DEPTS[g.dept] || (g.dept === "??" ? "(inconnu)" : g.dept), cdes: g.cdes, colis: g.colis, cout: g.cout, part: round2((g.cout / totCout) * 100), cpc: g.colis ? round2(g.cout / g.colis) : 0, pct: g.ht > 0 ? round2((g.cout / g.ht) * 100) : null });
+      }
+      styleHeader(ws); zebra(ws);
+      ws.getColumn("cout").numFmt = eurFmt; ws.getColumn("cpc").numFmt = eurFmt;
+      ws.getColumn("part").numFmt = pctNumFmt; ws.getColumn("pct").numFmt = pctNumFmt;
+      // Barre de données (heatmap intégrée) sur le coût réel.
+      if (ws.rowCount > 1) ws.addConditionalFormatting({ ref: `E2:E${ws.rowCount}`, rules: [{ type: "dataBar", cfvo: [{ type: "num", value: 0 }, { type: "max" }], color: { argb: "FF2563EB" } } as any] });
+    }
+
+    // ── Feuille TOP COMMANDEURS (qui commande le plus) ──────────────
+    if (carOdooLoaded) {
+      const byCli = new Map<string, { client: string; cdes: number; colis: number; cout: number; ht: number; ville: string }>();
+      for (const c of carCroise) {
+        const key = c.client || "(absent Odoo)";
+        if (!byCli.has(key)) byCli.set(key, { client: key, cdes: 0, colis: 0, cout: 0, ht: 0, ville: c.ville || "" });
+        const g = byCli.get(key)!; g.cdes += 1; g.colis += c.colis; g.cout = round2(g.cout + c.coutReel); g.ht = round2(g.ht + c.montantHT); if (!g.ville && c.ville) g.ville = c.ville;
+      }
+      const ws = wb.addWorksheet("Top commandeurs");
+      ws.columns = [
+        { header: "Client", key: "client", width: 30 }, { header: "Ville", key: "ville", width: 18 },
+        { header: "Commandes", key: "cdes", width: 11 }, { header: "Colis", key: "colis", width: 8 },
+        { header: "CA HT €", key: "ht", width: 14 }, { header: "Coût transp €", key: "cout", width: 14 },
+        { header: "% transp/CA", key: "pct", width: 12 },
+      ];
+      for (const g of Array.from(byCli.values()).sort((a, b) => b.cdes - a.cdes)) {
+        ws.addRow({ client: g.client, ville: g.ville, cdes: g.cdes, colis: g.colis, ht: g.ht || null, cout: g.cout, pct: g.ht > 0 ? round2((g.cout / g.ht) * 100) : null });
+      }
+      styleHeader(ws); zebra(ws);
+      ws.getColumn("ht").numFmt = eurFmt; ws.getColumn("cout").numFmt = eurFmt; ws.getColumn("pct").numFmt = pctNumFmt;
+      if (ws.rowCount > 1) ws.addConditionalFormatting({ ref: `C2:C${ws.rowCount}`, rules: [{ type: "dataBar", cfvo: [{ type: "num", value: 0 }, { type: "max" }], color: { argb: "FF16A34A" } } as any] });
+    }
+
     // ── Feuille LIGNES DÉTAIL ───────────────────────────────────────
     const wsD = wb.addWorksheet("Lignes détail");
     wsD.columns = [
@@ -796,6 +880,75 @@ export default function Dashboard() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url; a.download = `analyse_transport_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+
+  // Carte de France interactive (choroplèthe coût d'expédition par département) en HTML autonome.
+  function carExportCarte() {
+    const byDept: Record<string, { cout: number; cdes: number; colis: number; nom: string }> = {};
+    for (const c of carCroise) {
+      const k = c.dept || "";
+      if (!k) continue;
+      if (!byDept[k]) byDept[k] = { cout: 0, cdes: 0, colis: 0, nom: FR_DEPTS[k] || k };
+      byDept[k].cout = Math.round((byDept[k].cout + c.coutReel) * 100) / 100;
+      byDept[k].cdes += 1; byDept[k].colis += c.colis;
+    }
+    const periode = `${carStart || "—"} → ${carEnd || "—"}`;
+    const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>Carte coût transport</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<style>
+ body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#f8fafc;color:#0f172a}
+ header{padding:18px 24px;background:#1e293b;color:#fff}
+ header h1{margin:0;font-size:18px} header p{margin:4px 0 0;font-size:13px;color:#94a3b8}
+ #wrap{display:flex;gap:16px;padding:20px;flex-wrap:wrap}
+ #map{flex:1;min-width:480px;background:#fff;border:1px solid #e2e8f0;border-radius:12px}
+ #side{width:320px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;max-height:640px;overflow:auto}
+ #side h2{font-size:13px;text-transform:uppercase;color:#64748b;margin:0 0 10px}
+ .row{display:flex;justify-content:space-between;padding:6px 8px;border-radius:6px;font-size:13px}
+ .row:nth-child(even){background:#f1f5f9}
+ .dn{font-weight:600}.dv{font-weight:700;color:#2563eb}
+ .dept{stroke:#fff;stroke-width:.5;cursor:pointer;transition:opacity .1s}
+ .dept:hover{opacity:.75;stroke:#0f172a;stroke-width:1.2}
+ #tt{position:fixed;pointer-events:none;background:#0f172a;color:#fff;padding:8px 10px;border-radius:8px;font-size:12px;opacity:0;transition:opacity .1s;z-index:9}
+ .legend text{font-size:11px;fill:#475569}
+</style></head><body>
+<header><h1>Coût d'expédition par département</h1><p>Période ${periode} · coût réel tout compris (transport + frais + carburant réparti)</p></header>
+<div id="wrap"><div id="map"></div><div id="side"><h2>Top départements coûteux</h2><div id="ranking"></div></div></div>
+<div id="tt"></div>
+<script>
+const DATA = ${JSON.stringify(byDept)};
+const tt = document.getElementById('tt');
+const eur = n => (n||0).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';
+const vals = Object.values(DATA).map(d=>d.cout);
+const maxV = d3.max(vals)||1;
+const color = d3.scaleSequential(d3.interpolateYlOrRd).domain([0,maxV]);
+const W=640,H=640;
+const svg=d3.select('#map').append('svg').attr('viewBox','0 0 '+W+' '+H).attr('width','100%');
+d3.json('https://cdn.jsdelivr.net/gh/gregoiredavid/france-geojson@master/departements.geojson').then(geo=>{
+  const proj=d3.geoConicConformal().center([2.5,46.5]).scale(2600).translate([W/2,H/2]);
+  const path=d3.geoPath().projection(proj);
+  svg.selectAll('path').data(geo.features).join('path')
+    .attr('d',path).attr('class','dept')
+    .attr('fill',f=>{const d=DATA[f.properties.code];return d?color(d.cout):'#e2e8f0';})
+    .on('mousemove',(e,f)=>{const d=DATA[f.properties.code];tt.style.opacity=1;tt.style.left=(e.clientX+14)+'px';tt.style.top=(e.clientY+14)+'px';
+      tt.innerHTML='<b>'+f.properties.code+' · '+f.properties.nom+'</b><br>'+(d?eur(d.cout)+'<br>'+d.cdes+' cde · '+d.colis+' colis':'aucune expédition');})
+    .on('mouseleave',()=>tt.style.opacity=0);
+  // légende
+  const lg=svg.append('g').attr('class','legend').attr('transform','translate(20,'+(H-40)+')');
+  const lw=200;const ls=d3.scaleLinear().domain([0,maxV]).range([0,lw]);
+  const grad=svg.append('defs').append('linearGradient').attr('id','g');
+  d3.range(0,1.01,.1).forEach(t=>grad.append('stop').attr('offset',(t*100)+'%').attr('stop-color',color(t*maxV)));
+  lg.append('rect').attr('width',lw).attr('height',10).attr('fill','url(#g)').attr('rx',3);
+  lg.append('text').attr('y',26).text('0 €');lg.append('text').attr('x',lw).attr('y',26).attr('text-anchor','end').text(eur(maxV));
+});
+const rank=Object.entries(DATA).sort((a,b)=>b[1].cout-a[1].cout);
+document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"><span class="dn">'+k+' '+d.nom+'</span><span class="dv">'+eur(d.cout)+'</span></div>').join('');
+</script></body></html>`;
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `carte_transport_${new Date().toISOString().slice(0, 10)}.html`;
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }
   const [alerts, setAlerts] = useState<StockAlert[]>([]);
@@ -4508,6 +4661,11 @@ export default function Dashboard() {
                       {carSearching ? "Recherche…" : <>{I.search} {carOdooLoaded ? "Relancer" : "Rechercher dans Odoo"}</>}
                     </button>
                     <div style={{ flex: 1 }} />
+                    {carOdooLoaded && (
+                      <button onClick={carExportCarte} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+                        🗺️ Carte France
+                      </button>
+                    )}
                     <button onClick={carExportXlsx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
                       {I.download} Export Excel
                     </button>
