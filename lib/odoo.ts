@@ -2718,7 +2718,7 @@ export async function fetchCarrierSaleOrders(
       // 1. Récolte des identifiants joints (ids si relationnel, sinon noms texte).
       const joinedIds = new Set<number>();
       const joinedNames = new Set<string>();
-      for (const ref of byRef.keys()) {
+      for (const ref of Array.from(byRef.keys())) {
         const v = rawJoined.get(ref);
         if (v == null || v === false) continue;
         if (joinedRelational && Array.isArray(v)) {
@@ -2742,10 +2742,10 @@ export async function fetchCarrierSaleOrders(
       const nameList = Array.from(joinedNames);
       for (let i = 0; i < nameList.length; i += 200) await readJoined([["name", "in", nameList.slice(i, i + 200)]]);
       // On a aussi les montants des commandes facturées elles-mêmes.
-      for (const o of byRef.values()) amtByName.set(o.ref, { ht: o.montantHT, ttc: o.montantTTC });
+      for (const o of Array.from(byRef.values())) amtByName.set(o.ref, { ht: o.montantHT, ttc: o.montantTTC });
 
       // 3. Cumul sur chaque commande facturée (dédoublonné, self inclus).
-      for (const [ref, o] of byRef) {
+      for (const [ref, o] of Array.from(byRef.entries())) {
         const v = rawJoined.get(ref);
         const siblings: string[] = [];
         if (v != null && v !== false) {
