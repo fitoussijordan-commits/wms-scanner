@@ -361,14 +361,27 @@ export default function SupplierImportScreen({
               </div>
             </div>
 
-            {/* Refs manquantes — BLOQUANT */}
+            {/* Tout est OK — validation verte */}
+            {missingArticles.length === 0 && matchedLines.length > 0 && (
+              <div style={{ ...S.card, background: "#f0fdf4", border: "1px solid #86efac" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 24 }}>✅</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: "#15803d" }}>Tout est bon — aucune référence manquante</div>
+                    <div style={{ fontSize: 13, color: "#16a34a" }}>Les {matchedLines.length} ligne{matchedLines.length > 1 ? "s" : ""} ont toutes une correspondance Odoo. Tu peux lancer l'import.</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Refs manquantes — on liste et on laisse le choix (annuler / forcer) */}
             {missingArticles.length > 0 && (
               <div style={S.errorCard}>
                 <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>
-                  ❌ {missingArticles.length} référence{missingArticles.length > 1 ? "s" : ""} introuvable{missingArticles.length > 1 ? "s" : ""} dans Odoo
+                  ⚠️ {missingArticles.length} référence{missingArticles.length > 1 ? "s" : ""} introuvable{missingArticles.length > 1 ? "s" : ""} dans Odoo
                 </div>
                 <p style={{ fontSize: 13, color: "#7f1d1d", marginBottom: 10 }}>
-                  Ces articles n'ont pas de correspondance dans Odoo (champ <code>x_studio_code_produit_fournisseur</code>). L'import ne peut pas continuer tant qu'ils ne sont pas configurés.
+                  Ces articles n'ont pas de correspondance dans Odoo (champ <code>x_studio_code_produit_fournisseur</code>). Tu peux soit <strong>annuler</strong> pour les configurer d'abord, soit <strong>forcer l'import</strong> : les {matchedLines.length} ligne{matchedLines.length > 1 ? "s" : ""} valide{matchedLines.length > 1 ? "s" : ""} seront importée{matchedLines.length > 1 ? "s" : ""} et celles ci-dessous laissées de côté.
                 </p>
                 <div style={{ maxHeight: 160, overflowY: "auto", background: "#fff5f5", borderRadius: 6, padding: 10 }}>
                   {missingArticles.map(a => (
@@ -377,9 +390,6 @@ export default function SupplierImportScreen({
                       <span style={{ color: "#374151" }}>{a.description}</span>
                     </div>
                   ))}
-                </div>
-                <div style={{ marginTop: 10, fontSize: 12, color: "#9ca3af" }}>
-                  Les {matchedLines.length} autres articles correspondants ne seront pas importés non plus.
                 </div>
               </div>
             )}
@@ -429,16 +439,31 @@ export default function SupplierImportScreen({
             )}
 
             {/* Boutons */}
-            <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-              <button onClick={() => { setStep("upload"); setMatchedLines([]); setMissingArticles([]); }} style={S.btnSecondary}>
-                ← Changer de fichier
-              </button>
-              {missingArticles.length === 0 && matchedLines.length > 0 && (
-                <button onClick={runImport} style={S.btnPrimary}>
-                  🚀 Lancer l'import Odoo
+            {missingArticles.length === 0 ? (
+              /* Tout est OK : changer de fichier + import vert */
+              <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+                <button onClick={() => { setStep("upload"); setMatchedLines([]); setMissingArticles([]); }} style={S.btnSecondary}>
+                  ← Changer de fichier
                 </button>
-              )}
-            </div>
+                {matchedLines.length > 0 && (
+                  <button onClick={runImport} style={S.btnPrimary}>
+                    🚀 Lancer l'import Odoo
+                  </button>
+                )}
+              </div>
+            ) : (
+              /* Réfs manquantes : annuler (rouge) + forcer (orange) */
+              <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+                <button onClick={() => { setStep("upload"); setMatchedLines([]); setMissingArticles([]); setPackingLines([]); setFileName(""); }} style={S.btnDanger}>
+                  ✕ Annuler l'import
+                </button>
+                {matchedLines.length > 0 && (
+                  <button onClick={runImport} style={S.btnWarning}>
+                    ⚠️ Forcer l'import ({matchedLines.length} ligne{matchedLines.length > 1 ? "s" : ""}, {missingArticles.length} ignorée{missingArticles.length > 1 ? "s" : ""})
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -691,6 +716,28 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #e5e7eb",
     borderRadius: 10,
     fontWeight: 600,
+    fontSize: 14,
+    cursor: "pointer",
+  },
+  btnDanger: {
+    flex: 1,
+    padding: "14px 20px",
+    background: "#dc2626",
+    color: "#fff",
+    border: "none",
+    borderRadius: 10,
+    fontWeight: 700,
+    fontSize: 14,
+    cursor: "pointer",
+  },
+  btnWarning: {
+    flex: 1,
+    padding: "14px 20px",
+    background: "#ea580c",
+    color: "#fff",
+    border: "none",
+    borderRadius: 10,
+    fontWeight: 700,
     fontSize: 14,
     cursor: "pointer",
   },
