@@ -90,14 +90,22 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
   const productIds = resolved.map(r => r.productId);
 
   // 2. Récupérer toutes les lignes de commandes confirmées / livrées
+  // On exclut aussi les lignes annulées (state = cancel sur la ligne elle-même)
+  // et les lignes de type section/note (display_type != false)
   const lines = await odoo.searchRead(session, "sale.order.line",
-    [["product_id", "in", productIds], ["order_id.state", "in", ["sale", "done"]]],
-    ["product_id", "product_uom_qty", "price_subtotal"], 0
+    [
+      ["product_id", "in", productIds],
+      ["order_id.state", "in", ["sale", "done"]],
+      ["display_type", "=", false],
+    ],
+    ["product_id", "product_uom_qty", "price_subtotal", "state"], 0
   );
+  // Filtrer les lignes annulées côté client (le domaine Odoo ne supporte pas toujours != sur state)
+  const activeLines = lines.filter((l: any) => l.state !== "cancel");
 
-  // 3. Agréger par produit
+  // 3. Agréger par produit (lignes actives uniquement)
   const prodMap: Record<number, { qty: number; ca: number }> = {};
-  for (const l of lines) {
+  for (const l of activeLines) {
     const pid = l.product_id[0];
     if (!prodMap[pid]) prodMap[pid] = { qty: 0, ca: 0 };
     prodMap[pid].qty += l.product_uom_qty || 0;
