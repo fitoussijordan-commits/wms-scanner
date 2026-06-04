@@ -97,10 +97,11 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
       ["product_id", "in", productIds],
       ["order_id.state", "in", ["sale", "done"]],
       ["display_type", "=", false],
+      ["is_downpayment", "=", false],   // exclure les lignes d'acompte
     ],
     ["product_id", "product_uom_qty", "price_subtotal", "state"], 0
   );
-  // Filtrer les lignes annulées côté client (le domaine Odoo ne supporte pas toujours != sur state)
+  // Filtrer les lignes annulées côté client
   const activeLines = lines.filter((l: any) => l.state !== "cancel");
 
   // 3. Agréger par produit (lignes actives uniquement)
