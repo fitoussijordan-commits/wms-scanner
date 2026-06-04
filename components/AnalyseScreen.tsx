@@ -74,10 +74,12 @@ function genId() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-// ── Odoo: récupérer le CA d'une offre (le code offre EST un produit Odoo) ──────
+// ── Odoo: récupérer le CA d'une offre ──────────────────────────────────────────
+// L'offre est un produit "marqueur" dans la commande (souvent à 0€).
+// On trouve les commandes via ce produit, puis on somme le CA des composants.
 async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise<Omit<OffreAnalyse, "offre" | "loading">> {
 
-  // 1. Trouver le produit Odoo par le code offre lui-même
+  // 1. Trouver le produit Odoo correspondant au code offre
   let offreProd = await odoo.searchRead(session, "product.product",
     [["default_code", "=ilike", offre.code.trim()]], ["id", "name", "default_code"], 1);
   if (!offreProd.length) offreProd = await odoo.searchRead(session, "product.product",
@@ -85,70 +87,111 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
   if (!offreProd.length) {
     return { caTotal: 0, qtyTotal: 0, produits: [], delegues: [], debugOrders: [], error: `Produit "${offre.code}" introuvable dans Odoo` };
   }
-
   const offreProductId = offreProd[0].id;
 
-  // 2. Lignes de commande pour CE produit offre uniquement
-  const lines = await odoo.searchRead(session, "sale.order.line",
+  // 2. Trouver les commandes confirmées contenant ce produit offre
+  const offreLines = await odoo.searchRead(session, "sale.order.line",
     [
       ["product_id", "=", offreProductId],
       ["order_id.state", "in", ["sale", "done"]],
       ["display_type", "=", false],
       ["is_downpayment", "=", false],
     ],
-    ["product_uom_qty", "price_subtotal", "state", "order_id"], 0
+    ["order_id", "product_uom_qty", "state"], 0
   );
-  const activeLines = lines.filter((l: any) => l.state !== "cancel");
+  const activeOffreLines = offreLines.filter((l: any) => l.state !== "cancel");
+  const orderIds = Array.from(new Set(activeOffreLines.map((l: any) => l.order_id[0]))) as number[];
+  const qtyTotal = activeOffreLines.reduce((s: number, l: any) => s + (l.product_uom_qty || 0), 0);
 
-  const caTotal = activeLines.reduce((s: number, l: any) => s + (l.price_subtotal || 0), 0);
-  const qtyTotal = activeLines.reduce((s: number, l: any) => s + (l.product_uom_qty || 0), 0);
+  if (!orderIds.length) {
+    return { caTotal: 0, qtyTotal: 0, produits: [], delegues: [], debugOrders: [], error: null };
+  }
 
   // 3. Debug : liste des commandes
-  const debugOrderIds = Array.from(new Set(activeLines.map((l: any) => l.order_id[0]))) as number[];
-  let debugOrders: { id: number; name: string }[] = [];
-  if (debugOrderIds.length > 0) {
-    const ords = await odoo.searchRead(session, "sale.order",
-      [["id", "in", debugOrderIds]], ["id", "name"], debugOrderIds.length);
-    debugOrders = ords.map((o: any) => ({ id: o.id, name: o.name }));
-  }
+  const ords = await odoo.searchRead(session, "sale.order",
+    [["id", "in", orderIds]], ["id", "name"], orderIds.length);
+  const debugOrders: { id: number; name: string }[] = ords.map((o: any) => ({ id: o.id, name: o.name }));
 
-  // 4. Agréger par délégué (user_id sur sale.order)
-  let delegues: DelegueCA[] = [];
-  if (debugOrderIds.length > 0) {
-    const orders = await odoo.searchRead(session, "sale.order",
-      [["id", "in", debugOrderIds]], ["id", "user_id"], debugOrderIds.length);
-    const orderUserMap: Record<number, { userId: number; name: string }> = {};
-    for (const o of orders) {
-      if (o.user_id) orderUserMap[o.id] = { userId: o.user_id[0], name: o.user_id[1] };
-    }
-    const userMap: Record<number, { name: string; qty: number; ca: number }> = {};
-    for (const l of activeLines) {
-      const user = orderUserMap[l.order_id[0]];
-      if (!user) continue;
-      if (!userMap[user.userId]) userMap[user.userId] = { name: user.name, qty: 0, ca: 0 };
-      userMap[user.userId].qty += l.product_uom_qty || 0;
-      userMap[user.userId].ca += l.price_subtotal || 0;
-    }
-    delegues = Object.entries(userMap)
-      .map(([uid, v]) => ({ userId: Number(uid), name: v.name, qtyVendue: v.qty, ca: v.ca }))
-      .sort((a, b) => b.ca - a.ca);
-  }
-
-  // 5. Produits composants (depuis paramétrage) — affichage info uniquement
-  const resolveComp = async (ref: string): Promise<ProduitCA | null> => {
+  // 4. Résoudre les produits composants (paramétrage)
+  const resolveComp = async (ref: string): Promise<{ ref: string; productId: number; name: string } | null> => {
     let prods = await odoo.searchRead(session, "product.product",
       [["default_code", "=ilike", ref.trim()]], ["id", "name", "default_code"], 1);
     if (!prods.length) prods = await odoo.searchRead(session, "product.product",
       [["default_code", "ilike", ref.trim()]], ["id", "name", "default_code"], 1);
     if (!prods.length) return null;
-    return { ref, productId: prods[0].id, name: prods[0].name, qtyVendue: 0, ca: 0 };
+    return { ref, productId: prods[0].id, name: prods[0].name };
   };
-  const produits: ProduitCA[] = offre.produits.length
-    ? (await Promise.all(offre.produits.map(resolveComp))).filter(Boolean) as ProduitCA[]
+  const resolved = offre.produits.length
+    ? (await Promise.all(offre.produits.map(resolveComp))).filter(Boolean) as { ref: string; productId: number; name: string }[]
     : [];
+
+  // 5. CA des composants dans ces commandes
+  let produits: ProduitCA[] = resolved.map(r => ({ ...r, qtyVendue: 0, ca: 0 }));
+  let caTotal = 0;
+
+  if (resolved.length > 0) {
+    const compIds = resolved.map(r => r.productId);
+    const compLines = await odoo.searchRead(session, "sale.order.line",
+      [
+        ["order_id", "in", orderIds],
+        ["product_id", "in", compIds],
+        ["display_type", "=", false],
+        ["is_downpayment", "=", false],
+      ],
+      ["product_id", "product_uom_qty", "price_subtotal", "state"], 0
+    );
+    const activeComp = compLines.filter((l: any) => l.state !== "cancel");
+
+    const prodMap: Record<number, { qty: number; ca: number }> = {};
+    for (const l of activeComp) {
+      const pid = l.product_id[0];
+      if (!prodMap[pid]) prodMap[pid] = { qty: 0, ca: 0 };
+      prodMap[pid].qty += l.product_uom_qty || 0;
+      prodMap[pid].ca += l.price_subtotal || 0;
+    }
+    produits = resolved.map(r => ({
+      ...r,
+      qtyVendue: prodMap[r.productId]?.qty || 0,
+      ca: prodMap[r.productId]?.ca || 0,
+    }));
+    caTotal = produits.reduce((s, p) => s + p.ca, 0);
+  }
+
+  // 6. Agréger par délégué
+  const orders = await odoo.searchRead(session, "sale.order",
+    [["id", "in", orderIds]], ["id", "user_id"], orderIds.length);
+  const orderUserMap: Record<number, { userId: number; name: string }> = {};
+  for (const o of orders) {
+    if (o.user_id) orderUserMap[o.id] = { userId: o.user_id[0], name: o.user_id[1] };
+  }
+  const userMap: Record<number, { name: string; qty: number; ca: number }> = {};
+  for (const l of activeOffreLines) {
+    const user = orderUserMap[l.order_id[0]];
+    if (!user) continue;
+    if (!userMap[user.userId]) userMap[user.userId] = { name: user.name, qty: 0, ca: 0 };
+    userMap[user.userId].qty += l.product_uom_qty || 0;
+  }
+  // Ajouter le CA composants aux délégués
+  if (resolved.length > 0) {
+    const compLines2 = await odoo.searchRead(session, "sale.order.line",
+      [["order_id", "in", orderIds], ["product_id", "in", resolved.map(r => r.productId)],
+       ["display_type", "=", false], ["is_downpayment", "=", false]],
+      ["order_id", "price_subtotal", "state"], 0
+    );
+    for (const l of compLines2.filter((l: any) => l.state !== "cancel")) {
+      const user = orderUserMap[l.order_id[0]];
+      if (!user) continue;
+      if (!userMap[user.userId]) userMap[user.userId] = { name: user.name, qty: 0, ca: 0 };
+      userMap[user.userId].ca += l.price_subtotal || 0;
+    }
+  }
+  const delegues: DelegueCA[] = Object.entries(userMap)
+    .map(([uid, v]) => ({ userId: Number(uid), name: v.name, qtyVendue: v.qty, ca: v.ca }))
+    .sort((a, b) => b.ca - a.ca);
 
   return { caTotal, qtyTotal, produits, delegues, debugOrders, error: null };
 }
+
 
 
 // ── Formatage ────────────────────────────────────────────────────────────────
