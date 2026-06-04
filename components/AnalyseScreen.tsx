@@ -47,6 +47,7 @@ interface OffreAnalyse {
   qtyTotal: number;
   produits: ProduitCA[];
   delegues: DelegueCA[];
+  debugOrders?: { id: number; name: string }[];
 }
 
 interface Props {
@@ -111,6 +112,15 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
   );
   const activeLines = lines.filter((l: any) => l.state !== "cancel");
 
+  // Debug: récupérer les noms de commandes pour vérification
+  const debugOrderIds = Array.from(new Set(activeLines.map((l: any) => l.order_id[0])));
+  let debugOrders: { id: number; name: string }[] = [];
+  if (debugOrderIds.length > 0) {
+    const ords = await odoo.searchRead(session, "sale.order",
+      [["id", "in", debugOrderIds]], ["id", "name"], debugOrderIds.length);
+    debugOrders = ords.map((o: any) => ({ id: o.id, name: o.name }));
+  }
+
   // 3. Agréger par produit
   const prodMap: Record<number, { qty: number; ca: number }> = {};
   for (const l of activeLines) {
@@ -159,7 +169,7 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
   const caTotal = produits.reduce((s, p) => s + p.ca, 0);
   const qtyTotal = produits.reduce((s, p) => s + p.qtyVendue, 0);
 
-  return { caTotal, qtyTotal, produits, delegues, error: null };
+  return { caTotal, qtyTotal, produits, delegues, debugOrders, error: null };
 }
 
 // ── Formatage ────────────────────────────────────────────────────────────────
@@ -527,7 +537,7 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
 
                       {/* Toggles détail */}
                       {(r.produits.length > 0 || r.delegues.length > 0) && (
-                        <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+                        <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" as const }}>
                           <button onClick={() => {
                             if (isExpanded && detailMode[r.offre.id] === "produits") { setExpandedId(null); }
                             else { setExpandedId(r.offre.id); setDetailMode(m => ({ ...m, [r.offre.id]: "produits" })); }
@@ -539,6 +549,12 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
                             else { setExpandedId(r.offre.id); setDetailMode(m => ({ ...m, [r.offre.id]: "delegues" })); }
                           }} style={{ flex: 1, padding: "8px 0", background: isExpanded && detailMode[r.offre.id] === "delegues" ? C.purpleSoft : C.bg, border: `1px solid ${isExpanded && detailMode[r.offre.id] === "delegues" ? C.purple : C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600, color: isExpanded && detailMode[r.offre.id] === "delegues" ? C.purple : C.textSec, fontFamily: "inherit" }}>
                             👤 Délégués ({r.delegues.length})
+                          </button>
+                          <button onClick={() => {
+                            if (isExpanded && detailMode[r.offre.id] === "debug") { setExpandedId(null); }
+                            else { setExpandedId(r.offre.id); setDetailMode(m => ({ ...m, [r.offre.id]: "debug" })); }
+                          }} style={{ flex: 1, padding: "8px 0", background: isExpanded && detailMode[r.offre.id] === "debug" ? C.orangeSoft : C.bg, border: `1px solid ${isExpanded && detailMode[r.offre.id] === "debug" ? C.orange : C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600, color: isExpanded && detailMode[r.offre.id] === "debug" ? C.orange : C.textSec, fontFamily: "inherit" }}>
+                            🔍 Commandes ({r.debugOrders?.length ?? 0})
                           </button>
                         </div>
                       )}
@@ -564,6 +580,22 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* Liste commandes (debug) */}
+                {!r.loading && !r.error && isExpanded && detailMode[r.offre.id] === "debug" && (
+                  <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg, padding: "12px 14px" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: C.orange, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>
+                      {r.debugOrders?.length} commandes incluses — compare avec Odoo pour trouver l'écart
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 5 }}>
+                      {(r.debugOrders ?? []).sort((a, b) => a.name.localeCompare(b.name)).map(o => (
+                        <span key={o.id} style={{ fontSize: 11, fontFamily: "monospace", background: C.white, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 8px", color: C.textSec }}>
+                          {o.name}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 )}
 
