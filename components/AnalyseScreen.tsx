@@ -336,7 +336,7 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   const [inputVal, setInputVal] = useState("");
   const [globalLoading, setGlobalLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [detailMode, setDetailMode] = useState<Record<string, "produits" | "delegues">>({});
+  const [detailMode, setDetailMode] = useState<Record<string, "produits" | "delegues" | "debug">>({});
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { setConfigOffres(loadOffres()); }, []);
