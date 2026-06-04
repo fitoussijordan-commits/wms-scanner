@@ -32,6 +32,13 @@ interface ProduitCA {
   ca: number;
 }
 
+interface DelegueCA {
+  userId: number;
+  name: string;
+  qtyVendue: number;
+  ca: number;
+}
+
 interface OffreAnalyse {
   offre: Offre;
   loading: boolean;
@@ -39,6 +46,7 @@ interface OffreAnalyse {
   caTotal: number;
   qtyTotal: number;
   produits: ProduitCA[];
+  delegues: DelegueCA[];
 }
 
 interface Props {
@@ -68,7 +76,7 @@ function genId() {
 // ── Odoo: récupérer le CA d'une liste de refs ────────────────────────────────
 async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise<Omit<OffreAnalyse, "offre" | "loading">> {
   if (!offre.produits.length) {
-    return { caTotal: 0, qtyTotal: 0, produits: [], error: "Aucun produit configuré" };
+    return { caTotal: 0, qtyTotal: 0, produits: [], delegues: [], error: "Aucun produit configuré" };
   }
 
   // 1. Résoudre les refs → product IDs
@@ -84,7 +92,7 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
   const resolved = (await Promise.all(offre.produits.map(resolveRef))).filter(Boolean) as { ref: string; productId: number; name: string }[];
 
   if (!resolved.length) {
-    return { caTotal: 0, qtyTotal: 0, produits: [], error: "Aucun produit trouvé dans Odoo" };
+    return { caTotal: 0, qtyTotal: 0, produits: [], delegues: [], error: "Aucun produit trouvé dans Odoo" };
   }
 
   const productIds = resolved.map(r => r.productId);
@@ -97,14 +105,13 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
       ["product_id", "in", productIds],
       ["order_id.state", "in", ["sale", "done"]],
       ["display_type", "=", false],
-      ["is_downpayment", "=", false],   // exclure les lignes d'acompte
+      ["is_downpayment", "=", false],
     ],
-    ["product_id", "product_uom_qty", "price_subtotal", "state"], 0
+    ["product_id", "product_uom_qty", "price_subtotal", "state", "order_id"], 0
   );
-  // Filtrer les lignes annulées côté client
   const activeLines = lines.filter((l: any) => l.state !== "cancel");
 
-  // 3. Agréger par produit (lignes actives uniquement)
+  // 3. Agréger par produit
   const prodMap: Record<number, { qty: number; ca: number }> = {};
   for (const l of activeLines) {
     const pid = l.product_id[0];
@@ -121,10 +128,38 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
     ca: prodMap[r.productId]?.ca || 0,
   }));
 
+  // 4. Agréger par délégué (user_id sur sale.order)
+  const orderIds = Array.from(new Set(activeLines.map((l: any) => l.order_id[0])));
+  let delegues: DelegueCA[] = [];
+  if (orderIds.length > 0) {
+    const orders = await odoo.searchRead(session, "sale.order",
+      [["id", "in", orderIds]],
+      ["id", "user_id"], orderIds.length
+    );
+    // Map order_id → user_id
+    const orderUserMap: Record<number, { userId: number; name: string }> = {};
+    for (const o of orders) {
+      if (o.user_id) orderUserMap[o.id] = { userId: o.user_id[0], name: o.user_id[1] };
+    }
+    // Agréger CA + qty par user
+    const userMap: Record<number, { name: string; qty: number; ca: number }> = {};
+    for (const l of activeLines) {
+      const orderId = l.order_id[0];
+      const user = orderUserMap[orderId];
+      if (!user) continue;
+      if (!userMap[user.userId]) userMap[user.userId] = { name: user.name, qty: 0, ca: 0 };
+      userMap[user.userId].qty += l.product_uom_qty || 0;
+      userMap[user.userId].ca += l.price_subtotal || 0;
+    }
+    delegues = Object.entries(userMap)
+      .map(([uid, v]) => ({ userId: Number(uid), name: v.name, qtyVendue: v.qty, ca: v.ca }))
+      .sort((a, b) => b.ca - a.ca); // tri par CA décroissant
+  }
+
   const caTotal = produits.reduce((s, p) => s + p.ca, 0);
   const qtyTotal = produits.reduce((s, p) => s + p.qtyVendue, 0);
 
-  return { caTotal, qtyTotal, produits, error: null };
+  return { caTotal, qtyTotal, produits, delegues, error: null };
 }
 
 // ── Formatage ────────────────────────────────────────────────────────────────
@@ -291,6 +326,7 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   const [inputVal, setInputVal] = useState("");
   const [globalLoading, setGlobalLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [detailMode, setDetailMode] = useState<Record<string, "produits" | "delegues">>({});
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { setConfigOffres(loadOffres()); }, []);
@@ -324,7 +360,7 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
     const validCodes = newCodes.filter(c => findOffre(c));
     const placeholders: OffreAnalyse[] = validCodes.map(code => ({
       offre: findOffre(code)!,
-      loading: true, error: null, caTotal: 0, qtyTotal: 0, produits: []
+      loading: true, error: null, caTotal: 0, qtyTotal: 0, produits: [], delegues: []
     }));
 
     setResults(prev => [...prev, ...placeholders]);
@@ -348,7 +384,7 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
 
   const refreshAll = async () => {
     setGlobalLoading(true);
-    setResults(prev => prev.map(r => ({ ...r, loading: true, error: null })));
+    setResults(prev => prev.map(r => ({ ...r, loading: true, error: null, delegues: [] })));
     await Promise.all(results.map(async r => {
       try {
         const data = await fetchCAForOffre(session, r.offre);
@@ -489,22 +525,29 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
                         </div>
                       </div>
 
-                      {/* Toggle détail */}
-                      {r.produits.length > 0 && (
-                        <button onClick={() => setExpandedId(isExpanded ? null : r.offre.id)}
-                          style={{ marginTop: 10, width: "100%", padding: "8px 0", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600, color: C.textSec, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: isExpanded ? "rotate(180deg)" : undefined, transition: "transform 0.2s" }}>
-                            <polyline points="6 9 12 15 18 9"/>
-                          </svg>
-                          {isExpanded ? "Masquer le détail" : `Voir le détail (${r.produits.length} produits)`}
-                        </button>
+                      {/* Toggles détail */}
+                      {(r.produits.length > 0 || r.delegues.length > 0) && (
+                        <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+                          <button onClick={() => {
+                            if (isExpanded && detailMode[r.offre.id] === "produits") { setExpandedId(null); }
+                            else { setExpandedId(r.offre.id); setDetailMode(m => ({ ...m, [r.offre.id]: "produits" })); }
+                          }} style={{ flex: 1, padding: "8px 0", background: isExpanded && detailMode[r.offre.id] === "produits" ? C.blueSoft : C.bg, border: `1px solid ${isExpanded && detailMode[r.offre.id] === "produits" ? C.blue : C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600, color: isExpanded && detailMode[r.offre.id] === "produits" ? C.blue : C.textSec, fontFamily: "inherit" }}>
+                            📦 Produits ({r.produits.length})
+                          </button>
+                          <button onClick={() => {
+                            if (isExpanded && detailMode[r.offre.id] === "delegues") { setExpandedId(null); }
+                            else { setExpandedId(r.offre.id); setDetailMode(m => ({ ...m, [r.offre.id]: "delegues" })); }
+                          }} style={{ flex: 1, padding: "8px 0", background: isExpanded && detailMode[r.offre.id] === "delegues" ? C.purpleSoft : C.bg, border: `1px solid ${isExpanded && detailMode[r.offre.id] === "delegues" ? C.purple : C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600, color: isExpanded && detailMode[r.offre.id] === "delegues" ? C.purple : C.textSec, fontFamily: "inherit" }}>
+                            👤 Délégués ({r.delegues.length})
+                          </button>
+                        </div>
                       )}
                     </>
                   )}
                 </div>
 
                 {/* Détail par produit */}
-                {!r.loading && !r.error && isExpanded && (
+                {!r.loading && !r.error && isExpanded && detailMode[r.offre.id] === "produits" && (
                   <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg }}>
                     {r.produits.map((p, i) => (
                       <div key={p.productId} style={{ padding: "10px 14px", borderBottom: i < r.produits.length - 1 ? `1px solid ${C.border}` : undefined, display: "flex", alignItems: "center", gap: 10 }}>
@@ -516,9 +559,38 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
                           <div style={{ fontSize: 14, fontWeight: 800, color: C.teal }}>{fmtCA(p.ca)}</div>
                           <div style={{ fontSize: 11, color: C.textMuted }}>{Math.round(p.qtyVendue)} unités</div>
                         </div>
-                        {/* Mini barre proportionnelle */}
                         <div style={{ width: 40, height: 32, display: "flex", alignItems: "flex-end" }}>
                           <div style={{ width: "100%", height: `${Math.max(4, (p.ca / (r.caTotal || 1)) * 32)}px`, background: C.teal, borderRadius: 3, opacity: 0.7 }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Détail par délégué */}
+                {!r.loading && !r.error && isExpanded && detailMode[r.offre.id] === "delegues" && (
+                  <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg }}>
+                    {r.delegues.length === 0 ? (
+                      <div style={{ padding: "16px 14px", color: C.textMuted, fontSize: 12, textAlign: "center" as const }}>Aucun délégué trouvé</div>
+                    ) : r.delegues.map((d, i) => (
+                      <div key={d.userId} style={{ padding: "10px 14px", borderBottom: i < r.delegues.length - 1 ? `1px solid ${C.border}` : undefined, display: "flex", alignItems: "center", gap: 10 }}>
+                        {/* Avatar initiales */}
+                        <div style={{ width: 32, height: 32, borderRadius: 16, background: C.purpleSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <span style={{ fontSize: 12, fontWeight: 800, color: C.purple }}>
+                            {d.name.split(" ").map((n: string) => n[0]).slice(0, 2).join("").toUpperCase()}
+                          </span>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{d.name}</div>
+                          <div style={{ fontSize: 11, color: C.textMuted }}>{Math.round(d.qtyVendue)} unités</div>
+                        </div>
+                        <div style={{ textAlign: "right" as const, flexShrink: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: C.purple }}>{fmtCA(d.ca)}</div>
+                          <div style={{ fontSize: 10, color: C.textMuted }}>{Math.round((d.ca / (r.caTotal || 1)) * 100)}% du CA</div>
+                        </div>
+                        {/* Barre proportionnelle */}
+                        <div style={{ width: 40, height: 32, display: "flex", alignItems: "flex-end" }}>
+                          <div style={{ width: "100%", height: `${Math.max(4, (d.ca / (r.caTotal || 1)) * 32)}px`, background: C.purple, borderRadius: 3, opacity: 0.6 }} />
                         </div>
                       </div>
                     ))}
