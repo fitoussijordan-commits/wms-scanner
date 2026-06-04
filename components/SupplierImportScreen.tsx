@@ -122,6 +122,9 @@ export default function SupplierImportScreen({
   const [fileName, setFileName] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState("");
+  // Lignes brutes du fichier d'origine + ordre des colonnes (pour réexporter les manquantes à l'identique)
+  const [rawRows, setRawRows] = useState<any[]>([]);
+  const [headerRow, setHeaderRow] = useState<string[]>([]);
 
   const [importLogs, setImportLogs] = useState<{ text: string; status: "pending" | "ok" | "warn" | "error" | "running" }[]>([]);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
@@ -152,12 +155,16 @@ export default function SupplierImportScreen({
       const XLSX = await loadXLSX();
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
-      const raw = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(sheet);
+      const hdr = (XLSX.utils.sheet_to_json(sheet, { header: 1 })[0] || []) as string[];
       const parsed = parsePackingList(raw);
 
       if (!parsed.length) throw new Error("Aucune ligne valide trouvée dans la packing list (vérifiez les colonnes Article-No, Quantity, Batch)");
 
       setPackingLines(parsed);
+      setRawRows(raw as any[]);
+      setHeaderRow(hdr);
 
       // Match products in Odoo
       const articleCodes = Array.from(new Set(parsed.map(l => l.articleNo)));
@@ -261,6 +268,25 @@ export default function SupplierImportScreen({
       updateLastLog(`Erreur : ${err.message}`, "error");
       setImportError(err.message || "Erreur inconnue");
     }
+  };
+
+  // ── Export Excel des réfs manquantes (même format que le fichier d'origine) ──
+  const exportMissing = async () => {
+    if (!missingArticles.length || !rawRows.length) return;
+    const XLSX = await loadXLSX();
+    const missingSet = new Set(missingArticles.map(a => a.articleNo));
+    // On reprend toutes les lignes brutes (tous les lots) dont l'article est manquant
+    const rows = rawRows.filter(r =>
+      missingSet.has(String(getCellValue(r, ["ArticleNo", "Article-No", "ProductCode"]) || "").trim())
+    );
+    if (!rows.length) return;
+    const ws = headerRow.length
+      ? XLSX.utils.json_to_sheet(rows, { header: headerRow })
+      : XLSX.utils.json_to_sheet(rows);
+    const wbk = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbk, ws, "Packing List");
+    const base = (fileName || "wala").replace(/\.(xlsx|xls)$/i, "");
+    XLSX.writeFile(wbk, `${base}_refs_manquantes.xlsx`);
   };
 
   // ─── Render ───────────────────────────────────────────────────────────────
@@ -391,6 +417,12 @@ export default function SupplierImportScreen({
                     </div>
                   ))}
                 </div>
+                <button onClick={exportMissing} style={{ ...S.btnSecondary, flex: "none", marginTop: 10, display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 16px" }}>
+                  ⬇️ Télécharger les réfs manquantes (Excel)
+                </button>
+                <div style={{ marginTop: 6, fontSize: 12, color: "#9ca3af" }}>
+                  Fichier au même format que l'original — ajoute les réfs dans Odoo puis réimporte ce fichier.
+                </div>
               </div>
             )}
 
@@ -500,6 +532,29 @@ export default function SupplierImportScreen({
               <div style={{ fontWeight: 700, fontSize: 18, color: "#15803d", marginBottom: 4 }}>Import réussi !</div>
               <div style={{ fontSize: 13, color: "#16a34a" }}>BDC créé · Lots affectés · À toi de valider la réception dans Odoo</div>
             </div>
+
+            {/* Import forcé : rappel des réfs laissées de côté + export */}
+            {missingArticles.length > 0 && (
+              <div style={S.errorCard}>
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>
+                  ⚠️ {missingArticles.length} référence{missingArticles.length > 1 ? "s" : ""} non importée{missingArticles.length > 1 ? "s" : ""} (import forcé)
+                </div>
+                <p style={{ fontSize: 13, color: "#7f1d1d", marginBottom: 10 }}>
+                  Ces articles n'ont pas été commandés ni réceptionnés. Télécharge-les, configure-les dans Odoo, puis réimporte le fichier.
+                </p>
+                <div style={{ maxHeight: 130, overflowY: "auto", background: "#fff5f5", borderRadius: 6, padding: 10, marginBottom: 10 }}>
+                  {missingArticles.map(a => (
+                    <div key={a.articleNo} style={{ display: "flex", gap: 8, padding: "4px 0", borderBottom: "1px solid #fecaca", fontSize: 13 }}>
+                      <code style={{ color: "#dc2626", fontWeight: 700, minWidth: 90 }}>{a.articleNo}</code>
+                      <span style={{ color: "#374151" }}>{a.description}</span>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={exportMissing} style={{ ...S.btnWarning, flex: "none", display: "inline-flex", alignItems: "center", gap: 8, padding: "12px 18px" }}>
+                  ⬇️ Télécharger les réfs manquantes (Excel)
+                </button>
+              </div>
+            )}
 
             <div style={S.card}>
               <div style={S.cardTitle}>Récapitulatif</div>
