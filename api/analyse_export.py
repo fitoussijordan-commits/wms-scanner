@@ -252,7 +252,7 @@ def build_offre_sheet(wb, r):
     ws.cell(tot_row, 4).number_format = '#,##0 "€"'
     row_height(ws, tot_row, 22)
 
-    # ── Camembert produits ──
+    # ── Camembert produits — ancré à G4, taille fixe ──
     if len(prods) >= 2:
         pie_prod = PieChart()
         pie_prod.title = f"CA par produit — {code}"
@@ -265,15 +265,14 @@ def build_offre_sheet(wb, r):
         pie_prod.set_categories(cats_ref)
         pie_prod.series[0].title = None
 
-        # Couleurs des tranches
         for j in range(len(prods)):
             pt = DataPoint(idx=j)
             pt.graphicalProperties.solidFill = PIE_COLORS[j % len(PIE_COLORS)]
             pie_prod.series[0].dPt.append(pt)
 
         pie_prod.width  = 14
-        pie_prod.height = 10
-        ws.add_chart(pie_prod, f"G{prod_start}")
+        pie_prod.height = 13
+        ws.add_chart(pie_prod, "G4")   # ← position fixe
 
     # Ligne vide après produits
     after_prod = tot_row + 1
@@ -330,7 +329,7 @@ def build_offre_sheet(wb, r):
         ws.cell(dtot, 3).number_format = '#,##0 "€"'
         row_height(ws, dtot, 22)
 
-        # Camembert délégués
+        # Camembert délégués — ancré à N4 (à droite du camembert produits)
         if len(delegs) >= 2:
             pie_del = PieChart()
             pie_del.title = f"CA par délégué — {code}"
@@ -348,11 +347,11 @@ def build_offre_sheet(wb, r):
                 pie_del.series[0].dPt.append(pt)
 
             pie_del.width  = 14
-            pie_del.height = 10
-            ws.add_chart(pie_del, f"G{del_start}")
+            pie_del.height = 13
+            ws.add_chart(pie_del, "N4")  # ← côte à côte avec le camembert produits
 
     # ── Largeurs colonnes ──
-    for col, w in zip(range(1, 8), [14, 36, 14, 16, 10, 4, 22]):
+    for col, w in zip(range(1, 22), [14, 36, 14, 16, 10, 3, 2, 12, 12, 12, 12, 12, 3, 12, 12, 12, 12, 12, 12, 12, 12]):
         set_col_width(ws, col, w)
 
 
