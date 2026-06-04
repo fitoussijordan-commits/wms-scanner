@@ -12,6 +12,7 @@ import ArticleCreatorScreen, { SeuilsTab, CreationTab } from "@/components/Artic
 import FreeScanScreen from "@/components/FreeScanScreen";
 import ReturnsScreen from "@/components/ReturnsScreen";
 import PackingScreen from "@/components/PackingScreen";
+import AnalyseScreen from "@/components/AnalyseScreen";
 
 
 // ── Helpers PDF ─────────────────────────────────────────────────────────────────
@@ -1000,7 +1001,7 @@ export default function Page() {
     setIsDark(val);
   };
 
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "analyse">("login");
   const [packingPickingId, setPackingPickingId] = useState<number | null>(null);
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2324,6 +2325,7 @@ export default function Page() {
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: false },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels"), admin: false },
                 { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; }, admin: true },
+                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>, label: "Analyse", onClick: () => setScreen("analyse"), admin: false },
               ].filter(btn => !btn.admin || (session && odoo.isAdmin(session))).map((btn, i) => (
                 <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 6, padding: "14px 6px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", position: "relative" as const }}>
                   {btn.icon}
@@ -2731,6 +2733,10 @@ export default function Page() {
 
         {screen === "eshop" && session && (
           <EshopScreen session={session} onBack={goHome} onToast={showToast} />
+        )}
+
+        {screen === "analyse" && session && (
+          <AnalyseScreen session={session} onBack={goHome} onToast={showToast} />
         )}
       </main>
 
