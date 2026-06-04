@@ -1933,13 +1933,15 @@ export async function matchWalaArticles(
   articleCodes: string[]
 ): Promise<Record<string, { templateId: number; productId: number; name: string; defaultCode: string; uomId: number; uomName: string }>> {
   if (!articleCodes.length) return {};
+  const map: Record<string, any> = {};
+
+  // ── Passe 1 : champ custom sur le template (x_studio_code_produit_fournisseur) ──
   const templates = await searchRead(
     session, "product.template",
     [["x_studio_code_produit_fournisseur", "in", articleCodes]],
     ["id", "name", "default_code", "x_studio_code_produit_fournisseur", "product_variant_ids", "uom_id"],
     0
   );
-  const map: Record<string, any> = {};
   for (const t of templates) {
     const code = t.x_studio_code_produit_fournisseur;
     const productId = Array.isArray(t.product_variant_ids) ? t.product_variant_ids[0] : null;
@@ -1954,6 +1956,69 @@ export async function matchWalaArticles(
       };
     }
   }
+
+  // ── Passe 2 : Référence Fournisseur standard (product.supplierinfo.product_code) ──
+  // pour les codes non trouvés via le champ custom.
+  const remaining = articleCodes.filter(c => !(String(c).trim() in map));
+  if (remaining.length) {
+    const sis = await searchRead(
+      session, "product.supplierinfo",
+      [["product_code", "in", remaining]],
+      ["id", "product_code", "product_id", "product_tmpl_id"],
+      0
+    );
+    // Récupère les détails template (et variant orphelins) en une fois.
+    const tmplIds = new Set<number>();
+    const orphanVariantIds = new Set<number>();
+    for (const si of sis) {
+      if (Array.isArray(si.product_tmpl_id)) tmplIds.add(si.product_tmpl_id[0]);
+      else if (Array.isArray(si.product_id)) orphanVariantIds.add(si.product_id[0]);
+    }
+    const tmplById: Record<number, any> = {};
+    if (tmplIds.size) {
+      const tmpls = await searchRead(
+        session, "product.template",
+        [["id", "in", Array.from(tmplIds)]],
+        ["id", "name", "default_code", "uom_id", "product_variant_ids"], 0
+      );
+      for (const t of tmpls) tmplById[t.id] = t;
+    }
+    // Pour les supplierinfo sans product_tmpl_id : on résout le template via le variant.
+    const variantToTmpl: Record<number, any> = {};
+    if (orphanVariantIds.size) {
+      const prods = await searchRead(
+        session, "product.product",
+        [["id", "in", Array.from(orphanVariantIds)]],
+        ["id", "name", "default_code", "uom_id", "product_tmpl_id"], 0
+      );
+      for (const p of prods) variantToTmpl[p.id] = p;
+    }
+    for (const si of sis) {
+      const code = String(si.product_code || "").trim();
+      if (!code || map[code]) continue;
+      const tmplId = Array.isArray(si.product_tmpl_id) ? si.product_tmpl_id[0] : null;
+      const variantId = Array.isArray(si.product_id) ? si.product_id[0] : null;
+      let templateId = 0, productId = 0, name = "", defaultCode = "", uomId: any = null, uomName = "";
+      if (tmplId && tmplById[tmplId]) {
+        const t = tmplById[tmplId];
+        templateId = t.id;
+        productId = variantId || (Array.isArray(t.product_variant_ids) ? t.product_variant_ids[0] : 0);
+        name = t.name; defaultCode = t.default_code || "";
+        uomId = Array.isArray(t.uom_id) ? t.uom_id[0] : t.uom_id;
+        uomName = Array.isArray(t.uom_id) ? t.uom_id[1] : "";
+      } else if (variantId && variantToTmpl[variantId]) {
+        const p = variantToTmpl[variantId];
+        templateId = Array.isArray(p.product_tmpl_id) ? p.product_tmpl_id[0] : 0;
+        productId = p.id; name = p.name; defaultCode = p.default_code || "";
+        uomId = Array.isArray(p.uom_id) ? p.uom_id[0] : p.uom_id;
+        uomName = Array.isArray(p.uom_id) ? p.uom_id[1] : "";
+      }
+      if (templateId && productId) {
+        map[code] = { templateId, productId, name, defaultCode, uomId, uomName };
+      }
+    }
+  }
+
   return map;
 }
 

@@ -407,7 +407,7 @@ export default function SupplierImportScreen({
                   ⚠️ {missingArticles.length} référence{missingArticles.length > 1 ? "s" : ""} introuvable{missingArticles.length > 1 ? "s" : ""} dans Odoo
                 </div>
                 <p style={{ fontSize: 13, color: "#7f1d1d", marginBottom: 10 }}>
-                  Ces articles n'ont pas de correspondance dans Odoo (champ <code>x_studio_code_produit_fournisseur</code>). Tu peux soit <strong>annuler</strong> pour les configurer d'abord, soit <strong>forcer l'import</strong> : les {matchedLines.length} ligne{matchedLines.length > 1 ? "s" : ""} valide{matchedLines.length > 1 ? "s" : ""} seront importée{matchedLines.length > 1 ? "s" : ""} et celles ci-dessous laissées de côté.
+                  Ces articles n'ont pas de correspondance dans Odoo (ni via <code>x_studio_code_produit_fournisseur</code>, ni via la Référence Fournisseur <code>product_code</code>). Tu peux soit <strong>annuler</strong> pour les configurer d'abord, soit <strong>forcer l'import</strong> : les {matchedLines.length} ligne{matchedLines.length > 1 ? "s" : ""} valide{matchedLines.length > 1 ? "s" : ""} seront importée{matchedLines.length > 1 ? "s" : ""} et celles ci-dessous laissées de côté.
                 </p>
                 <div style={{ maxHeight: 160, overflowY: "auto", background: "#fff5f5", borderRadius: 6, padding: 10 }}>
                   {missingArticles.map(a => (
