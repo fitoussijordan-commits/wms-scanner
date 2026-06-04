@@ -349,6 +349,46 @@ function ParametrageTab({ onToast }: { onToast: Props["onToast"] }) {
   );
 }
 
+// ── Export Excel via API Python (openpyxl + camemberts) ──────────────────────
+async function exportToExcel(results: OffreAnalyse[], onToast: Props["onToast"], setExporting: (v: boolean) => void) {
+  setExporting(true);
+  try {
+    const payload = {
+      results: results
+        .filter(r => !r.loading && !r.error)
+        .map(r => ({
+          offre: r.offre,
+          caTotal: r.caTotal,
+          qtyTotal: r.qtyTotal,
+          produits: r.produits,
+          delegues: r.delegues,
+          debugOrders: r.debugOrders ?? [],
+        })),
+    };
+
+    const res = await fetch("/api/analyse_export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) throw new Error(`Erreur ${res.status}`);
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `analyse_offres_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+    onToast("Export Excel téléchargé 🎉", "success");
+  } catch (e: any) {
+    onToast("Erreur export : " + e.message, "error");
+  } finally {
+    setExporting(false);
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ONGLET ANALYSE
 // ═══════════════════════════════════════════════════════════════════════════
@@ -359,6 +399,7 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   const [globalLoading, setGlobalLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detailMode, setDetailMode] = useState<Record<string, "produits" | "delegues" | "debug">>({});
+  const [exporting, setExporting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { setConfigOffres(loadOffres()); }, []);
@@ -484,14 +525,26 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
             <div style={{ fontSize: 10, fontWeight: 700, color: C.orange, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Qté vendue</div>
             <div style={{ fontSize: 24, fontWeight: 800, color: C.orange }}>{Math.round(totalQty)}</div>
           </div>
-          {results.filter(r => !r.loading && !r.error).length > 1 && (
-            <button onClick={refreshAll} disabled={globalLoading}
-              style={{ padding: "0 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, cursor: "pointer", color: C.textMuted, flexShrink: 0, display: "flex", alignItems: "center" }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
-              </svg>
-            </button>
-          )}
+          <div style={{ display: "flex", flexDirection: "column" as const, gap: 6, flexShrink: 0 }}>
+            {results.filter(r => !r.loading && !r.error).length > 0 && (
+              <button onClick={refreshAll} disabled={globalLoading}
+                style={{ flex: 1, padding: "0 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", color: C.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+                </svg>
+              </button>
+            )}
+            {results.filter(r => !r.loading && !r.error).length > 0 && (
+              <button
+                onClick={() => exportToExcel(results, onToast, setExporting)}
+                disabled={exporting}
+                style={{ flex: 1, padding: "0 12px", background: exporting ? C.border : C.green, border: "none", borderRadius: 10, cursor: exporting ? "default" : "pointer", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 5, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                {exporting ? "…" : (
+                  <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>XLS</>
+                )}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
