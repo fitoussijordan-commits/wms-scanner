@@ -56,7 +56,7 @@ function computeFreeItems(cart: Record<number, CartItem>, rules: FreeRule[]): Fr
 
 // ═══════════════════════════════════════════════════════════════════════════
 export default function OrderScreen({ session, onBack, onToast }: Props) {
-  const [step, setStep] = useState<"client" | "catalog" | "confirm">("client");
+  const [step, setStep] = useState<"client" | "catalog">("client");
   const [client, setClient] = useState<any>(null);
   const [cart, setCart] = useState<Record<number, CartItem>>({});
   const [rules, setRules] = useState<FreeRule[]>([]);
@@ -139,9 +139,9 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
 
         {/* Breadcrumb / steps */}
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {(["client", "catalog", "confirm"] as const).map((s, i) => {
-            const labels = ["Client", "Catalogue", "Validation"];
-            const done_ = ["client", "catalog", "confirm"].indexOf(step) > i;
+          {(["client", "catalog"] as const).map((s, i) => {
+            const labels = ["Client", "Catalogue & Panier"];
+            const done_ = ["client", "catalog"].indexOf(step) > i;
             const active = step === s;
             return (
               <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -176,16 +176,7 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
           </div>
         )}
 
-        {/* Panier badge */}
-        {cartCount > 0 && step === "catalog" && (
-          <button onClick={() => setStep("confirm")} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", background: C.teal, color: "#fff", border: "none", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, fontSize: 13 }}>
-            🛒 {cartCount} article{cartCount > 1 ? "s" : ""}
-            {freeCount > 0 && <span style={{ background: "rgba(255,255,255,0.25)", borderRadius: 6, padding: "1px 6px", fontSize: 11 }}>+{freeCount} offerts</span>}
-            <span style={{ opacity: 0.85, fontSize: 13 }}>{fmtPrice(cartTotal)}</span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M9 18l6-6-6-6"/></svg>
-          </button>
-        )}
-
+  
         <button onClick={() => setShowRules(!showRules)} style={{ width: 36, height: 36, borderRadius: 10, background: showRules ? C.purpleSoft : C.bg, border: `1px solid ${showRules ? C.purple : C.border}`, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>
           ⚙️
         </button>
@@ -203,12 +194,9 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
       {/* ── Étapes ── */}
       {step === "client" && <ClientStep session={session} onSelect={c => { setClient(c); setStep("catalog"); }} />}
       {step === "catalog" && client && (
-        <CatalogStep session={session} cart={cart} onQtyChange={setQty} freeItems={freeItems} />
-      )}
-      {step === "confirm" && client && (
-        <ConfirmStep cart={cart} freeItems={freeItems} total={cartTotal} client={client}
-          note={note} setNote={setNote} onQtyChange={setQty}
-          onBack={() => setStep("catalog")} onSubmit={handleValidate} submitting={submitting} />
+        <CatalogStep session={session} cart={cart} onQtyChange={setQty} freeItems={freeItems}
+          onValidate={handleValidate} submitting={submitting}
+          note={note} setNote={setNote} client={client} />
       )}
     </div>
   );
@@ -288,11 +276,13 @@ function ClientStep({ session, onSelect }: { session: odoo.OdooSession; onSelect
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ÉTAPE 2 — Catalogue
+// ÉTAPE 2 — Catalogue + Panier persistant
 // ═══════════════════════════════════════════════════════════════════════════
-function CatalogStep({ session, cart, onQtyChange, freeItems }: {
+function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submitting, note, setNote, client }: {
   session: odoo.OdooSession; cart: Record<number, CartItem>;
   onQtyChange: (p: any, q: number) => void; freeItems: FreeItem[];
+  onValidate: () => void; submitting: boolean;
+  note: string; setNote: (n: string) => void; client: any;
 }) {
   const [cats, setCats] = useState<any[]>([]);
   const [catId, setCatId] = useState<number | null>(null);
@@ -329,84 +319,73 @@ function CatalogStep({ session, cart, onQtyChange, freeItems }: {
   }, [catId, search, load]);
 
   const freeProductIds = new Set(freeItems.map(f => f.product.id));
+  const cartItems = Object.values(cart);
+  const cartCount = cartItems.reduce((s, i) => s + i.qty, 0);
+  const cartTotal = cartItems.reduce((s, i) => s + i.qty * i.unitPrice, 0);
+  const freeCount = freeItems.reduce((s, i) => s + i.qty, 0);
 
   return (
     <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
 
-      {/* Sidebar catégories */}
-      <div style={{ width: 180, background: C.white, borderRight: `1px solid ${C.border}`, overflowY: "auto" as const, flexShrink: 0 }}>
+      {/* ── Sidebar catégories ── */}
+      <div style={{ width: 170, background: C.white, borderRight: `1px solid ${C.border}`, overflowY: "auto" as const, flexShrink: 0 }}>
         <div style={{ padding: "12px 12px 6px", fontSize: 10, fontWeight: 700, color: C.muted, textTransform: "uppercase" as const, letterSpacing: "0.08em" }}>Catégories</div>
         {[{ id: null, name: "Tous les produits" }, ...cats].map(cat => (
           <button key={cat.id ?? "all"} onClick={() => setCatId(cat.id)}
-            style={{ width: "100%", padding: "10px 12px", background: catId === cat.id ? C.tealSoft : "transparent", border: "none", borderLeft: `3px solid ${catId === cat.id ? C.teal : "transparent"}`, cursor: "pointer", textAlign: "left" as const, fontSize: 12, fontWeight: catId === cat.id ? 700 : 400, color: catId === cat.id ? C.tealDark : C.textSec, fontFamily: "inherit", transition: "all 0.1s" }}>
+            style={{ width: "100%", padding: "10px 12px", background: catId === cat.id ? C.tealSoft : "transparent", border: "none", borderLeft: `3px solid ${catId === cat.id ? C.teal : "transparent"}`, cursor: "pointer", textAlign: "left" as const, fontSize: 12, fontWeight: catId === cat.id ? 700 : 400, color: catId === cat.id ? C.tealDark : C.textSec, fontFamily: "inherit", transition: "all 0.1s", wordBreak: "break-word" as const }}>
             {cat.name}
           </button>
         ))}
       </div>
 
-      {/* Zone principale */}
+      {/* ── Zone produits ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column" as const, overflow: "hidden", minWidth: 0 }}>
-
         {/* Barre recherche */}
-        <div style={{ padding: "10px 16px", background: C.white, borderBottom: `1px solid ${C.border}`, display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ padding: "10px 14px", background: C.white, borderBottom: `1px solid ${C.border}`, display: "flex", gap: 10, alignItems: "center" }}>
           <div style={{ position: "relative" as const, flex: 1 }}>
-            <svg style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2">
-              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-            </svg>
-            <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Rechercher par nom ou référence..."
+            <svg style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher un produit..."
               style={{ width: "100%", boxSizing: "border-box" as const, padding: "9px 9px 9px 34px", border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: C.bg }} />
           </div>
-          {freeItems.length > 0 && (
-            <div style={{ padding: "6px 12px", background: C.greenSoft, border: `1px solid ${C.green}33`, borderRadius: 10, fontSize: 12, fontWeight: 600, color: C.green, flexShrink: 0 }}>
-              🎁 {freeItems.reduce((s, i) => s + i.qty, 0)} offerts
-            </div>
-          )}
         </div>
-
-        {/* Grille produits */}
-        <div style={{ flex: 1, overflowY: "auto" as const, padding: 16 }}>
+        {/* Grille */}
+        <div style={{ flex: 1, overflowY: "auto" as const, padding: 14 }}>
           {loading ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: C.muted }}>Chargement…</div>
           ) : !catId && !search ? (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 300, flexDirection: "column" as const, gap: 12, color: C.muted }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60%", flexDirection: "column" as const, gap: 12, color: C.muted }}>
               <div style={{ fontSize: 48 }}>👈</div>
               <div style={{ fontSize: 15, fontWeight: 600 }}>Sélectionne une catégorie</div>
               <div style={{ fontSize: 13 }}>ou utilise la recherche</div>
             </div>
           ) : products.length === 0 ? (
-            <div style={{ textAlign: "center", padding: 60, color: C.muted }}>Aucun produit trouvé</div>
+            <div style={{ textAlign: "center", padding: 60, color: C.muted }}>Aucun produit</div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(175px, 1fr))", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
               {products.map(p => {
                 const qty = cart[p.id]?.qty || 0;
                 const isFree = freeProductIds.has(p.id);
                 const stock = Math.max(0, Math.round(p.virtual_available || 0));
                 return (
-                  <div key={p.id} style={{ background: C.white, borderRadius: 16, overflow: "hidden", border: `2px solid ${qty > 0 ? C.teal : isFree ? C.green : C.border}`, boxShadow: qty > 0 ? `0 0 0 4px ${C.tealSoft}` : C.shadow, transition: "all 0.15s" }}>
-                    {/* Image */}
-                    <div style={{ height: 90, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" as const }}>
-                      {p.image_128
-                        ? <img src={`data:image/png;base64,${p.image_128}`} alt="" style={{ height: 80, objectFit: "contain" }} />
-                        : <div style={{ fontSize: 36 }}>📦</div>}
-                      {isFree && <div style={{ position: "absolute", top: 6, right: 6, background: C.green, color: "#fff", fontSize: 9, fontWeight: 700, borderRadius: 6, padding: "2px 6px" }}>OFFERT</div>}
-                      {qty > 0 && <div style={{ position: "absolute", top: 6, left: 6, background: C.teal, color: "#fff", fontSize: 11, fontWeight: 800, borderRadius: 8, padding: "2px 8px" }}>{qty}</div>}
+                  <div key={p.id} style={{ background: C.white, borderRadius: 14, overflow: "hidden", border: `2px solid ${qty > 0 ? C.teal : isFree ? C.green : C.border}`, boxShadow: qty > 0 ? `0 0 0 3px ${C.tealSoft}` : C.shadow, transition: "all 0.15s" }}>
+                    <div style={{ height: 80, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" as const }}>
+                      {p.image_128 ? <img src={`data:image/png;base64,${p.image_128}`} alt="" style={{ height: 72, objectFit: "contain" }} /> : <div style={{ fontSize: 32 }}>📦</div>}
+                      {isFree && <div style={{ position: "absolute", top: 5, right: 5, background: C.green, color: "#fff", fontSize: 9, fontWeight: 700, borderRadius: 5, padding: "2px 5px" }}>OFFERT</div>}
+                      {qty > 0 && <div style={{ position: "absolute", top: 5, left: 5, background: C.teal, color: "#fff", fontSize: 11, fontWeight: 800, borderRadius: 7, padding: "2px 7px" }}>{qty}</div>}
                     </div>
-                    {/* Infos */}
-                    <div style={{ padding: "10px 12px 12px" }}>
-                      <div style={{ fontSize: 10, color: C.muted, fontFamily: "monospace", marginBottom: 2 }}>{p.default_code}</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: C.text, lineHeight: 1.35, height: 32, overflow: "hidden" }}>{p.name}</div>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, marginBottom: 8 }}>
-                        <span style={{ fontSize: 14, fontWeight: 800, color: C.tealDark }}>{p.lst_price > 0 ? fmtPrice(p.lst_price) : "—"}</span>
-                        <span style={{ fontSize: 10, fontWeight: 600, color: stock > 0 ? C.green : C.red, background: stock > 0 ? C.greenSoft : C.redSoft, borderRadius: 6, padding: "2px 6px" }}>
+                    <div style={{ padding: "8px 10px 10px" }}>
+                      <div style={{ fontSize: 9, color: C.muted, fontFamily: "monospace", marginBottom: 1 }}>{p.default_code}</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: C.text, lineHeight: 1.3, height: 28, overflow: "hidden" }}>{p.name}</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 5, marginBottom: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: C.tealDark }}>{p.lst_price > 0 ? fmtPrice(p.lst_price) : "—"}</span>
+                        <span style={{ fontSize: 9, fontWeight: 600, color: stock > 0 ? C.green : C.red, background: stock > 0 ? C.greenSoft : C.redSoft, borderRadius: 5, padding: "2px 5px" }}>
                           {stock > 0 ? `${stock}` : "Rupture"}
                         </span>
                       </div>
-                      {/* Stepper */}
-                      <div style={{ display: "flex", background: qty > 0 ? C.tealSoft : C.bg, borderRadius: 10, overflow: "hidden", border: `1px solid ${qty > 0 ? C.tealMid : C.border}` }}>
-                        <button onClick={() => onQtyChange(p, qty - 1)} style={{ flex: 1, padding: "8px 0", background: "transparent", border: "none", cursor: "pointer", fontSize: 18, fontWeight: 700, color: qty > 0 ? C.red : C.muted, lineHeight: 1 }}>−</button>
-                        <span style={{ flex: 1, textAlign: "center" as const, fontSize: 15, fontWeight: 800, color: qty > 0 ? C.tealDark : C.muted, lineHeight: "34px" }}>{qty}</span>
-                        <button onClick={() => onQtyChange(p, qty + 1)} style={{ flex: 1, padding: "8px 0", background: "transparent", border: "none", cursor: "pointer", fontSize: 18, fontWeight: 700, color: C.teal, lineHeight: 1 }}>+</button>
+                      <div style={{ display: "flex", background: qty > 0 ? C.tealSoft : C.bg, borderRadius: 8, overflow: "hidden", border: `1px solid ${qty > 0 ? C.tealMid : C.border}` }}>
+                        <button onClick={() => onQtyChange(p, qty - 1)} style={{ flex: 1, padding: "7px 0", background: "transparent", border: "none", cursor: "pointer", fontSize: 17, fontWeight: 700, color: qty > 0 ? C.red : C.muted, lineHeight: 1 }}>−</button>
+                        <span style={{ flex: 1, textAlign: "center" as const, fontSize: 14, fontWeight: 800, color: qty > 0 ? C.tealDark : C.muted, lineHeight: "30px" }}>{qty}</span>
+                        <button onClick={() => onQtyChange(p, qty + 1)} style={{ flex: 1, padding: "7px 0", background: "transparent", border: "none", cursor: "pointer", fontSize: 17, fontWeight: 700, color: C.teal, lineHeight: 1 }}>+</button>
                       </div>
                     </div>
                   </div>
@@ -414,6 +393,72 @@ function CatalogStep({ session, cart, onQtyChange, freeItems }: {
               })}
             </div>
           )}
+        </div>
+      </div>
+
+      {/* ── Panier persistant (droite) ── */}
+      <div style={{ width: 280, background: C.white, borderLeft: `1px solid ${C.border}`, display: "flex", flexDirection: "column" as const, flexShrink: 0 }}>
+        {/* Header panier */}
+        <div style={{ padding: "12px 14px", background: "linear-gradient(135deg, #0d9488, #0f766e)", color: "#fff" }}>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>🛒 Panier — {client.name}</div>
+          <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>
+            {cartCount} article{cartCount > 1 ? "s" : ""} · {fmtPrice(cartTotal)}
+            {freeCount > 0 && <span style={{ marginLeft: 6, background: "rgba(255,255,255,0.2)", borderRadius: 5, padding: "1px 6px" }}>+{freeCount} offerts</span>}
+          </div>
+        </div>
+
+        {/* Liste articles */}
+        <div style={{ flex: 1, overflowY: "auto" as const, padding: "10px 12px" }}>
+          {cartItems.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "32px 12px", color: C.muted }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>🛒</div>
+              <div style={{ fontSize: 12 }}>Ajoute des produits</div>
+            </div>
+          ) : (
+            cartItems.map(item => (
+              <div key={item.product.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "7px 8px", background: C.bg, borderRadius: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{item.product.name}</div>
+                  <div style={{ fontSize: 10, color: C.muted }}>{fmtPrice(item.qty * item.unitPrice)}</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                  <button onClick={() => onQtyChange(item.product, item.qty - 1)} style={{ width: 22, height: 22, borderRadius: 5, background: C.redSoft, border: "none", cursor: "pointer", color: C.red, fontSize: 14, fontWeight: 700, lineHeight: 1 }}>−</button>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: C.text, minWidth: 18, textAlign: "center" as const }}>{item.qty}</span>
+                  <button onClick={() => onQtyChange(item.product, item.qty + 1)} style={{ width: 22, height: 22, borderRadius: 5, background: C.tealSoft, border: "none", cursor: "pointer", color: C.teal, fontSize: 14, fontWeight: 700, lineHeight: 1 }}>+</button>
+                </div>
+              </div>
+            ))
+          )}
+
+          {/* Articles gratuits */}
+          {freeItems.length > 0 && (
+            <div style={{ margin: "8px 0", padding: "8px 10px", background: C.greenSoft, border: `1px solid ${C.green}33`, borderRadius: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.green, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 5 }}>🎁 BC Gratuit (séparé)</div>
+              {freeItems.map((fi, i) => (
+                <div key={i} style={{ fontSize: 11, color: C.green, marginBottom: 2 }}>
+                  <strong>{fi.qty}×</strong> {fi.product.name}
+                  <div style={{ fontSize: 10, opacity: 0.7 }}>{fi.ruleName}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Note */}
+          <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Note interne..."
+            rows={2} style={{ width: "100%", boxSizing: "border-box" as const, marginTop: 6, padding: "7px 9px", border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 11, fontFamily: "inherit", resize: "none" as const, background: C.bg }} />
+        </div>
+
+        {/* Footer total + valider */}
+        <div style={{ padding: "12px 14px", borderTop: `1px solid ${C.border}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontSize: 12, color: C.muted }}>Total HT indicatif</span>
+            <span style={{ fontSize: 17, fontWeight: 800, color: C.tealDark }}>{fmtPrice(cartTotal)}</span>
+          </div>
+          <button onClick={onValidate} disabled={submitting || cartCount === 0}
+            style={{ width: "100%", padding: "13px 0", background: cartCount === 0 ? C.border : submitting ? C.muted : "linear-gradient(135deg, #0d9488, #0f766e)", color: "#fff", border: "none", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: cartCount === 0 ? "default" : "pointer", fontFamily: "inherit", boxShadow: cartCount > 0 && !submitting ? "0 4px 12px rgba(13,148,136,0.35)" : "none", transition: "all 0.2s" }}>
+            {submitting ? "Création…" : cartCount === 0 ? "Panier vide" : `Créer le devis${freeItems.length > 0 ? " + BC gratuit" : ""}`}
+          </button>
+          <div style={{ fontSize: 10, color: C.muted, textAlign: "center" as const, marginTop: 5 }}>Prix Odoo appliqués à la création</div>
         </div>
       </div>
     </div>
