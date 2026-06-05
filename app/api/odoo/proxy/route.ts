@@ -1,6 +1,19 @@
 // app/api/odoo/proxy/route.ts
 import { NextRequest, NextResponse } from "next/server";
 
+// Allowlist des endpoints Odoo autorisés — bloque toute tentative SSRF
+const ALLOWED_ENDPOINTS = [
+  "/web/session/authenticate",
+  "/web/session/destroy",
+  "/web/dataset/call_kw",
+  "/web/binary/image",
+  "/report/pdf/",
+];
+
+function isEndpointAllowed(endpoint: string): boolean {
+  return ALLOWED_ENDPOINTS.some(allowed => endpoint.startsWith(allowed));
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -8,6 +21,38 @@ export async function POST(req: NextRequest) {
 
     if (!odooUrl || !endpoint) {
       return NextResponse.json({ error: "odooUrl et endpoint requis" }, { status: 400 });
+    }
+
+    // ── Protection SSRF : l'URL doit correspondre exactement à ODOO_URL ──────
+    const allowedBase = (process.env.ODOO_URL || "").replace(/\/$/, "").toLowerCase();
+    const requestedBase = odooUrl.replace(/\/$/, "").toLowerCase();
+
+    // Si ODOO_URL est défini en env, on bloque toute URL différente
+    if (allowedBase && requestedBase !== allowedBase) {
+      console.warn(`[proxy] SSRF bloqué — URL non autorisée: ${odooUrl}`);
+      return NextResponse.json({ error: "URL Odoo non autorisée" }, { status: 403 });
+    }
+
+    // Bloquer les IPs privées et metadata cloud même si ODOO_URL n'est pas défini
+    const BLOCKED_PATTERNS = [
+      /^https?:\/\/169\.254\./,           // AWS metadata
+      /^https?:\/\/metadata\.google/,      // GCP metadata
+      /^https?:\/\/10\./,                  // RFC1918
+      /^https?:\/\/172\.(1[6-9]|2\d|3[01])\./, // RFC1918
+      /^https?:\/\/192\.168\./,            // RFC1918
+      /^https?:\/\/127\./,                 // loopback
+      /^https?:\/\/0\./,                   // 0.x.x.x
+      /^https?:\/\/localhost/i,            // localhost
+    ];
+    if (BLOCKED_PATTERNS.some(p => p.test(odooUrl))) {
+      console.warn(`[proxy] SSRF bloqué — IP réservée: ${odooUrl}`);
+      return NextResponse.json({ error: "URL non autorisée" }, { status: 403 });
+    }
+
+    // Valider que l'endpoint est dans la liste autorisée
+    if (!isEndpointAllowed(endpoint)) {
+      console.warn(`[proxy] Endpoint non autorisé: ${endpoint}`);
+      return NextResponse.json({ error: "Endpoint non autorisé" }, { status: 403 });
     }
 
     const headers: Record<string, string> = {
@@ -73,7 +118,7 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     console.error("Proxy Odoo error:", e);
     return NextResponse.json(
-      { error: e.message || "Erreur de connexion au serveur Odoo" },
+      { error: "Erreur de connexion au serveur Odoo" }, // pas de détail interne exposé
       { status: 500 }
     );
   }
