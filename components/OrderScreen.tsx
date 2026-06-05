@@ -460,13 +460,13 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
   const searchTimer = useRef<any>(null);
 
   // ── MEA / Offres ─────────────────────────────────────────────────────────
-  const [showMeaPicker, setShowMeaPicker] = useState(false);
+  const MEA_CAT_ID = "__mea__";
   const [meaTemplates, setMeaTemplates] = useState<any[]>([]);
   const [meaLoading, setMeaLoading] = useState(false);
   const [applyingMea, setApplyingMea] = useState<number | null>(null);
 
   const loadMeaTemplates = async () => {
-    if (meaTemplates.length > 0) return; // déjà chargé
+    if (meaTemplates.length > 0) return;
     setMeaLoading(true);
     try {
       const templates = await odoo.searchRead(session, "sale.order.template",
@@ -481,9 +481,12 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
   const applyMeaTemplate = async (template: any) => {
     setApplyingMea(template.id);
     try {
+      // Utilise les IDs de lignes déjà chargés pour éviter le filtre sur order_template_id
+      const lineIds: number[] = template.sale_order_template_line_ids || [];
+      if (!lineIds.length) { onToast("Aucun produit dans cette offre", "error"); setApplyingMea(null); return; }
       const lines = await odoo.searchRead(session, "sale.order.template.line",
-        [["order_template_id", "=", template.id], ["product_id", "!=", false]],
-        ["product_id", "product_uom_qty", "name"],
+        [["id", "in", lineIds], ["product_id", "!=", false]],
+        ["product_id", "product_uom_qty"],
         200);
       if (!lines.length) { onToast("Aucun produit dans cette offre", "error"); setApplyingMea(null); return; }
 
@@ -504,7 +507,6 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
         added++;
       }
       onToast(`✅ ${template.name} — ${added} produit${added > 1 ? "s" : ""} ajouté${added > 1 ? "s" : ""}`, "success");
-      setShowMeaPicker(false);
     } catch (e: any) { onToast("Erreur: " + e.message, "error"); }
     setApplyingMea(null);
   };
@@ -601,9 +603,9 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
         <div style={{ marginTop: 8, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
           <div style={{ padding: "4px 10px 4px", fontSize: 10, fontWeight: 700, color: C.muted, textTransform: "uppercase" as const, letterSpacing: "0.08em" }}>Offres</div>
           <button
-            onClick={() => { setShowMeaPicker(true); loadMeaTemplates(); }}
-            style={{ width: "100%", padding: "10px 10px", background: showMeaPicker ? C.orangeSoft : "transparent", border: "none", borderLeft: `3px solid ${showMeaPicker ? C.orange : "transparent"}`, cursor: "pointer", textAlign: "left" as const, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 7, transition: "all 0.1s" }}>
-            <span style={{ fontSize: 12, fontWeight: showMeaPicker ? 700 : 400, color: showMeaPicker ? C.orange : C.textSec, display: "flex", alignItems: "center", gap: 6 }}>
+            onClick={() => { setActiveCatId(MEA_CAT_ID); loadMeaTemplates(); }}
+            style={{ width: "100%", padding: "10px 10px", background: activeCatId === MEA_CAT_ID ? C.orangeSoft : "transparent", border: "none", borderLeft: `3px solid ${activeCatId === MEA_CAT_ID ? C.orange : "transparent"}`, cursor: "pointer", textAlign: "left" as const, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 7, transition: "all 0.1s" }}>
+            <span style={{ fontSize: 12, fontWeight: activeCatId === MEA_CAT_ID ? 700 : 400, color: activeCatId === MEA_CAT_ID ? C.orange : C.textSec, display: "flex", alignItems: "center", gap: 6 }}>
               <span>🎁</span> MEA
             </span>
           </button>
@@ -640,7 +642,42 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
 
         {/* Grille */}
         <div style={{ flex: 1, overflowY: "auto" as const, padding: 14 }}>
-          {loading && allProducts.length === 0 ? (
+
+          {/* ── Vue MEA ── */}
+          {activeCatId === MEA_CAT_ID ? (
+            meaLoading ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: C.muted }}>Chargement…</div>
+            ) : meaTemplates.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 60, color: C.muted }}>
+                <div style={{ fontSize: 32, marginBottom: 10 }}>📋</div>
+                <div>Aucun modèle de devis trouvé</div>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+                {meaTemplates.map(t => {
+                  const isApplying = applyingMea === t.id;
+                  const lineCount = t.sale_order_template_line_ids?.length || 0;
+                  return (
+                    <div key={t.id} style={{ background: C.white, borderRadius: 14, overflow: "hidden", border: `2px solid ${isApplying ? C.orange : C.border}`, boxShadow: isApplying ? `0 0 0 3px ${C.orangeSoft}` : C.shadow, transition: "all 0.15s" }}>
+                      <div style={{ height: 80, background: `linear-gradient(135deg, ${C.orangeSoft}, #fff7ed)`, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" as const }}>
+                        <span style={{ fontSize: 36 }}>🎁</span>
+                        <div style={{ position: "absolute", top: 6, right: 6, background: C.orange, color: "#fff", fontSize: 9, fontWeight: 700, borderRadius: 5, padding: "2px 6px" }}>{lineCount} lignes</div>
+                      </div>
+                      <div style={{ padding: "8px 10px 10px" }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: C.text, lineHeight: 1.3, marginBottom: 8, minHeight: 28 }}>{t.name}</div>
+                        <button
+                          onClick={() => applyMeaTemplate(t)}
+                          disabled={isApplying}
+                          style={{ width: "100%", padding: "8px 0", background: isApplying ? C.muted : C.orange, color: "#fff", border: "none", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: isApplying ? "default" : "pointer", fontFamily: "inherit", transition: "all 0.15s" }}>
+                          {isApplying ? "Ajout…" : "＋ Ajouter au panier"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : loading && allProducts.length === 0 ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: C.muted }}>Chargement…</div>
           ) : !activeCatId && !isSearching && allProducts.length === 0 ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60%", flexDirection: "column" as const, gap: 12, color: C.muted }}>
@@ -691,53 +728,6 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
           )}
         </div>
       </div>
-
-      {/* ── Modal MEA ── */}
-      {showMeaPicker && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
-          onClick={() => setShowMeaPicker(false)}>
-          <div style={{ background: C.white, borderRadius: 20, width: "100%", maxWidth: 480, maxHeight: "80vh", display: "flex", flexDirection: "column" as const, overflow: "hidden", boxShadow: C.shadowXl }}
-            onClick={e => e.stopPropagation()}>
-            {/* Header */}
-            <div style={{ padding: "18px 20px 14px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>🎁 Offres MEA</div>
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Sélectionne une offre pour ajouter tous ses produits au panier</div>
-              </div>
-              <button onClick={() => setShowMeaPicker(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.muted, lineHeight: 1 }}>✕</button>
-            </div>
-            {/* Liste */}
-            <div style={{ flex: 1, overflowY: "auto" as const, padding: "10px 16px 16px" }}>
-              {meaLoading ? (
-                <div style={{ textAlign: "center", padding: 40, color: C.muted }}>Chargement…</div>
-              ) : meaTemplates.length === 0 ? (
-                <div style={{ textAlign: "center", padding: 40, color: C.muted }}>
-                  <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
-                  <div>Aucun modèle de devis trouvé</div>
-                </div>
-              ) : (
-                meaTemplates.map(t => (
-                  <button key={t.id}
-                    onClick={() => applyMeaTemplate(t)}
-                    disabled={applyingMea === t.id}
-                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", background: applyingMea === t.id ? C.orangeSoft : C.bg, border: `1.5px solid ${applyingMea === t.id ? C.orange : C.border}`, borderRadius: 12, cursor: applyingMea === t.id ? "default" : "pointer", fontFamily: "inherit", textAlign: "left" as const, marginBottom: 8, transition: "all 0.12s" }}>
-                    <div style={{ width: 38, height: 38, borderRadius: 10, background: C.orangeSoft, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>🎁</div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{t.name}</div>
-                      <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>
-                        {applyingMea === t.id ? "Ajout en cours…" : `${t.sale_order_template_line_ids?.length || 0} ligne${(t.sale_order_template_line_ids?.length || 0) > 1 ? "s" : ""}`}
-                      </div>
-                    </div>
-                    {applyingMea !== t.id && (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
-                    )}
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Panier persistant (droite) ── */}
       <div style={{ width: 280, background: C.white, borderLeft: `1px solid ${C.border}`, display: "flex", flexDirection: "column" as const, flexShrink: 0 }}>
