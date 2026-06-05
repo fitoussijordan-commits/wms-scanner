@@ -1462,11 +1462,45 @@ export default function Page() {
   const clearLookup = () => { setLookupResult(null); setLookupStock([]); setLookupType(""); setError(""); };
   const doLookup = async (code: string) => {
     if (!code || !session) return;
+    const trimmed = code.trim();
+
+    // ── PICK → Préparation ──
+    if (/PICK/i.test(trimmed)) {
+      setLoading(true); setError("");
+      await loadPickings();
+      await openPickingByName(trimmed);
+      setLoading(false);
+      return;
+    }
+
+    // ── OUT → Emballage ──
+    if (/\/OUT\//i.test(trimmed) || /^OUT\//i.test(trimmed)) {
+      setLoading(true); setError("");
+      try {
+        const results = await odoo.searchRead(
+          session, "stock.picking",
+          [["name", "=", trimmed], ["state", "in", ["assigned", "waiting", "confirmed", "done"]]],
+          ["id", "name", "state"],
+          1
+        );
+        if (results.length) {
+          setPackingPickingId(results[0].id);
+          setScreen("packing");
+          vibrateSuccess();
+        } else {
+          showToast(`❌ "${trimmed}" introuvable`);
+          vibrateError();
+        }
+      } catch (e: any) { setError(e.message); vibrateError(); }
+      setLoading(false);
+      return;
+    }
+
     setLoading(true); setError(""); clearLookup();
     try {
       // ── Palette WMS — détection directe via Supabase ──
-      if (/^Pal-\d+$/i.test(code.trim())) {
-        const pal = await palFind(code.trim());
+      if (/^Pal-\d+$/i.test(trimmed)) {
+        const pal = await palFind(trimmed);
         if (pal) {
           const { palette, lignes } = await palDetail(pal.id);
           setLookupResult({ palette, lignes });
@@ -1476,11 +1510,11 @@ export default function Page() {
           return;
         }
       }
-      const r = await odoo.smartScan(session, code);
+      const r = await odoo.smartScan(session, trimmed);
       if (r.type === "product") { setLookupResult(r.data); setLookupType("product"); setLookupStock(await odoo.getAllStockForProduct(session, r.data.id)); vibrateSuccess(); }
       else if (r.type === "lot") { setLookupResult(r.data); setLookupType("lot"); if (r.data.product) setLookupStock(await odoo.getStockForLot(session, r.data.lot.id, r.data.product.id)); vibrateSuccess(); }
       else if (r.type === "location") { setLookupResult(r.data); setLookupType("location"); setLookupStock(await odoo.getProductsAtLocation(session, r.data.id)); vibrateSuccess(); }
-      else { setError(`"${code}" — introuvable`); vibrateError(); }
+      else { setError(`"${trimmed}" — introuvable`); vibrateError(); }
     } catch (e: any) { setError(e.message); vibrateError(); }
     setLoading(false);
   };
