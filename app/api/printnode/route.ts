@@ -1,5 +1,6 @@
 // app/api/printnode/route.ts — Server-side proxy for PrintNode API
 import { NextRequest, NextResponse } from "next/server";
+import { fetchT } from "@/lib/fetchTimeout";
 const API_URL = "https://api.printnode.com";
 
 function getApiKey(): string {
@@ -20,7 +21,7 @@ async function zplToPdfBase64(zpl: string, widthMM: number = 100, heightMM: numb
   const heightIn = (heightMM / 25.4).toFixed(3);
   // Sans index de page → retourne toutes les étiquettes en PDF multi-pages
   const url = `https://api.labelary.com/v1/printers/8dpmm/labels/${widthIn}x${heightIn}/`;
-  const res = await fetch(url, {
+  const res = await fetchT(url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/pdf" },
     body: zpl,
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest) {
   const action = new URL(req.url).searchParams.get("action");
   try {
     if (action === "printers") {
-      const res = await fetch(`${API_URL}/printers`, { headers: pnHeaders() });
+      const res = await fetchT(`${API_URL}/printers`, { headers: pnHeaders() });
       if (!res.ok) return NextResponse.json({ error: `PrintNode ${res.status}` }, { status: res.status });
       return NextResponse.json(await res.json());
     }
@@ -65,7 +66,7 @@ export async function POST(req: NextRequest) {
         contentType = "pdf_base64";
       }
 
-      const res = await fetch(`${API_URL}/printjobs`, {
+      const res = await fetchT(`${API_URL}/printjobs`, {
         method: "POST",
         headers: pnHeaders(),
         body: JSON.stringify({

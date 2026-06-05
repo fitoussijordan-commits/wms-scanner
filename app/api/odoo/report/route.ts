@@ -3,6 +3,7 @@
 // Utilise /report/pdf/{report_name}/{record_id} — endpoint HTTP standard Odoo
 
 import { NextRequest, NextResponse } from "next/server";
+import { fetchT } from "@/lib/fetchTimeout";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
 async function addDateOverlay(pdfBytes: ArrayBuffer, overlayDate?: string, overlayIndex?: number, overlayTotal?: number): Promise<Uint8Array> {
@@ -89,7 +90,7 @@ export async function POST(req: NextRequest) {
     const headers: Record<string, string> = {};
     if (sessionId) headers["Cookie"] = `session_id=${sessionId}`;
 
-    const res = await fetch(url, { method: "GET", headers });
+    const res = await fetchT(url, { method: "GET", headers }, 20_000); // 20s pour les gros rapports PDF
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");

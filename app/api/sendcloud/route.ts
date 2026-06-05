@@ -1,5 +1,6 @@
 // app/api/sendcloud/route.ts — Server-side proxy for SendCloud API
 import { NextRequest, NextResponse } from "next/server";
+import { fetchT } from "@/lib/fetchTimeout";
 
 export const maxDuration = 30;
 
@@ -14,7 +15,7 @@ function getAuth(): string {
 }
 
 async function scFetch(url: string, auth: string, options?: RequestInit): Promise<Response> {
-  return fetch(url, { ...options, headers: { "Authorization": auth, "Content-Type": "application/json", ...(options?.headers || {}) } });
+  return fetchT(url, { ...options, headers: { "Authorization": auth, "Content-Type": "application/json", ...(options?.headers || {}) } }, 15_000);
 }
 
 async function scJson(url: string, auth: string, options?: RequestInit) {

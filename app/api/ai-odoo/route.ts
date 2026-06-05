@@ -1,5 +1,6 @@
 // app/api/ai-odoo/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { fetchT } from "@/lib/fetchTimeout";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
@@ -57,7 +58,7 @@ Format JSON obligatoire (exemple lots expirant dans 1 an):
 
 async function callOdoo(odooUrl: string, sessionId: string, model: string, domain: any[], fields: string[], limit = 80, order?: string) {
   const url = `${odooUrl.replace(/\/$/, "")}/web/dataset/call_kw`;
-  const resp = await fetch(url, {
+  const resp = await fetchT(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Cookie": `session_id=${sessionId}` },
     body: JSON.stringify({
@@ -75,7 +76,7 @@ async function callOdoo(odooUrl: string, sessionId: string, model: string, domai
 }
 
 async function callClaude(messages: any[], system?: string, maxTokens = 1024) {
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+  const resp = await fetchT("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

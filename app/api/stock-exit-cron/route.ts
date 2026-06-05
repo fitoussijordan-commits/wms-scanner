@@ -7,6 +7,7 @@
 //         Authorization: Bearer {CRON_SECRET}
 
 import { NextRequest, NextResponse } from "next/server";
+import { fetchT } from "@/lib/fetchTimeout";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -26,7 +27,7 @@ const PREPARED_STATUS_IDS = [5];
 
 async function swFetch(path: string): Promise<any> {
   const auth = Buffer.from(`${SW_USER}:${SW_KEY}`).toString("base64");
-  const res = await fetch(`${SW_URL.replace(/\/$/, "")}/api/v1${path}`, {
+  const res = await fetchT(`${SW_URL.replace(/\/$/, "")}/api/v1${path}`, {
     headers: { Accept: "application/json", Authorization: `Basic ${auth}` },
     cache: "no-store",
   });
@@ -82,7 +83,7 @@ async function odooRpc(endpoint: string, params: any, sessionId?: string): Promi
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (sessionId) headers["Cookie"] = `session_id=${sessionId}`;
 
-  const res = await fetch(`${ODOO_URL.replace(/\/$/, "")}${endpoint}`, {
+  const res = await fetchT(`${ODOO_URL.replace(/\/$/, "")}${endpoint}`, {
     method: "POST",
     headers,
     body: JSON.stringify({ jsonrpc: "2.0", method: "call", id: Date.now(), params }),
@@ -94,7 +95,7 @@ async function odooRpc(endpoint: string, params: any, sessionId?: string): Promi
 }
 
 async function odooAuth(): Promise<OdooSession> {
-  const res = await fetch(`${ODOO_URL.replace(/\/$/, "")}/web/session/authenticate`, {
+  const res = await fetchT(`${ODOO_URL.replace(/\/$/, "")}/web/session/authenticate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

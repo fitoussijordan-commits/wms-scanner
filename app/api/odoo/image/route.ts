@@ -2,6 +2,7 @@
 // Proxy léger pour les images produit Odoo (session cookie requis).
 // Résultat mis en cache navigateur 1h.
 import { NextRequest, NextResponse } from "next/server";
+import { fetchT } from "@/lib/fetchTimeout";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -16,7 +17,7 @@ export async function GET(req: NextRequest) {
   const imageUrl = `${odooUrl.replace(/\/$/, "")}/web/image/product.product/${id}/image_128`;
 
   try {
-    const resp = await fetch(imageUrl, {
+    const resp = await fetchT(imageUrl, {
       headers: { Cookie: `session_id=${sessionId}` },
     });
 

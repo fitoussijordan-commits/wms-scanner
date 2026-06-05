@@ -4,6 +4,7 @@
 // Trajet : Odoo → Next.js → PrintNode (le navigateur ne touche pas le PDF)
 
 import { NextRequest, NextResponse } from "next/server";
+import { fetchT } from "@/lib/fetchTimeout";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
 const PRINTNODE_API_URL = "https://api.printnode.com";
@@ -87,7 +88,7 @@ export async function POST(req: NextRequest) {
     const headers: Record<string, string> = {};
     if (sessionId) headers["Cookie"] = `session_id=${sessionId}`;
 
-    const pdfRes = await fetch(pdfUrl, { method: "GET", headers });
+    const pdfRes = await fetchT(pdfUrl, { method: "GET", headers }, 20_000);
     if (!pdfRes.ok) {
       const text = await pdfRes.text().catch(() => "");
       return NextResponse.json({ error: `Odoo PDF ${pdfRes.status}: ${text.substring(0, 200)}` }, { status: pdfRes.status });
@@ -107,7 +108,7 @@ export async function POST(req: NextRequest) {
     const pdfBase64 = Buffer.from(pdfFinal).toString("base64");
 
     // ── 3. Envoyer directement à PrintNode ────────────────────────────
-    const pnRes = await fetch(`${PRINTNODE_API_URL}/printjobs`, {
+    const pnRes = await fetchT(`${PRINTNODE_API_URL}/printjobs`, {
       method: "POST",
       headers: pnHeaders(),
       body: JSON.stringify({
