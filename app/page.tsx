@@ -1028,6 +1028,13 @@ export default function Page() {
   const [lookupStock, setLookupStock] = useState<any[]>([]);
   const [lookupType, setLookupType] = useState("");
 
+  // Home quick search (dynamic suggestions)
+  const [homeQuery, setHomeQuery] = useState("");
+  const [homeResults, setHomeResults] = useState<any[]>([]);
+  const [homeSearching, setHomeSearching] = useState(false);
+  const homeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const homeSearchIdRef = useRef(0);
+
   // Transfer state
   const [src, setSrc] = useState<any>(null);
   const [dst, setDst] = useState<any>(null);
@@ -2294,7 +2301,89 @@ export default function Page() {
         {screen === "home" && <>
           <Section>
             <SectionHeader icon={scanIcon} title="Recherche rapide" sub="Scanne ou tape un code" />
-            <InputBar onSubmit={doLookup} placeholder="Code-barres, réf, lot, emplacement, Pal-XXXX..." />
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                style={{ ...inputStyle, flex: 1, width: "auto" }}
+                value={homeQuery}
+                onChange={e => {
+                  const val = e.target.value;
+                  setHomeQuery(val);
+                  if (homeDebounceRef.current) clearTimeout(homeDebounceRef.current);
+                  if (val.trim().length >= 2 && session) {
+                    homeDebounceRef.current = setTimeout(async () => {
+                      const searchId = ++homeSearchIdRef.current;
+                      setHomeSearching(true);
+                      try {
+                        const results = await odoo.globalSearch(session, val.trim());
+                        if (searchId !== homeSearchIdRef.current) return;
+                        const items = results.map((r: odoo.GlobalSearchResult) => {
+                          if (r.type === "location") return { kind: "location", label: r.data.complete_name || r.data.name, code: r.data.barcode || r.data.name };
+                          if (r.type === "product") return { kind: "product", label: r.data.name, ref: r.data.default_code, code: r.data.barcode || r.data.default_code };
+                          if (r.type === "lot") { const prod = r.data.product; return { kind: "lot", label: prod?.name || r.data.lot.product_id[1], ref: prod?.default_code, lotName: r.data.lot.name, code: r.data.lot.name }; }
+                          if (r.type === "supplier_ref") return { kind: "product", label: r.data.name, ref: r.data.default_code, code: r.data.barcode || r.data.default_code, supplierRef: r.supplierRef };
+                          return null;
+                        }).filter(Boolean);
+                        setHomeResults(items);
+                      } catch { /* silently ignore */ }
+                      setHomeSearching(false);
+                    }, 350);
+                  } else {
+                    setHomeResults([]);
+                    setHomeSearching(false);
+                  }
+                }}
+                onKeyDown={e => {
+                  if (e.key === "Enter" && homeQuery.trim()) {
+                    if (homeDebounceRef.current) clearTimeout(homeDebounceRef.current);
+                    setHomeResults([]);
+                    const q = homeQuery.trim();
+                    setHomeQuery("");
+                    doLookup(q);
+                  }
+                }}
+                placeholder="Code-barres, réf, lot, emplacement, Pal-XXXX..."
+              />
+              <button
+                onClick={() => {
+                  if (homeQuery.trim()) {
+                    if (homeDebounceRef.current) clearTimeout(homeDebounceRef.current);
+                    setHomeResults([]);
+                    const q = homeQuery.trim();
+                    setHomeQuery("");
+                    doLookup(q);
+                  }
+                }}
+                style={{ padding: "0 18px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 16, cursor: "pointer", flexShrink: 0 }}>→</button>
+            </div>
+            {homeSearching && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 6, paddingLeft: 2 }}>Recherche en cours...</div>}
+            {homeResults.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                {homeResults.map((r: any, i: number) => (
+                  <button key={i}
+                    onClick={() => { setHomeResults([]); setHomeQuery(""); doLookup(r.code); }}
+                    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, marginBottom: 4 }}>
+                    <div>
+                      {r.kind === "location" ? (
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>📍 {r.label}</div>
+                      ) : r.kind === "lot" ? (
+                        <>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.label}</div>
+                          {r.ref && <div style={{ fontSize: 11, color: C.textMuted }}>Réf: {r.ref}</div>}
+                          <div style={{ fontSize: 11, color: C.blue }}>🏷 Lot: {r.lotName}</div>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.label}</div>
+                          {r.ref && <div style={{ fontSize: 11, color: C.textMuted }}>Réf: {r.ref}</div>}
+                          {r.supplierRef && <div style={{ fontSize: 11, color: "#7c3aed" }}>🏭 {r.supplierRef}</div>}
+                        </>
+                      )}
+                    </div>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+                  </button>
+                ))}
+              </div>
+            )}
           </Section>
 
           {error && <Alert type="error">{error}</Alert>}
