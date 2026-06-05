@@ -1,5 +1,7 @@
 // app/api/odoo/proxy/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { fetchT } from "@/lib/fetchTimeout";
+import { checkRateLimit, getClientIp } from "@/lib/rateLimiter";
 
 // Allowlist des endpoints Odoo autorisés — bloque toute tentative SSRF
 const ALLOWED_ENDPOINTS = [
@@ -15,6 +17,16 @@ function isEndpointAllowed(endpoint: string): boolean {
 }
 
 export async function POST(req: NextRequest) {
+  // ── Rate limiting : 120 req / 60s par IP ─────────────────────────────────
+  const ip = getClientIp(req);
+  const rl = checkRateLimit(`proxy:${ip}`, 120, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: "Trop de requêtes" },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetIn / 1000)) } }
+    );
+  }
+
   try {
     const body = await req.json();
     const { odooUrl, endpoint, params, sessionId } = body;
@@ -65,7 +77,7 @@ export async function POST(req: NextRequest) {
 
     const url = `${odooUrl.replace(/\/$/, "")}${endpoint}`;
 
-    const odooRes = await fetch(url, {
+    const odooRes = await fetchT(url, {
       method: "POST",
       headers,
       body: JSON.stringify({

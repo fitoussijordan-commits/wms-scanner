@@ -1,6 +1,7 @@
 // app/api/ai-odoo/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { fetchT } from "@/lib/fetchTimeout";
+import { checkRateLimit, getClientIp } from "@/lib/rateLimiter";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
@@ -102,6 +103,16 @@ const tryParseJson = (text: string) => {
 };
 
 export async function POST(req: NextRequest) {
+  // ── Rate limiting : 30 requêtes / 60s par IP ──────────────────────────────
+  const ip = getClientIp(req);
+  const rl = checkRateLimit(`ai:${ip}`, 30, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: `Trop de requêtes. Réessaie dans ${Math.ceil(rl.resetIn / 1000)}s.` },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetIn / 1000)) } }
+    );
+  }
+
   if (!ANTHROPIC_API_KEY) {
     return NextResponse.json({ error: "ANTHROPIC_API_KEY non configurée dans les variables d'environnement Vercel." }, { status: 500 });
   }

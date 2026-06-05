@@ -3,10 +3,21 @@
 // Ajoute le WMS_INTERNAL_TOKEN sans l'exposer au client
 
 import { NextRequest, NextResponse } from "next/server";
+import { checkRateLimit, getClientIp } from "@/lib/rateLimiter";
 
 export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
+  // ── Rate limiting : 10 exports / 60s par IP ──────────────────────────────
+  const ip = getClientIp(req);
+  const rl = checkRateLimit(`excel:${ip}`, 10, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: "Trop de requêtes" },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetIn / 1000)) } }
+    );
+  }
+
   const token = process.env.WMS_INTERNAL_TOKEN;
   if (!token) {
     console.error("[export-excel] WMS_INTERNAL_TOKEN non défini");
