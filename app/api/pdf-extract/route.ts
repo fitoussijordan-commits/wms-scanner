@@ -37,7 +37,12 @@ export async function POST(req: NextRequest) {
       clearTimeout(timeout);
     }
 
-    const data = await res.json();
+    const rawText = await res.text();
+    if (!res.ok || !rawText.trimStart().startsWith("{")) {
+      console.error(`[pdf-extract] Réponse non-JSON (status=${res.status}):`, rawText.slice(0, 500));
+      return NextResponse.json({ error: `Erreur Python (${res.status}): ${rawText.slice(0, 200)}` }, { status: 502 });
+    }
+    const data = JSON.parse(rawText);
     return NextResponse.json(data, { status: res.status });
   } catch (e: any) {
     if (e.name === "AbortError") {
