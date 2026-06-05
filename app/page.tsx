@@ -10427,7 +10427,6 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
               onClick={() => { if (!locOk && onManualConfirmLoc) setShowLocConfirm(true); }}
               style={{ background: locOk ? C.greenSoft : C.blueSoft, border: `1px solid ${locOk ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "6px 12px", fontSize: 18, fontWeight: 900, color: locOk ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center", cursor: !locOk ? "pointer" : "default", userSelect: "none" as const }}>
               📍 {locOk && prepStep ? shortLoc(prepStep.locName) : shortLoc(currentLine.location_id?.[1] || "—")}
-              {!locOk && <span style={{ fontSize: 10, fontWeight: 600, color: C.blue, marginLeft: 8, opacity: 0.7 }}>appuyer pour confirmer</span>}
             </div>
             {locOk && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
