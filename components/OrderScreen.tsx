@@ -32,6 +32,30 @@ interface FreeItem { product: any; qty: number; ruleName: string; }
 
 const LS_RULES  = "wms_order_rules_v2";
 const LS_DRAFT  = "wms_order_draft";
+const LS_CATS   = "wms_order_smart_cats";
+
+// ── Catégories par mots-clés ──────────────────────────────────────────────────
+interface SmartCat { id: string; emoji: string; label: string; keywords: string[]; }
+
+const DEFAULT_CATS: SmartCat[] = [
+  { id: "visage",   emoji: "🌸", label: "Visage",   keywords: ["visage", "face", "crème", "sérum", "serum", "lotion", "tonique", "contour", "yeux", "regard", "nettoyant", "démaquillant", "fluide", "purifi", "teint"] },
+  { id: "corps",    emoji: "💆", label: "Corps",    keywords: ["corps", "body", "lait corps", "bain", "douche", "mains", "pieds", "baume", "lèvres"] },
+  { id: "cheveux",  emoji: "💇", label: "Cheveux",  keywords: ["cheveux", "shampooing", "shampoo", "capillaire", "après-shampooing"] },
+  { id: "coffrets", emoji: "🎁", label: "Coffrets", keywords: ["coffret", "kit", "set ", "duo "] },
+  { id: "huiles",   emoji: "💧", label: "Huiles",   keywords: ["huile", " oil"] },
+  { id: "solaire",  emoji: "☀️", label: "Solaire",  keywords: ["solaire", "soleil", "sun", "spf", "protection"] },
+];
+
+function loadSmartCats(): SmartCat[] {
+  try { const r = localStorage.getItem(LS_CATS); return r ? JSON.parse(r) : DEFAULT_CATS; } catch { return DEFAULT_CATS; }
+}
+function saveSmartCats(c: SmartCat[]) { localStorage.setItem(LS_CATS, JSON.stringify(c)); }
+
+function matchesCat(product: any, cat: SmartCat): boolean {
+  const name = (product.name || "").toLowerCase();
+  const ref  = (product.default_code || "").toLowerCase();
+  return cat.keywords.some(kw => name.includes(kw.toLowerCase()) || ref.includes(kw.toLowerCase()));
+}
 
 function loadRules(): FreeRule[] { try { return JSON.parse(localStorage.getItem(LS_RULES) || "[]"); } catch { return []; } }
 function saveRules(r: FreeRule[]) { localStorage.setItem(LS_RULES, JSON.stringify(r)); }
@@ -362,22 +386,20 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
   onValidate: () => void; submitting: boolean;
   note: string; setNote: (n: string) => void; client: any;
 }) {
-  const [cats, setCats] = useState<any[]>([]);
-  const [catId, setCatId] = useState<number | null>(null);
-  const [products, setProducts] = useState<any[]>([]);
+  const [smartCats, setSmartCats] = useState<SmartCat[]>([]);
+  const [activeCatId, setActiveCatId] = useState<string | null>(null);
+  const [allProducts, setAllProducts] = useState<any[]>([]); // cache complet des produits en stock
   const [loading, setProdLoading] = useState(false);
   const [search, setSearch] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
   const searchTimer = useRef<any>(null);
 
-  useEffect(() => {
-    odoo.searchRead(session, "product.category", [], ["id", "name", "parent_id"], 200, "complete_name")
-      .then(c => setCats(c)).catch(() => {});
-  }, [session]);
+  useEffect(() => { setSmartCats(loadSmartCats()); }, []);
 
-  const load = useCallback(async (cId: number | null, q: string) => {
+  // Chargement initial : tous les produits en stock (virtual_available > 0)
+  const loadAll = useCallback(async (q: string) => {
     setProdLoading(true);
-    const domain: any[] = [["sale_ok", "=", true], ["active", "=", true]];
-    if (cId) domain.push(["categ_id", "=", cId]);
+    const domain: any[] = [["sale_ok", "=", true], ["active", "=", true], ["virtual_available", ">", 0]];
     if (q.trim().length >= 2) {
       domain.push("|");
       domain.push(["name", "ilike", q.trim()]);
@@ -385,23 +407,39 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
     }
     try {
       const p = await odoo.searchRead(session, "product.product", domain,
-        ["id", "name", "default_code", "lst_price", "uom_id", "categ_id", "virtual_available", "qty_available", "image_128"], 80, "name");
-      // Tri : stock dispo > 0 en premier, puis par nom
-      p.sort((a: any, b: any) => {
-        const aStock = a.virtual_available > 0 ? 1 : 0;
-        const bStock = b.virtual_available > 0 ? 1 : 0;
-        if (bStock !== aStock) return bStock - aStock;
-        return a.name.localeCompare(b.name);
-      });
-      setProducts(p);
+        ["id", "name", "default_code", "lst_price", "virtual_available", "image_128"], 300, "name");
+      p.sort((a: any, b: any) => b.virtual_available - a.virtual_available); // plus de stock en premier
+      if (!q) setAllProducts(p);
+      else return p; // pour la recherche, retourner sans stocker
     } catch {}
     setProdLoading(false);
   }, [session]);
 
+  useEffect(() => { loadAll(""); }, [loadAll]);
+
+  // Produits affichés = filtre catégorie + filtre recherche sur le cache local
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const isSearching = search.trim().length >= 2;
+
   useEffect(() => {
+    if (!isSearching) { setSearchResults([]); return; }
     clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => load(catId, search), search ? 300 : 0);
-  }, [catId, search, load]);
+    searchTimer.current = setTimeout(async () => {
+      setProdLoading(true);
+      const r = await loadAll(search);
+      if (r) setSearchResults(r as any[]);
+      setProdLoading(false);
+    }, 300);
+  }, [search, loadAll, isSearching]);
+
+  const displayedProducts = isSearching
+    ? searchResults
+    : activeCatId
+      ? allProducts.filter(p => {
+          const cat = smartCats.find(c => c.id === activeCatId);
+          return cat ? matchesCat(p, cat) : true;
+        })
+      : allProducts;
 
   const freeProductIds = new Set(freeItems.map(f => f.product.id));
   const cartItems = Object.values(cart);
@@ -412,42 +450,77 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
   return (
     <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
 
-      {/* ── Sidebar catégories ── */}
-      <div style={{ width: 170, background: C.white, borderRight: `1px solid ${C.border}`, overflowY: "auto" as const, flexShrink: 0 }}>
-        <div style={{ padding: "12px 12px 6px", fontSize: 10, fontWeight: 700, color: C.muted, textTransform: "uppercase" as const, letterSpacing: "0.08em" }}>Catégories</div>
-        {[{ id: null, name: "Tous les produits" }, ...cats].map(cat => (
-          <button key={cat.id ?? "all"} onClick={() => setCatId(cat.id)}
-            style={{ width: "100%", padding: "10px 12px", background: catId === cat.id ? C.tealSoft : "transparent", border: "none", borderLeft: `3px solid ${catId === cat.id ? C.teal : "transparent"}`, cursor: "pointer", textAlign: "left" as const, fontSize: 12, fontWeight: catId === cat.id ? 700 : 400, color: catId === cat.id ? C.tealDark : C.textSec, fontFamily: "inherit", transition: "all 0.1s", wordBreak: "break-word" as const }}>
-            {cat.name}
-          </button>
-        ))}
+      {/* ── Sidebar catégories par mots-clés ── */}
+      <div style={{ width: 160, background: C.white, borderRight: `1px solid ${C.border}`, overflowY: "auto" as const, flexShrink: 0 }}>
+        <div style={{ padding: "12px 10px 6px", fontSize: 10, fontWeight: 700, color: C.muted, textTransform: "uppercase" as const, letterSpacing: "0.08em" }}>Gammes</div>
+
+        {/* Tous */}
+        <button onClick={() => setActiveCatId(null)}
+          style={{ width: "100%", padding: "10px 10px", background: !activeCatId ? C.tealSoft : "transparent", border: "none", borderLeft: `3px solid ${!activeCatId ? C.teal : "transparent"}`, cursor: "pointer", textAlign: "left" as const, fontSize: 12, fontWeight: !activeCatId ? 700 : 400, color: !activeCatId ? C.tealDark : C.textSec, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 7 }}>
+          <span>🏠</span> Tous
+        </button>
+
+        {/* Catégories configurées */}
+        {smartCats.map(cat => {
+          const count = allProducts.filter(p => matchesCat(p, cat)).length;
+          const active = activeCatId === cat.id;
+          return (
+            <button key={cat.id} onClick={() => setActiveCatId(cat.id)}
+              style={{ width: "100%", padding: "10px 10px", background: active ? C.tealSoft : "transparent", border: "none", borderLeft: `3px solid ${active ? C.teal : "transparent"}`, cursor: "pointer", textAlign: "left" as const, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, transition: "all 0.1s" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: active ? 700 : 400, color: active ? C.tealDark : C.textSec }}>
+                <span>{cat.emoji}</span>{cat.label}
+              </span>
+              {count > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: active ? C.teal : C.muted, background: active ? C.tealMid : C.bg, borderRadius: 5, padding: "1px 5px", flexShrink: 0 }}>{count}</span>}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── Zone produits ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column" as const, overflow: "hidden", minWidth: 0 }}>
-        {/* Barre recherche */}
+        {/* Barre recherche avec croix */}
         <div style={{ padding: "10px 14px", background: C.white, borderBottom: `1px solid ${C.border}`, display: "flex", gap: 10, alignItems: "center" }}>
           <div style={{ position: "relative" as const, flex: 1 }}>
-            <svg style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher un produit..."
-              style={{ width: "100%", boxSizing: "border-box" as const, padding: "9px 9px 9px 34px", border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: C.bg }} />
+            <svg style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input
+              ref={searchInput}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Rechercher par nom ou référence..."
+              style={{ width: "100%", boxSizing: "border-box" as const, padding: "9px 34px 9px 34px", border: `1.5px solid ${search ? C.teal : C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: C.bg, outline: "none", transition: "border-color 0.15s" }}
+            />
+            {search && (
+              <button onClick={() => { setSearch(""); searchInput.current?.focus(); }}
+                style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: C.muted, border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
           </div>
+          {/* Compteur résultats */}
+          {(activeCatId || isSearching) && (
+            <div style={{ fontSize: 12, color: C.muted, flexShrink: 0 }}>
+              {displayedProducts.length} produit{displayedProducts.length > 1 ? "s" : ""}
+            </div>
+          )}
         </div>
+
         {/* Grille */}
         <div style={{ flex: 1, overflowY: "auto" as const, padding: 14 }}>
-          {loading ? (
+          {loading && allProducts.length === 0 ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: C.muted }}>Chargement…</div>
-          ) : !catId && !search ? (
+          ) : !activeCatId && !isSearching && allProducts.length === 0 ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60%", flexDirection: "column" as const, gap: 12, color: C.muted }}>
-              <div style={{ fontSize: 48 }}>👈</div>
-              <div style={{ fontSize: 15, fontWeight: 600 }}>Sélectionne une catégorie</div>
-              <div style={{ fontSize: 13 }}>ou utilise la recherche</div>
+              <div style={{ fontSize: 48 }}>📦</div>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>Aucun produit en stock</div>
             </div>
-          ) : products.length === 0 ? (
-            <div style={{ textAlign: "center", padding: 60, color: C.muted }}>Aucun produit</div>
+          ) : displayedProducts.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 60, color: C.muted }}>
+              <div style={{ fontSize: 32, marginBottom: 10 }}>🔍</div>
+              <div>Aucun résultat</div>
+            </div>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
-              {products.map(p => {
+              {displayedProducts.map(p => {
                 const qty = cart[p.id]?.qty || 0;
                 const isFree = freeProductIds.has(p.id);
                 const stock = Math.max(0, Math.round(p.virtual_available || 0));
@@ -463,9 +536,7 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
                       <div style={{ fontSize: 11, fontWeight: 600, color: C.text, lineHeight: 1.3, height: 28, overflow: "hidden" }}>{p.name}</div>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 5, marginBottom: 6 }}>
                         <span style={{ fontSize: 13, fontWeight: 800, color: C.tealDark }}>{p.lst_price > 0 ? fmtPrice(p.lst_price) : "—"}</span>
-                        <span style={{ fontSize: 9, fontWeight: 600, color: stock > 0 ? C.green : C.red, background: stock > 0 ? C.greenSoft : C.redSoft, borderRadius: 5, padding: "2px 5px" }}>
-                          {stock > 0 ? `${stock}` : "Rupture"}
-                        </span>
+                        <span style={{ fontSize: 9, fontWeight: 600, color: C.green, background: C.greenSoft, borderRadius: 5, padding: "2px 5px" }}>{stock}</span>
                       </div>
                       <div style={{ display: "flex", background: qty > 0 ? C.tealSoft : C.bg, borderRadius: 8, overflow: "hidden", border: `1px solid ${qty > 0 ? C.tealMid : C.border}` }}>
                         <button onClick={() => onQtyChange(p, qty - 1)} style={{ flex: 1, padding: "7px 0", background: "transparent", border: "none", cursor: "pointer", fontSize: 17, fontWeight: 700, color: qty > 0 ? C.red : C.muted, lineHeight: 1 }}>−</button>
@@ -660,6 +731,7 @@ function ConfirmStep({ cart, freeItems, total, client, note, setNote, onQtyChang
 // PANNEAU RÈGLES
 // ═══════════════════════════════════════════════════════════════════════════
 function RulesPanel({ rules, onChange, onClose }: { rules: FreeRule[]; onChange: (r: FreeRule[]) => void; onClose: () => void }) {
+  const [panelTab, setPanelTab] = useState<"rules" | "cats">("rules");
   const [form, setForm] = useState<FreeRule | null>(null);
 
   const newRule = (): FreeRule => ({ id: uid(), name: "", triggerQty: 10, freeQty: 1, allProducts: true, productRefs: [] });
@@ -672,15 +744,29 @@ function RulesPanel({ rules, onChange, onClose }: { rules: FreeRule[]; onChange:
 
   return (
     <div style={{ display: "flex", flexDirection: "column" as const, height: "100%", fontFamily: "'DM Sans', sans-serif" }}>
-      <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12 }}>
+      {/* Header */}
+      <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
         <button onClick={onClose} style={{ background: C.bg, border: "none", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M18 6l-12 12M6 6l12 12"/></svg>
         </button>
-        <div style={{ fontSize: 16, fontWeight: 700, color: C.text, flex: 1 }}>Règles de gratuité</div>
-        <button onClick={() => setForm(newRule())} style={{ padding: "7px 14px", background: C.purple, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>+ Règle</button>
+        <div style={{ fontSize: 15, fontWeight: 700, color: C.text, flex: 1 }}>Paramètres</div>
+        {panelTab === "rules" && <button onClick={() => setForm(newRule())} style={{ padding: "6px 12px", background: C.purple, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>+ Règle</button>}
+      </div>
+
+      {/* Onglets */}
+      <div style={{ display: "flex", borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+        {([["rules", "🎁 Gratuités"], ["cats", "🏷️ Catégories"]] as const).map(([key, label]) => (
+          <button key={key} onClick={() => setPanelTab(key)}
+            style={{ flex: 1, padding: "10px 0", border: "none", background: panelTab === key ? C.white : "transparent", borderBottom: panelTab === key ? `2px solid ${C.purple}` : "2px solid transparent", cursor: "pointer", fontSize: 12, fontWeight: panelTab === key ? 700 : 400, color: panelTab === key ? C.purple : C.muted, fontFamily: "inherit", marginBottom: -1 }}>
+            {label}
+          </button>
+        ))}
       </div>
 
       <div style={{ flex: 1, overflowY: "auto" as const, padding: 16 }}>
+        {/* Onglet Catégories */}
+        {panelTab === "cats" && <CatsEditor />}
+        {panelTab === "rules" && <>
         {form && (
           <RuleForm rule={form} onChange={setForm} onSave={() => save(form!)} onCancel={() => setForm(null)} />
         )}
@@ -707,7 +793,78 @@ function RulesPanel({ rules, onChange, onClose }: { rules: FreeRule[]; onChange:
             <button onClick={() => onChange(rules.filter(x => x.id !== r.id))} style={{ background: C.redSoft, border: "none", borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 13, color: C.red }}>🗑</button>
           </div>
         ))}
+        </>}
       </div>
+    </div>
+  );
+}
+
+// ── Éditeur de catégories ─────────────────────────────────────────────────────
+function CatsEditor() {
+  const [cats, setCats] = useState<SmartCat[]>([]);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [fEmoji, setFEmoji] = useState(""); const [fLabel, setFLabel] = useState(""); const [fKws, setFKws] = useState("");
+
+  useEffect(() => { setCats(loadSmartCats()); }, []);
+
+  const save_ = (updated: SmartCat[]) => { setCats(updated); saveSmartCats(updated); };
+
+  const openEdit = (c: SmartCat) => { setEditId(c.id); setFEmoji(c.emoji); setFLabel(c.label); setFKws(c.keywords.join(", ")); };
+  const openNew = () => { setEditId("new"); setFEmoji("🏷️"); setFLabel(""); setFKws(""); };
+
+  const saveEdit = () => {
+    const kws = fKws.split(/[,;]+/).map(k => k.trim()).filter(Boolean);
+    if (!fLabel.trim() || !kws.length) return;
+    if (editId === "new") {
+      save_([...cats, { id: uid(), emoji: fEmoji, label: fLabel.trim(), keywords: kws }]);
+    } else {
+      save_(cats.map(c => c.id === editId ? { ...c, emoji: fEmoji, label: fLabel.trim(), keywords: kws } : c));
+    }
+    setEditId(null);
+  };
+
+  return (
+    <div>
+      {editId && (
+        <div style={{ background: C.white, border: `1.5px solid ${C.teal}`, borderRadius: 14, padding: 14, marginBottom: 14, display: "flex", flexDirection: "column" as const, gap: 10 }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={fEmoji} onChange={e => setFEmoji(e.target.value)} style={{ width: 48, padding: "8px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 18, textAlign: "center" as const }} />
+            <input value={fLabel} onChange={e => setFLabel(e.target.value)} placeholder="Nom de la catégorie" style={{ flex: 1, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit" }} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 4 }}>Mots-clés (séparés par des virgules)</div>
+            <input value={fKws} onChange={e => setFKws(e.target.value)} placeholder="visage, crème, sérum, lotion…"
+              style={{ width: "100%", boxSizing: "border-box" as const, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontFamily: "inherit" }} />
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Les produits dont le nom contient ces mots apparaîtront dans cette catégorie</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setEditId(null)} style={{ flex: 1, padding: "8px 0", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>Annuler</button>
+            <button onClick={saveEdit} style={{ flex: 2, padding: "8px 0", background: C.teal, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>Enregistrer</button>
+          </div>
+        </div>
+      )}
+
+      <button onClick={openNew} style={{ width: "100%", padding: "9px 0", background: C.tealSoft, border: `1px dashed ${C.teal}`, borderRadius: 10, cursor: "pointer", fontSize: 12, fontWeight: 600, color: C.tealDark, fontFamily: "inherit", marginBottom: 10 }}>
+        + Nouvelle catégorie
+      </button>
+
+      <div style={{ display: "flex", flexDirection: "column" as const, gap: 8 }}>
+        {cats.map(c => (
+          <div key={c.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 20 }}>{c.emoji}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{c.label}</div>
+              <div style={{ fontSize: 10, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{c.keywords.join(", ")}</div>
+            </div>
+            <button onClick={() => openEdit(c)} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 8px", cursor: "pointer", fontSize: 12 }}>✏️</button>
+            <button onClick={() => save_(cats.filter(x => x.id !== c.id))} style={{ background: C.redSoft, border: "none", borderRadius: 7, padding: "4px 8px", cursor: "pointer", fontSize: 12, color: C.red }}>🗑</button>
+          </div>
+        ))}
+      </div>
+
+      <button onClick={() => save_(DEFAULT_CATS)} style={{ width: "100%", marginTop: 12, padding: "7px 0", background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 11, color: C.muted, fontFamily: "inherit" }}>
+        Réinitialiser les catégories par défaut
+      </button>
     </div>
   );
 }

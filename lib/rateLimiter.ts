@@ -14,9 +14,9 @@ const store = new Map<string, Bucket>();
 if (typeof setInterval !== "undefined") {
   setInterval(() => {
     const now = Date.now();
-    for (const [key, bucket] of store) {
+    store.forEach((bucket, key) => {
       if (now > bucket.resetAt) store.delete(key);
-    }
+    });
   }, 5 * 60 * 1000);
 }
 
