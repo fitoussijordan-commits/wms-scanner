@@ -1887,6 +1887,19 @@ export default function Page() {
             );
             if (ml) {
               showToast(`ℹ️ Lot ${lotName} substitué à ${ml.lot_id?.[1] || "autre lot"}`);
+              // Alerte email — fire & forget, ne bloque pas l'UI
+              fetch("/api/alert-lot", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  pickingName: selectedPicking?.name || "—",
+                  productName: ml.product_id?.[1] || "—",
+                  productCode: ml.product_id?.[1]?.split("]")[0]?.replace("[", "") || "",
+                  expectedLot: ml.lot_id?.[1] || "—",
+                  scannedLot: lotName || "—",
+                  operatorName: session?.name || "—",
+                }),
+              }).catch(() => {}); // silencieux en cas d'erreur réseau
             } else {
               showToast(`✅ Lot ${lotName} déjà complet — rien de plus à prendre`);
               flashScan("ok");
