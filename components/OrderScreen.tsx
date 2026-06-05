@@ -652,23 +652,45 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
                 <div>Aucun modèle de devis trouvé</div>
               </div>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
-                {meaTemplates.map(t => {
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, alignItems: "start" }}>
+                {meaTemplates.map((t, idx) => {
                   const isApplying = applyingMea === t.id;
                   const lineCount = t.sale_order_template_line_ids?.length || 0;
+                  // Palette tournante pour varier les couleurs
+                  const palettes = [
+                    { bg: "linear-gradient(135deg, #0d9488 0%, #0f766e 100%)", soft: "#f0fdfa", accent: "#0d9488" },
+                    { bg: "linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)", soft: "#f5f3ff", accent: "#7c3aed" },
+                    { bg: "linear-gradient(135deg, #ea580c 0%, #c2410c 100%)", soft: "#fff7ed", accent: "#ea580c" },
+                    { bg: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)", soft: "#eff6ff", accent: "#2563eb" },
+                    { bg: "linear-gradient(135deg, #16a34a 0%, #15803d 100%)", soft: "#f0fdf4", accent: "#16a34a" },
+                    { bg: "linear-gradient(135deg, #db2777 0%, #be185d 100%)", soft: "#fdf2f8", accent: "#db2777" },
+                  ];
+                  const pal = palettes[idx % palettes.length];
+                  const isMea = t.name.toUpperCase().includes("MEA");
+                  const isImpl = t.name.toLowerCase().includes("implantation");
+                  const icon = isMea ? "🎯" : isImpl ? "🏗️" : "📋";
                   return (
-                    <div key={t.id} style={{ background: C.white, borderRadius: 14, overflow: "hidden", border: `2px solid ${isApplying ? C.orange : C.border}`, boxShadow: isApplying ? `0 0 0 3px ${C.orangeSoft}` : C.shadow, transition: "all 0.15s" }}>
-                      <div style={{ height: 80, background: `linear-gradient(135deg, ${C.orangeSoft}, #fff7ed)`, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" as const }}>
-                        <span style={{ fontSize: 36 }}>🎁</span>
-                        <div style={{ position: "absolute", top: 6, right: 6, background: C.orange, color: "#fff", fontSize: 9, fontWeight: 700, borderRadius: 5, padding: "2px 6px" }}>{lineCount} lignes</div>
-                      </div>
-                      <div style={{ padding: "8px 10px 10px" }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: C.text, lineHeight: 1.3, marginBottom: 8, minHeight: 28 }}>{t.name}</div>
+                    <div key={t.id} style={{ background: C.white, borderRadius: 16, overflow: "hidden", border: `1.5px solid ${isApplying ? pal.accent : C.border}`, boxShadow: isApplying ? `0 0 0 3px ${pal.soft}` : C.shadow, transition: "all 0.15s", display: "flex", flexDirection: "column" as const }}>
+                      {/* Bandeau couleur */}
+                      <div style={{ height: 8, background: pal.bg }} />
+                      <div style={{ padding: "14px 14px 12px", flex: 1, display: "flex", flexDirection: "column" as const, gap: 10 }}>
+                        {/* Icône + badge */}
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                          <div style={{ width: 40, height: 40, borderRadius: 10, background: pal.soft, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>
+                            {icon}
+                          </div>
+                          <div style={{ background: pal.soft, color: pal.accent, fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "3px 8px", whiteSpace: "nowrap" as const }}>
+                            {lineCount} produit{lineCount > 1 ? "s" : ""}
+                          </div>
+                        </div>
+                        {/* Nom */}
+                        <div style={{ fontSize: 12, fontWeight: 700, color: C.text, lineHeight: 1.4 }}>{t.name}</div>
+                        {/* Bouton */}
                         <button
                           onClick={() => applyMeaTemplate(t)}
                           disabled={isApplying}
-                          style={{ width: "100%", padding: "8px 0", background: isApplying ? C.muted : C.orange, color: "#fff", border: "none", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: isApplying ? "default" : "pointer", fontFamily: "inherit", transition: "all 0.15s" }}>
-                          {isApplying ? "Ajout…" : "＋ Ajouter au panier"}
+                          style={{ marginTop: "auto", width: "100%", padding: "9px 0", background: isApplying ? C.muted : pal.bg, color: "#fff", border: "none", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: isApplying ? "default" : "pointer", fontFamily: "inherit", transition: "all 0.15s", boxShadow: isApplying ? "none" : `0 2px 8px ${pal.accent}40` }}>
+                          {isApplying ? "Ajout en cours…" : "＋ Ajouter au panier"}
                         </button>
                       </div>
                     </div>
