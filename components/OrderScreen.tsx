@@ -34,16 +34,17 @@ const LS_RULES  = "wms_order_rules_v2";
 const LS_DRAFT  = "wms_order_draft";
 const LS_CATS   = "wms_order_smart_cats";
 
-// ── Catégories par mots-clés ──────────────────────────────────────────────────
-interface SmartCat { id: string; emoji: string; label: string; keywords: string[]; }
+// ── Catégories par codification référence (chars 1-2 de default_code) ─────────
+// Ex : 1010101 → "01" = Visage
+interface SmartCat { id: string; code: string; emoji: string; label: string; }
 
 const DEFAULT_CATS: SmartCat[] = [
-  { id: "visage",   emoji: "🌸", label: "Visage",   keywords: ["visage", "face", "crème", "sérum", "serum", "lotion", "tonique", "contour", "yeux", "regard", "nettoyant", "démaquillant", "fluide", "purifi", "teint"] },
-  { id: "corps",    emoji: "💆", label: "Corps",    keywords: ["corps", "body", "lait corps", "bain", "douche", "mains", "pieds", "baume", "lèvres"] },
-  { id: "cheveux",  emoji: "💇", label: "Cheveux",  keywords: ["cheveux", "shampooing", "shampoo", "capillaire", "après-shampooing"] },
-  { id: "coffrets", emoji: "🎁", label: "Coffrets", keywords: ["coffret", "kit", "set ", "duo "] },
-  { id: "huiles",   emoji: "💧", label: "Huiles",   keywords: ["huile", " oil"] },
-  { id: "solaire",  emoji: "☀️", label: "Solaire",  keywords: ["solaire", "soleil", "sun", "spf", "protection"] },
+  { id: "01", code: "01", emoji: "🌸", label: "Visage" },
+  { id: "02", code: "02", emoji: "✨", label: "Régénérant" },
+  { id: "03", code: "03", emoji: "💆", label: "Corps" },
+  { id: "04", code: "04", emoji: "🚿", label: "Hygiène" },
+  { id: "05", code: "05", emoji: "💊", label: "Med" },
+  { id: "06", code: "06", emoji: "💄", label: "Maquillage" },
 ];
 
 function loadSmartCats(): SmartCat[] {
@@ -51,10 +52,14 @@ function loadSmartCats(): SmartCat[] {
 }
 function saveSmartCats(c: SmartCat[]) { localStorage.setItem(LS_CATS, JSON.stringify(c)); }
 
+// Extrait le code catégorie : chars 1 et 2 (0-indexé) de la référence
+function getCatCode(product: any): string {
+  const ref = product.default_code || "";
+  return ref.length >= 3 ? ref.substring(1, 3) : "";
+}
+
 function matchesCat(product: any, cat: SmartCat): boolean {
-  const name = (product.name || "").toLowerCase();
-  const ref  = (product.default_code || "").toLowerCase();
-  return cat.keywords.some(kw => name.includes(kw.toLowerCase()) || ref.includes(kw.toLowerCase()));
+  return getCatCode(product) === cat.code;
 }
 
 function loadRules(): FreeRule[] { try { return JSON.parse(localStorage.getItem(LS_RULES) || "[]"); } catch { return []; } }
@@ -79,6 +84,51 @@ function fmtDate(ts: number) {
   return `${d.toLocaleDateString("fr-FR")} à ${d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`;
 }
 
+// ── Calcul prix pricelist côté client (1 seul appel Odoo au départ) ───────────
+interface PriceItem {
+  applied_on: string;          // '0_product_variant' | '1_product' | '2_product_category' | '3_global'
+  compute_price: string;       // 'fixed' | 'discount' | 'formula'
+  product_id: any;             // [id, name] ou false
+  product_tmpl_id: any;
+  categ_id: any;
+  fixed_price: number;
+  percent_price: number;       // % de remise pour compute_price='discount'
+  price_discount: number;      // % de remise pour compute_price='formula'
+  price_surcharge: number;
+  min_quantity: number;
+}
+
+function applyPricelist(lstPrice: number, productId: number, productTmplId: number, items: PriceItem[], qty = 1): number {
+  // Priorité : product_variant > product_template > global
+  // On prend la première règle qui s'applique (Odoo respecte la séquence)
+  const today = new Date().toISOString().slice(0, 10);
+
+  for (const item of items) {
+    if (item.min_quantity > qty) continue;
+
+    const appliesToProduct =
+      (item.applied_on === "0_product_variant" && item.product_id && item.product_id[0] === productId) ||
+      (item.applied_on === "1_product" && item.product_tmpl_id && item.product_tmpl_id[0] === productTmplId) ||
+      (item.applied_on === "3_global");
+
+    if (!appliesToProduct) continue;
+
+    if (item.compute_price === "fixed")    return item.fixed_price;
+    if (item.compute_price === "discount") return lstPrice * (1 - item.percent_price / 100);
+    if (item.compute_price === "formula")  return Math.max(0, lstPrice * (1 - item.price_discount / 100) + item.price_surcharge);
+  }
+  return lstPrice; // aucune règle → prix catalogue
+}
+
+async function fetchPricelistItems(session: odoo.OdooSession, pricelistId: number): Promise<PriceItem[]> {
+  return odoo.searchRead(session, "product.pricelist.item",
+    [["pricelist_id", "=", pricelistId], ["active", "=", true]],
+    ["applied_on", "compute_price", "product_id", "product_tmpl_id", "categ_id",
+     "fixed_price", "percent_price", "price_discount", "price_surcharge", "min_quantity"],
+    500, "sequence asc"  // Odoo trie par séquence pour appliquer la bonne priorité
+  );
+}
+
 function computeFreeItems(cart: Record<number, CartItem>, rules: FreeRule[]): FreeItem[] {
   const out: FreeItem[] = [];
   for (const rule of rules) {
@@ -101,6 +151,7 @@ function computeFreeItems(cart: Record<number, CartItem>, rules: FreeRule[]): Fr
 export default function OrderScreen({ session, onBack, onToast }: Props) {
   const [step, setStep] = useState<"client" | "catalog">("client");
   const [client, setClient] = useState<any>(null);
+  const [priceItems, setPriceItems] = useState<PriceItem[]>([]); // items pricelist du client
   const [cart, setCart] = useState<Record<number, CartItem>>({});
   const [rules, setRules] = useState<FreeRule[]>([]);
   const [freeItems, setFreeItems] = useState<FreeItem[]>([]);
@@ -116,10 +167,14 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
     setRules(loadRules());
     const d = loadDraft();
     if (d && Object.keys(d.cart).length > 0) {
+      // Recharger les items pricelist du brouillon
+      if (d.client?.property_product_pricelist?.[0]) {
+        fetchPricelistItems(session, d.client.property_product_pricelist[0]).then(setPriceItems).catch(() => {});
+      }
       setDraft(d);
       setShowDraftBanner(true);
     }
-  }, []);
+  }, [session]);
 
   // Sauvegarde auto du brouillon dès que le panier ou le client change
   useEffect(() => {
@@ -134,10 +189,11 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
   const cartTotal = Object.values(cart).reduce((s, i) => s + i.qty * i.unitPrice, 0);
   const freeCount = freeItems.reduce((s, i) => s + i.qty, 0);
 
-  const setQty = (product: any, qty: number) => {
+  const setQty = (product: any, qty: number, unitPrice?: number) => {
     setCart(prev => {
       if (qty <= 0) { const n = { ...prev }; delete n[product.id]; return n; }
-      return { ...prev, [product.id]: { product, qty, unitPrice: product.lst_price || 0 } };
+      const price = unitPrice ?? prev[product.id]?.unitPrice ?? product.lst_price ?? 0;
+      return { ...prev, [product.id]: { product, qty, unitPrice: price } };
     });
   };
 
@@ -294,11 +350,18 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
       )}
 
       {/* ── Étapes ── */}
-      {step === "client" && <ClientStep session={session} onSelect={c => { setClient(c); setStep("catalog"); }} />}
+      {step === "client" && <ClientStep session={session} onSelect={c => {
+        setClient(c);
+        setStep("catalog");
+        // 1 seul appel pricelist au moment du choix client
+        const plId = c.property_product_pricelist?.[0];
+        if (plId) fetchPricelistItems(session, plId).then(setPriceItems).catch(() => setPriceItems([]));
+        else setPriceItems([]);
+      }} />}
       {step === "catalog" && client && (
         <CatalogStep session={session} cart={cart} onQtyChange={setQty} freeItems={freeItems}
           onValidate={handleValidate} submitting={submitting}
-          note={note} setNote={setNote} client={client} />
+          note={note} setNote={setNote} client={client} priceItems={priceItems} />
       )}
     </div>
   );
@@ -380,11 +443,12 @@ function ClientStep({ session, onSelect }: { session: odoo.OdooSession; onSelect
 // ═══════════════════════════════════════════════════════════════════════════
 // ÉTAPE 2 — Catalogue + Panier persistant
 // ═══════════════════════════════════════════════════════════════════════════
-function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submitting, note, setNote, client }: {
+function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submitting, note, setNote, client, priceItems }: {
   session: odoo.OdooSession; cart: Record<number, CartItem>;
-  onQtyChange: (p: any, q: number) => void; freeItems: FreeItem[];
+  onQtyChange: (p: any, q: number, price?: number) => void; freeItems: FreeItem[];
   onValidate: () => void; submitting: boolean;
   note: string; setNote: (n: string) => void; client: any;
+  priceItems: PriceItem[];
 }) {
   const [smartCats, setSmartCats] = useState<SmartCat[]>([]);
   const [activeCatId, setActiveCatId] = useState<string | null>(null);
@@ -407,7 +471,7 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
     }
     try {
       const p = await odoo.searchRead(session, "product.product", domain,
-        ["id", "name", "default_code", "lst_price", "virtual_available", "image_128"], 300, "name");
+        ["id", "name", "default_code", "lst_price", "product_tmpl_id", "virtual_available", "image_128"], 300, "name");
       p.sort((a: any, b: any) => b.virtual_available - a.virtual_available); // plus de stock en premier
       if (!q) setAllProducts(p);
       else return p; // pour la recherche, retourner sans stocker
@@ -524,6 +588,9 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
                 const qty = cart[p.id]?.qty || 0;
                 const isFree = freeProductIds.has(p.id);
                 const stock = Math.max(0, Math.round(p.virtual_available || 0));
+                // Prix client calculé côté client à partir des items pricelist (0 appel supplémentaire)
+                const clientPrice = applyPricelist(p.lst_price || 0, p.id, p.product_tmpl_id?.[0] || 0, priceItems, qty || 1);
+                const hasDiscount = priceItems.length > 0 && Math.abs(clientPrice - (p.lst_price || 0)) > 0.01;
                 return (
                   <div key={p.id} style={{ background: C.white, borderRadius: 14, overflow: "hidden", border: `2px solid ${qty > 0 ? C.teal : isFree ? C.green : C.border}`, boxShadow: qty > 0 ? `0 0 0 3px ${C.tealSoft}` : C.shadow, transition: "all 0.15s" }}>
                     <div style={{ height: 80, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" as const }}>
@@ -535,13 +602,16 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
                       <div style={{ fontSize: 9, color: C.muted, fontFamily: "monospace", marginBottom: 1 }}>{p.default_code}</div>
                       <div style={{ fontSize: 11, fontWeight: 600, color: C.text, lineHeight: 1.3, height: 28, overflow: "hidden" }}>{p.name}</div>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 5, marginBottom: 6 }}>
-                        <span style={{ fontSize: 13, fontWeight: 800, color: C.tealDark }}>{p.lst_price > 0 ? fmtPrice(p.lst_price) : "—"}</span>
+                        <div style={{ display: "flex", flexDirection: "column" as const, gap: 1 }}>
+                          <span style={{ fontSize: 13, fontWeight: 800, color: hasDiscount ? C.green : C.tealDark }}>{clientPrice > 0 ? fmtPrice(clientPrice) : "—"}</span>
+                          {hasDiscount && <span style={{ fontSize: 9, color: C.muted, textDecoration: "line-through" }}>{fmtPrice(p.lst_price)}</span>}
+                        </div>
                         <span style={{ fontSize: 9, fontWeight: 600, color: C.green, background: C.greenSoft, borderRadius: 5, padding: "2px 5px" }}>{stock}</span>
                       </div>
                       <div style={{ display: "flex", background: qty > 0 ? C.tealSoft : C.bg, borderRadius: 8, overflow: "hidden", border: `1px solid ${qty > 0 ? C.tealMid : C.border}` }}>
-                        <button onClick={() => onQtyChange(p, qty - 1)} style={{ flex: 1, padding: "7px 0", background: "transparent", border: "none", cursor: "pointer", fontSize: 17, fontWeight: 700, color: qty > 0 ? C.red : C.muted, lineHeight: 1 }}>−</button>
+                        <button onClick={() => onQtyChange(p, qty - 1, clientPrice)} style={{ flex: 1, padding: "7px 0", background: "transparent", border: "none", cursor: "pointer", fontSize: 17, fontWeight: 700, color: qty > 0 ? C.red : C.muted, lineHeight: 1 }}>−</button>
                         <span style={{ flex: 1, textAlign: "center" as const, fontSize: 14, fontWeight: 800, color: qty > 0 ? C.tealDark : C.muted, lineHeight: "30px" }}>{qty}</span>
-                        <button onClick={() => onQtyChange(p, qty + 1)} style={{ flex: 1, padding: "7px 0", background: "transparent", border: "none", cursor: "pointer", fontSize: 17, fontWeight: 700, color: C.teal, lineHeight: 1 }}>+</button>
+                        <button onClick={() => onQtyChange(p, qty + 1, clientPrice)} style={{ flex: 1, padding: "7px 0", background: "transparent", border: "none", cursor: "pointer", fontSize: 17, fontWeight: 700, color: C.teal, lineHeight: 1 }}>+</button>
                       </div>
                     </div>
                   </div>
@@ -803,39 +873,41 @@ function RulesPanel({ rules, onChange, onClose }: { rules: FreeRule[]; onChange:
 function CatsEditor() {
   const [cats, setCats] = useState<SmartCat[]>([]);
   const [editId, setEditId] = useState<string | null>(null);
-  const [fEmoji, setFEmoji] = useState(""); const [fLabel, setFLabel] = useState(""); const [fKws, setFKws] = useState("");
+  const [fEmoji, setFEmoji] = useState("");
+  const [fLabel, setFLabel] = useState("");
+  const [fCode, setFCode] = useState("");
 
   useEffect(() => { setCats(loadSmartCats()); }, []);
-
   const save_ = (updated: SmartCat[]) => { setCats(updated); saveSmartCats(updated); };
-
-  const openEdit = (c: SmartCat) => { setEditId(c.id); setFEmoji(c.emoji); setFLabel(c.label); setFKws(c.keywords.join(", ")); };
-  const openNew = () => { setEditId("new"); setFEmoji("🏷️"); setFLabel(""); setFKws(""); };
+  const openEdit = (c: SmartCat) => { setEditId(c.id); setFEmoji(c.emoji); setFLabel(c.label); setFCode(c.code); };
+  const openNew = () => { setEditId("new"); setFEmoji("🏷️"); setFLabel(""); setFCode(""); };
 
   const saveEdit = () => {
-    const kws = fKws.split(/[,;]+/).map(k => k.trim()).filter(Boolean);
-    if (!fLabel.trim() || !kws.length) return;
+    const code = fCode.trim().padStart(2, "0").slice(0, 2);
+    if (!fLabel.trim() || !code) return;
     if (editId === "new") {
-      save_([...cats, { id: uid(), emoji: fEmoji, label: fLabel.trim(), keywords: kws }]);
+      save_([...cats, { id: code, code, emoji: fEmoji, label: fLabel.trim() }]);
     } else {
-      save_(cats.map(c => c.id === editId ? { ...c, emoji: fEmoji, label: fLabel.trim(), keywords: kws } : c));
+      save_(cats.map(c => c.id === editId ? { ...c, code, emoji: fEmoji, label: fLabel.trim() } : c));
     }
     setEditId(null);
   };
 
   return (
     <div>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, lineHeight: 1.5 }}>
+        Basé sur les 2ème et 3ème caractères de la référence produit.<br/>
+        Ex: <code style={{ background: C.bg, padding: "1px 4px", borderRadius: 4 }}>1<strong>01</strong>0101</code> → code <strong>01</strong>
+      </div>
+
       {editId && (
         <div style={{ background: C.white, border: `1.5px solid ${C.teal}`, borderRadius: 14, padding: 14, marginBottom: 14, display: "flex", flexDirection: "column" as const, gap: 10 }}>
           <div style={{ display: "flex", gap: 8 }}>
-            <input value={fEmoji} onChange={e => setFEmoji(e.target.value)} style={{ width: 48, padding: "8px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 18, textAlign: "center" as const }} />
-            <input value={fLabel} onChange={e => setFLabel(e.target.value)} placeholder="Nom de la catégorie" style={{ flex: 1, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit" }} />
-          </div>
-          <div>
-            <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 4 }}>Mots-clés (séparés par des virgules)</div>
-            <input value={fKws} onChange={e => setFKws(e.target.value)} placeholder="visage, crème, sérum, lotion…"
-              style={{ width: "100%", boxSizing: "border-box" as const, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontFamily: "inherit" }} />
-            <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Les produits dont le nom contient ces mots apparaîtront dans cette catégorie</div>
+            <input value={fEmoji} onChange={e => setFEmoji(e.target.value)} style={{ width: 44, padding: "8px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 18, textAlign: "center" as const }} />
+            <input value={fCode} onChange={e => setFCode(e.target.value)} placeholder="01" maxLength={2}
+              style={{ width: 52, padding: "8px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "monospace", fontWeight: 700, textAlign: "center" as const }} />
+            <input value={fLabel} onChange={e => setFLabel(e.target.value)} placeholder="Nom affiché"
+              style={{ flex: 1, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit" }} />
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => setEditId(null)} style={{ flex: 1, padding: "8px 0", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>Annuler</button>
@@ -852,9 +924,9 @@ function CatsEditor() {
         {cats.map(c => (
           <div key={c.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px", display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 20 }}>{c.emoji}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{c.label}</div>
-              <div style={{ fontSize: 10, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{c.keywords.join(", ")}</div>
+              <div style={{ fontSize: 10, color: C.muted, fontFamily: "monospace" }}>code : {c.code}</div>
             </div>
             <button onClick={() => openEdit(c)} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 8px", cursor: "pointer", fontSize: 12 }}>✏️</button>
             <button onClick={() => save_(cats.filter(x => x.id !== c.id))} style={{ background: C.redSoft, border: "none", borderRadius: 7, padding: "4px 8px", cursor: "pointer", fontSize: 12, color: C.red }}>🗑</button>
