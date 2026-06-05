@@ -501,7 +501,7 @@ export default function Dashboard() {
     setCarOdoo([]); setCarOdooLoaded(false); setCarView("commandes");
     try {
       const buf = await file.arrayBuffer();
-      const res = await fetch("/api/extract", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: buf });
+      const res = await fetch("/api/pdf-extract", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: buf });
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) {
         const txt = (await res.text()).slice(0, 200);

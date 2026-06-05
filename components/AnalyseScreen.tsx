@@ -366,7 +366,7 @@ async function exportToExcel(results: OffreAnalyse[], onToast: Props["onToast"],
         })),
     };
 
-    const res = await fetch("/api/analyse_export", {
+    const res = await fetch("/api/export-excel", {  // proxy Next.js — token ajouté côté serveur
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

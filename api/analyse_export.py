@@ -1,6 +1,7 @@
 from http.server import BaseHTTPRequestHandler
 import json
 import io
+import os
 
 from openpyxl import Workbook
 from openpyxl.styles import (
@@ -357,14 +358,29 @@ def build_offre_sheet(wb, r):
 
 # ── Handler HTTP ──────────────────────────────────────────────────────────────
 class handler(BaseHTTPRequestHandler):
+    def _check_token(self) -> bool:
+        expected = os.environ.get("WMS_INTERNAL_TOKEN", "")
+        received = self.headers.get("X-WMS-Token", "")
+        if not expected:
+            return True  # pas de token configuré → pas de blocage (compatibilité)
+        import hmac
+        return hmac.compare_digest(expected, received)  # timing-safe
+
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", "same-origin")
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-WMS-Token")
         self.end_headers()
 
     def do_POST(self):
+        if not self._check_token():
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error": "Non autoris\xc3\xa9"}')
+            return
+
         length  = int(self.headers.get("Content-Length", 0))
         payload = json.loads(self.rfile.read(length))
         results = payload.get("results", [])

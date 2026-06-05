@@ -2,6 +2,8 @@ from http.server import BaseHTTPRequestHandler
 import json
 import io
 import re
+import os
+import hmac
 from collections import defaultdict
 
 import fitz  # PyMuPDF — ~10-50× plus rapide que pdfplumber
@@ -233,13 +235,20 @@ def extract_all(pdf_bytes):
 
 
 class handler(BaseHTTPRequestHandler):
+    def _check_token(self) -> bool:
+        expected = os.environ.get("WMS_INTERNAL_TOKEN", "")
+        received = self.headers.get("X-WMS-Token", "")
+        if not expected:
+            return True  # pas de token configuré → pas de blocage
+        return hmac.compare_digest(expected, received)  # timing-safe
+
     def _send(self, code, payload):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", "same-origin")
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-WMS-Token")
         self.end_headers()
         self.wfile.write(body)
 
@@ -247,6 +256,9 @@ class handler(BaseHTTPRequestHandler):
         self._send(200, {"ok": True})
 
     def do_POST(self):
+        if not self._check_token():
+            self._send(401, {"error": "Non autorisé"})
+            return
         try:
             length = int(self.headers.get("Content-Length", 0))
             pdf_bytes = self.rfile.read(length)
@@ -255,4 +267,4 @@ class handler(BaseHTTPRequestHandler):
                 return
             self._send(200, extract_all(pdf_bytes))
         except Exception as e:
-            self._send(500, {"error": str(e)})
+            self._send(500, {"error": "Erreur traitement PDF"})
