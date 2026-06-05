@@ -513,15 +513,12 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
 
   useEffect(() => { setSmartCats(loadSmartCats()); }, []);
 
-  // Chargement initial : tous les produits en stock (virtual_available > 0)
+  // Chargement initial : tous les produits vendables actifs
   const loadAll = useCallback(async (q: string) => {
     setProdLoading(true);
-    // Filtre : articles de vente actifs, en stock, avec prix
     const domain: any[] = [
       ["sale_ok", "=", true],
       ["active", "=", true],
-      ["virtual_available", ">", 0],
-      ["lst_price", ">", 0],
     ];
     if (q.trim().length >= 2) {
       domain.push("|");
@@ -530,8 +527,9 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
     }
     try {
       const p = await odoo.searchRead(session, "product.product", domain,
-        ["id", "name", "default_code", "lst_price", "product_tmpl_id", "virtual_available", "image_128"], 300, "name");
-      p.sort((a: any, b: any) => b.virtual_available - a.virtual_available); // plus de stock en premier
+        ["id", "name", "default_code", "lst_price", "product_tmpl_id", "virtual_available", "image_128"], 500, "name");
+      // Produits en stock en premier, puis les autres
+      p.sort((a: any, b: any) => (b.virtual_available || 0) - (a.virtual_available || 0));
       if (!q) setAllProducts(p);
       else return p; // pour la recherche, retourner sans stocker
     } catch {}
