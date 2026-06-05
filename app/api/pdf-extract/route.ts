@@ -24,11 +24,13 @@ export async function POST(req: NextRequest) {
 
     let res: Response;
     try {
+      const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
       res = await fetch(`${baseUrl}/api/extract`, {
         method: "POST",
         headers: {
           "Content-Type": req.headers.get("content-type") || "application/pdf",
           "X-WMS-Token": token,
+          ...(bypassSecret ? { "x-vercel-protection-bypass": bypassSecret } : {}),
         },
         body,
         signal: controller.signal,
