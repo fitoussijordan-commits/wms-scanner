@@ -745,36 +745,40 @@ function vibrateError() { vibrate([100, 30, 100]); }
 function playBeep(type: "ok" | "err") {
   try {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-
-    if (type === "ok") {
-      // Double bip aigu rapide — son "scan réussi" classique
-      [0, 0.12].forEach(offset => {
+    // Resume obligatoire — les navigateurs suspendent l'AudioContext sans geste utilisateur préalable
+    ctx.resume().then(() => {
+      if (type === "ok") {
+        // Double bip aigu — ferme le context seulement après le 2ème oscillateur
+        [0, 0.13].forEach((offset, i, arr) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(1800, ctx.currentTime + offset);
+          gain.gain.setValueAtTime(0.4, ctx.currentTime + offset);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + offset + 0.09);
+          osc.start(ctx.currentTime + offset);
+          osc.stop(ctx.currentTime + offset + 0.09);
+          // Ferme le context uniquement après le dernier oscillateur
+          if (i === arr.length - 1) {
+            osc.onended = () => { try { ctx.close(); } catch {} };
+          }
+        });
+      } else {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.connect(gain);
         gain.connect(ctx.destination);
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(1800, ctx.currentTime + offset);
-        gain.gain.setValueAtTime(0.4, ctx.currentTime + offset);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + offset + 0.09);
-        osc.start(ctx.currentTime + offset);
-        osc.stop(ctx.currentTime + offset + 0.09);
+        osc.type = "square";
+        osc.frequency.setValueAtTime(180, ctx.currentTime);
+        gain.gain.setValueAtTime(0.4, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.5);
         osc.onended = () => { try { ctx.close(); } catch {} };
-      });
-    } else {
-      // Buzzer grave long — son d'erreur bien distinct
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.type = "square"; // onde carrée = son "buzz" bien reconnaissable
-      osc.frequency.setValueAtTime(180, ctx.currentTime);
-      gain.gain.setValueAtTime(0.4, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-      osc.start(ctx.currentTime);
-      osc.stop(ctx.currentTime + 0.5);
-      osc.onended = () => { try { ctx.close(); } catch {} };
-    }
+      }
+    }).catch(() => {});
   } catch {}
 }
 
