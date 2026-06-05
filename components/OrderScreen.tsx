@@ -463,7 +463,14 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
   // Chargement initial : tous les produits en stock (virtual_available > 0)
   const loadAll = useCallback(async (q: string) => {
     setProdLoading(true);
-    const domain: any[] = [["sale_ok", "=", true], ["active", "=", true], ["virtual_available", ">", 0]];
+    // Filtre : type Vente (1er char = "1") + en stock + prix > 0
+    const domain: any[] = [
+      ["sale_ok", "=", true],
+      ["active", "=", true],
+      ["virtual_available", ">", 0],
+      ["default_code", "=like", "1%"],   // type 1 = Vente uniquement
+      ["lst_price", ">", 0],             // exclure les prix à 0
+    ];
     if (q.trim().length >= 2) {
       domain.push("|");
       domain.push(["name", "ilike", q.trim()]);
