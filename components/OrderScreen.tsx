@@ -361,7 +361,7 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
       {step === "catalog" && client && (
         <CatalogStep session={session} cart={cart} onQtyChange={setQty} freeItems={freeItems}
           onValidate={handleValidate} submitting={submitting}
-          note={note} setNote={setNote} client={client} priceItems={priceItems} />
+          note={note} setNote={setNote} client={client} priceItems={priceItems} onToast={onToast} />
       )}
     </div>
   );
@@ -443,12 +443,13 @@ function ClientStep({ session, onSelect }: { session: odoo.OdooSession; onSelect
 // ═══════════════════════════════════════════════════════════════════════════
 // ÉTAPE 2 — Catalogue + Panier persistant
 // ═══════════════════════════════════════════════════════════════════════════
-function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submitting, note, setNote, client, priceItems }: {
+function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submitting, note, setNote, client, priceItems, onToast }: {
   session: odoo.OdooSession; cart: Record<number, CartItem>;
   onQtyChange: (p: any, q: number, price?: number) => void; freeItems: FreeItem[];
   onValidate: () => void; submitting: boolean;
   note: string; setNote: (n: string) => void; client: any;
   priceItems: PriceItem[];
+  onToast: (msg: string, type?: "success" | "error" | "info") => void;
 }) {
   const [smartCats, setSmartCats] = useState<SmartCat[]>([]);
   const [activeCatId, setActiveCatId] = useState<string | null>(null);
@@ -457,6 +458,56 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
   const [search, setSearch] = useState("");
   const searchInput = useRef<HTMLInputElement>(null);
   const searchTimer = useRef<any>(null);
+
+  // ── MEA / Offres ─────────────────────────────────────────────────────────
+  const [showMeaPicker, setShowMeaPicker] = useState(false);
+  const [meaTemplates, setMeaTemplates] = useState<any[]>([]);
+  const [meaLoading, setMeaLoading] = useState(false);
+  const [applyingMea, setApplyingMea] = useState<number | null>(null);
+
+  const loadMeaTemplates = async () => {
+    if (meaTemplates.length > 0) return; // déjà chargé
+    setMeaLoading(true);
+    try {
+      const templates = await odoo.searchRead(session, "sale.order.template",
+        [["active", "=", true]],
+        ["id", "name", "sale_order_template_line_ids"],
+        200, "name");
+      setMeaTemplates(templates);
+    } catch {}
+    setMeaLoading(false);
+  };
+
+  const applyMeaTemplate = async (template: any) => {
+    setApplyingMea(template.id);
+    try {
+      const lines = await odoo.searchRead(session, "sale.order.template.line",
+        [["order_template_id", "=", template.id], ["product_id", "!=", false]],
+        ["product_id", "product_uom_qty", "name"],
+        200);
+      if (!lines.length) { onToast("Aucun produit dans cette offre", "error"); setApplyingMea(null); return; }
+
+      const productIds = lines.map((l: any) => l.product_id[0]);
+      const products = await odoo.searchRead(session, "product.product",
+        [["id", "in", productIds]],
+        ["id", "name", "default_code", "lst_price", "product_tmpl_id", "virtual_available", "image_128"],
+        productIds.length);
+      const productMap = new Map<number, any>(products.map((p: any) => [p.id as number, p]));
+
+      let added = 0;
+      for (const line of lines) {
+        const product: any = productMap.get(line.product_id[0]);
+        if (!product) continue;
+        const qty = Math.max(1, Math.round(line.product_uom_qty || 1));
+        const clientPrice = applyPricelist(product.lst_price || 0, product.id, product.product_tmpl_id?.[0] || 0, priceItems, qty);
+        onQtyChange(product, (cart[product.id]?.qty || 0) + qty, clientPrice);
+        added++;
+      }
+      onToast(`✅ ${template.name} — ${added} produit${added > 1 ? "s" : ""} ajouté${added > 1 ? "s" : ""}`, "success");
+      setShowMeaPicker(false);
+    } catch (e: any) { onToast("Erreur: " + e.message, "error"); }
+    setApplyingMea(null);
+  };
 
   useEffect(() => { setSmartCats(loadSmartCats()); }, []);
 
@@ -545,6 +596,18 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
             </button>
           );
         })}
+
+        {/* ── Offres MEA ── */}
+        <div style={{ marginTop: 8, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
+          <div style={{ padding: "4px 10px 4px", fontSize: 10, fontWeight: 700, color: C.muted, textTransform: "uppercase" as const, letterSpacing: "0.08em" }}>Offres</div>
+          <button
+            onClick={() => { setShowMeaPicker(true); loadMeaTemplates(); }}
+            style={{ width: "100%", padding: "10px 10px", background: showMeaPicker ? C.orangeSoft : "transparent", border: "none", borderLeft: `3px solid ${showMeaPicker ? C.orange : "transparent"}`, cursor: "pointer", textAlign: "left" as const, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 7, transition: "all 0.1s" }}>
+            <span style={{ fontSize: 12, fontWeight: showMeaPicker ? 700 : 400, color: showMeaPicker ? C.orange : C.textSec, display: "flex", alignItems: "center", gap: 6 }}>
+              <span>🎁</span> MEA
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* ── Zone produits ── */}
@@ -628,6 +691,53 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
           )}
         </div>
       </div>
+
+      {/* ── Modal MEA ── */}
+      {showMeaPicker && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={() => setShowMeaPicker(false)}>
+          <div style={{ background: C.white, borderRadius: 20, width: "100%", maxWidth: 480, maxHeight: "80vh", display: "flex", flexDirection: "column" as const, overflow: "hidden", boxShadow: C.shadowXl }}
+            onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div style={{ padding: "18px 20px 14px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>🎁 Offres MEA</div>
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Sélectionne une offre pour ajouter tous ses produits au panier</div>
+              </div>
+              <button onClick={() => setShowMeaPicker(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.muted, lineHeight: 1 }}>✕</button>
+            </div>
+            {/* Liste */}
+            <div style={{ flex: 1, overflowY: "auto" as const, padding: "10px 16px 16px" }}>
+              {meaLoading ? (
+                <div style={{ textAlign: "center", padding: 40, color: C.muted }}>Chargement…</div>
+              ) : meaTemplates.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 40, color: C.muted }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
+                  <div>Aucun modèle de devis trouvé</div>
+                </div>
+              ) : (
+                meaTemplates.map(t => (
+                  <button key={t.id}
+                    onClick={() => applyMeaTemplate(t)}
+                    disabled={applyingMea === t.id}
+                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", background: applyingMea === t.id ? C.orangeSoft : C.bg, border: `1.5px solid ${applyingMea === t.id ? C.orange : C.border}`, borderRadius: 12, cursor: applyingMea === t.id ? "default" : "pointer", fontFamily: "inherit", textAlign: "left" as const, marginBottom: 8, transition: "all 0.12s" }}>
+                    <div style={{ width: 38, height: 38, borderRadius: 10, background: C.orangeSoft, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>🎁</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{t.name}</div>
+                      <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>
+                        {applyingMea === t.id ? "Ajout en cours…" : `${t.sale_order_template_line_ids?.length || 0} ligne${(t.sale_order_template_line_ids?.length || 0) > 1 ? "s" : ""}`}
+                      </div>
+                    </div>
+                    {applyingMea !== t.id && (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Panier persistant (droite) ── */}
       <div style={{ width: 280, background: C.white, borderLeft: `1px solid ${C.border}`, display: "flex", flexDirection: "column" as const, flexShrink: 0 }}>
