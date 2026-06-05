@@ -237,6 +237,29 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
         </button>
       </div>
 
+      {/* ── Bannière brouillon ── */}
+      {showDraftBanner && draft && (
+        <div style={{ background: "#fefce8", borderBottom: `1px solid #fde047`, padding: "10px 20px", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+          <span style={{ fontSize: 18 }}>📝</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#713f12" }}>
+              Commande en cours — {draft.client?.name}
+            </div>
+            <div style={{ fontSize: 11, color: "#92400e" }}>
+              {Object.keys(draft.cart).length} produit{Object.keys(draft.cart).length > 1 ? "s" : ""} · sauvegardé {fmtDate(draft.savedAt)}
+            </div>
+          </div>
+          <button onClick={restoreDraft}
+            style={{ padding: "7px 16px", background: "#ca8a04", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            Reprendre
+          </button>
+          <button onClick={discardDraft}
+            style={{ padding: "7px 12px", background: "transparent", color: "#92400e", border: `1px solid #fde047`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+            Ignorer
+          </button>
+        </div>
+      )}
+
       {/* ── Panneau règles (overlay) ── */}
       {showRules && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "flex-end" }} onClick={() => setShowRules(false)}>
