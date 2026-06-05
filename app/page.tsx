@@ -1039,6 +1039,53 @@ export default function Page() {
   const homeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const homeSearchIdRef = useRef(0);
 
+  // Caméra scan (recherche rapide)
+  const [showCamera, setShowCamera] = useState(false);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraDetectorRef = useRef<any>(null);
+  const cameraRafRef = useRef<number | null>(null);
+
+  const stopCamera = () => {
+    if (cameraRafRef.current) cancelAnimationFrame(cameraRafRef.current);
+    if (cameraStreamRef.current) { cameraStreamRef.current.getTracks().forEach(t => t.stop()); cameraStreamRef.current = null; }
+    setShowCamera(false);
+  };
+
+  const startCamera = async () => {
+    setShowCamera(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      cameraStreamRef.current = stream;
+      if (cameraVideoRef.current) { cameraVideoRef.current.srcObject = stream; await cameraVideoRef.current.play(); }
+
+      // BarcodeDetector API (Chrome Android / Chrome desktop)
+      const BD = (window as any).BarcodeDetector;
+      if (BD) {
+        cameraDetectorRef.current = new BD({ formats: ["ean_13", "ean_8", "code_128", "code_39", "qr_code", "data_matrix"] });
+        const scan = async () => {
+          if (!cameraVideoRef.current || !cameraDetectorRef.current) return;
+          try {
+            const codes = await cameraDetectorRef.current.detect(cameraVideoRef.current);
+            if (codes.length > 0) {
+              const val = codes[0].rawValue;
+              stopCamera();
+              setHomeQuery("");
+              setHomeResults([]);
+              doLookup(val);
+              return;
+            }
+          } catch {}
+          cameraRafRef.current = requestAnimationFrame(scan);
+        };
+        cameraRafRef.current = requestAnimationFrame(scan);
+      }
+    } catch (e) {
+      stopCamera();
+      showToast("⚠ Caméra non disponible");
+    }
+  };
+
   // Transfer state
   const [src, setSrc] = useState<any>(null);
   const [dst, setDst] = useState<any>(null);
@@ -2090,6 +2137,18 @@ export default function Page() {
     setLoading(false);
   };
 
+  // Confirmation manuelle d'emplacement (tap sur le badge) sans scanner de code-barres
+  const confirmLocationManually = (locId: number, locName: string) => {
+    const currentLines = pickingMoveLinesRef.current;
+    const pending = getPendingLinesAtLoc(currentLines, locId);
+    if (pending.length === 0) { showToast(`Aucun article à prendre à ${locName}`); flashScan("err"); return; }
+    const ml = pending[0];
+    const remaining = getProductRemainingAtLoc(currentLines, locId, ml.product_id?.[0]);
+    updatePrepStep({ locId, locName, lineId: ml.id, productName: ml.product_id[1], lotName: ml.lot_id?.[1] || undefined, remaining });
+    flashScan("ok");
+    showToast(`📍 ${locName} → Scannez ${ml.lot_id ? ml.lot_id[1] : ml.product_id[1]}`);
+  };
+
   const autoFillPicking = async () => {
     if (!session || !selectedPicking) return;
     setLoading(true);
@@ -2297,6 +2356,34 @@ export default function Page() {
     <Shell toast={toast} flash={scanFlash}>
       <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} />
 
+      {/* ── Overlay caméra ── */}
+      {showCamera && (
+        <div style={{ position: "fixed", inset: 0, background: "#000", zIndex: 10000, display: "flex", flexDirection: "column" as const }}>
+          <video ref={cameraVideoRef} autoPlay muted playsInline style={{ flex: 1, objectFit: "cover", width: "100%" }} />
+          {/* Viseur */}
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+            <div style={{ width: 260, height: 160, border: "3px solid #fff", borderRadius: 12, boxShadow: "0 0 0 2000px rgba(0,0,0,0.45)" }} />
+          </div>
+          {/* Hint */}
+          <div style={{ position: "absolute", bottom: 100, left: 0, right: 0, textAlign: "center", color: "#fff", fontSize: 14, fontWeight: 600, opacity: 0.85 }}>
+            Pointez le code-barres dans le cadre
+          </div>
+          {/* Bouton fermer */}
+          <div style={{ position: "absolute", bottom: 32, left: 0, right: 0, display: "flex", justifyContent: "center" }}>
+            <button onClick={stopCamera}
+              style={{ padding: "14px 40px", background: "rgba(255,255,255,0.15)", color: "#fff", border: "2px solid rgba(255,255,255,0.4)", borderRadius: 50, fontSize: 15, fontWeight: 700, cursor: "pointer", backdropFilter: "blur(8px)", fontFamily: "inherit" }}>
+              ✕ Annuler
+            </button>
+          </div>
+          {/* Note iOS */}
+          {!(window as any).BarcodeDetector && (
+            <div style={{ position: "absolute", top: 60, left: 16, right: 16, background: "rgba(255,200,0,0.9)", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#000", textAlign: "center" }}>
+              ⚠ Scan automatique non disponible sur Safari. Utilisez Chrome ou un scanner Bluetooth.
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Bannière nouvelles commandes (desktop uniquement) ── */}
       {newOrderNotif && (
         <div style={{
@@ -2392,6 +2479,12 @@ export default function Page() {
                   }
                 }}
                 style={{ padding: "0 18px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 16, cursor: "pointer", flexShrink: 0 }}>→</button>
+              <button
+                onClick={startCamera}
+                style={{ padding: "0 14px", background: C.white, color: C.text, border: `1.5px solid ${C.border}`, borderRadius: 10, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}
+                title="Scanner avec la caméra">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              </button>
             </div>
             {homeSearching && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 6, paddingLeft: 2 }}>Recherche en cours...</div>}
             {homeResults.length > 0 && (
@@ -2790,6 +2883,7 @@ export default function Page() {
             error={error}
             prepStep={prepStep}
             onScan={doPrepScan}
+            onManualConfirmLoc={confirmLocationManually}
             onTakeAll={prepTakeAll}
             onCancelStep={() => setPrepStep(null)}
             onAutoFill={autoFillPicking}
@@ -9946,7 +10040,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
 // ============================================
 // PREPARATION DETAIL SCREEN
 // ============================================
-function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, qtyOverrides, onValidate, onValidateAndPack, onBack, onReport, session }: any) {
+function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onManualConfirmLoc, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, qtyOverrides, onValidate, onValidateAndPack, onBack, onReport, session }: any) {
   // ── qty helper: overrides take priority over moveLines data ──
   const getQty = (ml: any) => qtyOverrides?.[ml.id] !== undefined ? qtyOverrides[ml.id] : (ml.qty_done || 0);
 
@@ -9956,6 +10050,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   const [colisLines, setColisLines] = useState<Set<number>>(new Set());
   const [showColisSummary, setShowColisSummary] = useState(false);
   const [locOk, setLocOk] = useState(false);
+  const [showLocConfirm, setShowLocConfirm] = useState(false);
   const [showBackorderWarning, setShowBackorderWarning] = useState(false);
   const [colisLoading, setColisLoading] = useState(false);
   const [colisError, setColisError] = useState("");
@@ -10328,13 +10423,43 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 
           {/* Emplacement */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-            <div style={{ background: locOk ? C.greenSoft : C.blueSoft, border: `1px solid ${locOk ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "6px 12px", fontSize: 18, fontWeight: 900, color: locOk ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center" }}>
+            <div
+              onClick={() => { if (!locOk && onManualConfirmLoc) setShowLocConfirm(true); }}
+              style={{ background: locOk ? C.greenSoft : C.blueSoft, border: `1px solid ${locOk ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "6px 12px", fontSize: 18, fontWeight: 900, color: locOk ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center", cursor: !locOk ? "pointer" : "default", userSelect: "none" as const }}>
               📍 {locOk && prepStep ? shortLoc(prepStep.locName) : shortLoc(currentLine.location_id?.[1] || "—")}
+              {!locOk && <span style={{ fontSize: 10, fontWeight: 600, color: C.blue, marginLeft: 8, opacity: 0.7 }}>appuyer pour confirmer</span>}
             </div>
             {locOk && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
             </div>}
           </div>
+
+          {/* Modal confirmation emplacement manuel */}
+          {showLocConfirm && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+              <div style={{ background: "#fff", borderRadius: 20, padding: 28, width: "100%", maxWidth: 340, textAlign: "center", boxShadow: "0 20px 40px rgba(0,0,0,0.15)" }}>
+                <div style={{ fontSize: 36, marginBottom: 12 }}>📍</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 6 }}>Confirmer l'emplacement</div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: C.blue, marginBottom: 6 }}>{shortLoc(currentLine.location_id?.[1] || "—")}</div>
+                <div style={{ fontSize: 13, color: "#64748b", marginBottom: 24 }}>Êtes-vous bien à cet emplacement ?</div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={() => setShowLocConfirm(false)}
+                    style={{ flex: 1, padding: "13px 0", background: "#f1f5f9", color: "#64748b", border: "none", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                    Non
+                  </button>
+                  <button onClick={() => {
+                    setShowLocConfirm(false);
+                    const locId = currentLine.location_id?.[0];
+                    const locName = currentLine.location_id?.[1] || "";
+                    if (locId && onManualConfirmLoc) onManualConfirmLoc(locId, locName);
+                  }}
+                    style={{ flex: 1, padding: "13px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                    ✓ Oui
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Produit */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
