@@ -30,11 +30,30 @@ interface FreeRule {
 }
 interface FreeItem { product: any; qty: number; ruleName: string; }
 
-const LS_RULES = "wms_order_rules_v2";
+const LS_RULES  = "wms_order_rules_v2";
+const LS_DRAFT  = "wms_order_draft";
+
 function loadRules(): FreeRule[] { try { return JSON.parse(localStorage.getItem(LS_RULES) || "[]"); } catch { return []; } }
 function saveRules(r: FreeRule[]) { localStorage.setItem(LS_RULES, JSON.stringify(r)); }
+
+interface Draft {
+  client: any;
+  cart: Record<number, CartItem>;
+  note: string;
+  savedAt: number; // timestamp
+}
+function loadDraft(): Draft | null { try { const r = localStorage.getItem(LS_DRAFT); return r ? JSON.parse(r) : null; } catch { return null; } }
+function saveDraft(d: Draft | null) {
+  if (d) localStorage.setItem(LS_DRAFT, JSON.stringify(d));
+  else localStorage.removeItem(LS_DRAFT);
+}
+
 function uid() { return Math.random().toString(36).slice(2, 9); }
 function fmtPrice(n: number) { return new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(n); }
+function fmtDate(ts: number) {
+  const d = new Date(ts);
+  return `${d.toLocaleDateString("fr-FR")} à ${d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`;
+}
 
 function computeFreeItems(cart: Record<number, CartItem>, rules: FreeRule[]): FreeItem[] {
   const out: FreeItem[] = [];
@@ -65,8 +84,26 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState<{ mainId: number; freeId: number | null } | null>(null);
   const [note, setNote] = useState("");
+  const [draft, setDraft] = useState<Draft | null>(null); // brouillon détecté au démarrage
+  const [showDraftBanner, setShowDraftBanner] = useState(false);
 
-  useEffect(() => { setRules(loadRules()); }, []);
+  // Chargement initial : règles + détection brouillon
+  useEffect(() => {
+    setRules(loadRules());
+    const d = loadDraft();
+    if (d && Object.keys(d.cart).length > 0) {
+      setDraft(d);
+      setShowDraftBanner(true);
+    }
+  }, []);
+
+  // Sauvegarde auto du brouillon dès que le panier ou le client change
+  useEffect(() => {
+    if (client && Object.keys(cart).length > 0) {
+      saveDraft({ client, cart, note, savedAt: Date.now() });
+    }
+  }, [cart, client, note]);
+
   useEffect(() => { setFreeItems(computeFreeItems(cart, rules)); }, [cart, rules]);
 
   const cartCount = Object.values(cart).reduce((s, i) => s + i.qty, 0);
@@ -78,6 +115,23 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
       if (qty <= 0) { const n = { ...prev }; delete n[product.id]; return n; }
       return { ...prev, [product.id]: { product, qty, unitPrice: product.lst_price || 0 } };
     });
+  };
+
+  const restoreDraft = () => {
+    if (!draft) return;
+    setClient(draft.client);
+    setCart(draft.cart);
+    setNote(draft.note || "");
+    setStep("catalog");
+    setShowDraftBanner(false);
+    setDraft(null);
+    onToast("Brouillon restauré", "success");
+  };
+
+  const discardDraft = () => {
+    saveDraft(null);
+    setDraft(null);
+    setShowDraftBanner(false);
   };
 
   const handleValidate = async () => {
@@ -99,6 +153,7 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
           await odoo.create(session, "sale.order.line", { order_id: freeId, product_id: fi.product.id, product_uom_qty: fi.qty, price_unit: 0 });
         }
       }
+      saveDraft(null); // effacer le brouillon après création réussie
       setDone({ mainId, freeId });
     } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
     setSubmitting(false);
@@ -115,7 +170,7 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
           {done.freeId && <><br/>BC gratuit <span style={{ color: C.purple, fontWeight: 700 }}>#{done.freeId}</span> créé automatiquement</>}
         </div>
         <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
-          <button onClick={() => { setDone(null); setCart({}); setClient(null); setNote(""); setStep("client"); }}
+          <button onClick={() => { setDone(null); setCart({}); setClient(null); setNote(""); setStep("client"); saveDraft(null); }}
             style={{ padding: "14px 28px", background: C.teal, color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
             Nouvelle commande
           </button>
@@ -308,6 +363,13 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
     try {
       const p = await odoo.searchRead(session, "product.product", domain,
         ["id", "name", "default_code", "lst_price", "uom_id", "categ_id", "virtual_available", "qty_available", "image_128"], 80, "name");
+      // Tri : stock dispo > 0 en premier, puis par nom
+      p.sort((a: any, b: any) => {
+        const aStock = a.virtual_available > 0 ? 1 : 0;
+        const bStock = b.virtual_available > 0 ? 1 : 0;
+        if (bStock !== aStock) return bStock - aStock;
+        return a.name.localeCompare(b.name);
+      });
       setProducts(p);
     } catch {}
     setProdLoading(false);
