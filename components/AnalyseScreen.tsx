@@ -111,23 +111,10 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre, filter: 
   const activeOffreLines = offreLines.filter((l: any) => l.state !== "cancel");
   const orderIdsFromLines = new Set<number>(activeOffreLines.map((l: any) => l.order_id[0] as number));
 
-  // 2b. Commandes via note interne (x_note_interne)
-  const orderIdsFromNote = new Set<number>();
-  if (offre.codeInterne?.trim()) {
-    const noteOrders = await odoo.searchRead(session, "sale.order",
-      [["x_note_interne", "ilike", offre.codeInterne.trim()], ["state", "in", states]],
-      ["id"], 0
-    );
-    for (const o of noteOrders) orderIdsFromNote.add(o.id as number);
-  }
-
-  // Fusion sans doublons — un ordre trouvé dans les deux sources ne compte qu'une fois
-  const orderIds = Array.from(new Set([...Array.from(orderIdsFromLines), ...Array.from(orderIdsFromNote)])) as number[];
-
-  // Quantité totale : uniquement via les lignes (la note n'a pas de qty)
+  // Offres individuelles = uniquement via lignes produit (pas de note)
+  const orderIds = Array.from(orderIdsFromLines) as number[];
   const qtyTotal = activeOffreLines.reduce((s: number, l: any) => s + (l.product_uom_qty || 0), 0);
-  // Commandes trouvées uniquement via note (pas de ligne offre)
-  const noteOnlyOrderIds = orderIds.filter(id => !orderIdsFromLines.has(id));
+  const noteOnlyOrderIds: number[] = [];
 
   if (!orderIds.length) {
     return { caTotal: 0, qtyTotal: 0, produits: [], delegues: [], debugOrders: [], error: null };
@@ -221,7 +208,50 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre, filter: 
   return { caTotal, qtyTotal, produits, delegues, debugOrders, error: null };
 }
 
+// Catch-all : commandes avec codeInterne dans la note mais PAS dans les offres listées
+async function fetchCatchall(
+  session: odoo.OdooSession,
+  codeInterne: string,
+  excludeOrderIds: number[],
+  filter: StateFilter
+): Promise<Omit<OffreAnalyse, "offre" | "loading">> {
+  const states = statesDomain(filter);
+  const noteOrders = await odoo.searchRead(session, "sale.order",
+    [["x_note_interne", "ilike", codeInterne.trim()], ["state", "in", states]],
+    ["id", "name", "user_id"], 0
+  );
+  const excludeSet = new Set(excludeOrderIds);
+  const orphans = noteOrders.filter((o: any) => !excludeSet.has(o.id));
+  if (!orphans.length) return { caTotal: 0, qtyTotal: 0, produits: [], delegues: [], debugOrders: [], error: null };
 
+  const orphanIds = orphans.map((o: any) => o.id as number);
+  const debugOrders = orphans.map((o: any) => ({ id: o.id, name: `${o.name} (note)` }));
+
+  const lines = await odoo.searchRead(session, "sale.order.line",
+    [["order_id", "in", orphanIds], ["display_type", "=", false], ["is_downpayment", "=", false]],
+    ["order_id", "product_id", "product_uom_qty", "price_subtotal", "state"], 0
+  );
+  const activeLines = lines.filter((l: any) => l.state !== "cancel");
+  const caTotal = activeLines.reduce((s: number, l: any) => s + (l.price_subtotal || 0), 0);
+
+  const userMap: Record<number, { name: string; qty: number; ca: number }> = {};
+  for (const o of orphans) {
+    if (!o.user_id) continue;
+    const uid = o.user_id[0];
+    if (!userMap[uid]) userMap[uid] = { name: o.user_id[1], qty: 0, ca: 0 };
+  }
+  for (const l of activeLines) {
+    const o = orphans.find((x: any) => x.id === l.order_id[0]);
+    if (!o?.user_id) continue;
+    const uid = o.user_id[0];
+    if (userMap[uid]) { userMap[uid].qty += l.product_uom_qty || 0; userMap[uid].ca += l.price_subtotal || 0; }
+  }
+  const delegues: DelegueCA[] = Object.entries(userMap)
+    .map(([uid, v]) => ({ userId: Number(uid), name: v.name, qtyVendue: v.qty, ca: v.ca }))
+    .sort((a, b) => b.ca - a.ca);
+
+  return { caTotal, qtyTotal: orphanIds.length, produits: [], delegues, debugOrders, error: null };
+}
 
 // ── Formatage ────────────────────────────────────────────────────────────────
 function fmtCA(n: number) {
@@ -433,9 +463,17 @@ async function exportToExcel(results: OffreAnalyse[], onToast: Props["onToast"],
 // ═══════════════════════════════════════════════════════════════════════════
 // ONGLET ANALYSE
 // ═══════════════════════════════════════════════════════════════════════════
+// Résultat catch-all par codeInterne
+interface CatchallResult {
+  codeInterne: string;
+  loading: boolean;
+  data: Omit<OffreAnalyse, "offre" | "loading"> | null;
+}
+
 function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; onToast: Props["onToast"]; filter: StateFilter }) {
   const [configOffres, setConfigOffres] = useState<Offre[]>([]);
   const [results, setResults] = useState<OffreAnalyse[]>([]);
+  const [catchalls, setCatchalls] = useState<CatchallResult[]>([]);
   const [inputVal, setInputVal] = useState("");
   const [globalLoading, setGlobalLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -490,8 +528,38 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
       }
     }));
 
+    // Calcul catch-all après toutes les offres
+    await runCatchalls();
+
     if (validCodes.length > 1) onToast(`${validCodes.length} offres analysées`, "success");
     inputRef.current?.focus();
+  };
+
+  const runCatchalls = async () => {
+    // Récupère tous les orderId déjà assignés à des offres individuelles
+    const allOrderIds = (await new Promise<number[]>(resolve => {
+      setResults(prev => {
+        const ids = prev.flatMap(r => (r.debugOrders || []).map(o => o.id));
+        resolve(ids);
+        return prev;
+      });
+    }));
+    // Groupe par codeInterne unique
+    const allOffres = loadOffres();
+    const codesInternes = Array.from(new Set(
+      allOffres.filter(o => o.codeInterne?.trim()).map(o => o.codeInterne!.trim())
+    ));
+    if (!codesInternes.length) return;
+
+    setCatchalls(codesInternes.map(ci => ({ codeInterne: ci, loading: true, data: null })));
+    await Promise.all(codesInternes.map(async ci => {
+      try {
+        const data = await fetchCatchall(session, ci, allOrderIds, filter);
+        setCatchalls(prev => prev.map(c => c.codeInterne === ci ? { ...c, loading: false, data } : c));
+      } catch {
+        setCatchalls(prev => prev.map(c => c.codeInterne === ci ? { ...c, loading: false, data: null } : c));
+      }
+    }));
   };
 
   const removeResult = (code: string) => setResults(prev => prev.filter(r => r.offre.code !== code));
@@ -507,6 +575,7 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
         setResults(prev => prev.map(x => x.offre.code === r.offre.code ? { ...x, loading: false, error: e.message || "Erreur" } : x));
       }
     }));
+    await runCatchalls();
     setGlobalLoading(false);
     onToast("Données actualisées", "success");
   };
@@ -749,6 +818,46 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
           })}
         </div>
       )}
+
+      {/* ── Sections catch-all par codeInterne ── */}
+      {catchalls.map(c => {
+        const d = c.data;
+        if (!c.loading && (!d || (d.qtyTotal === 0 && d.caTotal === 0))) return null;
+        return (
+          <div key={c.codeInterne} style={{ marginTop: 12, border: `1.5px dashed ${C.orange}`, borderRadius: 14, overflow: "hidden", background: C.white }}>
+            <div style={{ padding: "12px 14px", borderBottom: `1px solid ${C.border}`, background: C.orangeSoft, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: C.orange }}>{c.codeInterne}</div>
+                <div style={{ fontSize: 11, color: C.orange, opacity: 0.8 }}>Commandes sans code offre spécifique (note interne uniquement)</div>
+              </div>
+              {c.loading && <div style={{ width: 16, height: 16, border: "2px solid " + C.orange, borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />}
+            </div>
+            {!c.loading && d && (
+              <div style={{ padding: "12px 14px" }}>
+                <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                  <div style={{ flex: 1, background: C.bg, borderRadius: 10, padding: "10px 12px" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, marginBottom: 4 }}>CA (lignes)</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: C.teal }}>{fmtCA(d.caTotal)}</div>
+                  </div>
+                  <div style={{ flex: 1, background: C.bg, borderRadius: 10, padding: "10px 12px" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, marginBottom: 4 }}>Commandes</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: C.orange }}>{d.qtyTotal}</div>
+                  </div>
+                </div>
+                {d.debugOrders && d.debugOrders.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 4 }}>
+                    {d.debugOrders.sort((a, b) => a.name.localeCompare(b.name)).map(o => (
+                      <span key={o.id} style={{ fontSize: 10, fontFamily: "monospace", background: C.orangeSoft, border: `1px solid ${C.orange}44`, borderRadius: 6, padding: "2px 6px", color: C.orange }}>
+                        {o.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
