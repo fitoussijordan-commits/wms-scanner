@@ -459,8 +459,8 @@ function ParametrageTab({ onToast }: { onToast: Props["onToast"] }) {
   );
 }
 
-// ── Export Excel via API Python (openpyxl + camemberts) ──────────────────────
-async function exportToExcel(results: OffreAnalyse[], onToast: Props["onToast"], setExporting: (v: boolean) => void) {
+// ── Export Excel (exceljs, Node.js) ──────────────────────────────────────────
+async function exportToExcel(results: OffreAnalyse[], catchalls: CatchallResult[], onToast: Props["onToast"], setExporting: (v: boolean) => void) {
   setExporting(true);
   try {
     const payload = {
@@ -473,6 +473,12 @@ async function exportToExcel(results: OffreAnalyse[], onToast: Props["onToast"],
           produits: r.produits,
           delegues: r.delegues,
           debugOrders: r.debugOrders ?? [],
+        })),
+      catchalls: catchalls
+        .filter(c => !c.loading && c.data)
+        .map(c => ({
+          codeInterne: c.codeInterne,
+          data: c.data,
         })),
     };
 
@@ -513,6 +519,7 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
   const [configOffres, setConfigOffres] = useState<Offre[]>([]);
   const [results, setResults] = useState<OffreAnalyse[]>([]);
   const [catchalls, setCatchalls] = useState<CatchallResult[]>([]);
+  const [pendingCodes, setPendingCodes] = useState<string[]>([]); // offres sélectionnées mais pas encore chargées
   const [inputVal, setInputVal] = useState("");
   const [globalLoading, setGlobalLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -526,58 +533,51 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
     return configOffres.find(o => o.code.toLowerCase() === code.trim().toLowerCase()) || null;
   }, [configOffres]);
 
-  const addCodes = async (raw: string) => {
+  // Ajoute à la liste d'attente (sans lancer le chargement)
+  const stageCodes = (raw: string) => {
     const codes = raw.split(/[\n\r,;]+/).map(r => r.trim()).filter(Boolean);
     if (!codes.length) return;
+    const alreadyLoaded = results.map(r => r.offre.code.toLowerCase());
+    const notFound = codes.filter(c => !findOffre(c));
+    if (notFound.length) { onToast(`Non configuré(es): ${notFound.join(", ")}`, "error"); }
+    const valid = codes.filter(c => findOffre(c) && !alreadyLoaded.includes(c.toLowerCase()) && !pendingCodes.includes(c));
+    if (valid.length) setPendingCodes(prev => [...prev, ...valid]);
+    setInputVal("");
+  };
 
-    const currentCodes = results.map(r => r.offre.code.toLowerCase());
-    const newCodes = codes.filter(c => !currentCodes.includes(c.toLowerCase()));
-    const skipped = codes.length - newCodes.length;
+  // Lance le chargement de TOUTES les offres en attente en une seule fois
+  const analyseAll = async () => {
+    if (!pendingCodes.length) return;
+    const codesToLoad = [...pendingCodes];
+    setPendingCodes([]);
+    setGlobalLoading(true);
 
-    if (!newCodes.length) {
-      onToast("Offres déjà analysées", "info");
-      setInputVal("");
-      return;
-    }
-
-    // Vérifier que les offres existent dans le paramétrage
-    const notFound = newCodes.filter(c => !findOffre(c));
-    if (notFound.length) {
-      onToast(`Non configuré(es): ${notFound.join(", ")} — va dans Paramétrage`, "error");
-      const found = newCodes.filter(c => findOffre(c));
-      if (!found.length) { setInputVal(""); return; }
-    }
-
-    const validCodes = newCodes.filter(c => findOffre(c));
-    const placeholders: OffreAnalyse[] = validCodes.map(code => ({
+    const placeholders: OffreAnalyse[] = codesToLoad.map(code => ({
       offre: findOffre(code)!,
       loading: true, error: null, caTotal: 0, qtyTotal: 0, produits: [], delegues: []
     }));
-
-    // Tracker local pour éviter les problèmes de timing React state
-    const localFinished: OffreAnalyse[] = [];
-
     setResults(prev => [...prev, ...placeholders]);
-    setInputVal("");
 
-    await Promise.all(validCodes.map(async code => {
+    const localFinished: OffreAnalyse[] = [];
+    await Promise.all(codesToLoad.map(async code => {
       const offre = findOffre(code)!;
       try {
         const data = await fetchCAForOffre(session, offre, filter);
         const finished: OffreAnalyse = { offre, loading: false, ...data };
         localFinished.push(finished);
-        setResults(prev => prev.map(r => r.offre.code === code ? { ...r, ...data, loading: false } : r));
+        setResults(prev => prev.map(r => r.offre.code === code ? finished : r));
       } catch (e: any) {
-        setResults(prev => prev.map(r => r.offre.code === code ? { ...r, loading: false, error: e.message || "Erreur Odoo" } : r));
+        const failed: OffreAnalyse = { offre, loading: false, error: e.message || "Erreur Odoo", caTotal: 0, qtyTotal: 0, produits: [], delegues: [] };
+        localFinished.push(failed);
+        setResults(prev => prev.map(r => r.offre.code === code ? failed : r));
       }
     }));
 
-    // Catch-all : combiner les offres déjà chargées + les nouvelles
-    // (si on ajoute les offres une par une, localFinished n'a que la dernière ajoutée)
-    const prevLoaded = results.filter(r => !r.loading && !r.error && !validCodes.includes(r.offre.code));
-    await runCatchalls([...prevLoaded, ...localFinished]);
-
-    if (validCodes.length > 1) onToast(`${validCodes.length} offres analysées`, "success");
+    // Catchall calculé UNE SEULE FOIS avec toutes les offres chargées
+    const prevLoaded = results.filter(r => !r.loading && !r.error);
+    await runCatchalls([...prevLoaded, ...localFinished.filter(r => !r.error)]);
+    setGlobalLoading(false);
+    onToast(`${localFinished.length} offre(s) analysée(s)`, "success");
     inputRef.current?.focus();
   };
 
@@ -642,30 +642,60 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
   const totalQty = results.filter(r => !r.loading && !r.error).reduce((s, r) => s + r.qtyTotal, 0);
   const hasResults = results.some(r => !r.loading && !r.error);
 
-  const allOffres = configOffres.filter(o => !results.some(r => r.offre.id === o.id));
+  // Offres dispo = non encore dans results ET non dans pendingCodes
+  const allOffres = configOffres.filter(o =>
+    !results.some(r => r.offre.id === o.id) && !pendingCodes.includes(o.code)
+  );
 
   return (
     <div style={{ paddingBottom: 40 }}>
       {/* Saisie */}
       <div style={{ background: C.white, border: `1.5px solid ${C.blue}`, borderRadius: 14, padding: 14, marginBottom: 16, boxShadow: `0 0 0 3px ${C.blueSoft}` }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 10 }}>Ajouter une offre à analyser</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 10 }}>Sélectionner les offres à analyser</div>
+
+        {/* Chips en attente */}
+        {pendingCodes.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 6, marginBottom: 10 }}>
+            {pendingCodes.map(code => {
+              const o = findOffre(code);
+              return (
+                <span key={code} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px", background: C.blueSoft, border: `1px solid ${C.blue}44`, borderRadius: 8, fontSize: 12, fontWeight: 600, color: C.blue }}>
+                  {code}{o?.label ? ` · ${o.label}` : ""}
+                  <button onClick={() => setPendingCodes(p => p.filter(c => c !== code))}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: C.blue, padding: 0, lineHeight: 1, fontSize: 14 }}>×</button>
+                </span>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Input + bouton Analyser */}
         <div style={{ display: "flex", gap: 8 }}>
           <input
             ref={inputRef}
             value={inputVal}
             onChange={e => setInputVal(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") addCodes(inputVal); }}
+            onKeyDown={e => { if (e.key === "Enter") { stageCodes(inputVal); } }}
             onPaste={e => {
               const pasted = e.clipboardData.getData("text");
-              if (/[\n\r,;]/.test(pasted)) { e.preventDefault(); addCodes(pasted); }
+              if (/[\n\r,;]/.test(pasted)) { e.preventDefault(); stageCodes(pasted); }
             }}
             placeholder="Code offre (ex: 7131482)…"
             autoFocus
             style={{ flex: 1, padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.bg, color: C.text, outline: "none" }}
           />
-          <button onClick={() => addCodes(inputVal)} disabled={!inputVal.trim()}
-            style={{ padding: "10px 16px", background: inputVal.trim() ? C.blue : C.border, color: inputVal.trim() ? "#fff" : C.textMuted, border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: inputVal.trim() ? "pointer" : "default", fontFamily: "inherit" }}>
-            + Ajouter
+          {inputVal.trim() && (
+            <button onClick={() => stageCodes(inputVal)}
+              style={{ padding: "10px 14px", background: C.bg, color: C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+              + Ajouter
+            </button>
+          )}
+          <button onClick={analyseAll} disabled={!pendingCodes.length || globalLoading}
+            style={{ padding: "10px 16px", background: pendingCodes.length && !globalLoading ? C.blue : C.border, color: pendingCodes.length && !globalLoading ? "#fff" : C.textMuted, border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: pendingCodes.length && !globalLoading ? "pointer" : "default", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+            {globalLoading
+              ? <><span style={{ width: 13, height: 13, borderRadius: "50%", border: "2px solid #fff4", borderTopColor: "#fff", display: "inline-block", animation: "spin 0.7s linear infinite" }} />Calcul…</>
+              : "▶ Analyser"
+            }
           </button>
         </div>
 
@@ -673,7 +703,7 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
         {allOffres.length > 0 && (
           <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap" as const, gap: 6 }}>
             {allOffres.map(o => (
-              <button key={o.id} onClick={() => addCodes(o.code)}
+              <button key={o.id} onClick={() => stageCodes(o.code)}
                 style={{ padding: "4px 10px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", color: C.text, fontFamily: "inherit" }}>
                 {o.code}{o.label ? ` · ${o.label}` : ""}
               </button>
@@ -704,7 +734,7 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
             )}
             {results.filter(r => !r.loading && !r.error).length > 0 && (
               <button
-                onClick={() => exportToExcel(results, onToast, setExporting)}
+                onClick={() => exportToExcel(results, catchalls, onToast, setExporting)}
                 disabled={exporting}
                 style={{ flex: 1, padding: "0 12px", background: exporting ? C.border : C.green, border: "none", borderRadius: 10, cursor: exporting ? "default" : "pointer", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 5, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
                 {exporting ? "…" : (
