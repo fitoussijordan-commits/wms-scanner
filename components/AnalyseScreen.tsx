@@ -556,8 +556,10 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
       }
     }));
 
-    // Catch-all basé sur les données fraîchement calculées (pas sur le state React)
-    await runCatchalls(localFinished);
+    // Catch-all : combiner les offres déjà chargées + les nouvelles
+    // (si on ajoute les offres une par une, localFinished n'a que la dernière ajoutée)
+    const prevLoaded = results.filter(r => !r.loading && !r.error && !validCodes.includes(r.offre.code));
+    await runCatchalls([...prevLoaded, ...localFinished]);
 
     if (validCodes.length > 1) onToast(`${validCodes.length} offres analysées`, "success");
     inputRef.current?.focus();
