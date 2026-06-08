@@ -1686,60 +1686,20 @@ export async function applyInventoryAdjustment(
   newQty: number,
   reason?: string
 ): Promise<void> {
-  await write(session, "stock.quant", [quantId], { inventory_quantity: newQty });
-  const actionResult = await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
+  const vals: any = { inventory_quantity: newQty };
 
-  if (!reason?.trim()) return;
+  // En Odoo 16, il faut écrire la raison SUR LE QUANT avant d'appliquer
+  // Le champ peut s'appeler inventory_adjustment_name ou inventory_reason selon la version
+  if (reason?.trim()) {
+    // On tente les deux noms de champ possibles — le write ignore les champs inconnus
+    // en renvoyant une erreur, donc on fait deux appels séparés avec try/catch
+    try { await write(session, "stock.quant", [quantId], { inventory_quantity: newQty, inventory_adjustment_name: reason.trim() }); }
+    catch { await write(session, "stock.quant", [quantId], vals); }
+  } else {
+    await write(session, "stock.quant", [quantId], vals);
+  }
 
-  // Stratégie 1 : utiliser le wizard retourné par action_apply_inventory (Odoo 17)
-  // Le résultat est une action Odoo : { res_model: 'stock.inventory.adjustment.name', res_id: ..., context: ... }
-  try {
-    const resModel = actionResult?.res_model;
-    if (resModel === "stock.inventory.adjustment.name") {
-      // Wizard déjà créé par Odoo — on met à jour son nom puis on l'applique
-      let wizardId: number | null = actionResult?.res_id || null;
-      if (!wizardId) {
-        // Pas de res_id → créer le wizard avec le contexte retourné
-        const ctx = actionResult?.context || {};
-        wizardId = await create(session, "stock.inventory.adjustment.name", {
-          inventory_adjustment_name: reason.trim(),
-          ...(ctx.default_quant_ids ? { quant_ids: ctx.default_quant_ids } : { quant_ids: [[6, 0, [quantId]]] }),
-        }) as number;
-      } else {
-        await write(session, "stock.inventory.adjustment.name", [wizardId], {
-          inventory_adjustment_name: reason.trim(),
-        });
-      }
-      await callMethod(session, "stock.inventory.adjustment.name", "action_apply", [[wizardId]]);
-      return;
-    }
-  } catch {}
-
-  // Stratégie 2 : écrire sur stock.move.line.reference directement (fallback)
-  try {
-    const lines = await searchRead(
-      session, "stock.move.line",
-      [["quant_id", "=", quantId], ["state", "=", "done"]],
-      ["id"], 5, "id desc"
-    );
-    if (lines.length) {
-      await write(session, "stock.move.line", lines.map((l: any) => l.id), { reference: reason.trim() });
-      return;
-    }
-  } catch {}
-
-  // Stratégie 3 : écrire sur stock.move.name (visible dans historique)
-  try {
-    const quants = await searchRead(session, "stock.quant", [["id", "=", quantId]], ["product_id", "location_id"], 1);
-    if (quants.length) {
-      const pid = quants[0].product_id?.[0]; const lid = quants[0].location_id?.[0];
-      const moves = await searchRead(session, "stock.move",
-        [["state", "=", "done"], ["product_id", "=", pid],
-         ["|", ["location_id", "=", lid], ["location_dest_id", "=", lid]]],
-        ["id"], 1, "id desc");
-      if (moves.length) await write(session, "stock.move", [moves[0].id], { name: reason.trim() });
-    }
-  } catch {}
+  await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 }
 
 // Create a new quant (for products with 0 stock not yet in a location)
