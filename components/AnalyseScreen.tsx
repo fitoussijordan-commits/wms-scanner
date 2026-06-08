@@ -48,7 +48,7 @@ interface OffreAnalyse {
   qtyTotal: number;
   produits: ProduitCA[];
   delegues: DelegueCA[];
-  debugOrders?: { id: number; name: string }[];
+  debugOrders?: { id: number; name: string; partnerName?: string }[];
 }
 
 interface Props {
@@ -122,10 +122,11 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre, filter: 
 
   // 3. Debug : liste des commandes (avec tag source)
   const ords = await odoo.searchRead(session, "sale.order",
-    [["id", "in", orderIds]], ["id", "name"], orderIds.length);
-  const debugOrders: { id: number; name: string }[] = ords.map((o: any) => ({
+    [["id", "in", orderIds]], ["id", "name", "partner_id"], orderIds.length);
+  const debugOrders: { id: number; name: string; partnerName?: string }[] = ords.map((o: any) => ({
     id: o.id,
     name: noteOnlyOrderIds.includes(o.id) ? `${o.name} (note)` : o.name,
+    partnerName: o.partner_id ? o.partner_id[1] : undefined,
   }));
 
   // 4. Résoudre les produits composants (paramétrage)
@@ -219,7 +220,7 @@ async function fetchCatchall(
   const states = statesDomain(filter);
   const noteOrders = await odoo.searchRead(session, "sale.order",
     [["x_note_interne", "ilike", codeInterne.trim()], ["state", "in", states]],
-    ["id", "name", "user_id"], 0
+    ["id", "name", "user_id", "partner_id"], 0
   );
   const excludeSet = new Set(excludeOrderIds);
   let orphans = noteOrders.filter((o: any) => !excludeSet.has(o.id));
@@ -238,7 +239,7 @@ async function fetchCatchall(
   if (!orphans.length) return { caTotal: 0, qtyTotal: 0, produits: [], delegues: [], debugOrders: [], error: null };
 
   const orphanIds = orphans.map((o: any) => o.id as number);
-  const debugOrders = orphans.map((o: any) => ({ id: o.id, name: `${o.name} (note)` }));
+  const debugOrders = orphans.map((o: any) => ({ id: o.id, name: `${o.name} (note)`, partnerName: o.partner_id ? o.partner_id[1] : undefined }));
 
   const lines = await odoo.searchRead(session, "sale.order.line",
     [["order_id", "in", orphanIds], ["display_type", "=", false], ["is_downpayment", "=", false]],
@@ -802,13 +803,15 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
                 {!r.loading && !r.error && isExpanded && detailMode[r.offre.id] === "debug" && (
                   <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg, padding: "12px 14px" }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: C.orange, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>
-                      {r.debugOrders?.length} commandes incluses — compare avec Odoo pour trouver l'écart
+                      {r.debugOrders?.length} commandes incluses
                     </div>
-                    <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 5 }}>
+                    <div style={{ display: "flex", flexDirection: "column" as const, gap: 4 }}>
                       {(r.debugOrders ?? []).sort((a, b) => a.name.localeCompare(b.name)).map(o => (
-                        <span key={o.id} style={{ fontSize: 11, fontFamily: "monospace", background: C.white, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 8px", color: C.textSec }}>
-                          {o.name}
-                        </span>
+                        <a key={o.id} href={`https://wala-prod.odoo.com/web#id=${o.id}&menu_id=178&cids=1&action=301&model=sale.order&view_type=form`} target="_blank" rel="noreferrer"
+                          style={{ display: "flex", flexDirection: "column" as const, padding: "7px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, textDecoration: "none", gap: 1 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{o.name}</span>
+                          {o.partnerName && <span style={{ fontSize: 11, color: C.textMuted }}>{o.partnerName}</span>}
+                        </a>
                       ))}
                     </div>
                   </div>
@@ -915,11 +918,13 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
             {/* Détail commandes */}
             {!c.loading && d && isExp && mode === "debug" && (
               <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg, padding: "12px 14px" }}>
-                <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 5 }}>
+                <div style={{ display: "flex", flexDirection: "column" as const, gap: 4 }}>
                   {(d.debugOrders ?? []).sort((a, b) => a.name.localeCompare(b.name)).map(o => (
-                    <span key={o.id} style={{ fontSize: 11, fontFamily: "monospace", background: C.white, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 8px", color: C.textSec }}>
-                      {o.name}
-                    </span>
+                    <a key={o.id} href={`https://wala-prod.odoo.com/web#id=${o.id}&menu_id=178&cids=1&action=301&model=sale.order&view_type=form`} target="_blank" rel="noreferrer"
+                      style={{ display: "flex", flexDirection: "column" as const, padding: "7px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, textDecoration: "none", gap: 1 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: C.blue, fontFamily: "monospace" }}>{o.name}</span>
+                      {o.partnerName && <span style={{ fontSize: 11, color: C.textMuted }}>{o.partnerName}</span>}
+                    </a>
                   ))}
                 </div>
               </div>
