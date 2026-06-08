@@ -213,6 +213,7 @@ async function fetchCatchall(
   session: odoo.OdooSession,
   codeInterne: string,
   excludeOrderIds: number[],
+  excludeOfferCodes: string[],
   filter: StateFilter
 ): Promise<Omit<OffreAnalyse, "offre" | "loading">> {
   const states = statesDomain(filter);
@@ -221,7 +222,19 @@ async function fetchCatchall(
     ["id", "name", "user_id"], 0
   );
   const excludeSet = new Set(excludeOrderIds);
-  const orphans = noteOrders.filter((o: any) => !excludeSet.has(o.id));
+  let orphans = noteOrders.filter((o: any) => !excludeSet.has(o.id));
+
+  // Double-protection : exclure aussi les commandes qui ont une ligne avec un produit offre connu
+  // (évite les doublons quand la ligne offre est annulée ou filtrée côté offre principale)
+  if (orphans.length > 0 && excludeOfferCodes.length > 0) {
+    const orphanIds = orphans.map((o: any) => o.id as number);
+    const offerLines = await odoo.searchRead(session, "sale.order.line",
+      [["order_id", "in", orphanIds], ["product_id.default_code", "in", excludeOfferCodes], ["display_type", "=", false]],
+      ["order_id"], 0
+    );
+    const ordersWithOfferLines = new Set(offerLines.map((l: any) => l.order_id[0] as number));
+    orphans = orphans.filter((o: any) => !ordersWithOfferLines.has(o.id));
+  }
   if (!orphans.length) return { caTotal: 0, qtyTotal: 0, produits: [], delegues: [], debugOrders: [], error: null };
 
   const orphanIds = orphans.map((o: any) => o.id as number);
@@ -515,6 +528,9 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
       loading: true, error: null, caTotal: 0, qtyTotal: 0, produits: [], delegues: []
     }));
 
+    // Tracker local pour éviter les problèmes de timing React state
+    const localFinished: OffreAnalyse[] = [];
+
     setResults(prev => [...prev, ...placeholders]);
     setInputVal("");
 
@@ -522,17 +538,16 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
       const offre = findOffre(code)!;
       try {
         const data = await fetchCAForOffre(session, offre, filter);
+        const finished: OffreAnalyse = { offre, loading: false, ...data };
+        localFinished.push(finished);
         setResults(prev => prev.map(r => r.offre.code === code ? { ...r, ...data, loading: false } : r));
       } catch (e: any) {
         setResults(prev => prev.map(r => r.offre.code === code ? { ...r, loading: false, error: e.message || "Erreur Odoo" } : r));
       }
     }));
 
-    // Calcul catch-all uniquement sur les offres actuellement dans les résultats
-    const currentResults = await new Promise<OffreAnalyse[]>(resolve => {
-      setResults(prev => { resolve(prev); return prev; });
-    });
-    await runCatchalls(currentResults);
+    // Catch-all basé sur les données fraîchement calculées (pas sur le state React)
+    await runCatchalls(localFinished);
 
     if (validCodes.length > 1) onToast(`${validCodes.length} offres analysées`, "success");
     inputRef.current?.focus();
@@ -550,10 +565,13 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
     // IDs des commandes déjà assignées aux offres individuelles
     const allOrderIds = currentResults.flatMap(r => (r.debugOrders || []).map(o => o.id));
 
+    // Codes produits de toutes les offres connues → pour double-protection anti-doublon
+    const allOfferCodes = currentResults.map(r => r.offre.code);
+
     setCatchalls(codesInternes.map(ci => ({ codeInterne: ci, loading: true, data: null })));
     await Promise.all(codesInternes.map(async ci => {
       try {
-        const data = await fetchCatchall(session, ci, allOrderIds, filter);
+        const data = await fetchCatchall(session, ci, allOrderIds, allOfferCodes, filter);
         setCatchalls(prev => prev.map(c => c.codeInterne === ci ? { ...c, loading: false, data } : c));
       } catch {
         setCatchalls(prev => prev.map(c => c.codeInterne === ci ? { ...c, loading: false, data: null } : c));
@@ -574,15 +592,20 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
   const refreshAll = async () => {
     setGlobalLoading(true);
     setResults(prev => prev.map(r => ({ ...r, loading: true, error: null, delegues: [] })));
+    const refreshed: OffreAnalyse[] = [];
     await Promise.all(results.map(async r => {
       try {
         const data = await fetchCAForOffre(session, r.offre, filter);
-        setResults(prev => prev.map(x => x.offre.code === r.offre.code ? { ...x, ...data, loading: false } : x));
+        const finished: OffreAnalyse = { ...r, ...data, loading: false };
+        refreshed.push(finished);
+        setResults(prev => prev.map(x => x.offre.code === r.offre.code ? finished : x));
       } catch (e: any) {
-        setResults(prev => prev.map(x => x.offre.code === r.offre.code ? { ...x, loading: false, error: e.message || "Erreur" } : x));
+        const failed: OffreAnalyse = { ...r, loading: false, error: e.message || "Erreur" };
+        refreshed.push(failed);
+        setResults(prev => prev.map(x => x.offre.code === r.offre.code ? failed : x));
       }
     }));
-    await runCatchalls(results);
+    await runCatchalls(refreshed); // utilise les données fraîches, pas le state périmé
     setGlobalLoading(false);
     onToast("Données actualisées", "success");
   };
