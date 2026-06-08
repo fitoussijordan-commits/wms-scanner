@@ -1686,13 +1686,22 @@ export async function applyInventoryAdjustment(
   newQty: number,
   reason?: string
 ): Promise<void> {
-  // Toujours écrire la quantité seule (compatible toutes versions Odoo)
   await write(session, "stock.quant", [quantId], { inventory_quantity: newQty });
-  // inventory_reason n'existe que sur Odoo 16+ — on tente silencieusement
-  if (reason?.trim()) {
-    try { await write(session, "stock.quant", [quantId], { inventory_reason: reason.trim() }); } catch {}
-  }
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
+
+  // Écrire la raison via le wizard stock.inventory.adjustment.name (Odoo 17+)
+  if (reason?.trim()) {
+    try {
+      const wizardId = await create(session, "stock.inventory.adjustment.name", {
+        inventory_adjustment_name: reason.trim(),
+        quant_ids: [[6, 0, [quantId]]],
+      });
+      await callMethod(session, "stock.inventory.adjustment.name", "action_apply", [[wizardId]]);
+    } catch {
+      // Modèle absent (Odoo < 17) — on tente inventory_reason en fallback
+      try { await write(session, "stock.quant", [quantId], { inventory_reason: reason.trim() }); } catch {}
+    }
+  }
 }
 
 // Create a new quant (for products with 0 stock not yet in a location)
@@ -1710,11 +1719,19 @@ export async function createInventoryAdjustment(
     inventory_quantity: newQty,
   };
   if (lotId) vals.lot_id = lotId;
-  const quantId = await create(session, "stock.quant", vals);
-  if (reason?.trim()) {
-    try { await write(session, "stock.quant", [quantId], { inventory_reason: reason.trim() }); } catch {}
-  }
+  const quantId = await create(session, "stock.quant", vals) as number;
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
+  if (reason?.trim()) {
+    try {
+      const wizardId = await create(session, "stock.inventory.adjustment.name", {
+        inventory_adjustment_name: reason.trim(),
+        quant_ids: [[6, 0, [quantId]]],
+      });
+      await callMethod(session, "stock.inventory.adjustment.name", "action_apply", [[wizardId]]);
+    } catch {
+      try { await write(session, "stock.quant", [quantId], { inventory_reason: reason.trim() }); } catch {}
+    }
+  }
 }
 
 // Tous les emplacements avec stock négatif (pour corrections)
