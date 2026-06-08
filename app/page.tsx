@@ -5659,11 +5659,30 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         {/* Liste commandes */}
         {pending.map((p: any) => {
           const isSelected = waveOrders.has(p.order_number);
+
+          // Détection manquants : items avec match Odoo mais sans stock disponible
+          const chariotList = chariotSkus.length > 0 ? chariotSkus : getChariotSkusLocal();
+          const missingItems = (p.parcel_items || []).filter((item: any) => {
+            const val = parseFloat(item.value || "0");
+            const sku = (item.sku || "").toLowerCase();
+            if (val < 0 || sku.startsWith("offre_") || item.description === "Bon de réduction") return false;
+            const match = matchData[item.sku];
+            if (!match) return false; // produit inconnu → pas d'alerte (peut être normal)
+            const isChariot = chariotList.some((ex: string) => {
+              const el = ex.toLowerCase();
+              return el === (item.sku || "").toLowerCase() || el === (match.default_code || "").toLowerCase();
+            });
+            if (isChariot) return false; // chariot items : pas d'alerte (stock non suivi par emplacement)
+            const loc = locationData[match.product_id];
+            return !loc || (loc.quantity ?? 0) <= 0; // pas de stock Odoo
+          });
+          const hasShortage = missingItems.length > 0;
+
           return (
             <div
               key={p.id}
               onClick={() => waveSelectMode ? toggleWaveOrder(p.order_number) : openPrepOrder(p)}
-              style={{ ...cardStyle, marginBottom: 8, padding: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10, background: isSelected ? "#fce7f3" : C.white, border: `1.5px solid ${isSelected ? "#db2777" : C.border}` }}
+              style={{ ...cardStyle, marginBottom: 8, padding: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10, background: isSelected ? "#fce7f3" : C.white, border: `1.5px solid ${isSelected ? "#db2777" : hasShortage ? "#ef4444" : C.border}` }}
             >
               {waveSelectMode && (
                 <div style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${isSelected ? "#db2777" : C.border}`, background: isSelected ? "#db2777" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -5671,9 +5690,21 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                 </div>
               )}
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{p.order_number}</div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
+                  {p.order_number}
+                  {hasShortage && (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="#ef4444" stroke="none">
+                      <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                      <line x1="12" y1="9" x2="12" y2="13" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
+                      <line x1="12" y1="17" x2="12.01" y2="17" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
+                    </svg>
+                  )}
+                </div>
                 <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
-                <div style={{ fontSize: 11, color: C.textMuted }}>{(p.parcel_items || []).length} article(s)</div>
+                <div style={{ fontSize: 11, color: hasShortage ? "#ef4444" : C.textMuted }}>
+                  {(p.parcel_items || []).length} article(s)
+                  {hasShortage && ` · ⚠ ${missingItems.length} manquant${missingItems.length > 1 ? "s" : ""}`}
+                </div>
               </div>
               {!waveSelectMode && <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>}
             </div>
