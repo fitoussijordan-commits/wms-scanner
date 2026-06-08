@@ -515,7 +515,13 @@ interface CatchallResult {
   data: Omit<OffreAnalyse, "offre" | "loading"> | null;
 }
 
-function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; onToast: Props["onToast"]; filter: StateFilter }) {
+function AnalyseTab({ session, onToast, filter, sharedCodes, onCodesChange }: {
+  session: odoo.OdooSession;
+  onToast: Props["onToast"];
+  filter: StateFilter;
+  sharedCodes: string[];
+  onCodesChange: (codes: string[]) => void;
+}) {
   const [configOffres, setConfigOffres] = useState<Offre[]>([]);
   const [results, setResults] = useState<OffreAnalyse[]>([]);
   const [catchalls, setCatchalls] = useState<CatchallResult[]>([]);
@@ -528,6 +534,15 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { setConfigOffres(loadOffres()); }, []);
+
+  // Auto-charger les offres partagées depuis l'onglet précédent
+  useEffect(() => {
+    if (sharedCodes.length > 0 && configOffres.length > 0) {
+      const valid = sharedCodes.filter(c => configOffres.some(o => o.code.toLowerCase() === c.toLowerCase()));
+      if (valid.length > 0) setPendingCodes(valid);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configOffres]); // se déclenche une fois que configOffres est chargé
 
   const findOffre = useCallback((code: string): Offre | null => {
     return configOffres.find(o => o.code.toLowerCase() === code.trim().toLowerCase()) || null;
@@ -577,6 +592,9 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
     const prevLoaded = results.filter(r => !r.loading && !r.error);
     await runCatchalls([...prevLoaded, ...localFinished.filter(r => !r.error)]);
     setGlobalLoading(false);
+    // Notifier le parent des codes actuellement chargés (pour partage entre onglets)
+    const allLoaded = [...prevLoaded.map(r => r.offre.code), ...localFinished.filter(r => !r.error).map(r => r.offre.code)];
+    onCodesChange(allLoaded);
     onToast(`${localFinished.length} offre(s) analysée(s)`, "success");
     inputRef.current?.focus();
   };
@@ -622,6 +640,7 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
     setCatchalls([]);
     setPendingCodes([]);
     setExpandedId(null);
+    onCodesChange([]);
   };
 
   const refreshAll = async () => {
@@ -1040,6 +1059,7 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
 // ═══════════════════════════════════════════════════════════════════════════
 export default function AnalyseScreen({ session, onBack, onToast }: Props) {
   const [tab, setTab] = useState<"all" | "avenir" | "valide" | "parametrage">("all");
+  const [sharedCodes, setSharedCodes] = useState<string[]>([]);
 
   const TABS: [string, string, string][] = [
     ["all",        "📊 Tout",      C.blue],
@@ -1079,7 +1099,8 @@ export default function AnalyseScreen({ session, onBack, onToast }: Props) {
       {tab === "parametrage" ? (
         <ParametrageTab onToast={onToast} />
       ) : (
-        <AnalyseTab key={tab} session={session} onToast={onToast} filter={tab as StateFilter} />
+        <AnalyseTab key={tab} session={session} onToast={onToast} filter={tab as StateFilter}
+          sharedCodes={sharedCodes} onCodesChange={setSharedCodes} />
       )}
     </div>
   );
