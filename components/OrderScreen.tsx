@@ -726,11 +726,11 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
                   const isApplying = applyingMea === t.id;
                   const lineCount = t.sale_order_template_line_ids?.length || 0;
                   return (
-                    <div key={t.id} style={{ height: 110, background: C.white, borderRadius: 10, border: `1px solid ${isApplying ? C.teal : C.border}`, boxShadow: C.shadow, display: "flex", alignItems: "center", gap: 14, padding: "0 16px", transition: "border-color 0.15s" }}>
+                    <div key={t.id} style={{ minHeight: 90, background: C.white, borderRadius: 10, border: `1px solid ${isApplying ? C.teal : C.border}`, boxShadow: C.shadow, display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", transition: "border-color 0.15s" }}>
                       {/* Infos */}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 11, color: C.muted, marginBottom: 3 }}>{lineCount} produit{lineCount > 1 ? "s" : ""}</div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, lineHeight: 1.35, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const }}>{t.name}</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, lineHeight: 1.35, overflowWrap: "anywhere" as const }}>{t.name}</div>
                       </div>
                       {/* Bouton */}
                       <button
