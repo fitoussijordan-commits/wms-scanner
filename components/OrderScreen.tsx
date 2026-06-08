@@ -462,6 +462,22 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
   const searchInput = useRef<HTMLInputElement>(null);
   const searchTimer = useRef<any>(null);
 
+  // ── Zoom image produit ─────────────────────────────────────────────────────
+  const [zoom, setZoom] = useState<any>(null);          // produit affiché en grand
+  const [zoomImg, setZoomImg] = useState<string>("");   // base64 image_1024
+  const [zoomLoading, setZoomLoading] = useState(false);
+
+  const openZoom = async (p: any) => {
+    setZoom(p);
+    setZoomImg("");
+    setZoomLoading(true);
+    try {
+      const r = await odoo.searchRead(session, "product.product", [["id", "=", p.id]], ["image_1024"], 1);
+      setZoomImg(r?.[0]?.image_1024 || "");
+    } catch {}
+    setZoomLoading(false);
+  };
+
   // ── MEA / Offres ─────────────────────────────────────────────────────────
   const MEA_CAT_ID = "__mea__";
   const [meaTemplates, setMeaTemplates] = useState<any[]>([]);
@@ -776,8 +792,11 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
                 const hasDiscount = priceItems.length > 0 && Math.abs(clientPrice - (p.lst_price || 0)) > 0.01;
                 return (
                   <div key={p.id} style={{ background: C.white, borderRadius: 14, overflow: "hidden", border: `2px solid ${qty > 0 ? C.teal : isFree ? C.green : C.border}`, boxShadow: qty > 0 ? `0 0 0 3px ${C.tealSoft}` : C.shadow, transition: "all 0.15s" }}>
-                    <div style={{ height: 80, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" as const }}>
+                    <div onClick={() => openZoom(p)} title="Agrandir l'image" style={{ height: 80, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" as const, cursor: "zoom-in" }}>
                       {p.image_128 ? <img src={`data:image/png;base64,${p.image_128}`} alt="" style={{ height: 72, objectFit: "contain" }} /> : <div style={{ fontSize: 32 }}>📦</div>}
+                      <div style={{ position: "absolute", bottom: 4, right: 4, background: "rgba(255,255,255,0.85)", borderRadius: 6, width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2.5"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/></svg>
+                      </div>
                       {isFree && <div style={{ position: "absolute", top: 5, right: 5, background: C.green, color: "#fff", fontSize: 9, fontWeight: 700, borderRadius: 5, padding: "2px 5px" }}>OFFERT</div>}
                       {qty > 0 && <div style={{ position: "absolute", top: 5, left: 5, background: C.teal, color: "#fff", fontSize: 11, fontWeight: 800, borderRadius: 7, padding: "2px 7px" }}>{qty}</div>}
                     </div>
@@ -875,6 +894,46 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
           <div style={{ fontSize: 10, color: C.muted, textAlign: "center" as const, marginTop: 5 }}>Prix Odoo appliqués à la création</div>
         </div>
       </div>
+
+      {/* ── Modale zoom image ── */}
+      {zoom && (
+        <div onClick={() => setZoom(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: C.white, borderRadius: 16, maxWidth: 480, width: "100%", maxHeight: "90vh", overflow: "auto" as const, boxShadow: C.shadowXl, position: "relative" as const }}>
+            {/* Bouton fermer */}
+            <button onClick={() => setZoom(null)}
+              style={{ position: "absolute", top: 12, right: 12, width: 32, height: 32, borderRadius: "50%", background: C.bg, border: `1px solid ${C.border}`, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1 }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+            {/* Image */}
+            <div style={{ height: 340, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "16px 16px 0 0" }}>
+              {zoomLoading ? (
+                <span style={{ color: C.muted, fontSize: 13 }}>Chargement…</span>
+              ) : zoomImg ? (
+                <img src={`data:image/png;base64,${zoomImg}`} alt="" style={{ maxHeight: 320, maxWidth: "90%", objectFit: "contain" }} />
+              ) : zoom.image_128 ? (
+                <img src={`data:image/png;base64,${zoom.image_128}`} alt="" style={{ maxHeight: 200, maxWidth: "90%", objectFit: "contain" }} />
+              ) : (
+                <div style={{ fontSize: 64 }}>📦</div>
+              )}
+            </div>
+            {/* Infos */}
+            <div style={{ padding: "16px 20px 20px" }}>
+              <div style={{ fontSize: 11, color: C.muted, fontFamily: "monospace", marginBottom: 4 }}>{zoom.default_code}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: C.text, lineHeight: 1.35, marginBottom: 10 }}>{zoom.name}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: C.tealDark }}>
+                  {(() => { const cp = applyPricelist(zoom.lst_price || 0, zoom.id, zoom.product_tmpl_id?.[0] || 0, priceItems, cart[zoom.id]?.qty || 1); return cp > 0 ? fmtPrice(cp) : "—"; })()}
+                </span>
+                {(() => { const s = Math.max(0, Math.round(zoom.virtual_available || 0)); return (
+                  <span style={{ fontSize: 11, fontWeight: 600, color: s > 0 ? C.green : C.red, background: s > 0 ? C.greenSoft : C.redSoft, borderRadius: 6, padding: "3px 8px" }}>{s > 0 ? `${s} en stock` : "Rupture"}</span>
+                ); })()}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
