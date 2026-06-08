@@ -823,18 +823,21 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
       {catchalls.map(c => {
         const d = c.data;
         if (!c.loading && (!d || (d.qtyTotal === 0 && d.caTotal === 0))) return null;
+        const caKey = `catchall_${c.codeInterne}`;
+        const isExp = expandedId === caKey;
+        const mode = detailMode[caKey] || "delegues";
         return (
           <div key={c.codeInterne} style={{ marginTop: 12, border: `1.5px dashed ${C.orange}`, borderRadius: 14, overflow: "hidden", background: C.white }}>
             <div style={{ padding: "12px 14px", borderBottom: `1px solid ${C.border}`, background: C.orangeSoft, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 800, color: C.orange }}>{c.codeInterne}</div>
-                <div style={{ fontSize: 11, color: C.orange, opacity: 0.8 }}>Commandes sans code offre spécifique (note interne uniquement)</div>
+                <div style={{ fontSize: 11, color: C.orange, opacity: 0.8 }}>Commandes sans code offre spécifique (note interne)</div>
               </div>
               {c.loading && <div style={{ width: 16, height: 16, border: "2px solid " + C.orange, borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />}
             </div>
             {!c.loading && d && (
               <div style={{ padding: "12px 14px" }}>
-                <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
                   <div style={{ flex: 1, background: C.bg, borderRadius: 10, padding: "10px 12px" }}>
                     <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, marginBottom: 4 }}>CA (lignes)</div>
                     <div style={{ fontSize: 18, fontWeight: 800, color: C.teal }}>{fmtCA(d.caTotal)}</div>
@@ -844,15 +847,51 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
                     <div style={{ fontSize: 18, fontWeight: 800, color: C.orange }}>{d.qtyTotal}</div>
                   </div>
                 </div>
-                {d.debugOrders && d.debugOrders.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 4 }}>
-                    {d.debugOrders.sort((a, b) => a.name.localeCompare(b.name)).map(o => (
-                      <span key={o.id} style={{ fontSize: 10, fontFamily: "monospace", background: C.orangeSoft, border: `1px solid ${C.orange}44`, borderRadius: 6, padding: "2px 6px", color: C.orange }}>
-                        {o.name}
-                      </span>
-                    ))}
+                {/* Boutons détail */}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => { setExpandedId(isExp && mode === "delegues" ? null : caKey); setDetailMode(m => ({ ...m, [caKey]: "delegues" })); }}
+                    style={{ flex: 1, padding: "7px 0", background: isExp && mode === "delegues" ? C.purpleSoft : C.bg, border: `1px solid ${isExp && mode === "delegues" ? C.purple : C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, color: isExp && mode === "delegues" ? C.purple : C.textSec, fontFamily: "inherit" }}>
+                    👤 Délégués ({d.delegues.length})
+                  </button>
+                  <button onClick={() => { setExpandedId(isExp && mode === "debug" ? null : caKey); setDetailMode(m => ({ ...m, [caKey]: "debug" })); }}
+                    style={{ flex: 1, padding: "7px 0", background: isExp && mode === "debug" ? C.orangeSoft : C.bg, border: `1px solid ${isExp && mode === "debug" ? C.orange : C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, color: isExp && mode === "debug" ? C.orange : C.textSec, fontFamily: "inherit" }}>
+                    🔍 Commandes ({d.debugOrders?.length ?? 0})
+                  </button>
+                </div>
+              </div>
+            )}
+            {/* Détail délégués */}
+            {!c.loading && d && isExp && mode === "delegues" && (
+              <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg }}>
+                {d.delegues.length === 0 ? (
+                  <div style={{ padding: "12px 14px", color: C.textMuted, fontSize: 12, textAlign: "center" as const }}>Aucun délégué</div>
+                ) : d.delegues.map((del, i) => (
+                  <div key={del.userId} style={{ padding: "10px 14px", borderBottom: i < d.delegues.length - 1 ? `1px solid ${C.border}` : undefined, display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 16, background: C.purpleSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: C.purple }}>{del.name.split(" ").map((n: string) => n[0]).slice(0, 2).join("").toUpperCase()}</span>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{del.name}</div>
+                      <div style={{ fontSize: 11, color: C.textMuted }}>{del.qtyVendue} lignes</div>
+                    </div>
+                    <div style={{ textAlign: "right" as const }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: C.purple }}>{fmtCA(del.ca)}</div>
+                      <div style={{ fontSize: 10, color: C.textMuted }}>{Math.round((del.ca / (d.caTotal || 1)) * 100)}%</div>
+                    </div>
                   </div>
-                )}
+                ))}
+              </div>
+            )}
+            {/* Détail commandes */}
+            {!c.loading && d && isExp && mode === "debug" && (
+              <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg, padding: "12px 14px" }}>
+                <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 5 }}>
+                  {(d.debugOrders ?? []).sort((a, b) => a.name.localeCompare(b.name)).map(o => (
+                    <span key={o.id} style={{ fontSize: 11, fontFamily: "monospace", background: C.white, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 8px", color: C.textSec }}>
+                      {o.name}
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
           </div>
