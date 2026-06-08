@@ -79,14 +79,26 @@ function genId() {
 // L'offre est un produit "marqueur" dans la commande (souvent à 0€).
 // On trouve les commandes via ce produit, puis on somme le CA des composants.
 type StateFilter = "all" | "avenir" | "valide";
-function statesDomain(filter: StateFilter): string[] {
-  if (filter === "avenir") return ["sale"];
-  if (filter === "valide") return ["done"];
-  return ["sale", "done"];
+
+// Retourne les conditions de domaine Odoo pour filtrer les commandes selon le filtre
+// "avenir"  = confirmées, pas encore facturées
+// "valide"  = entièrement facturées (invoice_status = invoiced)
+// "all"     = toutes les commandes confirmées
+function filterDomain(filter: StateFilter): any[] {
+  if (filter === "avenir")  return [["state", "=", "sale"], ["invoice_status", "!=", "invoiced"]];
+  if (filter === "valide")  return [["state", "in", ["sale", "done"]], ["invoice_status", "=", "invoiced"]];
+  return [["state", "in", ["sale", "done"]]];
+}
+
+// Pour filtrer les lignes via order_id (sale.order.line domain)
+function orderLineDomain(filter: StateFilter): any[] {
+  if (filter === "avenir")  return [["order_id.state", "=", "sale"], ["order_id.invoice_status", "!=", "invoiced"]];
+  if (filter === "valide")  return [["order_id.state", "in", ["sale", "done"]], ["order_id.invoice_status", "=", "invoiced"]];
+  return [["order_id.state", "in", ["sale", "done"]]];
 }
 
 async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre, filter: StateFilter = "all"): Promise<Omit<OffreAnalyse, "offre" | "loading">> {
-  const states = statesDomain(filter);
+  const lineDomain = orderLineDomain(filter);
 
   // 1. Trouver le produit Odoo correspondant au code offre
   let offreProd = await odoo.searchRead(session, "product.product",
@@ -102,7 +114,7 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre, filter: 
   const offreLines = await odoo.searchRead(session, "sale.order.line",
     [
       ["product_id", "=", offreProductId],
-      ["order_id.state", "in", states],
+      ...lineDomain,
       ["display_type", "=", false],
       ["is_downpayment", "=", false],
     ],
@@ -217,9 +229,9 @@ async function fetchCatchall(
   excludeOfferCodes: string[],
   filter: StateFilter
 ): Promise<Omit<OffreAnalyse, "offre" | "loading">> {
-  const states = statesDomain(filter);
+  const orderDomain = filterDomain(filter);
   const noteOrders = await odoo.searchRead(session, "sale.order",
-    [["x_note_interne", "ilike", codeInterne.trim()], ["state", "in", states]],
+    [["x_note_interne", "ilike", codeInterne.trim()], ...orderDomain],
     ["id", "name", "user_id", "partner_id"], 0
   );
   const excludeSet = new Set(excludeOrderIds);
@@ -1078,7 +1090,7 @@ export default function AnalyseScreen({ session, onBack, onToast }: Props) {
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Analyse offres</div>
           <div style={{ fontSize: 12, color: C.textMuted }}>
-            {tab === "avenir" ? "Commandes confirmées non expédiées" : tab === "valide" ? "Commandes expédiées / finalisées" : "CA généré par offre via Odoo"}
+            {tab === "avenir" ? "Commandes confirmées, pas encore facturées" : tab === "valide" ? "Commandes entièrement facturées" : "CA généré par offre via Odoo"}
           </div>
         </div>
       </div>
