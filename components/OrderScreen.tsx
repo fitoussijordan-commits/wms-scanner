@@ -483,7 +483,7 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
       since.setFullYear(since.getFullYear() - 1);
       const sinceStr = since.toISOString().slice(0, 10);
       const lines = await odoo.searchRead(session, "sale.order.line",
-        [["order_partner_id", "=", client.id], ["product_id", "!=", false], ["create_date", ">=", sinceStr]],
+        [["order_partner_id", "=", client.id], ["product_id", "!=", false], ["create_date", ">=", sinceStr], ["state", "in", ["sale", "done"]]],
         ["product_id", "product_uom_qty", "create_date"],
         2000, "create_date desc");
       // Agrégation par produit : quantité totale, nb de commandes, dernière date
