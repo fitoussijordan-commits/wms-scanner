@@ -1686,9 +1686,12 @@ export async function applyInventoryAdjustment(
   newQty: number,
   reason?: string
 ): Promise<void> {
-  const vals: any = { inventory_quantity: newQty };
-  if (reason?.trim()) vals.inventory_reason = reason.trim();
-  await write(session, "stock.quant", [quantId], vals);
+  // Toujours écrire la quantité seule (compatible toutes versions Odoo)
+  await write(session, "stock.quant", [quantId], { inventory_quantity: newQty });
+  // inventory_reason n'existe que sur Odoo 16+ — on tente silencieusement
+  if (reason?.trim()) {
+    try { await write(session, "stock.quant", [quantId], { inventory_reason: reason.trim() }); } catch {}
+  }
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 }
 
@@ -1707,8 +1710,10 @@ export async function createInventoryAdjustment(
     inventory_quantity: newQty,
   };
   if (lotId) vals.lot_id = lotId;
-  if (reason?.trim()) vals.inventory_reason = reason.trim();
   const quantId = await create(session, "stock.quant", vals);
+  if (reason?.trim()) {
+    try { await write(session, "stock.quant", [quantId], { inventory_reason: reason.trim() }); } catch {}
+  }
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 }
 
