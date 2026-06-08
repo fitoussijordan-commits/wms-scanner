@@ -78,7 +78,15 @@ function genId() {
 // ── Odoo: récupérer le CA d'une offre ──────────────────────────────────────────
 // L'offre est un produit "marqueur" dans la commande (souvent à 0€).
 // On trouve les commandes via ce produit, puis on somme le CA des composants.
-async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise<Omit<OffreAnalyse, "offre" | "loading">> {
+type StateFilter = "all" | "avenir" | "valide";
+function statesDomain(filter: StateFilter): string[] {
+  if (filter === "avenir") return ["sale"];
+  if (filter === "valide") return ["done"];
+  return ["sale", "done"];
+}
+
+async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre, filter: StateFilter = "all"): Promise<Omit<OffreAnalyse, "offre" | "loading">> {
+  const states = statesDomain(filter);
 
   // 1. Trouver le produit Odoo correspondant au code offre
   let offreProd = await odoo.searchRead(session, "product.product",
@@ -94,7 +102,7 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
   const offreLines = await odoo.searchRead(session, "sale.order.line",
     [
       ["product_id", "=", offreProductId],
-      ["order_id.state", "in", ["sale", "done"]],
+      ["order_id.state", "in", states],
       ["display_type", "=", false],
       ["is_downpayment", "=", false],
     ],
@@ -104,11 +112,10 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
   const orderIdsFromLines = new Set<number>(activeOffreLines.map((l: any) => l.order_id[0] as number));
 
   // 2b. Commandes via note interne (x_note_interne)
-  // Uniquement si codeInterne est explicitement renseigné dans le paramétrage
   const orderIdsFromNote = new Set<number>();
   if (offre.codeInterne?.trim()) {
     const noteOrders = await odoo.searchRead(session, "sale.order",
-      [["x_note_interne", "ilike", offre.codeInterne.trim()], ["state", "in", ["sale", "done"]]],
+      [["x_note_interne", "ilike", offre.codeInterne.trim()], ["state", "in", states]],
       ["id"], 0
     );
     for (const o of noteOrders) orderIdsFromNote.add(o.id as number);
@@ -426,7 +433,7 @@ async function exportToExcel(results: OffreAnalyse[], onToast: Props["onToast"],
 // ═══════════════════════════════════════════════════════════════════════════
 // ONGLET ANALYSE
 // ═══════════════════════════════════════════════════════════════════════════
-function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: Props["onToast"] }) {
+function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; onToast: Props["onToast"]; filter: StateFilter }) {
   const [configOffres, setConfigOffres] = useState<Offre[]>([]);
   const [results, setResults] = useState<OffreAnalyse[]>([]);
   const [inputVal, setInputVal] = useState("");
@@ -476,7 +483,7 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
     await Promise.all(validCodes.map(async code => {
       const offre = findOffre(code)!;
       try {
-        const data = await fetchCAForOffre(session, offre);
+        const data = await fetchCAForOffre(session, offre, filter);
         setResults(prev => prev.map(r => r.offre.code === code ? { ...r, ...data, loading: false } : r));
       } catch (e: any) {
         setResults(prev => prev.map(r => r.offre.code === code ? { ...r, loading: false, error: e.message || "Erreur Odoo" } : r));
@@ -494,7 +501,7 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
     setResults(prev => prev.map(r => ({ ...r, loading: true, error: null, delegues: [] })));
     await Promise.all(results.map(async r => {
       try {
-        const data = await fetchCAForOffre(session, r.offre);
+        const data = await fetchCAForOffre(session, r.offre, filter);
         setResults(prev => prev.map(x => x.offre.code === r.offre.code ? { ...x, ...data, loading: false } : x));
       } catch (e: any) {
         setResults(prev => prev.map(x => x.offre.code === r.offre.code ? { ...x, loading: false, error: e.message || "Erreur" } : x));
@@ -752,7 +759,14 @@ function AnalyseTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
 // COMPOSANT PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════════
 export default function AnalyseScreen({ session, onBack, onToast }: Props) {
-  const [tab, setTab] = useState<"analyse" | "parametrage">("analyse");
+  const [tab, setTab] = useState<"all" | "avenir" | "valide" | "parametrage">("all");
+
+  const TABS: [string, string, string][] = [
+    ["all",        "📊 Tout",      C.blue],
+    ["avenir",     "🔜 À venir",   C.orange],
+    ["valide",     "✅ Validé",    C.green],
+    ["parametrage","⚙️ Config",    C.textMuted],
+  ];
 
   return (
     <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto", fontFamily: "'DM Sans', sans-serif" }}>
@@ -763,27 +777,29 @@ export default function AnalyseScreen({ session, onBack, onToast }: Props) {
         </button>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Analyse offres</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>CA généré par offre via Odoo</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>
+            {tab === "avenir" ? "Commandes confirmées non expédiées" : tab === "valide" ? "Commandes expédiées / finalisées" : "CA généré par offre via Odoo"}
+          </div>
         </div>
       </div>
 
       {/* Onglets */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 20, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: 4 }}>
-        {([["analyse", "📊 Analyse"], ["parametrage", "⚙️ Paramétrage"]] as const).map(([key, label]) => (
-          <button key={key} onClick={() => setTab(key)}
-            style={{ flex: 1, padding: "9px 0", border: "none", borderRadius: 9, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700, transition: "all 0.15s",
+      <div style={{ display: "flex", gap: 4, marginBottom: 20, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: 4 }}>
+        {TABS.map(([key, label, color]) => (
+          <button key={key} onClick={() => setTab(key as any)}
+            style={{ flex: 1, padding: "8px 0", border: "none", borderRadius: 9, cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700, transition: "all 0.15s",
               background: tab === key ? C.white : "transparent",
-              color: tab === key ? C.text : C.textMuted,
+              color: tab === key ? color : C.textMuted,
               boxShadow: tab === key ? C.shadow : "none" }}>
             {label}
           </button>
         ))}
       </div>
 
-      {tab === "analyse" ? (
-        <AnalyseTab session={session} onToast={onToast} />
-      ) : (
+      {tab === "parametrage" ? (
         <ParametrageTab onToast={onToast} />
+      ) : (
+        <AnalyseTab key={tab} session={session} onToast={onToast} filter={tab as StateFilter} />
       )}
     </div>
   );
