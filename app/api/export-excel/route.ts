@@ -119,8 +119,9 @@ function buildRecap(wb: ExcelJS.Workbook, results: any[], catchalls: any[]) {
     fmtEur(caCell);
   });
 
-  // Total
-  const totRow = ws.addRow(["TOTAL", "", { formula: `SUM(C5:C${4 + allRows.length})` }, { formula: `SUM(D5:D${4 + allRows.length})` }, "", ""]);
+  // Total — données démarrent ligne 6 (1=titre, 2=sous-titre, 3=spacer, 4=vide, 5=headers)
+  const dataEnd = 5 + allRows.length;
+  const totRow = ws.addRow(["TOTAL", "", { formula: `SUM(C6:C${dataEnd})` }, { formula: `SUM(D6:D${dataEnd})` }, "", ""]);
   totRow.height = 26;
   totRow.eachCell(cell => {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF" + TEAL } };
@@ -283,7 +284,7 @@ function buildToutesCommandes(wb: ExcelJS.Workbook, results: any[], catchalls: a
   ws.getRow(1).height = 34;
   ws.getRow(2).height = 6;
 
-  const hRow = ws.addRow(["Commande", "Client", "Offre / Note", "Libellé offre", "Type"]);
+  const hRow = ws.addRow(["Commande", "Client", "N° Offre", "Libellé offre", "Type"]);
   hRow.height = 22;
   hRow.eachCell(cell => {
     cell.font = { bold: true, color: { argb: "FF" + WHITE }, size: 10, name: "Calibri" };
@@ -292,7 +293,7 @@ function buildToutesCommandes(wb: ExcelJS.Workbook, results: any[], catchalls: a
     cell.border = { top: { style: "thin", color: { argb: "FFE5E7EB" } }, bottom: { style: "thin", color: { argb: "FFE5E7EB" } }, left: { style: "thin", color: { argb: "FFE5E7EB" } }, right: { style: "thin", color: { argb: "FFE5E7EB" } } };
   });
 
-  // Toutes les commandes dans une Map pour dédupliquer
+  // Collecter toutes les commandes (dédupliquées)
   const seen = new Set<string>();
   const allOrders: { name: string; partnerName: string; offreCode: string; offreLabel: string; type: string }[] = [];
 
@@ -301,7 +302,7 @@ function buildToutesCommandes(wb: ExcelJS.Workbook, results: any[], catchalls: a
       const cleanName = String(o.name).replace(" (note)", "");
       if (!seen.has(cleanName)) {
         seen.add(cleanName);
-        allOrders.push({ name: cleanName, partnerName: o.partnerName ?? "", offreCode: r.offre?.code ?? "", offreLabel: r.offre?.label ?? "", type: "Offre" });
+        allOrders.push({ name: cleanName, partnerName: o.partnerName ?? "", offreCode: String(r.offre?.code ?? ""), offreLabel: r.offre?.label ?? "", type: "Offre" });
       }
     }
   }
@@ -310,7 +311,7 @@ function buildToutesCommandes(wb: ExcelJS.Workbook, results: any[], catchalls: a
       const cleanName = String(o.name).replace(" (note)", "");
       if (!seen.has(cleanName)) {
         seen.add(cleanName);
-        allOrders.push({ name: cleanName, partnerName: o.partnerName ?? "", offreCode: c.codeInterne, offreLabel: "Note interne", type: "Note" });
+        allOrders.push({ name: cleanName, partnerName: o.partnerName ?? "", offreCode: String(c.codeInterne), offreLabel: "Note interne", type: "Note" });
       }
     }
   }
@@ -318,18 +319,24 @@ function buildToutesCommandes(wb: ExcelJS.Workbook, results: any[], catchalls: a
   allOrders.sort((a, b) => a.name.localeCompare(b.name));
 
   allOrders.forEach((o, i) => {
-    const bg = o.type === "Note" ? ORANGE_S : (i % 2 === 0 ? WHITE : LGRAY);
+    const isNote = o.type === "Note";
+    const bg = isNote ? ORANGE_S : (i % 2 === 0 ? WHITE : LGRAY);
     const row = ws.addRow([o.name, o.partnerName, o.offreCode, o.offreLabel, o.type]);
     row.height = 20;
     row.eachCell((cell, col) => {
-      dataCell(cell, cell.value, bg, col === 5 ? "center" : "left");
-      if (col === 5 && o.type === "Note") {
+      dataCell(cell, cell.value, bg, col === 3 ? "center" : col === 5 ? "center" : "left");
+      // N° offre : gras teal (offre) ou orange (note)
+      if (col === 3) {
+        cell.font = { bold: true, color: { argb: "FF" + (isNote ? ORANGE : TEAL) }, size: 10, name: "Calibri" };
+        cell.numFmt = "@"; // forcer texte pour éviter conversion numérique
+      }
+      if (col === 5 && isNote) {
         cell.font = { bold: true, color: { argb: "FF" + ORANGE }, size: 10, name: "Calibri" };
       }
     });
   });
 
-  ws.columns = [{ width: 14 }, { width: 40 }, { width: 16 }, { width: 36 }, { width: 10 }];
+  ws.columns = [{ width: 14 }, { width: 40 }, { width: 14 }, { width: 36 }, { width: 10 }];
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
