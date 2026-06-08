@@ -1686,34 +1686,60 @@ export async function applyInventoryAdjustment(
   newQty: number,
   reason?: string
 ): Promise<void> {
-  // Lire product_id + location_id avant d'appliquer (pour retrouver le move après)
-  let productId: number | null = null;
-  let locationId: number | null = null;
-  if (reason?.trim()) {
-    try {
-      const quants = await searchRead(session, "stock.quant", [["id", "=", quantId]], ["product_id", "location_id"], 1);
-      if (quants.length) { productId = quants[0].product_id?.[0]; locationId = quants[0].location_id?.[0]; }
-    } catch {}
-  }
-
   await write(session, "stock.quant", [quantId], { inventory_quantity: newQty });
-  await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
+  const actionResult = await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 
-  // Écrire la raison sur le stock.move créé par l'ajustement
-  if (reason?.trim() && productId && locationId) {
-    try {
-      // Cherche le move d'inventaire le plus récent pour ce produit/emplacement
-      const moves = await searchRead(
-        session, "stock.move",
-        [["state", "=", "done"], ["product_id", "=", productId],
-         ["|", ["location_id", "=", locationId], ["location_dest_id", "=", locationId]]],
-        ["id", "reference"], 1, "date desc"
-      );
-      if (moves.length) {
-        await write(session, "stock.move", [moves[0].id], { reference: reason.trim() });
+  if (!reason?.trim()) return;
+
+  // Stratégie 1 : utiliser le wizard retourné par action_apply_inventory (Odoo 17)
+  // Le résultat est une action Odoo : { res_model: 'stock.inventory.adjustment.name', res_id: ..., context: ... }
+  try {
+    const resModel = actionResult?.res_model;
+    if (resModel === "stock.inventory.adjustment.name") {
+      // Wizard déjà créé par Odoo — on met à jour son nom puis on l'applique
+      let wizardId: number | null = actionResult?.res_id || null;
+      if (!wizardId) {
+        // Pas de res_id → créer le wizard avec le contexte retourné
+        const ctx = actionResult?.context || {};
+        wizardId = await create(session, "stock.inventory.adjustment.name", {
+          inventory_adjustment_name: reason.trim(),
+          ...(ctx.default_quant_ids ? { quant_ids: ctx.default_quant_ids } : { quant_ids: [[6, 0, [quantId]]] }),
+        }) as number;
+      } else {
+        await write(session, "stock.inventory.adjustment.name", [wizardId], {
+          inventory_adjustment_name: reason.trim(),
+        });
       }
-    } catch {}
-  }
+      await callMethod(session, "stock.inventory.adjustment.name", "action_apply", [[wizardId]]);
+      return;
+    }
+  } catch {}
+
+  // Stratégie 2 : écrire sur stock.move.line.reference directement (fallback)
+  try {
+    const lines = await searchRead(
+      session, "stock.move.line",
+      [["quant_id", "=", quantId], ["state", "=", "done"]],
+      ["id"], 5, "id desc"
+    );
+    if (lines.length) {
+      await write(session, "stock.move.line", lines.map((l: any) => l.id), { reference: reason.trim() });
+      return;
+    }
+  } catch {}
+
+  // Stratégie 3 : écrire sur stock.move.name (visible dans historique)
+  try {
+    const quants = await searchRead(session, "stock.quant", [["id", "=", quantId]], ["product_id", "location_id"], 1);
+    if (quants.length) {
+      const pid = quants[0].product_id?.[0]; const lid = quants[0].location_id?.[0];
+      const moves = await searchRead(session, "stock.move",
+        [["state", "=", "done"], ["product_id", "=", pid],
+         ["|", ["location_id", "=", lid], ["location_dest_id", "=", lid]]],
+        ["id"], 1, "id desc");
+      if (moves.length) await write(session, "stock.move", [moves[0].id], { name: reason.trim() });
+    }
+  } catch {}
 }
 
 // Create a new quant (for products with 0 stock not yet in a location)
