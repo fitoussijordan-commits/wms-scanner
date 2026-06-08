@@ -104,15 +104,17 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
   const orderIdsFromLines = new Set<number>(activeOffreLines.map((l: any) => l.order_id[0] as number));
 
   // 2b. Commandes via note interne (x_note_interne)
-  // Utilise codeInterne si défini, sinon le code offre principal
-  const noteSearchCode = (offre.codeInterne?.trim() || offre.code.trim());
-  const noteOrders = await odoo.searchRead(session, "sale.order",
-    [["x_note_interne", "ilike", noteSearchCode], ["state", "in", ["sale", "done"]]],
-    ["id"], 0
-  );
-  const orderIdsFromNote = new Set<number>(noteOrders.map((o: any) => o.id as number));
+  // Uniquement si codeInterne est explicitement renseigné dans le paramétrage
+  const orderIdsFromNote = new Set<number>();
+  if (offre.codeInterne?.trim()) {
+    const noteOrders = await odoo.searchRead(session, "sale.order",
+      [["x_note_interne", "ilike", offre.codeInterne.trim()], ["state", "in", ["sale", "done"]]],
+      ["id"], 0
+    );
+    for (const o of noteOrders) orderIdsFromNote.add(o.id as number);
+  }
 
-  // Fusion des deux sources
+  // Fusion sans doublons — un ordre trouvé dans les deux sources ne compte qu'une fois
   const orderIds = Array.from(new Set([...Array.from(orderIdsFromLines), ...Array.from(orderIdsFromNote)])) as number[];
 
   // Quantité totale : uniquement via les lignes (la note n'a pas de qty)
