@@ -166,18 +166,55 @@ async function generateEshopPackingSlipPDF(order: {
     doc.text("Dr. Hauschka", M, headerY + 14);
   }
 
-  // Barcode (en haut à droite, aligné avec le logo)
+  // Barcode Code 39 scannable (en haut à droite)
   const bcW = 62; const bcH = 14;
   const bcX = W - M - bcW;
-  doc.setDrawColor(...BLACK);
-  const bars = 90;
-  for (let i = 0; i < bars; i++) {
-    const thick = (i % 5 === 0 || i % 7 === 0) ? 1.1 : (i % 3 === 0 ? 0.55 : 0.25);
-    doc.setLineWidth(thick);
-    const bx = bcX + (i / bars) * bcW;
-    if (i % 2 === 0) doc.line(bx, headerY + 4, bx, headerY + 4 + bcH);
+
+  // ── Encodage Code 39 ──────────────────────────────────────────────────────
+  const C39: Record<string, number[]> = {
+    '0':[1,1,1,3,3,1,3,1,1],'1':[3,1,1,3,1,1,1,1,3],'2':[1,1,3,3,1,1,1,1,3],
+    '3':[3,1,3,3,1,1,1,1,1],'4':[1,1,1,3,3,1,1,1,3],'5':[3,1,1,3,3,1,1,1,1],
+    '6':[1,1,3,3,3,1,1,1,1],'7':[1,1,1,3,1,1,3,1,3],'8':[3,1,1,3,1,1,3,1,1],
+    '9':[1,1,3,3,1,1,3,1,1],'A':[3,1,1,1,1,3,1,1,3],'B':[1,1,3,1,1,3,1,1,3],
+    'C':[3,1,3,1,1,3,1,1,1],'D':[1,1,1,1,3,3,1,1,3],'E':[3,1,1,1,3,3,1,1,1],
+    'F':[1,1,3,1,3,3,1,1,1],'G':[1,1,1,1,1,3,3,1,3],'H':[3,1,1,1,1,3,3,1,1],
+    'I':[1,1,3,1,1,3,3,1,1],'J':[1,1,1,1,3,3,3,1,1],'K':[3,1,1,1,1,1,1,3,3],
+    'L':[1,1,3,1,1,1,1,3,3],'M':[3,1,3,1,1,1,1,3,1],'N':[1,1,1,1,3,1,1,3,3],
+    'O':[3,1,1,1,3,1,1,3,1],'P':[1,1,3,1,3,1,1,3,1],'Q':[1,1,1,1,1,1,3,3,3],
+    'R':[3,1,1,1,1,1,3,3,1],'S':[1,1,3,1,1,1,3,3,1],'T':[1,1,1,1,3,1,3,3,1],
+    'U':[3,3,1,1,1,1,1,1,3],'V':[1,3,3,1,1,1,1,1,3],'W':[3,3,3,1,1,1,1,1,1],
+    'X':[1,3,1,1,3,1,1,1,3],'Y':[3,3,1,1,3,1,1,1,1],'Z':[1,3,3,1,3,1,1,1,1],
+    '-':[1,3,1,1,1,1,3,1,3],'.':[3,3,1,1,1,1,3,1,1],' ':[1,3,3,1,1,1,3,1,1],
+    '*':[1,3,1,1,3,1,3,1,1],
+  };
+  const buildCode39 = (text: string): string | null => {
+    try {
+      const chars = ('*' + text.toUpperCase() + '*').split('');
+      const N = 2; const W = 6; const G = 2; // narrow, wide, inter-char gap (px)
+      let totalW = 0;
+      for (const c of chars) { const p = C39[c]; if (!p) return null; for (const v of p) totalW += v === 1 ? N : W; totalW += G; }
+      const H = 60;
+      const canvas = document.createElement('canvas');
+      canvas.width = totalW; canvas.height = H;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, totalW, H);
+      let x = 0;
+      for (const c of chars) {
+        const p = C39[c]!;
+        for (let i = 0; i < p.length; i++) {
+          const w = p[i] === 1 ? N : W;
+          if (i % 2 === 0) { ctx.fillStyle = '#000'; ctx.fillRect(x, 0, w, H); }
+          x += w;
+        }
+        x += G;
+      }
+      return canvas.toDataURL('image/png');
+    } catch { return null; }
+  };
+  const bcImg = buildCode39(order.order_number);
+  if (bcImg) {
+    doc.addImage(bcImg, 'PNG', bcX, headerY + 2, bcW, bcH);
   }
-  doc.setLineWidth(0.25);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7);
   doc.setTextColor(...GRAY);
