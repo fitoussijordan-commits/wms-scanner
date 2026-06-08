@@ -528,28 +528,27 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
       }
     }));
 
-    // Calcul catch-all après toutes les offres
-    await runCatchalls();
+    // Calcul catch-all uniquement sur les offres actuellement dans les résultats
+    const currentResults = await new Promise<OffreAnalyse[]>(resolve => {
+      setResults(prev => { resolve(prev); return prev; });
+    });
+    await runCatchalls(currentResults);
 
     if (validCodes.length > 1) onToast(`${validCodes.length} offres analysées`, "success");
     inputRef.current?.focus();
   };
 
-  const runCatchalls = async () => {
-    // Récupère tous les orderId déjà assignés à des offres individuelles
-    const allOrderIds = (await new Promise<number[]>(resolve => {
-      setResults(prev => {
-        const ids = prev.flatMap(r => (r.debugOrders || []).map(o => o.id));
-        resolve(ids);
-        return prev;
-      });
-    }));
-    // Groupe par codeInterne unique
-    const allOffres = loadOffres();
+  const runCatchalls = async (currentResults: OffreAnalyse[]) => {
+    // Uniquement les codeInterne des offres ACTUELLEMENT dans les résultats
     const codesInternes = Array.from(new Set(
-      allOffres.filter(o => o.codeInterne?.trim()).map(o => o.codeInterne!.trim())
+      currentResults
+        .filter(r => r.offre.codeInterne?.trim())
+        .map(r => r.offre.codeInterne!.trim())
     ));
-    if (!codesInternes.length) return;
+    if (!codesInternes.length) { setCatchalls([]); return; }
+
+    // IDs des commandes déjà assignées aux offres individuelles
+    const allOrderIds = currentResults.flatMap(r => (r.debugOrders || []).map(o => o.id));
 
     setCatchalls(codesInternes.map(ci => ({ codeInterne: ci, loading: true, data: null })));
     await Promise.all(codesInternes.map(async ci => {
@@ -562,7 +561,15 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
     }));
   };
 
-  const removeResult = (code: string) => setResults(prev => prev.filter(r => r.offre.code !== code));
+  const removeResult = (code: string) => {
+    setResults(prev => {
+      const next = prev.filter(r => r.offre.code !== code);
+      // Recalculer les catchalls avec les offres restantes (sans relancer les requêtes Odoo)
+      const remainingCodes = Array.from(new Set(next.filter(r => r.offre.codeInterne?.trim()).map(r => r.offre.codeInterne!.trim())));
+      setCatchalls(prev => prev.filter(c => remainingCodes.includes(c.codeInterne)));
+      return next;
+    });
+  };
 
   const refreshAll = async () => {
     setGlobalLoading(true);
@@ -575,7 +582,7 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
         setResults(prev => prev.map(x => x.offre.code === r.offre.code ? { ...x, loading: false, error: e.message || "Erreur" } : x));
       }
     }));
-    await runCatchalls();
+    await runCatchalls(results);
     setGlobalLoading(false);
     onToast("Données actualisées", "success");
   };
