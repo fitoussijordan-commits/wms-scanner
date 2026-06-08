@@ -357,14 +357,13 @@ async function fetchCatchall(
       const inv = o.invoice_status ?? "";
       const orderLines = activeLines.filter((l: any) => l.order_id[0] === o.id);
       const orderCA = orderLines.reduce((s: number, l: any) => s + (l.price_subtotal || 0), 0);
-      const orderQty = orderLines.reduce((s: number, l: any) => s + (l.product_uom_qty || 0), 0);
-      if (inv === "invoiced") { splitValide.qty += orderQty; splitValide.ca += orderCA; }
-      else { splitAvenir.qty += orderQty; splitAvenir.ca += orderCA; }
+      // qty du catch-all = nb de commandes (cohérent avec qtyTotal = orphanIds.length)
+      if (inv === "invoiced") { splitValide.qty += 1; splitValide.ca += orderCA; }
+      else { splitAvenir.qty += 1; splitAvenir.ca += orderCA; }
     }
   }
 
-  const qtyUnits = activeLines.reduce((s: number, l: any) => s + (l.product_uom_qty || 0), 0);
-  return { caTotal, qtyTotal: qtyUnits, produits, delegues, debugOrders, split: { valide: splitValide, avenir: splitAvenir }, error: null };
+  return { caTotal, qtyTotal: orphanIds.length, produits, delegues, debugOrders, split: { valide: splitValide, avenir: splitAvenir }, error: null };
 }
 
 // ── Formatage ────────────────────────────────────────────────────────────────
@@ -1073,7 +1072,7 @@ function AnalyseTab({ session, onToast, filter, sharedCodes, onCodesChange }: {
                   </div>
                   <div style={{ flex: 1, background: C.bg, borderRadius: 10, padding: "10px 12px" }}>
                     <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, marginBottom: 4 }}>Commandes</div>
-                    <div style={{ fontSize: 18, fontWeight: 800, color: C.orange }}>{d.debugOrders?.length ?? 0}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: C.orange }}>{d.qtyTotal}</div>
                   </div>
                 </div>
                 {/* Boutons détail */}
