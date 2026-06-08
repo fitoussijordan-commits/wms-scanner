@@ -363,7 +363,8 @@ async function fetchCatchall(
     }
   }
 
-  return { caTotal, qtyTotal: orphanIds.length, produits, delegues, debugOrders, split: { valide: splitValide, avenir: splitAvenir }, error: null };
+  const qtyUnits = activeLines.reduce((s: number, l: any) => s + (l.product_uom_qty || 0), 0);
+  return { caTotal, qtyTotal: qtyUnits, produits, delegues, debugOrders, split: { valide: splitValide, avenir: splitAvenir }, error: null };
 }
 
 // ── Formatage ────────────────────────────────────────────────────────────────
@@ -829,57 +830,58 @@ function AnalyseTab({ session, onToast, filter, sharedCodes, onCodesChange }: {
       </div>
 
       {/* Totaux */}
-      {hasResults && hasSplit && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <div style={{ flex: 1, background: C.greenSoft, border: `1px solid ${C.green}33`, borderRadius: 10, padding: "8px 12px" }}>
-            <div style={{ fontSize: 9, fontWeight: 700, color: C.green, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 2 }}>✅ Validé</div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: C.green }}>{Math.round(splitValideQty)}</div>
-            <div style={{ fontSize: 10, color: C.green, opacity: 0.8 }}>{fmtCA(splitValideCA)}</div>
-          </div>
-          <div style={{ flex: 1, background: C.orangeSoft, border: `1px solid ${C.orange}33`, borderRadius: 10, padding: "8px 12px" }}>
-            <div style={{ fontSize: 9, fontWeight: 700, color: C.orange, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 2 }}>🔜 À venir</div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: C.orange }}>{Math.round(splitAvenirQty)}</div>
-            <div style={{ fontSize: 10, color: C.orange, opacity: 0.8 }}>{fmtCA(splitAvenirCA)}</div>
-          </div>
-        </div>
-      )}
-
       {hasResults && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-          <div style={{ flex: 2, background: C.tealSoft, border: `1px solid ${C.teal}22`, borderRadius: 12, padding: "12px 14px" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: C.teal, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>CA Total</div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: C.teal }}>{fmtCA(totalCA)}</div>
+        <div style={{ marginBottom: 16 }}>
+          {/* KPIs alignés (hauteur uniforme via flex stretch) */}
+          <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 10, alignItems: "stretch" }}>
+            <div style={{ flex: "1 1 150px", background: C.tealSoft, border: `1px solid ${C.teal}33`, borderRadius: 12, padding: "12px 14px", display: "flex", flexDirection: "column" as const, justifyContent: "space-between" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.teal, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>💰 CA Total</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: C.teal, marginTop: 6 }}>{fmtCA(totalCA)}</div>
+            </div>
+            <div style={{ flex: "1 1 150px", background: C.orangeSoft, border: `1px solid ${C.orange}33`, borderRadius: 12, padding: "12px 14px", display: "flex", flexDirection: "column" as const, justifyContent: "space-between" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.orange, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>📦 Qté vendue</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: C.orange, marginTop: 6 }}>{Math.round(totalQty)}</div>
+            </div>
+            {hasSplit && (
+              <div style={{ flex: "1 1 150px", background: C.greenSoft, border: `1px solid ${C.green}33`, borderRadius: 12, padding: "12px 14px", display: "flex", flexDirection: "column" as const, justifyContent: "space-between" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: C.green, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>✅ Validé</div>
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: C.green, lineHeight: 1 }}>{Math.round(splitValideQty)}</div>
+                  <div style={{ fontSize: 11, color: C.green, opacity: 0.85, marginTop: 2 }}>{fmtCA(splitValideCA)}</div>
+                </div>
+              </div>
+            )}
+            {hasSplit && (
+              <div style={{ flex: "1 1 150px", background: C.orangeSoft, border: `1px solid ${C.orange}33`, borderRadius: 12, padding: "12px 14px", display: "flex", flexDirection: "column" as const, justifyContent: "space-between" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: C.orange, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>🔜 À venir</div>
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: C.orange, lineHeight: 1 }}>{Math.round(splitAvenirQty)}</div>
+                  <div style={{ fontSize: 11, color: C.orange, opacity: 0.85, marginTop: 2 }}>{fmtCA(splitAvenirCA)}</div>
+                </div>
+              </div>
+            )}
           </div>
-          <div style={{ flex: 1, background: C.orangeSoft, border: `1px solid ${C.orange}22`, borderRadius: 12, padding: "12px 14px" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: C.orange, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Qté vendue</div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: C.orange }}>{Math.round(totalQty)}</div>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column" as const, gap: 6, flexShrink: 0 }}>
-            {results.filter(r => !r.loading && !r.error).length > 0 && (
+
+          {/* Barre d'actions */}
+          {results.filter(r => !r.loading && !r.error).length > 0 && (
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
               <button onClick={refreshAll} disabled={globalLoading}
-                style={{ flex: 1, padding: "0 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", color: C.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
-                </svg>
+                style={{ padding: "8px 14px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: globalLoading ? "default" : "pointer", color: C.textSec, display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+                Actualiser
               </button>
-            )}
-            {results.filter(r => !r.loading && !r.error).length > 0 && (
               <button onClick={clearAll}
-                style={{ flex: 1, padding: "0 12px", background: C.white, border: `1px solid ${C.red}44`, borderRadius: 10, cursor: "pointer", color: C.red, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                style={{ padding: "8px 14px", background: C.white, border: `1px solid ${C.red}44`, borderRadius: 10, cursor: "pointer", color: C.red, display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                Vider
               </button>
-            )}
-            {results.filter(r => !r.loading && !r.error).length > 0 && (
-              <button
-                onClick={() => exportToExcel(results, catchalls, onToast, setExporting)}
-                disabled={exporting}
-                style={{ flex: 1, padding: "0 12px", background: exporting ? C.border : C.green, border: "none", borderRadius: 10, cursor: exporting ? "default" : "pointer", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 5, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
-                {exporting ? "…" : (
-                  <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>XLS</>
-                )}
+              <button onClick={() => exportToExcel(results, catchalls, onToast, setExporting)} disabled={exporting}
+                style={{ padding: "8px 16px", background: exporting ? C.border : C.green, border: "none", borderRadius: 10, cursor: exporting ? "default" : "pointer", color: "#fff", display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                {exporting ? "Export…" : "Excel"}
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1071,7 +1073,7 @@ function AnalyseTab({ session, onToast, filter, sharedCodes, onCodesChange }: {
                   </div>
                   <div style={{ flex: 1, background: C.bg, borderRadius: 10, padding: "10px 12px" }}>
                     <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, marginBottom: 4 }}>Commandes</div>
-                    <div style={{ fontSize: 18, fontWeight: 800, color: C.orange }}>{d.qtyTotal}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: C.orange }}>{d.debugOrders?.length ?? 0}</div>
                   </div>
                 </div>
                 {/* Boutons détail */}
