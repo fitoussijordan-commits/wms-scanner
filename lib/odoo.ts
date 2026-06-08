@@ -1693,19 +1693,25 @@ export async function applyInventoryAdjustment(
   newQty: number,
   reason?: string
 ): Promise<void> {
-  const vals: any = { inventory_quantity: newQty };
+  // 1. Toujours écrire la quantité sur le quant
+  await write(session, "stock.quant", [quantId], { inventory_quantity: newQty });
 
-  // En Odoo 16, il faut écrire la raison SUR LE QUANT avant d'appliquer
-  // Le champ peut s'appeler inventory_adjustment_name ou inventory_reason selon la version
   if (reason?.trim()) {
-    // On tente les deux noms de champ possibles — le write ignore les champs inconnus
-    // en renvoyant une erreur, donc on fait deux appels séparés avec try/catch
-    try { await write(session, "stock.quant", [quantId], { inventory_quantity: newQty, inventory_adjustment_name: reason.trim() }); }
-    catch { await write(session, "stock.quant", [quantId], vals); }
-  } else {
-    await write(session, "stock.quant", [quantId], vals);
+    // 2a. Avec raison : laisser le wizard appliquer ET nommer (ne pas appeler action_apply_inventory)
+    // Le wizard stock.inventory.adjustment.name.action_apply() fait les deux en une fois
+    try {
+      const wizardId = await create(session, "stock.inventory.adjustment.name", {
+        inventory_adjustment_name: reason.trim(),
+        quant_ids: [[6, 0, [quantId]]],
+      }) as number;
+      await callMethod(session, "stock.inventory.adjustment.name", "action_apply", [[wizardId]]);
+      return;
+    } catch {
+      // Si le wizard échoue → fallback sans raison
+    }
   }
 
+  // 2b. Sans raison (ou fallback) : appel direct
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 }
 

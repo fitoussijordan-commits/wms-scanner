@@ -8642,14 +8642,6 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
           <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Ajustement inventaire</h2>
           <p style={{ fontSize: 12, color: C.textMuted }}>Corriger les quantités en stock</p>
         </div>
-        <button onClick={async () => {
-          try {
-            const fields = await odoo.getInventoryFields(session);
-            alert("Champs inventory sur stock.quant :\n" + (fields.length ? fields.join("\n") : "(aucun trouvé)"));
-          } catch(e: any) { alert("Erreur: " + e.message); }
-        }} style={{ fontSize: 10, padding: "4px 8px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, cursor: "pointer", color: C.textMuted, fontFamily: "inherit" }}>
-          debug
-        </button>
       </div>
 
       {/* Tab bar */}
