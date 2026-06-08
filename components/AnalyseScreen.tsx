@@ -8,7 +8,6 @@ const C = {
   textMuted: "#6b7280", border: "#e5e7eb",
   blue: "#3b82f6", blueSoft: "#eff6ff",
   green: "#22c55e", greenSoft: "#f0fdf4", redSoft: "#fef2f2", red: "#ef4444",
-  red: "#ef4444", redSoft: "#fef2f2",
   orange: "#f97316", orangeSoft: "#fff7ed",
   purple: "#7c3aed", purpleSoft: "#f5f3ff",
   teal: "#0d9488", tealSoft: "#f0fdfa",
