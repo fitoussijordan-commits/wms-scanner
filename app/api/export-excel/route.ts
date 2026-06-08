@@ -339,6 +339,81 @@ function buildToutesCommandes(wb: ExcelJS.Workbook, results: any[], catchalls: a
   ws.columns = [{ width: 14 }, { width: 40 }, { width: 14 }, { width: 36 }, { width: 10 }];
 }
 
+// ── Feuille Synthèse par article ─────────────────────────────────────────────
+function buildSynthese(wb: ExcelJS.Workbook, results: any[], catchalls: any[]) {
+  const ws = wb.addWorksheet("Synthèse Articles");
+  ws.views = [{ showGridLines: false }];
+
+  ws.mergeCells("A1:E1");
+  const t = ws.getCell("A1"); t.value = "Synthèse — Total vendu par article";
+  t.font = { bold: true, size: 14, color: { argb: "FF" + WHITE }, name: "Calibri" };
+  t.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF" + TEAL } };
+  t.alignment = { horizontal: "center", vertical: "middle" };
+  ws.getRow(1).height = 34;
+  ws.getRow(2).height = 6;
+
+  const hRow = ws.addRow(["Référence", "Nom article", "Qté totale vendue", "CA HT total", "% CA"]);
+  hRow.height = 22;
+  hRow.eachCell(cell => {
+    cell.font = { bold: true, color: { argb: "FF" + WHITE }, size: 10, name: "Calibri" };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF" + DARK } };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = { top: { style: "thin", color: { argb: "FFE5E7EB" } }, bottom: { style: "thin", color: { argb: "FFE5E7EB" } }, left: { style: "thin", color: { argb: "FFE5E7EB" } }, right: { style: "thin", color: { argb: "FFE5E7EB" } } };
+  });
+
+  // Agréger tous les produits toutes offres + catchalls confondus
+  const artMap: Record<string, { name: string; qty: number; ca: number }> = {};
+
+  for (const r of results) {
+    for (const p of (r.produits ?? [])) {
+      const key = p.ref || p.name || String(p.productId);
+      if (!artMap[key]) artMap[key] = { name: p.name ?? key, qty: 0, ca: 0 };
+      artMap[key].qty += p.qtyVendue ?? 0;
+      artMap[key].ca += p.ca ?? 0;
+    }
+  }
+  for (const c of catchalls) {
+    for (const p of (c.data?.produits ?? [])) {
+      const key = p.ref || p.name || String(p.productId);
+      if (!artMap[key]) artMap[key] = { name: p.name ?? key, qty: 0, ca: 0 };
+      artMap[key].qty += p.qtyVendue ?? 0;
+      artMap[key].ca += p.ca ?? 0;
+    }
+  }
+
+  const articles = Object.entries(artMap)
+    .map(([ref, v]) => ({ ref, ...v }))
+    .sort((a, b) => b.ca - a.ca);
+
+  const totalCA = articles.reduce((s, a) => s + a.ca, 0);
+  const dataStart = 4; // row après titre + spacer + header
+
+  articles.forEach((a, i) => {
+    const bg = i % 2 === 0 ? WHITE : TEAL_S;
+    const row = ws.addRow([a.ref, a.name, a.qty, a.ca, totalCA > 0 ? a.ca / totalCA : 0]);
+    row.height = 20;
+    row.eachCell((cell, col) => {
+      dataCell(cell, cell.value, bg, col <= 2 ? "left" : "center");
+      if (col === 4) { fmtEur(cell); cell.font = { bold: true, color: { argb: "FF" + TEAL }, size: 10, name: "Calibri" }; }
+      if (col === 5) fmtPct(cell);
+      if (col === 3) { cell.font = { bold: true, color: { argb: "FF" + DARK }, size: 10, name: "Calibri" }; }
+    });
+  });
+
+  // Total
+  const totRow = ws.addRow(["TOTAL", "", { formula: `SUM(C${dataStart}:C${dataStart + articles.length - 1})` }, { formula: `SUM(D${dataStart}:D${dataStart + articles.length - 1})` }, ""]);
+  totRow.height = 24;
+  totRow.eachCell(cell => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF" + TEAL } };
+    cell.font = { bold: true, color: { argb: "FF" + WHITE }, size: 11, name: "Calibri" };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = { top: { style: "thin", color: { argb: "FFE5E7EB" } }, bottom: { style: "thin", color: { argb: "FFE5E7EB" } }, left: { style: "thin", color: { argb: "FFE5E7EB" } }, right: { style: "thin", color: { argb: "FFE5E7EB" } } };
+  });
+  fmtEur(totRow.getCell(4));
+
+  ws.columns = [{ width: 16 }, { width: 44 }, { width: 18 }, { width: 16 }, { width: 10 }];
+}
+
 // ── Handler ──────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
@@ -351,6 +426,7 @@ export async function POST(req: NextRequest) {
     wb.created = new Date();
 
     buildRecap(wb, results, catchalls);
+    buildSynthese(wb, results, catchalls);
     for (const r of results) buildOffreSheet(wb, r);
     if (catchalls.some(c => (c.data?.debugOrders ?? []).length > 0)) {
       buildCommandesNote(wb, catchalls);
