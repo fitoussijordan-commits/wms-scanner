@@ -1077,64 +1077,45 @@ export default function Page() {
   const homeSearchIdRef = useRef(0);
 
   // Caméra scan (recherche rapide)
-  const [showCamera, setShowCamera] = useState(false);
-  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
-  const cameraStreamRef = useRef<MediaStream | null>(null);
-  const cameraActiveRef = useRef(false);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
 
-  const stopCamera = () => {
-    cameraActiveRef.current = false;
-    if (cameraStreamRef.current) { cameraStreamRef.current.getTracks().forEach(t => t.stop()); cameraStreamRef.current = null; }
-    setShowCamera(false);
+  const startCamera = () => {
+    cameraInputRef.current?.click();
   };
 
-  const startCamera = () => { setShowCamera(true); };
+  const handleCameraCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset input pour permettre de rescanner le même code
+    e.target.value = "";
 
-  // Monte le stream APRÈS que le <video> soit dans le DOM
-  useEffect(() => {
-    if (!showCamera) return;
-    cameraActiveRef.current = true;
-    let cancelled = false;
+    const BD = (window as any).BarcodeDetector;
+    if (!BD) {
+      showToast("⚠ Scan automatique non disponible sur ce navigateur");
+      return;
+    }
 
-    (async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } });
-        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
-        cameraStreamRef.current = stream;
-        const video = cameraVideoRef.current;
-        if (!video) { stopCamera(); return; }
-        video.srcObject = stream;
-        await video.play();
+    try {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.src = url;
+      await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = rej; });
 
-        const BD = (window as any).BarcodeDetector;
-        if (!BD) return; // pas de détection auto — l'utilisateur saisit manuellement
+      const detector = new BD({ formats: ["ean_13", "ean_8", "code_128", "code_39", "qr_code", "data_matrix", "upc_a", "upc_e"] });
+      const codes = await detector.detect(img);
+      URL.revokeObjectURL(url);
 
-        const detector = new BD({ formats: ["ean_13", "ean_8", "code_128", "code_39", "qr_code", "data_matrix", "upc_a", "upc_e"] });
-
-        const scan = async () => {
-          if (!cameraActiveRef.current || !cameraVideoRef.current) return;
-          if (cameraVideoRef.current.readyState >= 2) {
-            try {
-              const codes = await detector.detect(cameraVideoRef.current);
-              if (codes.length > 0 && cameraActiveRef.current) {
-                const val = codes[0].rawValue;
-                stopCamera();
-                setHomeResults([]);
-                doLookup(val);
-                return;
-              }
-            } catch {}
-          }
-          if (cameraActiveRef.current) setTimeout(scan, 250);
-        };
-        setTimeout(scan, 500); // laisser la vidéo s'initialiser
-      } catch {
-        if (!cancelled) { stopCamera(); showToast("⚠ Caméra non disponible"); }
+      if (codes.length > 0) {
+        const val = codes[0].rawValue;
+        setHomeResults([]);
+        doLookup(val);
+      } else {
+        showToast("⚠ Aucun code-barres détecté — réessaie");
       }
-    })();
-
-    return () => { cancelled = true; cameraActiveRef.current = false; };
-  }, [showCamera]);
+    } catch {
+      showToast("⚠ Impossible de lire le code-barres");
+    }
+  };
 
   // Transfer state
   const [src, setSrc] = useState<any>(null);
@@ -2406,57 +2387,6 @@ export default function Page() {
     <Shell toast={toast} flash={scanFlash}>
       <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} />
 
-      {/* ── Overlay caméra ── */}
-      {showCamera && (
-        <div style={{ position: "fixed", inset: 0, background: "#000", zIndex: 10000, display: "flex", flexDirection: "column" as const }}>
-          <video ref={cameraVideoRef} autoPlay muted playsInline style={{ flex: 1, objectFit: "cover", width: "100%" }} />
-          {/* Viseur */}
-          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
-            <div style={{ width: 260, height: 160, border: "3px solid #fff", borderRadius: 12, boxShadow: "0 0 0 2000px rgba(0,0,0,0.45)" }} />
-          </div>
-          {/* Hint */}
-          <div style={{ position: "absolute", bottom: 100, left: 0, right: 0, textAlign: "center", color: "#fff", fontSize: 14, fontWeight: 600, opacity: 0.85 }}>
-            Pointez le code-barres dans le cadre
-          </div>
-          {/* Bouton fermer */}
-          <div style={{ position: "absolute", bottom: 32, left: 0, right: 0, display: "flex", justifyContent: "center" }}>
-            <button onClick={stopCamera}
-              style={{ padding: "14px 40px", background: "rgba(255,255,255,0.15)", color: "#fff", border: "2px solid rgba(255,255,255,0.4)", borderRadius: 50, fontSize: 15, fontWeight: 700, cursor: "pointer", backdropFilter: "blur(8px)", fontFamily: "inherit" }}>
-              ✕ Annuler
-            </button>
-          </div>
-          {/* Saisie manuelle si BarcodeDetector absent (Safari iOS) */}
-          {!(window as any).BarcodeDetector && (
-            <div style={{ position: "absolute", bottom: 110, left: 16, right: 16 }}>
-              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", textAlign: "center", marginBottom: 8 }}>
-                Scan auto indisponible sur Safari — saisie manuelle :
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input
-                  autoFocus
-                  placeholder="Code-barres..."
-                  style={{ flex: 1, padding: "12px 14px", borderRadius: 10, border: "none", fontSize: 15, fontFamily: "inherit", background: "rgba(255,255,255,0.95)" }}
-                  onKeyDown={e => {
-                    if (e.key === "Enter") {
-                      const val = (e.target as HTMLInputElement).value.trim();
-                      if (val) { stopCamera(); doLookup(val); }
-                    }
-                  }}
-                />
-                <button
-                  onMouseDown={e => {
-                    const input = (e.currentTarget.previousSibling as HTMLInputElement);
-                    const val = input?.value?.trim();
-                    if (val) { stopCamera(); doLookup(val); }
-                  }}
-                  style={{ padding: "12px 18px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                  →
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ── Bannière nouvelles commandes (desktop uniquement) ── */}
       {newOrderNotif && (
@@ -2559,6 +2489,14 @@ export default function Page() {
                 title="Scanner avec la caméra">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
               </button>
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                style={{ display: "none" }}
+                onChange={handleCameraCapture}
+              />
             </div>
             {homeSearching && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 6, paddingLeft: 2 }}>Recherche en cours...</div>}
             {homeResults.length > 0 && (
