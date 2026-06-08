@@ -227,7 +227,8 @@ async function fetchCatchall(
   codeInterne: string,
   excludeOrderIds: number[],
   excludeOfferCodes: string[],
-  filter: StateFilter
+  filter: StateFilter,
+  produitRefs: string[] = []  // si renseigné : ne comptabilise que ces produits (comme l'offre principale)
 ): Promise<Omit<OffreAnalyse, "offre" | "loading">> {
   const orderDomain = filterDomain(filter);
   const noteOrders = await odoo.searchRead(session, "sale.order",
@@ -262,13 +263,29 @@ async function fetchCatchall(
   const orphanIds = orphans.map((o: any) => o.id as number);
   const debugOrders = orphans.map((o: any) => ({ id: o.id, name: `${o.name} (note)`, partnerName: o.partner_id ? o.partner_id[1] : undefined }));
 
+  // Résoudre les refs produits configurés → IDs
+  let filteredProdIds: Set<number> | null = null;
+  const prodRefMap: Record<number, string> = {}; // id → ref configurée
+  if (produitRefs.length > 0) {
+    const configProds = await odoo.searchRead(session, "product.product",
+      [["default_code", "in", produitRefs]],
+      ["id", "default_code"], 0
+    );
+    filteredProdIds = new Set(configProds.map((p: any) => p.id as number));
+    for (const p of configProds) prodRefMap[p.id] = p.default_code;
+  }
+
   const lines = await odoo.searchRead(session, "sale.order.line",
     [["order_id", "in", orphanIds], ["display_type", "=", false], ["is_downpayment", "=", false]],
     ["order_id", "product_id", "product_uom_qty", "price_subtotal", "state"], 0
   );
-  const activeLines = lines.filter((l: any) => l.state !== "cancel"
-    && l.price_subtotal > 0  // exclure les lignes gratuites (offres marqueurs)
-  );
+  const activeLines = lines.filter((l: any) => {
+    if (l.state === "cancel") return false;
+    if (l.price_subtotal <= 0) return false;
+    // Si des produits sont configurés, ne garder que ceux-là
+    if (filteredProdIds && l.product_id && !filteredProdIds.has(l.product_id[0])) return false;
+    return true;
+  });
   const caTotal = activeLines.reduce((s: number, l: any) => s + (l.price_subtotal || 0), 0);
 
   // Agrégation par produit
@@ -276,7 +293,8 @@ async function fetchCatchall(
   for (const l of activeLines) {
     if (!l.product_id) continue;
     const pid = l.product_id[0];
-    if (!prodMap[pid]) prodMap[pid] = { name: l.product_id[1], ref: l.product_id[1], qty: 0, ca: 0 };
+    const ref = prodRefMap[pid] || l.product_id[1];
+    if (!prodMap[pid]) prodMap[pid] = { name: l.product_id[1], ref, qty: 0, ca: 0 };
     prodMap[pid].qty += l.product_uom_qty || 0;
     prodMap[pid].ca += l.price_subtotal || 0;
   }
@@ -629,7 +647,10 @@ function AnalyseTab({ session, onToast, filter, sharedCodes, onCodesChange }: {
     setCatchalls(codesInternes.map(ci => ({ codeInterne: ci, loading: true, data: null })));
     await Promise.all(codesInternes.map(async ci => {
       try {
-        const data = await fetchCatchall(session, ci, allOrderIds, allOfferCodes, filter);
+        // Récupérer les produits configurés pour cette offre (via codeInterne)
+        const parentOffre = currentResults.find(r => r.offre.codeInterne?.trim() === ci);
+        const produitRefs = parentOffre?.offre.produits ?? [];
+        const data = await fetchCatchall(session, ci, allOrderIds, allOfferCodes, filter, produitRefs);
         setCatchalls(prev => prev.map(c => c.codeInterne === ci ? { ...c, loading: false, data } : c));
       } catch {
         setCatchalls(prev => prev.map(c => c.codeInterne === ci ? { ...c, loading: false, data: null } : c));
