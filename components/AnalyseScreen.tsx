@@ -22,6 +22,7 @@ interface Offre {
   code: string;
   label: string;
   produits: string[]; // refs internes Odoo
+  codeInterne?: string; // code recherché dans x_note_interne
 }
 
 interface ProduitCA {
@@ -89,7 +90,7 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
   }
   const offreProductId = offreProd[0].id;
 
-  // 2. Trouver les commandes confirmées contenant ce produit offre
+  // 2a. Commandes via lignes contenant le produit offre
   const offreLines = await odoo.searchRead(session, "sale.order.line",
     [
       ["product_id", "=", offreProductId],
@@ -100,17 +101,36 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre): Promise
     ["order_id", "product_uom_qty", "state"], 0
   );
   const activeOffreLines = offreLines.filter((l: any) => l.state !== "cancel");
-  const orderIds = Array.from(new Set(activeOffreLines.map((l: any) => l.order_id[0]))) as number[];
+  const orderIdsFromLines = new Set<number>(activeOffreLines.map((l: any) => l.order_id[0] as number));
+
+  // 2b. Commandes via note interne (x_note_interne)
+  // Utilise codeInterne si défini, sinon le code offre principal
+  const noteSearchCode = (offre.codeInterne?.trim() || offre.code.trim());
+  const noteOrders = await odoo.searchRead(session, "sale.order",
+    [["x_note_interne", "ilike", noteSearchCode], ["state", "in", ["sale", "done"]]],
+    ["id"], 0
+  );
+  const orderIdsFromNote = new Set<number>(noteOrders.map((o: any) => o.id as number));
+
+  // Fusion des deux sources
+  const orderIds = Array.from(new Set([...Array.from(orderIdsFromLines), ...Array.from(orderIdsFromNote)])) as number[];
+
+  // Quantité totale : uniquement via les lignes (la note n'a pas de qty)
   const qtyTotal = activeOffreLines.reduce((s: number, l: any) => s + (l.product_uom_qty || 0), 0);
+  // Commandes trouvées uniquement via note (pas de ligne offre)
+  const noteOnlyOrderIds = orderIds.filter(id => !orderIdsFromLines.has(id));
 
   if (!orderIds.length) {
     return { caTotal: 0, qtyTotal: 0, produits: [], delegues: [], debugOrders: [], error: null };
   }
 
-  // 3. Debug : liste des commandes
+  // 3. Debug : liste des commandes (avec tag source)
   const ords = await odoo.searchRead(session, "sale.order",
     [["id", "in", orderIds]], ["id", "name"], orderIds.length);
-  const debugOrders: { id: number; name: string }[] = ords.map((o: any) => ({ id: o.id, name: o.name }));
+  const debugOrders: { id: number; name: string }[] = ords.map((o: any) => ({
+    id: o.id,
+    name: noteOnlyOrderIds.includes(o.id) ? `${o.name} (note)` : o.name,
+  }));
 
   // 4. Résoudre les produits composants (paramétrage)
   const resolveComp = async (ref: string): Promise<{ ref: string; productId: number; name: string } | null> => {
@@ -211,12 +231,13 @@ function ParametrageTab({ onToast }: { onToast: Props["onToast"] }) {
   const [formCode, setFormCode] = useState("");
   const [formLabel, setFormLabel] = useState("");
   const [formProduits, setFormProduits] = useState(""); // un par ligne
+  const [formCodeInterne, setFormCodeInterne] = useState("");
 
   useEffect(() => { setOffres(loadOffres()); }, []);
 
   const openNew = () => {
     setEditId(null);
-    setFormCode(""); setFormLabel(""); setFormProduits("");
+    setFormCode(""); setFormLabel(""); setFormProduits(""); setFormCodeInterne("");
     setShowForm(true);
   };
 
@@ -225,6 +246,7 @@ function ParametrageTab({ onToast }: { onToast: Props["onToast"] }) {
     setFormCode(o.code);
     setFormLabel(o.label);
     setFormProduits(o.produits.join("\n"));
+    setFormCodeInterne(o.codeInterne || "");
     setShowForm(true);
   };
 
@@ -232,18 +254,18 @@ function ParametrageTab({ onToast }: { onToast: Props["onToast"] }) {
     const code = formCode.trim();
     const label = formLabel.trim();
     const produits = formProduits.split(/[\n\r,;]+/).map(r => r.trim()).filter(Boolean);
+    const codeInterne = formCodeInterne.trim() || undefined;
     if (!code) { onToast("Code offre requis", "error"); return; }
     if (!produits.length) { onToast("Au moins un produit requis", "error"); return; }
 
     let updated: Offre[];
     if (editId) {
-      updated = offres.map(o => o.id === editId ? { ...o, code, label, produits } : o);
+      updated = offres.map(o => o.id === editId ? { ...o, code, label, produits, codeInterne } : o);
     } else {
-      // Vérifier doublon code
       if (offres.some(o => o.code.toLowerCase() === code.toLowerCase())) {
         onToast("Ce code offre existe déjà", "error"); return;
       }
-      updated = [...offres, { id: genId(), code, label, produits }];
+      updated = [...offres, { id: genId(), code, label, produits, codeInterne }];
     }
     saveOffres(updated);
     setOffres(updated);
@@ -280,6 +302,16 @@ function ParametrageTab({ onToast }: { onToast: Props["onToast"] }) {
             <label style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>Libellé (optionnel)</label>
             <input value={formLabel} onChange={e => setFormLabel(e.target.value)} placeholder="Ex: Offre été 2024"
               style={{ width: "100%", boxSizing: "border-box" as const, padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.bg, color: C.text }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+              Code interne <span style={{ fontWeight: 400, textTransform: "none" as const }}>(optionnel) — recherché dans la note interne Odoo</span>
+            </label>
+            <input value={formCodeInterne} onChange={e => setFormCodeInterne(e.target.value)} placeholder="Ex: CURE26"
+              style={{ width: "100%", boxSizing: "border-box" as const, padding: "10px 12px", border: `1.5px solid ${formCodeInterne ? C.purple : C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.bg, color: C.text }} />
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>
+              Si renseigné, les commandes avec ce code dans x_note_interne seront incluses même sans ligne offre
+            </div>
           </div>
           <div>
             <label style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
