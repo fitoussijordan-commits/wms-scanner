@@ -254,9 +254,25 @@ async function fetchCatchall(
     [["order_id", "in", orphanIds], ["display_type", "=", false], ["is_downpayment", "=", false]],
     ["order_id", "product_id", "product_uom_qty", "price_subtotal", "state"], 0
   );
-  const activeLines = lines.filter((l: any) => l.state !== "cancel");
+  const activeLines = lines.filter((l: any) => l.state !== "cancel"
+    && l.price_subtotal > 0  // exclure les lignes gratuites (offres marqueurs)
+  );
   const caTotal = activeLines.reduce((s: number, l: any) => s + (l.price_subtotal || 0), 0);
 
+  // Agrégation par produit
+  const prodMap: Record<number, { name: string; ref: string; qty: number; ca: number }> = {};
+  for (const l of activeLines) {
+    if (!l.product_id) continue;
+    const pid = l.product_id[0];
+    if (!prodMap[pid]) prodMap[pid] = { name: l.product_id[1], ref: l.product_id[1], qty: 0, ca: 0 };
+    prodMap[pid].qty += l.product_uom_qty || 0;
+    prodMap[pid].ca += l.price_subtotal || 0;
+  }
+  const produits: ProduitCA[] = Object.entries(prodMap)
+    .map(([pid, v]) => ({ productId: Number(pid), ref: v.ref, name: v.name, qtyVendue: v.qty, ca: v.ca }))
+    .sort((a, b) => b.ca - a.ca);
+
+  // Agrégation par délégué
   const userMap: Record<number, { name: string; qty: number; ca: number }> = {};
   for (const o of orphans) {
     if (!o.user_id) continue;
@@ -273,7 +289,7 @@ async function fetchCatchall(
     .map(([uid, v]) => ({ userId: Number(uid), name: v.name, qtyVendue: v.qty, ca: v.ca }))
     .sort((a, b) => b.ca - a.ca);
 
-  return { caTotal, qtyTotal: orphanIds.length, produits: [], delegues, debugOrders, error: null };
+  return { caTotal, qtyTotal: orphanIds.length, produits, delegues, debugOrders, error: null };
 }
 
 // ── Formatage ────────────────────────────────────────────────────────────────
@@ -893,6 +909,10 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
                 </div>
                 {/* Boutons détail */}
                 <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => { setExpandedId(isExp && mode === "produits" ? null : caKey); setDetailMode(m => ({ ...m, [caKey]: "produits" })); }}
+                    style={{ flex: 1, padding: "7px 0", background: isExp && mode === "produits" ? C.blueSoft : C.bg, border: `1px solid ${isExp && mode === "produits" ? C.blue : C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, color: isExp && mode === "produits" ? C.blue : C.textSec, fontFamily: "inherit" }}>
+                    📦 Produits ({d.produits.length})
+                  </button>
                   <button onClick={() => { setExpandedId(isExp && mode === "delegues" ? null : caKey); setDetailMode(m => ({ ...m, [caKey]: "delegues" })); }}
                     style={{ flex: 1, padding: "7px 0", background: isExp && mode === "delegues" ? C.purpleSoft : C.bg, border: `1px solid ${isExp && mode === "delegues" ? C.purple : C.border}`, borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, color: isExp && mode === "delegues" ? C.purple : C.textSec, fontFamily: "inherit" }}>
                     👤 Délégués ({d.delegues.length})
@@ -902,6 +922,27 @@ function AnalyseTab({ session, onToast, filter }: { session: odoo.OdooSession; o
                     🔍 Commandes ({d.debugOrders?.length ?? 0})
                   </button>
                 </div>
+              </div>
+            )}
+            {/* Détail produits */}
+            {!c.loading && d && isExp && mode === "produits" && (
+              <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg }}>
+                {d.produits.length === 0 ? (
+                  <div style={{ padding: "12px 14px", color: C.textMuted, fontSize: 12, textAlign: "center" as const }}>Aucun produit</div>
+                ) : d.produits.map((p, i) => (
+                  <div key={p.productId} style={{ padding: "10px 14px", borderBottom: i < d.produits.length - 1 ? `1px solid ${C.border}` : undefined, display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{p.name}</div>
+                    </div>
+                    <div style={{ textAlign: "right" as const, flexShrink: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: C.teal }}>{fmtCA(p.ca)}</div>
+                      <div style={{ fontSize: 11, color: C.textMuted }}>{Math.round(p.qtyVendue)} unités</div>
+                    </div>
+                    <div style={{ width: 40, height: 32, display: "flex", alignItems: "flex-end" }}>
+                      <div style={{ width: "100%", height: `${Math.max(4, (p.ca / (d.caTotal || 1)) * 32)}px`, background: C.teal, borderRadius: 3, opacity: 0.7 }} />
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
             {/* Détail délégués */}
