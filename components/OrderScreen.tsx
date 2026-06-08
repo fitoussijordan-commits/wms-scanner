@@ -901,6 +901,11 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
           <div onClick={e => e.stopPropagation()}
             style={{ background: C.white, borderRadius: 16, maxWidth: 480, width: "100%", maxHeight: "90vh", overflow: "auto" as const, boxShadow: C.shadowXl, position: "relative" as const }}>
+            {/* Bouton retour (gauche) */}
+            <button onClick={() => setZoom(null)} title="Retour"
+              style={{ position: "absolute", top: 12, left: 12, width: 32, height: 32, borderRadius: "50%", background: C.bg, border: `1px solid ${C.border}`, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2.5"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+            </button>
             {/* Bouton fermer */}
             <button onClick={() => setZoom(null)}
               style={{ position: "absolute", top: 12, right: 12, width: 32, height: 32, borderRadius: "50%", background: C.bg, border: `1px solid ${C.border}`, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1 }}>
