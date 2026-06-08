@@ -39,6 +39,13 @@ export async function callMethod(session: OdooSession, model: string, method: st
   return call(session, "/web/dataset/call_kw", { model, method, args, kwargs });
 }
 
+export async function getInventoryFields(session: OdooSession): Promise<string[]> {
+  const fields = await call(session, "/web/dataset/call_kw", {
+    model: "stock.quant", method: "fields_get", args: [], kwargs: { attributes: ["string", "type"] }
+  });
+  return Object.keys(fields || {}).filter((k: string) => k.includes("inventor") || k.includes("reason") || k.includes("adjustment"));
+}
+
 export async function create(session: OdooSession, model: string, values: any) {
   return call(session, "/web/dataset/call_kw", { model, method: "create", args: [values], kwargs: {} });
 }
