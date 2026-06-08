@@ -8295,6 +8295,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
   const [adjustments, setAdjustments] = useState<Record<number, string>>({}); // quantId -> new qty string
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [adjustReason, setAdjustReason] = useState("");
   // New stock form (for product with 0 quants)
   const [newStockLoc, setNewStockLoc] = useState("");
   const [newStockLocId, setNewStockLocId] = useState<number | null>(null);
@@ -8552,7 +8553,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
     for (const q of changedQuants) {
       const newQty = parseFloat(adjustments[q.id]);
       try {
-        await odoo.applyInventoryAdjustment(session, q.id, newQty);
+        await odoo.applyInventoryAdjustment(session, q.id, newQty, adjustReason || undefined);
         // Update local state
         setQuants(prev => prev.map(pq => pq.id === q.id ? { ...pq, quantity: newQty } : pq));
         setAdjustments(prev => ({ ...prev, [q.id]: String(newQty) }));
@@ -8965,7 +8966,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
                         if (lots.length > 0) { lotId = lots[0].id; }
                         else { lotId = await odoo.create(session, "stock.lot", { name: newStockLot.trim(), product_id: selectedProduct.id }) as number; }
                       }
-                      await odoo.createInventoryAdjustment(session, selectedProduct.id, newStockLocId, parseFloat(newStockQty), lotId);
+                      await odoo.createInventoryAdjustment(session, selectedProduct.id, newStockLocId, parseFloat(newStockQty), lotId, adjustReason || undefined);
                       onToast(`✅ Stock créé : ${newStockQty} unités à ${newStockLoc}`);
                       // Recharger les quants
                       const data = await odoo.getQuantsForProduct(session, selectedProduct.id);
@@ -9063,7 +9064,17 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
                     </div>
                   );
                 })}
-                <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+                {/* Raison */}
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 6 }}>Raison (optionnel)</div>
+                  <input
+                    value={adjustReason}
+                    onChange={e => setAdjustReason(e.target.value)}
+                    placeholder="Ex: casse préparateur, retour client..."
+                    style={{ width: "100%", boxSizing: "border-box" as const, padding: "9px 12px", border: `1.5px solid ${adjustReason ? "#8b5cf6" : C.border}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit", outline: "none", background: C.bg }}
+                  />
+                </div>
+                <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
                   <button onClick={() => setConfirmOpen(false)}
                     style={{ flex: 1, padding: 12, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", color: C.textSec }}>
                     Annuler

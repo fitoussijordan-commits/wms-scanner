@@ -1683,9 +1683,12 @@ export async function getQuantsForProduct(session: OdooSession, productId: numbe
 export async function applyInventoryAdjustment(
   session: OdooSession,
   quantId: number,
-  newQty: number
+  newQty: number,
+  reason?: string
 ): Promise<void> {
-  await write(session, "stock.quant", [quantId], { inventory_quantity: newQty });
+  const vals: any = { inventory_quantity: newQty };
+  if (reason?.trim()) vals.inventory_reason = reason.trim();
+  await write(session, "stock.quant", [quantId], vals);
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 }
 
@@ -1695,7 +1698,8 @@ export async function createInventoryAdjustment(
   productId: number,
   locationId: number,
   newQty: number,
-  lotId?: number
+  lotId?: number,
+  reason?: string
 ): Promise<void> {
   const vals: any = {
     product_id: productId,
@@ -1703,6 +1707,7 @@ export async function createInventoryAdjustment(
     inventory_quantity: newQty,
   };
   if (lotId) vals.lot_id = lotId;
+  if (reason?.trim()) vals.inventory_reason = reason.trim();
   const quantId = await create(session, "stock.quant", vals);
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 }
