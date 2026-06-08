@@ -229,12 +229,21 @@ async function fetchCatchall(
   // (évite les doublons quand la ligne offre est annulée ou filtrée côté offre principale)
   if (orphans.length > 0 && excludeOfferCodes.length > 0) {
     const orphanIds = orphans.map((o: any) => o.id as number);
-    const offerLines = await odoo.searchRead(session, "sale.order.line",
-      [["order_id", "in", orphanIds], ["product_id.default_code", "in", excludeOfferCodes], ["display_type", "=", false]],
-      ["order_id"], 0
+    // Étape 1 : résoudre les codes → IDs produits (domain direct, pas de traversée relationnelle)
+    const offerProds = await odoo.searchRead(session, "product.product",
+      [["default_code", "in", excludeOfferCodes]],
+      ["id"], 0
     );
-    const ordersWithOfferLines = new Set(offerLines.map((l: any) => l.order_id[0] as number));
-    orphans = orphans.filter((o: any) => !ordersWithOfferLines.has(o.id));
+    const offerProdIds = offerProds.map((p: any) => p.id as number);
+    if (offerProdIds.length > 0) {
+      // Étape 2 : commandes orphelines qui ont une ligne avec ce produit
+      const offerLines = await odoo.searchRead(session, "sale.order.line",
+        [["order_id", "in", orphanIds], ["product_id", "in", offerProdIds], ["display_type", "=", false]],
+        ["order_id"], 0
+      );
+      const ordersWithOfferLines = new Set(offerLines.map((l: any) => l.order_id[0] as number));
+      orphans = orphans.filter((o: any) => !ordersWithOfferLines.has(o.id));
+    }
   }
   if (!orphans.length) return { caTotal: 0, qtyTotal: 0, produits: [], delegues: [], debugOrders: [], error: null };
 
