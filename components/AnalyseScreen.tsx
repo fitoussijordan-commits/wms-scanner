@@ -7,7 +7,7 @@ const C = {
   bg: "#f8fafc", white: "#ffffff", text: "#1a1a2e", textSec: "#374151",
   textMuted: "#6b7280", border: "#e5e7eb",
   blue: "#3b82f6", blueSoft: "#eff6ff",
-  green: "#22c55e", greenSoft: "#f0fdf4",
+  green: "#22c55e", greenSoft: "#f0fdf4", redSoft: "#fef2f2", red: "#ef4444",
   red: "#ef4444", redSoft: "#fef2f2",
   orange: "#f97316", orangeSoft: "#fff7ed",
   purple: "#7c3aed", purpleSoft: "#f5f3ff",
@@ -48,7 +48,8 @@ interface OffreAnalyse {
   qtyTotal: number;
   produits: ProduitCA[];
   delegues: DelegueCA[];
-  debugOrders?: { id: number; name: string; partnerName?: string }[];
+  debugOrders?: { id: number; name: string; partnerName?: string; invoiceStatus?: string }[];
+  split?: { valide: { qty: number; ca: number }; avenir: { qty: number; ca: number } };
 }
 
 interface Props {
@@ -134,11 +135,14 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre, filter: 
 
   // 3. Debug : liste des commandes (avec tag source)
   const ords = await odoo.searchRead(session, "sale.order",
-    [["id", "in", orderIds]], ["id", "name", "partner_id"], orderIds.length);
-  const debugOrders: { id: number; name: string; partnerName?: string }[] = ords.map((o: any) => ({
+    [["id", "in", orderIds]], ["id", "name", "partner_id", "invoice_status"], orderIds.length);
+  const orderInvoiceMap: Record<number, string> = {};
+  for (const o of ords) orderInvoiceMap[o.id] = o.invoice_status ?? "";
+  const debugOrders: { id: number; name: string; partnerName?: string; invoiceStatus?: string }[] = ords.map((o: any) => ({
     id: o.id,
     name: noteOnlyOrderIds.includes(o.id) ? `${o.name} (note)` : o.name,
     partnerName: o.partner_id ? o.partner_id[1] : undefined,
+    invoiceStatus: o.invoice_status,
   }));
 
   // 4. Résoudre les produits composants (paramétrage)
@@ -218,7 +222,35 @@ async function fetchCAForOffre(session: odoo.OdooSession, offre: Offre, filter: 
     .map(([uid, v]) => ({ userId: Number(uid), name: v.name, qtyVendue: v.qty, ca: v.ca }))
     .sort((a, b) => b.ca - a.ca);
 
-  return { caTotal, qtyTotal, produits, delegues, debugOrders, error: null };
+  // Split valide / à venir basé sur invoice_status des commandes
+  const splitValide = { qty: 0, ca: 0 };
+  const splitAvenir = { qty: 0, ca: 0 };
+  if (filter === "all") {
+    for (const l of activeOffreLines) {
+      const inv = orderInvoiceMap[l.order_id[0]];
+      if (inv === "invoiced") splitValide.qty += l.product_uom_qty || 0;
+      else splitAvenir.qty += l.product_uom_qty || 0;
+    }
+    for (const p of produits) {
+      // répartir le CA de chaque produit par invoice_status via les compLines déjà chargées
+    }
+    // Calculer la part du CA par invoice_status depuis les lignes composants
+    if (resolved.length > 0) {
+      const compIds = resolved.map(r => r.productId);
+      const splitLines = await odoo.searchRead(session, "sale.order.line",
+        [["order_id", "in", orderIds], ["product_id", "in", compIds],
+         ["display_type", "=", false], ["is_downpayment", "=", false]],
+        ["order_id", "price_subtotal", "state"], 0
+      );
+      for (const l of splitLines.filter((l: any) => l.state !== "cancel")) {
+        const inv = orderInvoiceMap[l.order_id[0]];
+        if (inv === "invoiced") splitValide.ca += l.price_subtotal || 0;
+        else splitAvenir.ca += l.price_subtotal || 0;
+      }
+    }
+  }
+
+  return { caTotal, qtyTotal, produits, delegues, debugOrders, split: { valide: splitValide, avenir: splitAvenir }, error: null };
 }
 
 // Catch-all : commandes avec codeInterne dans la note mais PAS dans les offres listées
@@ -233,7 +265,7 @@ async function fetchCatchall(
   const orderDomain = filterDomain(filter);
   const noteOrders = await odoo.searchRead(session, "sale.order",
     [["x_note_interne", "ilike", codeInterne.trim()], ...orderDomain],
-    ["id", "name", "user_id", "partner_id"], 0
+    ["id", "name", "user_id", "partner_id", "invoice_status"], 0
   );
   const excludeSet = new Set(excludeOrderIds);
   let orphans = noteOrders.filter((o: any) => !excludeSet.has(o.id));
@@ -261,7 +293,7 @@ async function fetchCatchall(
   if (!orphans.length) return { caTotal: 0, qtyTotal: 0, produits: [], delegues: [], debugOrders: [], error: null };
 
   const orphanIds = orphans.map((o: any) => o.id as number);
-  const debugOrders = orphans.map((o: any) => ({ id: o.id, name: `${o.name} (note)`, partnerName: o.partner_id ? o.partner_id[1] : undefined }));
+  const debugOrders = orphans.map((o: any) => ({ id: o.id, name: `${o.name} (note)`, partnerName: o.partner_id ? o.partner_id[1] : undefined, invoiceStatus: o.invoice_status }));
 
   // Résoudre les refs produits configurés → IDs
   let filteredProdIds: Set<number> | null = null;
@@ -319,7 +351,20 @@ async function fetchCatchall(
     .map(([uid, v]) => ({ userId: Number(uid), name: v.name, qtyVendue: v.qty, ca: v.ca }))
     .sort((a, b) => b.ca - a.ca);
 
-  return { caTotal, qtyTotal: orphanIds.length, produits, delegues, debugOrders, error: null };
+  const splitValide = { qty: 0, ca: 0 };
+  const splitAvenir = { qty: 0, ca: 0 };
+  if (filter === "all") {
+    for (const o of orphans) {
+      const inv = o.invoice_status ?? "";
+      const orderLines = activeLines.filter((l: any) => l.order_id[0] === o.id);
+      const orderCA = orderLines.reduce((s: number, l: any) => s + (l.price_subtotal || 0), 0);
+      const orderQty = orderLines.reduce((s: number, l: any) => s + (l.product_uom_qty || 0), 0);
+      if (inv === "invoiced") { splitValide.qty += orderQty; splitValide.ca += orderCA; }
+      else { splitAvenir.qty += orderQty; splitAvenir.ca += orderCA; }
+    }
+  }
+
+  return { caTotal, qtyTotal: orphanIds.length, produits, delegues, debugOrders, split: { valide: splitValide, avenir: splitAvenir }, error: null };
 }
 
 // ── Formatage ────────────────────────────────────────────────────────────────
@@ -701,6 +746,17 @@ function AnalyseTab({ session, onToast, filter, sharedCodes, onCodesChange }: {
     + catchalls.filter(c => !c.loading && c.data).reduce((s, c) => s + (c.data?.caTotal ?? 0), 0);
   const totalQty = results.filter(r => !r.loading && !r.error).reduce((s, r) => s + r.qtyTotal, 0)
     + catchalls.filter(c => !c.loading && c.data).reduce((s, c) => s + (c.data?.qtyTotal ?? 0), 0);
+
+  // Split valide / à venir (uniquement en mode "Tout")
+  const splitValideQty = results.filter(r => !r.loading && !r.error).reduce((s, r) => s + (r.split?.valide.qty ?? 0), 0)
+    + catchalls.filter(c => !c.loading && c.data).reduce((s, c) => s + (c.data?.split?.valide.qty ?? 0), 0);
+  const splitAvenirQty = results.filter(r => !r.loading && !r.error).reduce((s, r) => s + (r.split?.avenir.qty ?? 0), 0)
+    + catchalls.filter(c => !c.loading && c.data).reduce((s, c) => s + (c.data?.split?.avenir.qty ?? 0), 0);
+  const splitValideCA = results.filter(r => !r.loading && !r.error).reduce((s, r) => s + (r.split?.valide.ca ?? 0), 0)
+    + catchalls.filter(c => !c.loading && c.data).reduce((s, c) => s + (c.data?.split?.valide.ca ?? 0), 0);
+  const splitAvenirCA = results.filter(r => !r.loading && !r.error).reduce((s, r) => s + (r.split?.avenir.ca ?? 0), 0)
+    + catchalls.filter(c => !c.loading && c.data).reduce((s, c) => s + (c.data?.split?.avenir.ca ?? 0), 0);
+  const hasSplit = filter === "all" && (splitValideQty > 0 || splitAvenirQty > 0);
   const hasResults = results.some(r => !r.loading && !r.error);
 
   // Offres dispo = non encore dans results ET non dans pendingCodes
@@ -774,6 +830,21 @@ function AnalyseTab({ session, onToast, filter, sharedCodes, onCodesChange }: {
       </div>
 
       {/* Totaux */}
+      {hasResults && hasSplit && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          <div style={{ flex: 1, background: C.greenSoft, border: `1px solid ${C.green}33`, borderRadius: 10, padding: "8px 12px" }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: C.green, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 2 }}>✅ Validé</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.green }}>{Math.round(splitValideQty)}</div>
+            <div style={{ fontSize: 10, color: C.green, opacity: 0.8 }}>{fmtCA(splitValideCA)}</div>
+          </div>
+          <div style={{ flex: 1, background: C.orangeSoft, border: `1px solid ${C.orange}33`, borderRadius: 10, padding: "8px 12px" }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: C.orange, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 2 }}>🔜 À venir</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.orange }}>{Math.round(splitAvenirQty)}</div>
+            <div style={{ fontSize: 10, color: C.orange, opacity: 0.8 }}>{fmtCA(splitAvenirCA)}</div>
+          </div>
+        </div>
+      )}
+
       {hasResults && (
         <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
           <div style={{ flex: 2, background: C.tealSoft, border: `1px solid ${C.teal}22`, borderRadius: 12, padding: "12px 14px" }}>

@@ -456,6 +456,7 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
   const [allProducts, setAllProducts] = useState<any[]>([]); // cache complet des produits en stock
   const [loading, setProdLoading] = useState(false);
   const [search, setSearch] = useState("");
+  const [stockOnly, setStockOnly] = useState(true); // n'afficher que les articles avec du stock prévisionnel
   const searchInput = useRef<HTMLInputElement>(null);
   const searchTimer = useRef<any>(null);
 
@@ -464,6 +465,52 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
   const [meaTemplates, setMeaTemplates] = useState<any[]>([]);
   const [meaLoading, setMeaLoading] = useState(false);
   const [applyingMea, setApplyingMea] = useState<number | null>(null);
+
+  // ── Favoris : produits déjà commandés par le client, triés par quantité ───
+  const FAV_CAT_ID = "__fav__";
+  const [favProducts, setFavProducts] = useState<any[]>([]);
+  const [favLoading, setFavLoading] = useState(false);
+  const [favLoaded, setFavLoaded] = useState(false);
+
+  const loadFavorites = async () => {
+    if (favLoaded || !client?.id) return;
+    setFavLoading(true);
+    try {
+      // 12 derniers mois pour rester pertinent et rapide
+      const since = new Date();
+      since.setFullYear(since.getFullYear() - 1);
+      const sinceStr = since.toISOString().slice(0, 10);
+      const lines = await odoo.searchRead(session, "sale.order.line",
+        [["order_partner_id", "=", client.id], ["product_id", "!=", false], ["create_date", ">=", sinceStr]],
+        ["product_id", "product_uom_qty", "create_date"],
+        2000, "create_date desc");
+      // Agrégation par produit : quantité totale, nb de commandes, dernière date
+      const agg = new Map<number, { totalQty: number; times: number; lastDate: string }>();
+      for (const l of lines) {
+        const pid = l.product_id?.[0];
+        if (!pid) continue;
+        const cur = agg.get(pid) || { totalQty: 0, times: 0, lastDate: "" };
+        cur.totalQty += l.product_uom_qty || 0;
+        cur.times += 1;
+        if ((l.create_date || "") > cur.lastDate) cur.lastDate = l.create_date || "";
+        agg.set(pid, cur);
+      }
+      const ids = Array.from(agg.keys());
+      if (ids.length) {
+        const prods = await odoo.searchRead(session, "product.product",
+          [["id", "in", ids]],
+          ["id", "name", "default_code", "lst_price", "product_tmpl_id", "virtual_available", "image_128"],
+          ids.length);
+        const enriched = prods.map((p: any) => ({ ...p, ...agg.get(p.id) }));
+        enriched.sort((a: any, b: any) => (b.totalQty || 0) - (a.totalQty || 0));
+        setFavProducts(enriched);
+      } else {
+        setFavProducts([]);
+      }
+      setFavLoaded(true);
+    } catch (e: any) { onToast("Erreur favoris: " + e.message, "error"); }
+    setFavLoading(false);
+  };
 
   const loadMeaTemplates = async () => {
     if (meaTemplates.length > 0) return;
@@ -553,14 +600,19 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
     }, 300);
   }, [search, loadAll, isSearching]);
 
-  const displayedProducts = isSearching
+  const inStock = (p: any) => (p.virtual_available || 0) > 0;
+
+  const baseProducts = isSearching
     ? searchResults
-    : activeCatId
-      ? allProducts.filter(p => {
-          const cat = smartCats.find(c => c.id === activeCatId);
-          return cat ? matchesCat(p, cat) : true;
-        })
-      : allProducts;
+    : activeCatId === FAV_CAT_ID
+      ? favProducts
+      : activeCatId
+        ? allProducts.filter(p => {
+            const cat = smartCats.find(c => c.id === activeCatId);
+            return cat ? matchesCat(p, cat) : true;
+          })
+        : allProducts;
+  const displayedProducts = stockOnly ? baseProducts.filter(inStock) : baseProducts;
 
   const freeProductIds = new Set(freeItems.map(f => f.product.id));
   const cartItems = Object.values(cart);
@@ -581,9 +633,18 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
           <span>🏠</span> Tous
         </button>
 
+        {/* Favoris du client */}
+        <button onClick={() => { setActiveCatId(FAV_CAT_ID); loadFavorites(); }}
+          style={{ width: "100%", padding: "10px 10px", background: activeCatId === FAV_CAT_ID ? C.orangeSoft : "transparent", border: "none", borderLeft: `3px solid ${activeCatId === FAV_CAT_ID ? C.orange : "transparent"}`, cursor: "pointer", textAlign: "left" as const, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, transition: "all 0.1s" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: activeCatId === FAV_CAT_ID ? 700 : 400, color: activeCatId === FAV_CAT_ID ? C.orange : C.textSec }}>
+            <span>⭐</span> Favoris
+          </span>
+          {favLoaded && favProducts.length > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: activeCatId === FAV_CAT_ID ? C.orange : C.muted, background: activeCatId === FAV_CAT_ID ? C.orangeSoft : C.bg, borderRadius: 5, padding: "1px 5px", flexShrink: 0 }}>{favProducts.length}</span>}
+        </button>
+
         {/* Catégories configurées */}
         {smartCats.map(cat => {
-          const count = allProducts.filter(p => matchesCat(p, cat)).length;
+          const count = allProducts.filter(p => matchesCat(p, cat) && (!stockOnly || inStock(p))).length;
           const active = activeCatId === cat.id;
           return (
             <button key={cat.id} onClick={() => setActiveCatId(cat.id)}
@@ -629,6 +690,16 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
               </button>
             )}
           </div>
+          {/* Toggle stock dispo */}
+          <button
+            onClick={() => setStockOnly(v => !v)}
+            title={stockOnly ? "Afficher aussi les articles en rupture" : "N'afficher que les articles en stock"}
+            style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0, background: stockOnly ? C.tealSoft : C.bg, border: `1.5px solid ${stockOnly ? C.teal : C.border}`, borderRadius: 10, padding: "7px 11px", cursor: "pointer", fontFamily: "inherit" }}>
+            <span style={{ width: 30, height: 17, borderRadius: 10, background: stockOnly ? C.teal : C.muted, position: "relative" as const, transition: "background 0.15s", flexShrink: 0 }}>
+              <span style={{ position: "absolute", top: 2, left: stockOnly ? 15 : 2, width: 13, height: 13, borderRadius: "50%", background: "#fff", transition: "left 0.15s" }} />
+            </span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: stockOnly ? C.tealDark : C.textSec, whiteSpace: "nowrap" as const }}>Stock dispo</span>
+          </button>
           {/* Compteur résultats */}
           {(activeCatId || isSearching) && (
             <div style={{ fontSize: 12, color: C.muted, flexShrink: 0 }}>
@@ -673,6 +744,13 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
                 })}
               </div>
             )
+          ) : activeCatId === FAV_CAT_ID && favLoading ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: C.muted }}>Chargement des favoris…</div>
+          ) : activeCatId === FAV_CAT_ID && favLoaded && displayedProducts.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 60, color: C.muted }}>
+              <div style={{ fontSize: 32, marginBottom: 10 }}>⭐</div>
+              <div>{favProducts.length === 0 ? "Ce client n'a passé aucune commande sur les 12 derniers mois" : "Aucun favori en stock — désactive « Stock dispo » pour tout voir"}</div>
+            </div>
           ) : loading && allProducts.length === 0 ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: C.muted }}>Chargement…</div>
           ) : !activeCatId && !isSearching && allProducts.length === 0 ? (
@@ -704,12 +782,17 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
                     <div style={{ padding: "8px 10px 10px" }}>
                       <div style={{ fontSize: 9, color: C.muted, fontFamily: "monospace", marginBottom: 1 }}>{p.default_code}</div>
                       <div style={{ fontSize: 11, fontWeight: 600, color: C.text, lineHeight: 1.3, height: 28, overflow: "hidden" }}>{p.name}</div>
+                      {activeCatId === FAV_CAT_ID && p.totalQty != null && (
+                        <div style={{ fontSize: 9, fontWeight: 700, color: C.orange, background: C.orangeSoft, borderRadius: 5, padding: "2px 5px", marginTop: 3, display: "inline-block" }}>
+                          ⭐ {Math.round(p.totalQty)} commandé{Math.round(p.totalQty) > 1 ? "s" : ""} · {p.times} fois
+                        </div>
+                      )}
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 5, marginBottom: 6 }}>
                         <div style={{ display: "flex", flexDirection: "column" as const, gap: 1 }}>
                           <span style={{ fontSize: 13, fontWeight: 800, color: hasDiscount ? C.green : C.tealDark }}>{clientPrice > 0 ? fmtPrice(clientPrice) : "—"}</span>
                           {hasDiscount && <span style={{ fontSize: 9, color: C.muted, textDecoration: "line-through" }}>{fmtPrice(p.lst_price)}</span>}
                         </div>
-                        <span style={{ fontSize: 9, fontWeight: 600, color: C.green, background: C.greenSoft, borderRadius: 5, padding: "2px 5px" }}>{stock}</span>
+                        <span style={{ fontSize: 9, fontWeight: 600, color: stock > 0 ? C.green : C.red, background: stock > 0 ? C.greenSoft : C.redSoft, borderRadius: 5, padding: "2px 5px" }}>{stock > 0 ? stock : "Rupture"}</span>
                       </div>
                       <div style={{ display: "flex", background: qty > 0 ? C.tealSoft : C.bg, borderRadius: 8, overflow: "hidden", border: `1px solid ${qty > 0 ? C.tealMid : C.border}` }}>
                         <button onClick={() => onQtyChange(p, qty - 1, clientPrice)} style={{ flex: 1, padding: "7px 0", background: "transparent", border: "none", cursor: "pointer", fontSize: 17, fontWeight: 700, color: qty > 0 ? C.red : C.muted, lineHeight: 1 }}>−</button>
