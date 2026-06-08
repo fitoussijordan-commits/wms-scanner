@@ -264,7 +264,7 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
   );
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: C.bg, display: "flex", flexDirection: "column" as const, fontFamily: "'DM Sans', sans-serif", overflow: "hidden" }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 150, background: C.bg, display: "flex", flexDirection: "column" as const, fontFamily: "'DM Sans', sans-serif", overflow: "hidden" }}>
 
       {/* ── Top bar ── */}
       <div style={{ height: 56, background: "#fff", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", padding: "0 20px", gap: 16, flexShrink: 0, boxShadow: C.shadow }}>
@@ -462,6 +462,9 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
   const searchInput = useRef<HTMLInputElement>(null);
   const searchTimer = useRef<any>(null);
 
+  // URL vignette via proxy (chargée en lazy + cache navigateur 1h) — évite de charger 500 base64 d'un coup
+  const imgUrl = (id: number) => `/api/odoo/image?odooUrl=${encodeURIComponent(session.config.url)}&id=${id}&s=${session.sessionId}`;
+
   // ── Zoom image produit ─────────────────────────────────────────────────────
   const [zoom, setZoom] = useState<any>(null);          // produit affiché en grand
   const [zoomImg, setZoomImg] = useState<string>("");   // base64 image_1024
@@ -517,7 +520,7 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
       if (ids.length) {
         const prods = await odoo.searchRead(session, "product.product",
           [["id", "in", ids]],
-          ["id", "name", "default_code", "lst_price", "product_tmpl_id", "virtual_available", "image_128"],
+          ["id", "name", "default_code", "lst_price", "product_tmpl_id", "virtual_available"],
           ids.length);
         const enriched = prods.map((p: any) => ({ ...p, ...agg.get(p.id) }));
         enriched.sort((a: any, b: any) => (b.totalQty || 0) - (a.totalQty || 0));
@@ -558,7 +561,7 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
       const productIds = lines.map((l: any) => l.product_id[0]);
       const products = await odoo.searchRead(session, "product.product",
         [["id", "in", productIds]],
-        ["id", "name", "default_code", "lst_price", "product_tmpl_id", "virtual_available", "image_128"],
+        ["id", "name", "default_code", "lst_price", "product_tmpl_id", "virtual_available"],
         productIds.length);
       const productMap = new Map<number, any>(products.map((p: any) => [p.id as number, p]));
 
@@ -592,7 +595,7 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
     }
     try {
       const p = await odoo.searchRead(session, "product.product", domain,
-        ["id", "name", "default_code", "lst_price", "product_tmpl_id", "virtual_available", "image_128"], 500, "name");
+        ["id", "name", "default_code", "lst_price", "product_tmpl_id", "virtual_available"], 500, "name");
       // Produits en stock en premier, puis les autres
       p.sort((a: any, b: any) => (b.virtual_available || 0) - (a.virtual_available || 0));
       if (!q) setAllProducts(p);
@@ -793,7 +796,8 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
                 return (
                   <div key={p.id} style={{ background: C.white, borderRadius: 14, overflow: "hidden", border: `2px solid ${qty > 0 ? C.teal : isFree ? C.green : C.border}`, boxShadow: qty > 0 ? `0 0 0 3px ${C.tealSoft}` : C.shadow, transition: "all 0.15s" }}>
                     <div onClick={() => openZoom(p)} title="Agrandir l'image" style={{ height: 80, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" as const, cursor: "zoom-in" }}>
-                      {p.image_128 ? <img src={`data:image/png;base64,${p.image_128}`} alt="" style={{ height: 72, objectFit: "contain" }} /> : <div style={{ fontSize: 32 }}>📦</div>}
+                      <div style={{ position: "absolute", fontSize: 32 }}>📦</div>
+                      <img src={imgUrl(p.id)} alt="" loading="lazy" style={{ height: 72, objectFit: "contain", position: "relative" as const, zIndex: 1 }} onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
                       <div style={{ position: "absolute", bottom: 4, right: 4, background: "rgba(255,255,255,0.85)", borderRadius: 6, width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2.5"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/></svg>
                       </div>
@@ -917,10 +921,8 @@ function CatalogStep({ session, cart, onQtyChange, freeItems, onValidate, submit
                 <span style={{ color: C.muted, fontSize: 13 }}>Chargement…</span>
               ) : zoomImg ? (
                 <img src={`data:image/png;base64,${zoomImg}`} alt="" style={{ maxHeight: 320, maxWidth: "90%", objectFit: "contain" }} />
-              ) : zoom.image_128 ? (
-                <img src={`data:image/png;base64,${zoom.image_128}`} alt="" style={{ maxHeight: 200, maxWidth: "90%", objectFit: "contain" }} />
               ) : (
-                <div style={{ fontSize: 64 }}>📦</div>
+                <img src={imgUrl(zoom.id)} alt="" style={{ maxHeight: 200, maxWidth: "90%", objectFit: "contain" }} onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
               )}
             </div>
             {/* Infos */}
