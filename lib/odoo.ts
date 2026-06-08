@@ -1686,21 +1686,33 @@ export async function applyInventoryAdjustment(
   newQty: number,
   reason?: string
 ): Promise<void> {
+  // Lire product_id + location_id avant d'appliquer (pour retrouver le move après)
+  let productId: number | null = null;
+  let locationId: number | null = null;
+  if (reason?.trim()) {
+    try {
+      const quants = await searchRead(session, "stock.quant", [["id", "=", quantId]], ["product_id", "location_id"], 1);
+      if (quants.length) { productId = quants[0].product_id?.[0]; locationId = quants[0].location_id?.[0]; }
+    } catch {}
+  }
+
   await write(session, "stock.quant", [quantId], { inventory_quantity: newQty });
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 
-  // Écrire la raison via le wizard stock.inventory.adjustment.name (Odoo 17+)
-  if (reason?.trim()) {
+  // Écrire la raison sur le stock.move créé par l'ajustement
+  if (reason?.trim() && productId && locationId) {
     try {
-      const wizardId = await create(session, "stock.inventory.adjustment.name", {
-        inventory_adjustment_name: reason.trim(),
-        quant_ids: [[6, 0, [quantId]]],
-      });
-      await callMethod(session, "stock.inventory.adjustment.name", "action_apply", [[wizardId]]);
-    } catch {
-      // Modèle absent (Odoo < 17) — on tente inventory_reason en fallback
-      try { await write(session, "stock.quant", [quantId], { inventory_reason: reason.trim() }); } catch {}
-    }
+      // Cherche le move d'inventaire le plus récent pour ce produit/emplacement
+      const moves = await searchRead(
+        session, "stock.move",
+        [["state", "=", "done"], ["product_id", "=", productId],
+         ["|", ["location_id", "=", locationId], ["location_dest_id", "=", locationId]]],
+        ["id", "reference"], 1, "date desc"
+      );
+      if (moves.length) {
+        await write(session, "stock.move", [moves[0].id], { reference: reason.trim() });
+      }
+    } catch {}
   }
 }
 
@@ -1723,14 +1735,14 @@ export async function createInventoryAdjustment(
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
   if (reason?.trim()) {
     try {
-      const wizardId = await create(session, "stock.inventory.adjustment.name", {
-        inventory_adjustment_name: reason.trim(),
-        quant_ids: [[6, 0, [quantId]]],
-      });
-      await callMethod(session, "stock.inventory.adjustment.name", "action_apply", [[wizardId]]);
-    } catch {
-      try { await write(session, "stock.quant", [quantId], { inventory_reason: reason.trim() }); } catch {}
-    }
+      const moves = await searchRead(
+        session, "stock.move",
+        [["state", "=", "done"], ["product_id", "=", productId],
+         ["|", ["location_id", "=", locationId], ["location_dest_id", "=", locationId]]],
+        ["id"], 1, "date desc"
+      );
+      if (moves.length) await write(session, "stock.move", [moves[0].id], { reference: reason.trim() });
+    } catch {}
   }
 }
 
