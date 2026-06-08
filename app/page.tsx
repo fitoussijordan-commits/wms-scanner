@@ -8617,18 +8617,21 @@ function InventoryScreen({ session, onBack, onToast, initialProduct }: { session
   const saveAdjustments = async () => {
     setSaving(true);
     setConfirmOpen(false);
+    const total = changedQuants.length;
+    const reason = adjustReason;
+    setAdjustReason(""); // reset la raison
     let errors = 0;
     for (const q of changedQuants) {
       const newQty = parseFloat(adjustments[q.id]);
       try {
-        await odoo.applyInventoryAdjustment(session, q.id, newQty, adjustReason || undefined);
+        await odoo.applyInventoryAdjustment(session, q.id, newQty, reason || undefined);
         // Update local state
         setQuants(prev => prev.map(pq => pq.id === q.id ? { ...pq, quantity: newQty } : pq));
         setAdjustments(prev => ({ ...prev, [q.id]: String(newQty) }));
       } catch (e: any) { errors++; onToast("Erreur: " + e.message); }
     }
     setSaving(false);
-    if (errors === 0) onToast(`✅ ${changedQuants.length} ajustement(s) appliqué(s)`);
+    onToast(errors === 0 ? `✅ ${total} ajustement(s) appliqué(s)` : `⚠️ ${total - errors} OK · ${errors} erreur(s)`);
   };
 
   return (
