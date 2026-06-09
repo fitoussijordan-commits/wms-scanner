@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as odoo from "@/lib/odoo";
 import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByNumero as palFind, createPalette as palCreate, upsertLigne as palUpsert, updateLigneQty as palUpdateQty, updatePalette as palUpdate, searchProductInPalettes as palSearch, searchLotInPalettes as palSearchLot, searchByEmplacement as palSearchEmpl, generatePaletteZPL as palZPL, loadPickingSlots, upsertPickingSlot, deletePickingSlot } from "@/lib/supabase-palettes";
 import type { WmsPickingSlot } from "@/lib/supabase-palettes";
+import { createNotification, loadTodayNotifications, type WmsNotification } from "@/lib/supabase";
 import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
@@ -1190,6 +1191,31 @@ export default function Page() {
   const [newOrderNotif, setNewOrderNotif] = useState<{ count: number; names: string[] } | null>(null);
   const knownOrderIdsRef = useRef<Set<number>>(new Set());
 
+  // ── Notifications (cloche header) ──
+  const [notifs, setNotifs] = useState<WmsNotification[]>([]);
+  const [showNotifs, setShowNotifs] = useState(false);
+  const [notifSeenAt, setNotifSeenAt] = useState<number>(0);
+  const refreshNotifs = useCallback(() => {
+    loadTodayNotifications().then(setNotifs).catch(() => {});
+  }, []);
+  useEffect(() => {
+    setNotifSeenAt(Number(localStorage.getItem("wms_notif_seen_at") || 0));
+  }, []);
+  const notifUnread = notifs.filter(n => new Date(n.created_at).getTime() > notifSeenAt).length;
+  const openNotifs = () => {
+    setShowNotifs(true);
+    const now = Date.now();
+    setNotifSeenAt(now);
+    try { localStorage.setItem("wms_notif_seen_at", String(now)); } catch {}
+  };
+  // Charge les notifs du jour à la connexion, puis rafraîchit toutes les 60 s
+  useEffect(() => {
+    if (!session) return;
+    refreshNotifs();
+    const t = setInterval(refreshNotifs, 60_000);
+    return () => clearInterval(t);
+  }, [session, refreshNotifs]);
+
   // ── Control Center (desktop only) ────────────────────────────────────────
   const [ccData, setCcData] = useState<{
     waitingToday: { count: number; names: string[] };
@@ -1850,30 +1876,27 @@ export default function Page() {
   // Anti-doublon : on n'alerte qu'une fois par (ligne + lot scanné), pas à chaque +1.
   const lotAlertedRef = useRef<Set<string>>(new Set());
 
-  // Alerte email quand un lot différent du lot réservé est utilisé en préparation.
-  // Échec rendu VISIBLE (toast + log) — plus de catch silencieux, pour pouvoir diagnostiquer.
+  // Notification in-app quand un lot différent du lot réservé est utilisé en préparation.
+  // Enregistrée dans Supabase → visible par tous via la cloche du header (notifs du jour).
   const notifyLotSubstitution = async (info: { productName: string; productCode?: string; expectedLot: string; scannedLot: string }) => {
     try {
-      const res = await fetch("/api/alert-lot", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      await createNotification({
+        type: "lot_substitution",
+        title: `Lot substitué — ${selectedPicking?.name || "préparation"}`,
+        body: `${info.productCode ? `[${info.productCode}] ` : ""}${info.productName} : lot réservé ${info.expectedLot} → lot pris ${info.scannedLot} (par ${session?.name || "—"})`,
+        meta: {
           pickingName: selectedPicking?.name || "—",
           productName: info.productName || "—",
           productCode: info.productCode || "",
           expectedLot: info.expectedLot || "—",
           scannedLot: info.scannedLot || "—",
           operatorName: session?.name || "—",
-        }),
+        },
       });
-      if (!res.ok) {
-        let detail = ""; try { detail = (await res.json())?.error || ""; } catch {}
-        console.error("[alert-lot] échec envoi", res.status, detail);
-        showToast(`⚠️ Alerte lot non envoyée (${res.status})`);
-      }
+      refreshNotifs();
     } catch (e: any) {
-      console.error("[alert-lot] erreur réseau", e?.message);
-      showToast("⚠️ Alerte lot non envoyée (réseau)");
+      console.error("[notif] échec enregistrement", e?.message);
+      showToast("⚠️ Notification non enregistrée");
     }
   };
 
@@ -2418,7 +2441,51 @@ export default function Page() {
 
   return (
     <Shell toast={toast} flash={scanFlash}>
-      <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} />
+      <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} />
+
+      {/* ── Panneau notifications du jour (cloche header) ── */}
+      {showNotifs && (
+        <div onClick={() => setShowNotifs(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 10000, display: "flex", justifyContent: "flex-end", alignItems: "flex-start", padding: "64px 12px 12px" }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.white, borderRadius: 16, width: "100%", maxWidth: 380, maxHeight: "80vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 50px rgba(0,0,0,0.25)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="1.8"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+                <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Notifications du jour</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button onClick={refreshNotifs} title="Rafraîchir" style={{ ...iconBtn, padding: 6 }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+                </button>
+                <button onClick={() => setShowNotifs(false)} style={{ ...iconBtn, padding: 6 }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+            </div>
+            <div style={{ overflowY: "auto", padding: 12 }}>
+              {notifs.length === 0 ? (
+                <div style={{ textAlign: "center", color: C.textMuted, fontSize: 13, padding: "30px 0" }}>Aucune notification aujourd'hui</div>
+              ) : notifs.map(n => {
+                const t = new Date(n.created_at);
+                const hh = `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+                return (
+                  <div key={n.id} style={{ display: "flex", gap: 10, padding: "10px 12px", marginBottom: 8, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+                    <div style={{ width: 30, height: 30, borderRadius: 8, background: "#fef2f2", border: "1px solid #fecaca", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{n.title}</span>
+                        <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{hh}</span>
+                      </div>
+                      {n.body && <div style={{ fontSize: 12, color: C.textSec, marginTop: 3, lineHeight: 1.4 }}>{n.body}</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
 
       {/* ── Bannière nouvelles commandes (desktop uniquement) ── */}
@@ -3402,7 +3469,7 @@ function Shell({ children, toast, flash }: { children: React.ReactNode; toast: s
   );
 }
 
-function Header({ name, onLogout, onHome, onSettings, isAdmin }: { name?: string; onLogout: () => void; onHome: () => void; onSettings: () => void; isAdmin?: boolean }) {
+function Header({ name, onLogout, onHome, onSettings, isAdmin, notifCount = 0, onNotifs }: { name?: string; onLogout: () => void; onHome: () => void; onSettings: () => void; isAdmin?: boolean; notifCount?: number; onNotifs?: () => void }) {
   return (
     <header style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -3413,6 +3480,16 @@ function Header({ name, onLogout, onHome, onSettings, isAdmin }: { name?: string
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.green, boxShadow: `0 0 6px ${C.green}` }} />
         <span style={{ fontSize: 12, color: C.textSec }}>{name}</span>
+        {onNotifs && (
+          <button onClick={onNotifs} style={{ ...iconBtn, position: "relative" }} title="Notifications du jour" aria-label="Notifications">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="1.8"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+            {notifCount > 0 && (
+              <span style={{ position: "absolute", top: -4, right: -4, minWidth: 16, height: 16, padding: "0 4px", borderRadius: 8, background: C.red, color: "#fff", fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>
+                {notifCount > 9 ? "9+" : notifCount}
+              </span>
+            )}
+          </button>
+        )}
         <button onClick={onSettings} style={iconBtn}>{settingsIcon}</button>
         <button onClick={onLogout} style={iconBtn}>{logoutIcon}</button>
       </div>

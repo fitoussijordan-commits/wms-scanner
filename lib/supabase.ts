@@ -249,6 +249,44 @@ export async function deleteScanSession(id: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+// ══════════════════════════════════════════
+// NOTIFICATIONS (cloche header — partagées entre postes)
+// ══════════════════════════════════════════
+
+export interface WmsNotification {
+  id: string;
+  type: string;
+  title: string;
+  body: string | null;
+  meta: any;
+  created_at: string;
+}
+
+/** Enregistre une notification (ex : substitution de lot en préparation). */
+export async function createNotification(n: { type?: string; title: string; body?: string; meta?: any }): Promise<void> {
+  const { error } = await sb.from("wms_notifications").insert({
+    type: n.type || "lot_substitution",
+    title: n.title,
+    body: n.body ?? null,
+    meta: n.meta ?? null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/** Charge les notifications du jour (depuis minuit), les plus récentes d'abord. */
+export async function loadTodayNotifications(): Promise<WmsNotification[]> {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const { data, error } = await sb
+    .from("wms_notifications")
+    .select("*")
+    .gte("created_at", start.toISOString())
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) throw new Error(error.message);
+  return (data || []) as WmsNotification[];
+}
+
 /** Returns true if cache is older than maxAgeMinutes */
 export function isCacheStale(syncedAt: Date | null, maxAgeMinutes: number): boolean {
   if (!syncedAt) return true;
