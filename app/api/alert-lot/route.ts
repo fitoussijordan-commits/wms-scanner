@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
   if (!rl.allowed) return NextResponse.json({ ok: false }, { status: 429 });
 
   if (!ODOO_URL || !ALERT_EMAIL) {
+    console.error("[alert-lot] config manquante", { hasOdooUrl: !!ODOO_URL, hasAlertEmail: !!ALERT_EMAIL });
     return NextResponse.json({ ok: false, error: "ODOO_URL ou ALERT_EMAIL non configuré" }, { status: 500 });
   }
 

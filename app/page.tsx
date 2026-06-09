@@ -1847,6 +1847,36 @@ export default function Page() {
     return await odoo.getPickingMoveLines(session, picking.id);
   };
 
+  // Anti-doublon : on n'alerte qu'une fois par (ligne + lot scanné), pas à chaque +1.
+  const lotAlertedRef = useRef<Set<string>>(new Set());
+
+  // Alerte email quand un lot différent du lot réservé est utilisé en préparation.
+  // Échec rendu VISIBLE (toast + log) — plus de catch silencieux, pour pouvoir diagnostiquer.
+  const notifyLotSubstitution = async (info: { productName: string; productCode?: string; expectedLot: string; scannedLot: string }) => {
+    try {
+      const res = await fetch("/api/alert-lot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pickingName: selectedPicking?.name || "—",
+          productName: info.productName || "—",
+          productCode: info.productCode || "",
+          expectedLot: info.expectedLot || "—",
+          scannedLot: info.scannedLot || "—",
+          operatorName: session?.name || "—",
+        }),
+      });
+      if (!res.ok) {
+        let detail = ""; try { detail = (await res.json())?.error || ""; } catch {}
+        console.error("[alert-lot] échec envoi", res.status, detail);
+        showToast(`⚠️ Alerte lot non envoyée (${res.status})`);
+      }
+    } catch (e: any) {
+      console.error("[alert-lot] erreur réseau", e?.message);
+      showToast("⚠️ Alerte lot non envoyée (réseau)");
+    }
+  };
+
   const doPrepScan = async (code: string) => {
     const currentStep = prepStepRef.current;
     const currentLines = pickingMoveLinesRef.current;
@@ -2009,19 +2039,7 @@ export default function Page() {
             );
             if (ml) {
               showToast(`ℹ️ Lot ${lotName} substitué à ${ml.lot_id?.[1] || "autre lot"}`);
-              // Alerte email — fire & forget, ne bloque pas l'UI
-              fetch("/api/alert-lot", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  pickingName: selectedPicking?.name || "—",
-                  productName: ml.product_id?.[1] || "—",
-                  productCode: ml.product_id?.[1]?.split("]")[0]?.replace("[", "") || "",
-                  expectedLot: ml.lot_id?.[1] || "—",
-                  scannedLot: lotName || "—",
-                  operatorName: session?.name || "—",
-                }),
-              }).catch(() => {}); // silencieux en cas d'erreur réseau
+              // L'alerte email part plus bas, dès qu'un lot ≠ lot réservé est écrit (déclencheur unique élargi)
             } else {
               showToast(`✅ Lot ${lotName} déjà complet — rien de plus à prendre`);
               flashScan("ok");
@@ -2063,6 +2081,22 @@ export default function Page() {
       const actualLotName = lotName || ml.lot_id?.[1] || null;
       // Si le lot scanné est différent de celui de la ligne → on le transmet à Odoo
       const writeLotId = lotId && lotId !== (ml.lot_id?.[0] ?? null) ? lotId : null;
+
+      // ── Alerte email : tout lot scanné ≠ lot réservé sur la ligne ──────────
+      // (déclencheur élargi — couvre désormais tous les cas de substitution, pas seulement
+      //  celui d'un lot déjà complet remplacé par un autre)
+      if (writeLotId && ml.lot_id?.[0]) {
+        const alertKey = `${ml.id}:${writeLotId}`;
+        if (!lotAlertedRef.current.has(alertKey)) {
+          lotAlertedRef.current.add(alertKey);
+          notifyLotSubstitution({
+            productName: ml.product_id?.[1] || "—",
+            productCode: ml.product_id?.[1]?.split("]")[0]?.replace("[", "") || "",
+            expectedLot: ml.lot_id?.[1] || "—",
+            scannedLot: lotName || "—",
+          });
+        }
+      }
 
       // ── Mise à jour optimiste (instantanée) ──────────────────────────────
       const optimisticLines = currentLines.map((m: any) =>
@@ -10191,6 +10225,14 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
     allLines.filter((ml: any) => (ml.reserved_uom_qty || 0) > 0),
   [allLines]);
 
+  // Emplacement suivant — pour l'indice "Ensuite" (préparateur peut anticiper son trajet)
+  const nextLine = useMemo(() => {
+    if (!currentLine) return null;
+    const pending = displayLines.filter((ml: any) => getQty(ml) < (ml.reserved_uom_qty || 0));
+    const curLoc = currentLine.location_id?.[0];
+    return pending.find((ml: any) => ml.location_id?.[0] !== curLoc) || pending.find((ml: any) => ml.id !== currentLine.id) || null;
+  }, [displayLines, currentLine]); // eslint-disable-line
+
   const doneLines = displayLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).length;
   const totalLines = displayLines.length;
   const allDone = totalLines > 0 && doneLines === totalLines;
@@ -10467,22 +10509,50 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           {/* Étape */}
           <div style={{ fontSize: 11, fontWeight: 700, color: locOk && prepStep ? C.green : C.blue, letterSpacing: 0.5, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
             {!locOk
-              ? <><span style={{ background: C.blue, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>1</span> SCANNER L'EMPLACEMENT</>
-              : <><span style={{ background: C.green, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>✓</span> EMPLACEMENT OK — SCANNER LE LOT</>
+              ? <><span style={{ background: C.blue, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>1</span> RENDEZ-VOUS À L'EMPLACEMENT</>
+              : <><span style={{ background: C.green, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>2</span> SCANNER LE LOT &amp; COMPTER</>
             }
           </div>
 
-          {/* Emplacement */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-            <div
-              onClick={() => { if (!locOk && onManualConfirmLoc) setShowLocConfirm(true); }}
-              style={{ background: locOk ? C.greenSoft : C.blueSoft, border: `1px solid ${locOk ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "6px 12px", fontSize: 18, fontWeight: 900, color: locOk ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center", cursor: !locOk ? "pointer" : "default", userSelect: "none" as const }}>
-              📍 {locOk && prepStep ? shortLoc(prepStep.locName) : shortLoc(currentLine.location_id?.[1] || "—")}
+          {/* Emplacement — étape 1 : en grand pour guider le trajet ; étape 2 : bandeau validé compact */}
+          {!locOk ? (
+            <>
+              <div
+                onClick={() => { if (onManualConfirmLoc) setShowLocConfirm(true); }}
+                style={{ background: C.blueSoft, border: `1px solid ${C.blueBorder}`, borderRadius: 16, padding: "24px 12px", textAlign: "center", cursor: "pointer", userSelect: "none" as const, marginBottom: 12 }}>
+                <div style={{ color: C.blue, fontSize: 24, marginBottom: 2 }}>📍</div>
+                <div style={{ fontSize: 40, fontWeight: 900, color: C.blue, letterSpacing: 1, lineHeight: 1 }}>
+                  {shortLoc(currentLine.location_id?.[1] || "—")}
+                </div>
+                <div style={{ fontSize: 11, color: C.blue, opacity: 0.7, marginTop: 8 }}>Appuyer si vous y êtes déjà</div>
+              </div>
+              {/* Produit en rappel estompé — on sait quoi on va chercher sans encombrer */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, opacity: 0.55, padding: "0 2px" }}>
+                {activeLine && (
+                  <img key={activeLine.product_id[0]}
+                    src={`/api/odoo/image?odooUrl=${encodeURIComponent(session.config.url)}&id=${activeLine.product_id[0]}&s=${session.sessionId}`}
+                    loading="lazy" alt=""
+                    style={{ width: 40, height: 40, objectFit: "contain", borderRadius: 8, background: "#f1f5f9", flexShrink: 0, border: "1px solid #e2e8f0" }}
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
+                )}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis" }}>{activeLine?.product_id[1]}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>
+                    {effectiveQty.total} {activeLine?.product_uom_id?.[1] || "u."}{activeLine?.lot_id ? ` · lot ${activeLine.lot_id[1]}` : ""}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.greenSoft, border: `1px solid ${C.greenBorder}`, borderRadius: 10, padding: "7px 12px", marginBottom: 14 }}>
+              <div style={{ width: 24, height: 24, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
+              <span style={{ fontSize: 15, fontWeight: 900, color: C.green, letterSpacing: 0.3 }}>📍 {prepStep ? shortLoc(prepStep.locName) : shortLoc(currentLine.location_id?.[1] || "—")}</span>
+              <span style={{ marginLeft: "auto", fontSize: 11, color: C.textSec, fontWeight: 600 }}>emplacement OK</span>
             </div>
-            {locOk && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
-            </div>}
-          </div>
+          )}
 
           {/* Modal confirmation emplacement manuel */}
           {showLocConfirm && (
@@ -10511,6 +10581,8 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
             </div>
           )}
 
+          {/* ── ÉTAPE 2 : produit + lot + quantité, une fois l'emplacement validé ── */}
+          {locOk && (<>
           {/* Produit */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
             {activeLine && (
@@ -10599,8 +10671,17 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
               </button>
             )}
           </div>
+          </>)}
         </div>
       ) : null}
+
+      {/* ── Indice : emplacement suivant (anticipation du trajet) ── */}
+      {!allDone && nextLine && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11, color: C.textMuted, marginBottom: 12 }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+          <span>Ensuite&nbsp;: <span style={{ fontWeight: 700, color: C.textSec }}>{shortLoc(nextLine.location_id?.[1] || "—")}</span>{nextLine.product_id ? ` · ${nextLine.product_id[1]}` : ""}</span>
+        </div>
+      )}
 
       {/* ── Input scan ── */}
       {!allDone && (
