@@ -10603,21 +10603,23 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
                 </div>
                 <div style={{ fontSize: 11, color: C.blue, opacity: 0.7, marginTop: 8 }}>Appuyer si vous y êtes déjà</div>
               </div>
-              {/* Produit en rappel estompé — on sait quoi on va chercher sans encombrer */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, opacity: 0.55, padding: "0 2px" }}>
+              {/* Produit + quantité à prendre — bien visible dès l'arrivée à l'emplacement */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 12 }}>
                 {activeLine && (
                   <img key={activeLine.product_id[0]}
                     src={`/api/odoo/image?odooUrl=${encodeURIComponent(session.config.url)}&id=${activeLine.product_id[0]}&s=${session.sessionId}`}
                     loading="lazy" alt=""
-                    style={{ width: 40, height: 40, objectFit: "contain", borderRadius: 8, background: "#f1f5f9", flexShrink: 0, border: "1px solid #e2e8f0" }}
+                    style={{ width: 48, height: 48, objectFit: "contain", borderRadius: 8, background: "#f1f5f9", flexShrink: 0, border: "1px solid #e2e8f0" }}
                     onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                   />
                 )}
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis" }}>{activeLine?.product_id[1]}</div>
-                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>
-                    {effectiveQty.total} {activeLine?.product_uom_id?.[1] || "u."}{activeLine?.lot_id ? ` · lot ${activeLine.lot_id[1]}` : ""}
-                  </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text, lineHeight: 1.3 }}>{activeLine?.product_id[1]}</div>
+                  {activeLine?.lot_id && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>🏷️ Lot {activeLine.lot_id[1]}</div>}
+                </div>
+                <div style={{ textAlign: "center", flexShrink: 0, paddingLeft: 6 }}>
+                  <div style={{ fontSize: 30, fontWeight: 900, color: C.blue, lineHeight: 1 }}>{effectiveQty.total}</div>
+                  <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2, fontWeight: 600 }}>à prendre</div>
                 </div>
               </div>
             </>
