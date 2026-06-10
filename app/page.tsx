@@ -10494,7 +10494,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   return (
     <>
       {/* ── Header ── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
         <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
@@ -10511,14 +10511,14 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
       </div>
 
       {/* ── Progress bar ── */}
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Progression</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: allDone ? C.green : C.blue }}>
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: C.text }}>Progression</span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: allDone ? C.green : C.blue }}>
             {doneUnits}/{totalUnits} produits
           </span>
         </div>
-        <div style={{ height: 8, borderRadius: 4, background: C.bg, overflow: "hidden", border: `1px solid ${C.border}` }}>
+        <div style={{ height: 6, borderRadius: 4, background: C.bg, overflow: "hidden", border: `1px solid ${C.border}` }}>
           <div style={{ height: "100%", width: `${progress}%`, borderRadius: 4, background: allDone ? C.green : C.blue, transition: "width .3s" }} />
         </div>
       </div>
@@ -10580,11 +10580,11 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         <div style={{
           background: locOk && prepStep ? "#f0fdf4" : "#f8fafc",
           border: `2px solid ${locOk && prepStep ? C.green : C.blue}`,
-          borderRadius: 20, padding: 20, marginBottom: 16,
+          borderRadius: 16, padding: 14, marginBottom: 12,
           transition: "background .3s, border-color .3s"
         }}>
           {/* Étape */}
-          <div style={{ fontSize: 11, fontWeight: 700, color: locOk && prepStep ? C.green : C.blue, letterSpacing: 0.5, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: locOk && prepStep ? C.green : C.blue, letterSpacing: 0.5, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
             {!locOk
               ? <><span style={{ background: C.blue, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>1</span> RENDEZ-VOUS À L'EMPLACEMENT</>
               : <><span style={{ background: C.green, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>2</span> SCANNER LE LOT &amp; COMPTER</>
@@ -10596,20 +10596,18 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
             <>
               <div
                 onClick={() => { if (onManualConfirmLoc) setShowLocConfirm(true); }}
-                style={{ background: C.blueSoft, border: `1px solid ${C.blueBorder}`, borderRadius: 16, padding: "24px 12px", textAlign: "center", cursor: "pointer", userSelect: "none" as const, marginBottom: 12 }}>
-                <div style={{ color: C.blue, fontSize: 24, marginBottom: 2 }}>📍</div>
-                <div style={{ fontSize: 40, fontWeight: 900, color: C.blue, letterSpacing: 1, lineHeight: 1 }}>
-                  {shortLoc(currentLine.location_id?.[1] || "—")}
+                style={{ background: C.blueSoft, border: `1px solid ${C.blueBorder}`, borderRadius: 12, padding: "12px 12px", textAlign: "center", cursor: "pointer", userSelect: "none" as const, marginBottom: 8 }}>
+                <div style={{ fontSize: 28, fontWeight: 900, color: C.blue, letterSpacing: 1, lineHeight: 1 }}>
+                  📍 {shortLoc(currentLine.location_id?.[1] || "—")}
                 </div>
-                <div style={{ fontSize: 11, color: C.blue, opacity: 0.7, marginTop: 8 }}>Appuyer si vous y êtes déjà</div>
               </div>
               {/* Produit + quantité à prendre — bien visible dès l'arrivée à l'emplacement */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10 }}>
                 {activeLine && (
                   <img key={activeLine.product_id[0]}
                     src={`/api/odoo/image?odooUrl=${encodeURIComponent(session.config.url)}&id=${activeLine.product_id[0]}&s=${session.sessionId}`}
                     loading="lazy" alt=""
-                    style={{ width: 48, height: 48, objectFit: "contain", borderRadius: 8, background: "#f1f5f9", flexShrink: 0, border: "1px solid #e2e8f0" }}
+                    style={{ width: 40, height: 40, objectFit: "contain", borderRadius: 8, background: "#f1f5f9", flexShrink: 0, border: "1px solid #e2e8f0" }}
                     onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                   />
                 )}
@@ -10618,8 +10616,8 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
                   {activeLine?.lot_id && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>🏷️ Lot {activeLine.lot_id[1]}</div>}
                 </div>
                 <div style={{ textAlign: "center", flexShrink: 0, paddingLeft: 6 }}>
-                  <div style={{ fontSize: 30, fontWeight: 900, color: C.blue, lineHeight: 1 }}>{effectiveQty.total}</div>
-                  <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2, fontWeight: 600 }}>à prendre</div>
+                  <div style={{ fontSize: 24, fontWeight: 900, color: C.blue, lineHeight: 1 }}>{effectiveQty.total}</div>
+                  <div style={{ fontSize: 10, color: C.textMuted, marginTop: 1, fontWeight: 600 }}>à prendre</div>
                 </div>
               </div>
             </>
@@ -10670,11 +10668,11 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
                 src={`/api/odoo/image?odooUrl=${encodeURIComponent(session.config.url)}&id=${activeLine.product_id[0]}&s=${session.sessionId}`}
                 loading="lazy"
                 alt=""
-                style={{ width: 64, height: 64, objectFit: "contain", borderRadius: 10, background: "#f1f5f9", flexShrink: 0, border: "1px solid #e2e8f0" }}
+                style={{ width: 44, height: 44, objectFit: "contain", borderRadius: 8, background: "#f1f5f9", flexShrink: 0, border: "1px solid #e2e8f0" }}
                 onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
               />
             )}
-            <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b", lineHeight: 1.3 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#1e293b", lineHeight: 1.3 }}>
               {activeLine?.product_id[1]}
             </div>
           </div>
@@ -10698,25 +10696,25 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 
           {/* Lot */}
           {activeLine?.lot_id && (
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 700, color: "#475569", marginBottom: 10 }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 8, padding: "3px 9px", fontSize: 12, fontWeight: 700, color: "#475569", marginBottom: 6 }}>
               🏷️ Lot {activeLine.lot_id[1]}
             </div>
           )}
 
           {/* Quantité + contrôles */}
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 6 }}>
             {/* Compteur +/- */}
-            <div style={{ display: "flex", alignItems: "stretch", gap: 0, border: `1.5px solid ${C.border}`, borderRadius: 14, overflow: "hidden", background: C.white, marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "stretch", gap: 0, border: `1.5px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.white, marginBottom: 8 }}>
               <button
                 onClick={() => activeLine && onAdjustQty(activeLine.id, getQty(activeLine) - 1)}
                 disabled={loading || !activeLine || getQty(activeLine) <= 0}
-                style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 24, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}`, opacity: !activeLine || getQty(activeLine) <= 0 ? 0.3 : 1 }}>
+                style={{ width: 56, flexShrink: 0, background: C.bg, border: "none", fontSize: 22, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}`, opacity: !activeLine || getQty(activeLine) <= 0 ? 0.3 : 1 }}>
                 −
               </button>
-              <div style={{ flex: 1, textAlign: "center", padding: "12px 4px", minWidth: 0 }}>
-                <span style={{ fontSize: 36, fontWeight: 900, color: C.text }}>{effectiveQty.done}</span>
-                <span style={{ fontSize: 18, color: C.textMuted, margin: "0 4px" }}>/</span>
-                <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{effectiveQty.total}</span>
+              <div style={{ flex: 1, textAlign: "center", padding: "7px 4px", minWidth: 0 }}>
+                <span style={{ fontSize: 28, fontWeight: 900, color: C.text }}>{effectiveQty.done}</span>
+                <span style={{ fontSize: 16, color: C.textMuted, margin: "0 4px" }}>/</span>
+                <span style={{ fontSize: 18, fontWeight: 700, color: C.textSec }}>{effectiveQty.total}</span>
                 <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 4 }}>{activeLine?.product_uom_id?.[1] || ""}</span>
                 {effectiveQty.isMerged && effectiveQty.perPicking.length > 1 ? (
                   <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 4, marginTop: 5 }}>
@@ -10736,7 +10734,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
               <button
                 onClick={() => activeLine && onAdjustQty(activeLine.id, getQty(activeLine) + 1)}
                 disabled={loading || !activeLine || getQty(activeLine) >= (activeLine.reserved_uom_qty || 0)}
-                style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 24, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderLeft: `1px solid ${C.blue}`, opacity: !activeLine || getQty(activeLine) >= (activeLine.reserved_uom_qty || 0) ? 0.3 : 1 }}>
+                style={{ width: 56, flexShrink: 0, background: C.blue, border: "none", fontSize: 22, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderLeft: `1px solid ${C.blue}`, opacity: !activeLine || getQty(activeLine) >= (activeLine.reserved_uom_qty || 0) ? 0.3 : 1 }}>
                 +
               </button>
             </div>
