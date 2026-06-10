@@ -1878,18 +1878,49 @@ export default function Page() {
 
   // Notification in-app quand un lot différent du lot réservé est utilisé en préparation.
   // Enregistrée dans Supabase → visible par tous via la cloche du header (notifs du jour).
-  const notifyLotSubstitution = async (info: { productName: string; productCode?: string; expectedLot: string; scannedLot: string }) => {
+  // FEFO : si le lot pris expire AVANT (ou en même temps que) le lot réservé, c'est le bon
+  // réflexe (on écoule la DLV la plus courte) → on n'alerte PAS.
+  const fmtMonthYear = (d?: string | null) => {
+    if (!d) return "?";
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return "?";
+    return `${String(dt.getMonth() + 1).padStart(2, "0")}/${dt.getFullYear()}`;
+  };
+  const notifyLotSubstitution = async (info: { productName: string; productCode?: string; reservedLotId: number; reservedLotName: string; scannedLotId: number; scannedLotName: string }) => {
     try {
+      // Noms bruts + dates d'expiration des deux lots (rappel + règle FEFO)
+      let reservedDate = "", scannedDate = "";
+      let reservedRaw = info.reservedLotName, scannedRaw = info.scannedLotName;
+      try {
+        const lots = await odoo.searchRead(session!, "stock.lot",
+          [["id", "in", [info.reservedLotId, info.scannedLotId]]],
+          ["id", "name", "expiration_date", "use_date", "removal_date"], 2);
+        const byId = new Map<number, any>(lots.map((l: any) => [l.id, l]));
+        const r = byId.get(info.reservedLotId);
+        const s = byId.get(info.scannedLotId);
+        if (r) { reservedRaw = r.name || reservedRaw; reservedDate = r.expiration_date || r.use_date || r.removal_date || ""; }
+        if (s) { scannedRaw = s.name || scannedRaw; scannedDate = s.expiration_date || s.use_date || s.removal_date || ""; }
+      } catch { /* dates indisponibles → on alerte quand même par sécurité */ }
+
+      // FEFO : lot pris expire avant/= le réservé → comportement correct, pas d'alerte
+      if (reservedDate && scannedDate && new Date(scannedDate).getTime() <= new Date(reservedDate).getTime()) {
+        return;
+      }
+
+      const resLabel = `${reservedRaw}${reservedDate ? ` (${fmtMonthYear(reservedDate)})` : ""}`;
+      const scanLabel = `${scannedRaw}${scannedDate ? ` (${fmtMonthYear(scannedDate)})` : ""}`;
       await createNotification({
         type: "lot_substitution",
         title: `Lot substitué — ${selectedPicking?.name || "préparation"}`,
-        body: `${info.productCode ? `[${info.productCode}] ` : ""}${info.productName} : lot réservé ${info.expectedLot} → lot pris ${info.scannedLot} (par ${session?.name || "—"})`,
+        body: `${info.productCode ? `[${info.productCode}] ` : ""}${info.productName} : lot réservé ${resLabel} → lot pris ${scanLabel} (par ${session?.name || "—"})`,
         meta: {
           pickingName: selectedPicking?.name || "—",
           productName: info.productName || "—",
           productCode: info.productCode || "",
-          expectedLot: info.expectedLot || "—",
-          scannedLot: info.scannedLot || "—",
+          reservedLot: info.reservedLotName || "—",
+          reservedDate: reservedDate || null,
+          scannedLot: info.scannedLotName || "—",
+          scannedDate: scannedDate || null,
           operatorName: session?.name || "—",
         },
       });
@@ -2115,8 +2146,10 @@ export default function Page() {
           notifyLotSubstitution({
             productName: ml.product_id?.[1] || "—",
             productCode: ml.product_id?.[1]?.split("]")[0]?.replace("[", "") || "",
-            expectedLot: ml.lot_id?.[1] || "—",
-            scannedLot: lotName || "—",
+            reservedLotId: ml.lot_id[0],
+            reservedLotName: ml.lot_id?.[1] || "—",
+            scannedLotId: writeLotId,
+            scannedLotName: lotName || "—",
           });
         }
       }
