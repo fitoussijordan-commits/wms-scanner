@@ -9,7 +9,7 @@ import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
 import SupplierImportScreen from "@/components/SupplierImportScreen";
-import ArticleCreatorScreen, { SeuilsTab, CreationTab } from "@/components/ArticleCreatorScreen";
+import ArticleCreatorScreen, { SeuilsTab, CreationTab, NonVendableTab } from "@/components/ArticleCreatorScreen";
 import FreeScanScreen from "@/components/FreeScanScreen";
 import ReturnsScreen from "@/components/ReturnsScreen";
 import PackingScreen from "@/components/PackingScreen";
@@ -6928,7 +6928,7 @@ function applyMapping(row: any[], headers: string[], mapping: ColMapping): Impor
 }
 
 function ProductImportScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
-  const [tab, setTab] = useState<"import" | "create" | "seuils">("import");
+  const [tab, setTab] = useState<"import" | "create" | "seuils" | "nonvendable">("import");
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [checking, setChecking] = useState(false);
   const [currentIdx, setCurrentIdx] = useState<number | null>(null);
@@ -7174,9 +7174,9 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
 
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 4, marginBottom: 20, background: C.bg, borderRadius: 12, padding: 4 }}>
-        {([["import", "Import Excel"], ["create", "Créer article"], ["seuils", "Seuils d'alerte"]] as const).map(([t, label]) => (
+        {([["import", "Import Excel"], ["create", "Créer article"], ["seuils", "Seuils d'alerte"], ["nonvendable", "Stock non vendable"]] as const).map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)}
-            style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600,
+            style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600,
               background: tab === t ? C.white : "transparent", color: tab === t ? C.text : C.textMuted,
               boxShadow: tab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none", transition: "all 0.15s" }}>
             {label}
@@ -7188,6 +7188,8 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
         <SeuilsTab session={session} onToast={onToast} />
       ) : tab === "create" ? (
         <CreationTab session={session} onToast={onToast} />
+      ) : tab === "nonvendable" ? (
+        <NonVendableTab session={session} onToast={onToast} />
       ) : rows.length === 0 ? (
         // ── Upload zone ──
         <div>
