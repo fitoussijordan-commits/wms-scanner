@@ -3530,6 +3530,7 @@ function ProductQuickEditModal({ session, productId, onClose, onToast }: { sessi
   const [barcode, setBarcode] = useState("");
   const [weight, setWeight] = useState("");
   const [volume, setVolume] = useState("");
+  const [dimText, setDimText] = useState("");
   const [dims, setDims] = useState<Record<string, string>>({});
   const [supplierCodes, setSupplierCodes] = useState<Record<number, string>>({});
 
@@ -3543,6 +3544,7 @@ function ProductQuickEditModal({ session, productId, onClose, onToast }: { sessi
         setBarcode(d.product.barcode || "");
         setWeight(d.product.weight ? String(d.product.weight) : "");
         setVolume(d.product.volume ? String(d.product.volume) : "");
+        setDimText(d.dimText || "");
         const dm: Record<string, string> = {};
         for (const f of d.dimFields) dm[f] = d.dims[f] ? String(d.dims[f]) : "";
         setDims(dm);
@@ -3565,6 +3567,8 @@ function ProductQuickEditModal({ session, productId, onClose, onToast }: { sessi
         saleOk,
         weight: weight === "" ? undefined : parseFloat(weight),
         volume: volume === "" ? undefined : parseFloat(volume),
+        dimTextField: data.dimTextField,
+        dimText,
         dims: Object.fromEntries(Object.entries(dims).filter(([, v]) => v !== "").map(([k, v]) => [k, parseFloat(v)])),
         supplierCodes: data.suppliers.map(s => ({ id: s.id, product_code: supplierCodes[s.id] ?? "" })),
       });
@@ -3632,7 +3636,7 @@ function ProductQuickEditModal({ session, productId, onClose, onToast }: { sessi
             {/* Poids + volume + dimensions */}
             <div style={{ marginBottom: 22 }}>
               <label style={lbl}>Poids & dimensions</label>
-              <div style={{ display: "grid", gridTemplateColumns: data.dimFields.length ? "1fr 1fr" : "1fr 1fr", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div>
                   <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 4 }}>Poids (kg)</div>
                   <input type="number" step="0.001" min="0" value={weight} onChange={e => setWeight(e.target.value)} placeholder="0.000" style={inp} />
@@ -3641,6 +3645,12 @@ function ProductQuickEditModal({ session, productId, onClose, onToast }: { sessi
                   <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 4 }}>Volume (m³)</div>
                   <input type="number" step="0.001" min="0" value={volume} onChange={e => setVolume(e.target.value)} placeholder="0.000" style={inp} />
                 </div>
+                {data.dimTextField && (
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 4 }}>{data.dimTextLabel}</div>
+                    <input value={dimText} onChange={e => setDimText(e.target.value)} placeholder="Ex : 165mm x 28mm x 36mm" style={{ ...inp, fontFamily: "monospace" }} />
+                  </div>
+                )}
                 {data.dimFields.map(f => (
                   <div key={f}>
                     <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 4 }}>{data.dimLabels[f] || f}</div>
@@ -3648,8 +3658,8 @@ function ProductQuickEditModal({ session, productId, onClose, onToast }: { sessi
                   </div>
                 ))}
               </div>
-              {!data.dimFields.length && (
-                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6 }}>Longueur / largeur / hauteur non disponibles sur cette base Odoo (module dimensions absent)</div>
+              {!data.dimTextField && !data.dimFields.length && (
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6 }}>Champ dimensions introuvable sur cette base Odoo</div>
               )}
             </div>
 

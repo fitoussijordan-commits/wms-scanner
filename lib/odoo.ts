@@ -2913,7 +2913,12 @@ export async function fetchCarrierSaleOrders(
 export interface ProductQuickEditData {
   product: any;
   tmplId: number;
-  dimFields: string[];          // champs dimensions présents sur cette base (module product_dimension ou équivalent)
+  // Champ dimensions texte (ex: x_dimensions "165mm x 28mm x 36mm" — base Dr. Hauschka)
+  dimTextField: string | null;
+  dimTextLabel: string;
+  dimText: string;
+  // Champs dimensions numériques éventuels (module product_dimension ou équivalent)
+  dimFields: string[];
   dimLabels: Record<string, string>;
   dims: Record<string, number>;
   suppliers: Array<{ id: number; partner_id: [number, string]; product_code: string | false; product_name: string | false }>;
@@ -2928,26 +2933,39 @@ export async function getProductQuickEdit(session: OdooSession, productId: numbe
   const tmplId = prod.product_tmpl_id[0];
 
   // Détecte dynamiquement les champs dimensions disponibles sur cette base
+  // — x_dimensions (char, custom Dr. Hauschka) en priorité, puis champs numériques standards
+  let dimTextField: string | null = null;
+  let dimTextLabel = "Dimensions";
+  let dimText = "";
   let dimFields: string[] = [];
   const dimLabels: Record<string, string> = {};
   const dims: Record<string, number> = {};
   try {
     const fg = await callMethod(session, "product.template", "fields_get",
-      [["product_length", "product_width", "product_height"]], { attributes: ["string"] });
-    dimFields = Object.keys(fg || {});
-    for (const f of dimFields) dimLabels[f] = (fg[f]?.string as string) || f;
-    if (dimFields.length) {
-      const tmpls = await searchRead(session, "product.template", [["id", "=", tmplId]], dimFields, 1);
-      if (tmpls[0]) for (const f of dimFields) dims[f] = tmpls[0][f] || 0;
+      [["x_dimensions", "product_length", "product_width", "product_height"]], { attributes: ["string", "type"] });
+    const found = fg || {};
+    if (found.x_dimensions) {
+      dimTextField = "x_dimensions";
+      dimTextLabel = (found.x_dimensions.string as string) || "Dimensions H x L x P";
     }
-  } catch { dimFields = []; }
+    dimFields = Object.keys(found).filter(f => f !== "x_dimensions" && found[f]?.type === "float");
+    for (const f of dimFields) dimLabels[f] = (found[f]?.string as string) || f;
+    const toRead = [...(dimTextField ? [dimTextField] : []), ...dimFields];
+    if (toRead.length) {
+      const tmpls = await searchRead(session, "product.template", [["id", "=", tmplId]], toRead, 1);
+      if (tmpls[0]) {
+        if (dimTextField) dimText = tmpls[0][dimTextField] || "";
+        for (const f of dimFields) dims[f] = tmpls[0][f] || 0;
+      }
+    }
+  } catch { dimFields = []; dimTextField = null; }
 
   // Lignes fournisseur (variante OU template)
   const suppliers = await searchRead(session, "product.supplierinfo",
     ["|", ["product_id", "=", productId], "&", ["product_id", "=", false], ["product_tmpl_id", "=", tmplId]],
     ["id", "partner_id", "product_code", "product_name"], 10);
 
-  return { product: prod, tmplId, dimFields, dimLabels, dims, suppliers };
+  return { product: prod, tmplId, dimTextField, dimTextLabel, dimText, dimFields, dimLabels, dims, suppliers };
 }
 
 export async function saveProductQuickEdit(session: OdooSession, params: {
@@ -2956,10 +2974,12 @@ export async function saveProductQuickEdit(session: OdooSession, params: {
   saleOk?: boolean;
   weight?: number;
   volume?: number;
+  dimTextField?: string | null;
+  dimText?: string;
   dims?: Record<string, number>;
   supplierCodes?: Array<{ id: number; product_code: string }>;
 }) {
-  const { productId, tmplId, barcode, saleOk, weight, volume, dims, supplierCodes } = params;
+  const { productId, tmplId, barcode, saleOk, weight, volume, dimTextField, dimText, dims, supplierCodes } = params;
 
   // EAN → product.product (false pour effacer)
   if (barcode !== undefined) {
@@ -2971,6 +2991,7 @@ export async function saveProductQuickEdit(session: OdooSession, params: {
   if (saleOk !== undefined) tmplVals.sale_ok = saleOk;
   if (weight !== undefined && !isNaN(weight)) tmplVals.weight = weight;
   if (volume !== undefined && !isNaN(volume)) tmplVals.volume = volume;
+  if (dimTextField && dimText !== undefined) tmplVals[dimTextField] = dimText.trim() || false;
   if (dims) for (const [k, v] of Object.entries(dims)) { if (!isNaN(v)) tmplVals[k] = v; }
   if (Object.keys(tmplVals).length) await write(session, "product.template", [tmplId], tmplVals);
 
