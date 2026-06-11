@@ -2707,7 +2707,7 @@ export default function Page() {
       <main style={isDesktopUI
         ? { marginLeft: 248, padding: screen === "home" ? "28px 36px 60px" : "28px 24px 60px" }
         : { maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px" }}>
-       <div style={isDesktopUI ? { maxWidth: screen === "home" ? 1240 : 720, margin: "0 auto" } : undefined}>
+       <div style={isDesktopUI ? { maxWidth: screen === "home" ? 1240 : screen === "waitingOrders" ? 1120 : 720, margin: "0 auto" } : undefined}>
 
         {/* ===== HOME (PDA / mobile) ===== */}
         {screen === "home" && !isDesktopUI && <>
@@ -3785,6 +3785,8 @@ function Shell({ children, toast, flash, desktop }: { children: React.ReactNode;
         .dk-tool:hover { transform: translateY(-2px); box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.12) !important; }
         .dk-chip { transition: border-color .12s, color .12s; }
         .dk-chip:hover { border-color: #c7d2e3 !important; color: #0f172a !important; }
+        .dk-row { transition: background .12s; }
+        .dk-row:hover { background: #fafbfd; }
       `}</style>
       {flash && (
         <div key={flash + Date.now()} style={{
@@ -8516,6 +8518,162 @@ function WaitingOrdersScreen({
 
   const todayCount = groups.find(g => g.label === "Aujourd'hui")?.totalCount ?? 0;
   const lateCount = groups.filter(g => g.key < new Date().toISOString().split("T")[0] && g.key !== "Sans date").reduce((s, g) => s + g.totalCount, 0);
+
+  // ════════ RENDU DESKTOP — tableau (refonte) ════════
+  if (desktop) {
+    const todayISO = new Date().toISOString().split("T")[0];
+    const readyCount = pickings.filter(p => (results[p.id]?.state ?? p.state) === "assigned" && (results[p.id]?.missingLines?.length ?? 0) === 0).length;
+    const D = { text: "#0f172a", t2: "#64748b", t3: "#94a3b8", border: "#e8ecf3" };
+    const card: React.CSSProperties = { background: "#fff", border: `1px solid ${D.border}`, borderRadius: 16, boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.08)" };
+    const cols = "minmax(220px,1.4fr) minmax(170px,1fr) 64px 120px 120px 200px";
+    const stats = [
+      { label: "Total", value: pickings.length, color: D.text, soft: "#f4f6fb" },
+      { label: "Aujourd'hui", value: todayCount, color: "#2563eb", soft: "#eff6ff" },
+      { label: "En retard", value: lateCount, color: "#dc2626", soft: "#fef2f2" },
+      { label: "Prêtes", value: readyCount, color: "#16a34a", soft: "#dcfce7" },
+    ];
+    return (
+      <div style={{ animation: "fadeIn .2s" }}>
+        {/* En-tête */}
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, marginBottom: 18 }}>
+          <div>
+            <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.4, color: D.text }}>Commandes en attente</div>
+            <div style={{ fontSize: 13, color: D.t2, marginTop: 3 }}>En attente de disponibilité · regroupées par date d'expédition puis par client</div>
+          </div>
+          <button onClick={load} disabled={loading} className="dk-tool" style={{ background: "#fff", border: `1px solid ${D.border}`, borderRadius: 11, padding: "9px 16px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: D.t2, fontFamily: "inherit", boxShadow: "0 1px 2px rgba(15,23,42,.04)", flexShrink: 0 }}>
+            {loading ? "…" : "↻ Actualiser"}
+          </button>
+        </div>
+
+        {/* Bandeau stats */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 22 }}>
+          {stats.map((s, i) => (
+            <div key={i} style={{ ...card, padding: "14px 18px", display: "flex", alignItems: "center", gap: 13 }}>
+              <div style={{ width: 38, height: 38, borderRadius: 11, background: s.soft, color: s.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 800, flexShrink: 0 }}>
+                {loading ? "·" : s.value}
+              </div>
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, lineHeight: 1, color: s.value > 0 ? s.color : D.t3 }}>{loading ? "—" : s.value}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: D.t2, marginTop: 3, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{s.label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {loading && <div style={{ ...card, textAlign: "center" as const, padding: 50, color: D.t3, fontSize: 14 }}>Chargement…</div>}
+
+        {!loading && pickings.length === 0 && (
+          <div style={{ ...card, textAlign: "center" as const, padding: 50, color: D.t2, fontSize: 14 }}>
+            <div style={{ fontSize: 36, marginBottom: 10 }}>✅</div>
+            Aucune commande en attente
+          </div>
+        )}
+
+        {/* Sections par date — tableau */}
+        {groups.map(group => {
+          const isOpen = expanded[group.key] !== false && (expanded[group.key] === true || group.key <= todayISO);
+          const hasLate = group.key < todayISO && group.key !== "Sans date";
+          return (
+            <div key={group.key} style={{ ...card, marginBottom: 16, overflow: "hidden", borderColor: hasLate ? "#fecaca" : D.border }}>
+              {/* En-tête date */}
+              <button
+                onClick={() => setExpanded(prev => ({ ...prev, [group.key]: !isOpen }))}
+                style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 18px", background: hasLate ? "#fef2f2" : "#fafbfd", border: "none", borderBottom: isOpen ? `1px solid ${hasLate ? "#fecaca" : D.border}` : "none", cursor: "pointer", fontFamily: "inherit" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: hasLate ? "#b91c1c" : D.text, textTransform: "capitalize" as const }}>{group.label}</span>
+                  <span style={{ fontSize: 11, background: hasLate ? "#fecaca" : "#fff", color: hasLate ? "#b91c1c" : D.t2, padding: "2px 9px", borderRadius: 10, fontWeight: 700, border: `1px solid ${hasLate ? "#fca5a5" : D.border}` }}>{group.totalCount}</span>
+                </div>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={D.t3} strokeWidth="2" style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .2s" }}>
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+
+              {isOpen && (
+                <div>
+                  {/* En-tête colonnes */}
+                  <div style={{ display: "grid", gridTemplateColumns: cols, gap: 14, padding: "9px 18px", borderBottom: `1px solid ${D.border}`, fontSize: 10.5, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase" as const, color: D.t3 }}>
+                    <span>Client</span><span>Bons</span><span>Art.</span><span>Transporteur</span><span>Statut</span><span style={{ textAlign: "right" as const, paddingRight: 2 }}>Action</span>
+                  </div>
+
+                  {/* Lignes */}
+                  {group.clientGroups.map((cg, rowIdx) => {
+                    const isGroupBusy = processing[cg.groupId];
+                    const allAssigned = cg.items.every((p: any) => results[p.id]?.state === "assigned" && (results[p.id]?.missingLines?.length ?? 0) === 0);
+                    const hasMissing = cg.items.some((p: any) => (results[p.id]?.missingLines?.length ?? 0) > 0);
+                    const someResult = cg.items.some((p: any) => results[p.id]);
+                    const isMulti = cg.items.length > 1;
+                    const totalArticles = cg.items.reduce((s: number, p: any) => s + (p.move_ids_without_package || []).length, 0);
+                    const allMissing = cg.items.flatMap((p: any) => (results[p.id]?.missingLines ?? []).map((m: any) => ({ ...m, picking: p.name })));
+                    return (
+                      <div key={cg.groupId} className="dk-row" style={{ borderBottom: rowIdx < group.clientGroups.length - 1 || allMissing.length > 0 ? `1px solid ${D.border}` : "none" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 14, padding: "13px 18px", alignItems: "center" }}>
+                          {/* Client */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                            {isMulti && <span style={{ fontSize: 11, background: C.blueSoft, color: C.blue, padding: "2px 7px", borderRadius: 6, fontWeight: 700, flexShrink: 0 }}>×{cg.items.length}</span>}
+                            <span style={{ fontSize: 13.5, fontWeight: 600, color: D.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }} title={cg.clientName}>{cg.clientName}</span>
+                          </div>
+                          {/* Bons */}
+                          <div style={{ minWidth: 0 }}>
+                            {cg.items.map((p: any) => (
+                              <div key={p.id} style={{ lineHeight: 1.45 }}>
+                                <span style={{ fontSize: 12.5, fontWeight: 600, color: D.text }}>{p.name}</span>
+                                {p.origin && <span style={{ fontSize: 11.5, color: D.t3 }}> · {p.origin}</span>}
+                              </div>
+                            ))}
+                          </div>
+                          {/* Articles */}
+                          <div style={{ fontSize: 13, fontWeight: 700, color: D.t2 }}>{totalArticles}</div>
+                          {/* Transporteur */}
+                          <div>
+                            {cg.items[0]?.carrier_id
+                              ? <span style={{ fontSize: 11, color: "#7c3aed", background: "#f3e8ff", padding: "3px 8px", borderRadius: 6, fontWeight: 700 }}>{cg.items[0].carrier_id[1]}</span>
+                              : <span style={{ fontSize: 12, color: D.t3 }}>—</span>}
+                          </div>
+                          {/* Statut */}
+                          <div style={{ display: "flex", flexDirection: "column" as const, gap: 3, alignItems: "flex-start" }}>
+                            {cg.items.map((p: any) => {
+                              const sl = stateLabel(results[p.id] ? results[p.id].state : p.state);
+                              return <span key={p.id} style={{ fontSize: 11, color: sl.color, background: sl.bg, padding: "2px 8px", borderRadius: 6, fontWeight: 700 }}>{sl.text}</span>;
+                            })}
+                          </div>
+                          {/* Action */}
+                          <div>
+                            {(!allAssigned || hasMissing) && (
+                              <button
+                                onClick={() => hasMissing ? forcePrepGroup(cg.groupId, cg.items) : startPrepGroup(cg.groupId, cg.items)}
+                                disabled={isGroupBusy}
+                                style={{ width: "100%", padding: "9px 0", background: isGroupBusy ? C.border : hasMissing ? C.orange : C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: isGroupBusy ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: isGroupBusy ? 0.7 : 1 }}>
+                                {isGroupBusy ? "En cours…" : hasMissing ? "⚠️ Préparer quand même" : isMulti ? `▶ Commencer (${cg.items.length} BL)` : "▶ Commencer prépa"}
+                              </button>
+                            )}
+                            {allAssigned && !hasMissing && someResult && (
+                              <div style={{ padding: "8px 0", background: "#dcfce7", borderRadius: 10, fontSize: 12, fontWeight: 700, color: "#166534", textAlign: "center" as const }}>
+                                ✅ Prête — bon imprimé
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {/* Sous-ligne manquants */}
+                        {allMissing.length > 0 && (
+                          <div style={{ margin: "0 18px 12px", padding: "8px 12px", background: "#fef3c7", borderRadius: 9, border: "1px solid #fcd34d", display: "flex", flexWrap: "wrap" as const, gap: "4px 16px", alignItems: "center" }}>
+                            <span style={{ fontSize: 11.5, fontWeight: 700, color: "#92400e" }}>⚠️ Manquants :</span>
+                            {allMissing.slice(0, 6).map((m: any, i: number) => (
+                              <span key={i} style={{ fontSize: 11.5, color: "#92400e" }}>{m.product} <b>(−{m.missing})</b></span>
+                            ))}
+                            {allMissing.length > 6 && <span style={{ fontSize: 11.5, color: "#92400e" }}>+{allMissing.length - 6} autres…</span>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <div>
