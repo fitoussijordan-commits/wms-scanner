@@ -2705,6 +2705,7 @@ export async function bulkUpdateMinQuantity(
 export interface CarrierSaleOrder {
   ref: string;          // name de la commande (S####)
   client: string;       // nom du partenaire
+  partnerRef?: string;  // ref du partenaire (code client Odoo, champ ref de res.partner)
   montantHT: number;    // amount_untaxed (CUMULÉ avec les commandes jointes)
   montantTTC: number;   // amount_total  (CUMULÉ avec les commandes jointes)
   dateOrder: string;    // date_order (YYYY-MM-DD)
@@ -2769,12 +2770,16 @@ export async function fetchCarrierSaleOrders(
   const rawJoined = new Map<string, any>();
   // Partenaire de livraison par réf → enrichissement CP/ville ensuite.
   const refToShip = new Map<string, number>();
+  // Partenaire client (partner_id) par réf → enrichissement code client (ref) ensuite.
+  const refToPartner = new Map<string, number>();
 
   const toRow = (r: any): CarrierSaleOrder => {
     if (joinedName) rawJoined.set(r.name, r[joinedName]);
     const shipId = Array.isArray(r.partner_shipping_id) ? r.partner_shipping_id[0]
       : Array.isArray(r.partner_id) ? r.partner_id[0] : null;
     if (shipId) refToShip.set(r.name, shipId);
+    const partnerId = Array.isArray(r.partner_id) ? r.partner_id[0] : null;
+    if (partnerId) refToPartner.set(r.name, partnerId);
     return {
       ref: r.name,
       client: Array.isArray(r.partner_id) ? r.partner_id[1] : "",
@@ -2898,6 +2903,25 @@ export async function fetchCarrierSaleOrders(
           o.cp = p.cp; o.ville = p.ville;
           const m = (p.cp || "").trim().match(/^(\d{2})\d{3}$/);
           o.dept = m ? m[1] : "";
+        }
+      }
+    }
+  } catch { /* enrichissement best-effort */ }
+
+  // ── Enrichissement code client (ref de res.partner) ─────────────────────
+  try {
+    const partnerIds = Array.from(new Set(Array.from(byRef.keys()).map(ref => refToPartner.get(ref)).filter((x): x is number => typeof x === "number")));
+    if (partnerIds.length) {
+      const refById = new Map<number, string>();
+      for (let i = 0; i < partnerIds.length; i += 200) {
+        const rows = await searchRead(session, "res.partner", [["id", "in", partnerIds.slice(i, i + 200)]], ["id", "ref"], 0, "");
+        for (const p of rows) if (p.ref) refById.set(p.id, p.ref);
+      }
+      for (const [orderRef, o] of Array.from(byRef.entries())) {
+        const pid = refToPartner.get(orderRef);
+        if (pid != null) {
+          const r = refById.get(pid);
+          if (r) o.partnerRef = r;
         }
       }
     }

@@ -466,7 +466,7 @@ export default function Dashboard() {
   interface CarrierFacture { num: string; mois_label: string; mois_key: string; periode_debut: string; periode_fin: string; stats: CarrierStats }
   interface CarrierStats { nb_lignes: number; nb_commandes: number; total_transport: number; total_facture: number; total_options?: number; surcharge_carburant?: number; surcharge_taux?: number; total_general_ht?: number }
   // coutReel = transport + options + quote-part de surcharge carburant (coût réel tout compris)
-  interface CarrierCrossed extends CarrierCommande { client: string; montantHT: number; montantTTC: number; coutReel: number; pct: number | null; matched: boolean; alert: boolean; cp?: string; ville?: string; dept?: string; groupe?: string[]; groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[] }
+  interface CarrierCrossed extends CarrierCommande { client: string; partnerRef?: string; montantHT: number; montantTTC: number; coutReel: number; pct: number | null; matched: boolean; alert: boolean; cp?: string; ville?: string; dept?: string; groupe?: string[]; groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[] }
   const [carLoading, setCarLoading] = useState(false);
   const [carPdfName, setCarPdfName] = useState("");
   const [carLignes, setCarLignes] = useState<CarrierLigne[]>([]);
@@ -559,7 +559,7 @@ export default function Dashboard() {
       const coutReel = c.coutReel ?? Math.round((c.total + carbShare) * 100) / 100;
       // Anomalie : on a payé du transport mais la commande n'a aucun montant (absente Odoo ou montant 0)
       const alert = coutReel > 0 && montantHT <= 0;
-      return { ...c, client: o?.client ?? "", montantHT, montantTTC: o?.montantTTC ?? 0, coutReel, matched: !!o, alert, cp: o?.cp, ville: o?.ville, dept: o?.dept, groupe: o?.groupe, groupeDetail: o?.groupeDetail, pct: montantHT > 0 ? coutReel / montantHT : null };
+      return { ...c, client: o?.client ?? "", partnerRef: o?.partnerRef, montantHT, montantTTC: o?.montantTTC ?? 0, coutReel, matched: !!o, alert, cp: o?.cp, ville: o?.ville, dept: o?.dept, groupe: o?.groupe, groupeDetail: o?.groupeDetail, pct: montantHT > 0 ? coutReel / montantHT : null };
     });
   }, [carCommandes, carOdoo, carStats]);
 
@@ -796,25 +796,28 @@ export default function Dashboard() {
 
     // ── Feuille PAR CLIENT ──────────────────────────────────────────
     if (carOdooLoaded) {
-      const byClient = new Map<string, { client: string; cdes: number; colis: number; transport: number; ht: number }>();
+      const byClient = new Map<string, { client: string; partnerRef: string; cdes: number; colis: number; transport: number; ht: number }>();
       for (const c of carCroise) {
         const key = c.client || "(absent Odoo)";
-        if (!byClient.has(key)) byClient.set(key, { client: key, cdes: 0, colis: 0, transport: 0, ht: 0 });
-        const g = byClient.get(key)!; g.cdes += 1; g.colis += c.colis; g.transport = round2(g.transport + c.coutReel); g.ht = round2(g.ht + c.montantHT);
+        if (!byClient.has(key)) byClient.set(key, { client: key, partnerRef: c.partnerRef || "", cdes: 0, colis: 0, transport: 0, ht: 0 });
+        const g = byClient.get(key)!;
+        if (!g.partnerRef && c.partnerRef) g.partnerRef = c.partnerRef;
+        g.cdes += 1; g.colis += c.colis; g.transport = round2(g.transport + c.coutReel); g.ht = round2(g.ht + c.montantHT);
       }
       const ws = wb.addWorksheet("Par client");
       ws.columns = [
-        { header: "Client", key: "client", width: 32 }, { header: "Cdes", key: "cdes", width: 8 },
-        { header: "Colis", key: "colis", width: 8 }, { header: "Transport €", key: "transport", width: 14 },
-        { header: "Montant HT €", key: "ht", width: 15 }, { header: "% Transp.", key: "pct", width: 11 },
+        { header: "N° Client", key: "partnerRef", width: 14 }, { header: "Client", key: "client", width: 32 },
+        { header: "Cdes", key: "cdes", width: 8 }, { header: "Colis", key: "colis", width: 8 },
+        { header: "Transport €", key: "transport", width: 14 }, { header: "Montant HT €", key: "ht", width: 15 },
+        { header: "% Transp.", key: "pct", width: 11 },
       ];
       for (const g of Array.from(byClient.values()).sort((a, b) => b.transport - a.transport)) {
-        ws.addRow({ client: g.client, cdes: g.cdes, colis: g.colis, transport: g.transport, ht: g.ht || null, pct: g.ht > 0 ? round2((g.transport / g.ht) * 100) : null });
+        ws.addRow({ partnerRef: g.partnerRef || null, client: g.client, cdes: g.cdes, colis: g.colis, transport: g.transport, ht: g.ht || null, pct: g.ht > 0 ? round2((g.transport / g.ht) * 100) : null });
       }
       styleHeader(ws); zebra(ws);
       ws.getColumn("transport").numFmt = eurFmt; ws.getColumn("ht").numFmt = eurFmt; ws.getColumn("pct").numFmt = pctNumFmt;
       for (let r = 2; r <= ws.rowCount; r++) {
-        const pc = ws.getCell(r, 6); const v = typeof pc.value === "number" ? pc.value / 100 : null;
+        const pc = ws.getCell(r, 7); const v = typeof pc.value === "number" ? pc.value / 100 : null;
         if (v !== null) { const bg = v > 0.15 ? C.red : v > 0.08 ? C.amber : C.green; const fg = v > 0.15 ? C.redT : v > 0.08 ? C.amberT : C.greenT; pc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } }; pc.font = { bold: true, color: { argb: fg } }; pc.alignment = { horizontal: "center" }; pc.border = allBorders; }
       }
     }
