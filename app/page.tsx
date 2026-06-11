@@ -11306,6 +11306,21 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   const totalUnits = displayLines.reduce((s: number, ml: any) => s + (ml.reserved_uom_qty || 0), 0);
   const doneUnits = displayLines.reduce((s: number, ml: any) => s + Math.min(getQty(ml), ml.reserved_uom_qty || 0), 0);
 
+  // Helper : extrait le code article depuis product_id[1] = "[1010101] Nom..."
+  const getLineCode = (ml: any): string => {
+    const name: string = Array.isArray(ml.product_id) ? (ml.product_id[1] || "") : "";
+    const m = name.match(/^\[([^\]]+)\]/);
+    return m ? m[1] : "";
+  };
+  const isEchantillon = (ml: any) => getLineCode(ml).startsWith("5");
+
+  // Décompte séparé articles / échantillons
+  const prodLines  = displayLines.filter((ml: any) => !isEchantillon(ml));
+  const echanLines = displayLines.filter((ml: any) => isEchantillon(ml));
+  const doneProd   = prodLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).length;
+  const doneEchan  = echanLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).length;
+  const hasEchan   = echanLines.length > 0;
+
   // Progression par colis (= par picking source) — utile seulement en groupe
   const colisProgress = useMemo(() => {
     const groups = new Map<number, { total: number; done: number }>();
@@ -11501,11 +11516,21 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
 
       {/* ── Progress bar ── */}
       <div style={{ marginBottom: 10 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
           <span style={{ fontSize: 12, fontWeight: 700, color: C.text }}>Progression</span>
-          <span style={{ fontSize: 12, fontWeight: 700, color: allDone ? C.green : C.blue }}>
-            {doneUnits}/{totalUnits} produits
-          </span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: allDone ? C.green : C.blue }}>
+              {doneUnits}/{totalUnits}
+            </span>
+            {hasEchan ? (
+              <span style={{ fontSize: 11, color: C.textMuted, display: "flex", gap: 6 }}>
+                <span title="Articles">📦 {doneProd}/{prodLines.length}</span>
+                <span title="Échantillons">🧪 {doneEchan}/{echanLines.length}</span>
+              </span>
+            ) : (
+              <span style={{ fontSize: 11, color: C.textMuted }}>produits</span>
+            )}
+          </div>
         </div>
         <div style={{ height: 6, borderRadius: 4, background: C.bg, overflow: "hidden", border: `1px solid ${C.border}` }}>
           <div style={{ height: "100%", width: `${progress}%`, borderRadius: 4, background: allDone ? C.green : C.blue, transition: "width .3s" }} />
