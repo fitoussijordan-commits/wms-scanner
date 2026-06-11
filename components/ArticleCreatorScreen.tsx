@@ -760,14 +760,33 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
     }
   };
 
-  const filtered = rows.filter(r =>
-    !search ||
-    r.default_code.toLowerCase().includes(search.toLowerCase()) ||
-    r.name.toLowerCase().includes(search.toLowerCase())
-  );
+  // Priorité de tri : 1-5 en premier (vente), puis 6-9, puis AV/autres
+  function refPriority(code: string): number {
+    const c = (code || "").trim();
+    const first = c.charAt(0);
+    if (["1","2","3","4","5"].includes(first)) return 0;
+    if (["6","7","8","9"].includes(first)) return 1;
+    return 2; // AV, autres
+  }
+
+  const filtered = rows
+    .filter(r =>
+      !search ||
+      r.default_code.toLowerCase().includes(search.toLowerCase()) ||
+      r.name.toLowerCase().includes(search.toLowerCase())
+    )
+    .sort((a, b) => {
+      const pa = refPriority(a.default_code);
+      const pb = refPriority(b.default_code);
+      if (pa !== pb) return pa - pb;
+      return b.qty_available - a.qty_available;
+    });
+
+  // Groupes pour afficher un séparateur visuel
+  const GROUP_LABELS: Record<number, string> = { 0: "Articles vente (1–5)", 1: "Autres catégories (6–9)", 2: "Codes spéciaux (AV…)" };
 
   return (
-    <div style={{ ...S.body, maxWidth: 720 }}>
+    <div style={{ ...S.body, maxWidth: 760 }}>
       {/* Barre de recherche + refresh */}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input
@@ -792,8 +811,8 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
       {!loading && (
         <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 600 }}>
           {filtered.length === 0
-            ? rows.length === 0 ? "Aucun article avec stock disponible non vendable 🎉" : "Aucun résultat"
-            : `${filtered.length} article${filtered.length > 1 ? "s" : ""} avec stock disponible mais non vendable`
+            ? rows.length === 0 ? "✓ Aucun article avec qté prévue non vendable" : "Aucun résultat"
+            : `${filtered.length} article${filtered.length > 1 ? "s" : ""} avec qté prévue > 0 mais non vendable`
           }
         </div>
       )}
@@ -808,58 +827,78 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
         </div>
       ) : filtered.length > 0 ? (
         <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
-          {/* Header tableau */}
+          {/* Header */}
           <div style={{
-            display: "grid", gridTemplateColumns: "110px 1fr 80px 44px",
-            gap: 0, padding: "8px 12px",
-            background: "#f9fafb", borderBottom: "1px solid #e5e7eb",
+            display: "grid", gridTemplateColumns: "120px 1fr 90px 44px",
+            padding: "8px 14px", background: "#f1f5f9", borderBottom: "1px solid #e5e7eb",
             fontSize: 10, fontWeight: 700, color: "#6b7280", letterSpacing: "0.06em", textTransform: "uppercase" as const,
           }}>
             <span>Référence</span>
             <span>Désignation</span>
-            <span style={{ textAlign: "right" }}>Stock dispo</span>
+            <span style={{ textAlign: "right" }}>Qté prévue</span>
             <span/>
           </div>
-          {filtered.map((row, i) => (
-            <div
-              key={row.id}
-              style={{
-                display: "grid", gridTemplateColumns: "110px 1fr 80px 44px",
-                gap: 0, padding: "9px 12px", alignItems: "center",
-                background: i % 2 === 0 ? "#fff" : "#fafafa",
-                borderBottom: i < filtered.length - 1 ? "1px solid #f3f4f6" : "none",
-              }}
-            >
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#374151", fontFamily: "monospace" }}>
-                {row.default_code || "—"}
-              </span>
-              <span style={{ fontSize: 12, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }} title={row.name}>
-                {row.name}
-              </span>
-              <span style={{ fontSize: 13, fontWeight: 700, color: "#b45309", textAlign: "right", fontFamily: "monospace" }}>
-                {row.qty_available % 1 === 0 ? row.qty_available : row.qty_available.toFixed(2)}
-              </span>
-              {/* Bouton activer "peut être vendu" */}
-              <button
-                onClick={() => enableSaleOk(row)}
-                disabled={row.enabling}
-                title='Activer "Peut être vendu"'
-                style={{
-                  background: row.enabling ? "#f3f4f6" : "#dcfce7",
-                  border: "none", borderRadius: 6, cursor: row.enabling ? "wait" : "pointer",
-                  padding: "5px 6px", display: "flex", alignItems: "center", justifyContent: "center",
-                  color: row.enabling ? "#9ca3af" : "#166534", transition: "background 0.15s",
-                }}
-                onMouseEnter={e => !row.enabling && (e.currentTarget.style.background = "#bbf7d0")}
-                onMouseLeave={e => !row.enabling && (e.currentTarget.style.background = "#dcfce7")}
-              >
-                {row.enabling
-                  ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                  : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                }
-              </button>
-            </div>
-          ))}
+          {(() => {
+            let lastGroup = -1;
+            return filtered.map((row, i) => {
+              const grp = refPriority(row.default_code);
+              const showSep = !search && grp !== lastGroup;
+              lastGroup = grp;
+              return (
+                <div key={row.id}>
+                  {showSep && (
+                    <div style={{
+                      padding: "6px 14px", fontSize: 10, fontWeight: 700, letterSpacing: "0.07em",
+                      textTransform: "uppercase" as const,
+                      color: grp === 0 ? "#1d4ed8" : grp === 1 ? "#7c3aed" : "#9ca3af",
+                      background: grp === 0 ? "#eff6ff" : grp === 1 ? "#f5f3ff" : "#f9fafb",
+                      borderBottom: "1px solid #e5e7eb",
+                    }}>
+                      {GROUP_LABELS[grp]}
+                    </div>
+                  )}
+                  <div style={{
+                    display: "grid", gridTemplateColumns: "120px 1fr 90px 44px",
+                    padding: "9px 14px", alignItems: "center",
+                    background: i % 2 === 0 ? "#fff" : "#fafafa",
+                    borderBottom: i < filtered.length - 1 ? "1px solid #f3f4f6" : "none",
+                  }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#374151", fontFamily: "monospace" }}>
+                      {row.default_code || "—"}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }} title={row.name}>
+                      {row.name}
+                    </span>
+                    <span style={{
+                      fontSize: 13, fontWeight: 700, textAlign: "right", fontFamily: "monospace",
+                      color: row.qty_available >= 50 ? "#b45309" : "#374151",
+                    }}>
+                      {row.qty_available % 1 === 0 ? row.qty_available : row.qty_available.toFixed(2)}
+                    </span>
+                    <button
+                      onClick={() => enableSaleOk(row)}
+                      disabled={row.enabling}
+                      title='Activer "Peut être vendu"'
+                      style={{
+                        background: row.enabling ? "#f3f4f6" : "#dcfce7",
+                        border: "none", borderRadius: 6, cursor: row.enabling ? "wait" : "pointer",
+                        padding: "5px 6px", display: "flex", alignItems: "center", justifyContent: "center",
+                        color: row.enabling ? "#9ca3af" : "#166534", transition: "background 0.15s",
+                        marginLeft: "auto",
+                      }}
+                      onMouseEnter={e => !row.enabling && (e.currentTarget.style.background = "#bbf7d0")}
+                      onMouseLeave={e => !row.enabling && (e.currentTarget.style.background = "#dcfce7")}
+                    >
+                      {row.enabling
+                        ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                        : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      }
+                    </button>
+                  </div>
+                </div>
+              );
+            });
+          })()}
         </div>
       ) : null}
 
