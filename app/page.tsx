@@ -3392,6 +3392,7 @@ export default function Page() {
             onBack={goHome}
             onToast={showToast}
             onStartPrep={(picking) => { openPicking(picking); }}
+            desktop={isDesktopUI}
           />
         )}
 
@@ -8314,10 +8315,10 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
 // WAITING ORDERS SCREEN — Commandes en attente
 // ============================================================
 function WaitingOrdersScreen({
-  session, onBack, onToast, onStartPrep,
+  session, onBack, onToast, onStartPrep, desktop,
 }: {
   session: any; onBack: () => void; onToast: (m: string) => void;
-  onStartPrep: (picking: any) => void;
+  onStartPrep: (picking: any) => void; desktop?: boolean;
 }) {
   const [pickings, setPickings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -8513,18 +8514,30 @@ function WaitingOrdersScreen({
     onStartPrep(pickingsGroup[0]);
   };
 
+  const todayCount = groups.find(g => g.label === "Aujourd'hui")?.totalCount ?? 0;
+  const lateCount = groups.filter(g => g.key < new Date().toISOString().split("T")[0] && g.key !== "Sans date").reduce((s, g) => s + g.totalCount, 0);
+
   return (
     <div>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-        <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
-        </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: desktop ? 22 : 16 }}>
+        {!desktop && (
+          <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+        )}
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>Commandes en attente</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>{pickings.length} commande{pickings.length !== 1 ? "s" : ""} · En attente de dispo</div>
+          <div style={{ fontSize: desktop ? 21 : 17, fontWeight: 700, letterSpacing: desktop ? -0.4 : 0, color: desktop ? "#0f172a" : C.text, display: "flex", alignItems: "center", gap: 10 }}>
+            Commandes en attente
+            {desktop && lateCount > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: "#b91c1c", background: "#fef2f2", border: "1px solid #fecaca", padding: "3px 9px", borderRadius: 8 }}>⚠ {lateCount} en retard</span>}
+          </div>
+          <div style={{ fontSize: desktop ? 13 : 12, color: desktop ? "#64748b" : C.textMuted, marginTop: desktop ? 3 : 0 }}>
+            {pickings.length} commande{pickings.length !== 1 ? "s" : ""} · En attente de dispo{desktop && todayCount > 0 ? ` · ${todayCount} aujourd'hui` : ""}
+          </div>
         </div>
-        <button onClick={load} disabled={loading} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, color: C.textMuted, fontFamily: "inherit" }}>
+        <button onClick={load} disabled={loading} className={desktop ? "dk-tool" : undefined} style={desktop
+          ? { background: "#fff", border: "1px solid #e8ecf3", borderRadius: 11, padding: "9px 16px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#64748b", fontFamily: "inherit", boxShadow: "0 1px 2px rgba(15,23,42,.04)" }
+          : { background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, color: C.textMuted, fontFamily: "inherit" }}>
           {loading ? "…" : "↻ Actualiser"}
         </button>
       </div>
@@ -8544,14 +8557,17 @@ function WaitingOrdersScreen({
         const isOpen = expanded[group.key] !== false && (expanded[group.key] === true || group.key <= today);
         const hasLate = group.key < today && group.key !== "Sans date";
         return (
-          <div key={group.key} style={{ marginBottom: 12 }}>
+          <div key={group.key} style={{ marginBottom: desktop ? 16 : 12 }}>
             {/* En-tête date */}
             <button
               onClick={() => setExpanded(prev => ({ ...prev, [group.key]: !isOpen }))}
-              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: hasLate ? "#fef2f2" : C.bg, border: `1px solid ${hasLate ? "#fecaca" : C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", marginBottom: 6 }}>
+              className={desktop ? "dk-tool" : undefined}
+              style={desktop
+                ? { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 16px", background: hasLate ? "#fef2f2" : "#fff", border: `1px solid ${hasLate ? "#fecaca" : "#e8ecf3"}`, borderRadius: 13, cursor: "pointer", fontFamily: "inherit", marginBottom: 8, boxShadow: "0 1px 2px rgba(15,23,42,.04)" }
+                : { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: hasLate ? "#fef2f2" : C.bg, border: `1px solid ${hasLate ? "#fecaca" : C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", marginBottom: 6 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: hasLate ? C.red : C.text }}>{group.label}</span>
-                <span style={{ fontSize: 11, background: hasLate ? "#fecaca" : C.border, color: hasLate ? C.red : C.textMuted, padding: "1px 7px", borderRadius: 10, fontWeight: 600 }}>{group.totalCount}</span>
+                <span style={{ fontSize: desktop ? 13.5 : 13, fontWeight: 700, color: hasLate ? C.red : (desktop ? "#0f172a" : C.text), textTransform: desktop ? ("capitalize" as const) : ("none" as const) }}>{group.label}</span>
+                <span style={{ fontSize: 11, background: hasLate ? "#fecaca" : (desktop ? "#f4f6fb" : C.border), color: hasLate ? C.red : (desktop ? "#64748b" : C.textMuted), padding: desktop ? "2px 9px" : "1px 7px", borderRadius: 10, fontWeight: 700, border: desktop && !hasLate ? "1px solid #e8ecf3" : "none" }}>{group.totalCount}</span>
               </div>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"
                 style={{ transform: isOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .2s" }}>
@@ -8571,11 +8587,15 @@ function WaitingOrdersScreen({
               const isMulti = cg.items.length > 1;
 
               return (
-                <div key={cg.groupId} style={{ background: C.white, borderRadius: 12, border: `1.5px solid ${isMulti ? C.blue : C.border}`, marginBottom: 8, padding: "12px 14px", boxShadow: C.shadow }}>
+                <div key={cg.groupId} className={desktop ? "dk-tool" : undefined} style={desktop
+                  ? { background: "#fff", borderRadius: 14, border: `1.5px solid ${isMulti ? C.blue : "#e8ecf3"}`, marginBottom: 8, padding: "14px 18px", boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.06)" }
+                  : { background: C.white, borderRadius: 12, border: `1.5px solid ${isMulti ? C.blue : C.border}`, marginBottom: 8, padding: "12px 14px", boxShadow: C.shadow }}>
+                 <div style={desktop ? { display: "flex", gap: 20, alignItems: "center" } : undefined}>
+                  <div style={desktop ? { flex: 1, minWidth: 0 } : undefined}>
                   {/* Nom client (en-tête du groupe) */}
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: isMulti ? 8 : 4 }}>
                     {isMulti && <span style={{ fontSize: 11, background: C.blueSoft, color: C.blue, padding: "2px 7px", borderRadius: 6, fontWeight: 700 }}>×{cg.items.length}</span>}
-                    <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{cg.clientName}</span>
+                    <span style={{ fontSize: desktop ? 13.5 : 13, fontWeight: 700, color: desktop ? "#0f172a" : C.text }}>{cg.clientName}</span>
                     {cg.items[0]?.carrier_id && <span style={{ fontSize: 11, color: "#7c3aed", background: "#f3e8ff", padding: "2px 6px", borderRadius: 4, fontWeight: 600 }}>{cg.items[0].carrier_id[1]}</span>}
                   </div>
 
@@ -8583,14 +8603,17 @@ function WaitingOrdersScreen({
                   {cg.items.map((p: any) => {
                     const result = results[p.id];
                     const sl = stateLabel(result ? result.state : p.state);
+                    const nbArticles = (p.move_ids_without_package || []).length;
                     return (
                       <div key={p.id} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: isMulti ? `1px solid ${C.border}` : "none" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
-                          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{p.name}</span>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: desktop ? "#0f172a" : C.text }}>{p.name}</span>
                           <span style={{ fontSize: 11, color: sl.color, background: sl.bg, padding: "2px 6px", borderRadius: 5, fontWeight: 600 }}>{sl.text}</span>
+                          {desktop && p.origin && <span style={{ fontSize: 11.5, color: "#94a3b8" }}>Réf : {p.origin}</span>}
+                          {desktop && <span style={{ fontSize: 11.5, color: "#94a3b8" }}>· {nbArticles} article{nbArticles !== 1 ? "s" : ""}</span>}
                         </div>
-                        {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Réf : {p.origin}</div>}
-                        <div style={{ fontSize: 11, color: C.textMuted }}>{(p.move_ids_without_package || []).length} article{(p.move_ids_without_package || []).length !== 1 ? "s" : ""}</div>
+                        {!desktop && p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Réf : {p.origin}</div>}
+                        {!desktop && <div style={{ fontSize: 11, color: C.textMuted }}>{nbArticles} article{nbArticles !== 1 ? "s" : ""}</div>}
                         {/* Manquants si partiel */}
                         {result && result.missingLines.length > 0 && (
                           <div style={{ marginTop: 4, padding: "6px 8px", background: "#fef3c7", borderRadius: 7, border: "1px solid #fcd34d" }}>
@@ -8604,7 +8627,9 @@ function WaitingOrdersScreen({
                       </div>
                     );
                   })}
+                  </div>
 
+                  <div style={desktop ? { width: 235, flexShrink: 0 } : undefined}>
                   {/* Bouton unique pour tout le groupe */}
                   {/* Affiché si pas encore tout assigned, OU si manquants (on peut quand même lancer la prépa partielle) */}
                   {(!allAssigned || hasMissing) && (
@@ -8614,15 +8639,17 @@ function WaitingOrdersScreen({
                         : startPrepGroup(cg.groupId, cg.items)
                       }
                       disabled={isGroupBusy}
-                      style={{ width: "100%", marginTop: 6, padding: "10px 0", background: isGroupBusy ? C.border : hasMissing ? C.orange : C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: isGroupBusy ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: isGroupBusy ? 0.7 : 1 }}>
+                      style={{ width: "100%", marginTop: desktop ? 0 : 6, padding: desktop ? "11px 0" : "10px 0", background: isGroupBusy ? C.border : hasMissing ? C.orange : C.blue, color: "#fff", border: "none", borderRadius: desktop ? 11 : 10, fontSize: desktop ? 13.5 : 14, fontWeight: 700, cursor: isGroupBusy ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: isGroupBusy ? 0.7 : 1 }}>
                       {isGroupBusy ? "En cours…" : hasMissing ? (isMulti ? `⚠️ Préparer quand même (${cg.items.length} BL)` : "⚠️ Préparer quand même") : isMulti ? `▶ Commencer prépa (${cg.items.length} BL)` : "▶ Commencer prépa"}
                     </button>
                   )}
                   {allAssigned && !hasMissing && someResult && (
-                    <div style={{ marginTop: 6, padding: "8px 10px", background: "#dcfce7", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#166534", textAlign: "center" as const }}>
+                    <div style={{ marginTop: desktop ? 0 : 6, padding: "8px 10px", background: "#dcfce7", borderRadius: 8, fontSize: 13, fontWeight: 600, color: "#166534", textAlign: "center" as const }}>
                       ✅ {isMulti ? `${cg.items.length} BL prêts — bons imprimés` : "Prête — bon imprimé"}
                     </div>
                   )}
+                  </div>
+                 </div>
                 </div>
               );
             })}
