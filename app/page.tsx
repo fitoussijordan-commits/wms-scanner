@@ -7196,11 +7196,17 @@ function ProductImportScreen({ session, onBack, onToast, desktop }: { session: a
       </div>
 
       {tab === "seuils" ? (
-        <SeuilsTab session={session} onToast={onToast} />
+        <div style={desktop ? { maxWidth: 752, margin: "0 0 0 -16px" } : undefined}>
+          <SeuilsTab session={session} onToast={onToast} />
+        </div>
       ) : tab === "create" ? (
-        <CreationTab session={session} onToast={onToast} />
+        <div style={desktop ? { maxWidth: 652, margin: "0 0 0 -16px" } : undefined}>
+          <CreationTab session={session} onToast={onToast} />
+        </div>
       ) : tab === "nonvendable" ? (
-        <NonVendableTab session={session} onToast={onToast} />
+        <div style={desktop ? { maxWidth: 752, margin: "0 0 0 -16px" } : undefined}>
+          <NonVendableTab session={session} onToast={onToast} />
+        </div>
       ) : rows.length === 0 ? (
         // ── Upload zone ──
         <div style={desktop ? { maxWidth: 640 } : undefined}>
