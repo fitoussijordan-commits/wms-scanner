@@ -713,10 +713,35 @@ interface NonVendableRow {
   enabling: boolean;
 }
 
+// Catégories connues (code = premier(s) caractère(s) de la référence)
+const CAT_FILTERS = [
+  { code: "1", label: "Vente" },
+  { code: "2", label: "Cabine" },
+  { code: "3", label: "Testeur" },
+  { code: "4", label: "Miniature" },
+  { code: "5", label: "Echantillon" },
+  { code: "6", label: "PLV" },
+  { code: "7", label: "Offres" },
+  { code: "8", label: "Gratuité DE" },
+  { code: "9", label: "Présentoir" },
+  { code: "AV", label: "Art. suivi offres" },
+  { code: "90", label: "Mat. Animatrice" },
+  { code: "91", label: "Formation" },
+];
+
+function getCatCode(ref: string): string {
+  const r = (ref || "").trim().toUpperCase();
+  // Codes à 2 chars alphanumériques en priorité
+  const two = r.slice(0, 2);
+  if (CAT_FILTERS.find(c => c.code === two)) return two;
+  return r.charAt(0);
+}
+
 export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession; onToast: (msg: string, type?: "success"|"error"|"info") => void }) {
   const [rows, setRows]       = useState<NonVendableRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch]   = useState("");
+  const [activeCats, setActiveCats] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -766,15 +791,31 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
     const first = c.charAt(0);
     if (["1","2","3","4","5"].includes(first)) return 0;
     if (["6","7","8","9"].includes(first)) return 1;
-    return 2; // AV, autres
+    return 2;
   }
 
+  // Chips disponibles = catégories présentes dans les données
+  const availableCats = CAT_FILTERS.filter(cf =>
+    rows.some(r => getCatCode(r.default_code) === cf.code)
+  );
+
+  const toggleCat = (code: string) => {
+    setActiveCats(prev => {
+      const next = new Set(prev);
+      next.has(code) ? next.delete(code) : next.add(code);
+      return next;
+    });
+  };
+
   const filtered = rows
-    .filter(r =>
-      !search ||
-      r.default_code.toLowerCase().includes(search.toLowerCase()) ||
-      r.name.toLowerCase().includes(search.toLowerCase())
-    )
+    .filter(r => {
+      if (activeCats.size > 0 && !activeCats.has(getCatCode(r.default_code))) return false;
+      if (!search) return true;
+      return (
+        r.default_code.toLowerCase().includes(search.toLowerCase()) ||
+        r.name.toLowerCase().includes(search.toLowerCase())
+      );
+    })
     .sort((a, b) => {
       const pa = refPriority(a.default_code);
       const pb = refPriority(b.default_code);
@@ -782,7 +823,8 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
       return b.qty_available - a.qty_available;
     });
 
-  // Groupes pour afficher un séparateur visuel
+  // Groupes visuels (désactivés quand filtre actif pour éviter la redondance)
+  const showGroups = activeCats.size === 0 && !search;
   const GROUP_LABELS: Record<number, string> = { 0: "Articles vente (1–5)", 1: "Autres catégories (6–9)", 2: "Codes spéciaux (AV…)" };
 
   return (
@@ -806,6 +848,44 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
           </svg>
         </button>
       </div>
+
+      {/* Chips catégories */}
+      {!loading && availableCats.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {availableCats.map(cf => {
+            const active = activeCats.has(cf.code);
+            const count = rows.filter(r => getCatCode(r.default_code) === cf.code).length;
+            return (
+              <button
+                key={cf.code}
+                onClick={() => toggleCat(cf.code)}
+                style={{
+                  padding: "5px 11px", borderRadius: 99, border: "1.5px solid",
+                  borderColor: active ? "#2563eb" : "#d1d5db",
+                  background: active ? "#2563eb" : "#fff",
+                  color: active ? "#fff" : "#374151",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                  transition: "all 0.12s",
+                }}
+              >
+                {cf.code} · {cf.label} <span style={{ opacity: 0.7, fontSize: 11 }}>({count})</span>
+              </button>
+            );
+          })}
+          {activeCats.size > 0 && (
+            <button
+              onClick={() => setActiveCats(new Set())}
+              style={{
+                padding: "5px 11px", borderRadius: 99, border: "1.5px solid #e5e7eb",
+                background: "#f3f4f6", color: "#6b7280",
+                fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+              }}
+            >
+              ✕ Tout afficher
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Compteur */}
       {!loading && (
@@ -846,7 +926,7 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
               lastGroup = grp;
               return (
                 <div key={row.id}>
-                  {showSep && (
+                  {showGroups && showSep && (
                     <div style={{
                       padding: "6px 14px", fontSize: 10, fontWeight: 700, letterSpacing: "0.07em",
                       textTransform: "uppercase" as const,
