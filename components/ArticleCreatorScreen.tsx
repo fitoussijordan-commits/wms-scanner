@@ -726,16 +726,16 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
       const data = await odoo.searchRead(
         session,
         "product.product",
-        [["sale_ok", "=", false], ["qty_available", ">", 0], ["active", "=", true]],
-        ["id", "name", "default_code", "qty_available", "product_tmpl_id"],
+        [["sale_ok", "=", false], ["virtual_available", ">", 0], ["active", "=", true]],
+        ["id", "name", "default_code", "virtual_available", "product_tmpl_id"],
         0,
-        "qty_available desc"
+        "virtual_available desc"
       );
       setRows(data.map((r: any) => ({
         id: r.id,
         default_code: r.default_code || "",
         name: r.name || "",
-        qty_available: r.qty_available ?? 0,
+        qty_available: r.virtual_available ?? 0,
         product_tmpl_id: Array.isArray(r.product_tmpl_id) ? r.product_tmpl_id[0] : r.product_tmpl_id,
         enabling: false,
       })));
