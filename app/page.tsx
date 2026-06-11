@@ -9262,31 +9262,86 @@ function InventoryScreen({ session, onBack, onToast, initialProduct, desktop }: 
 
       {/* ── Onglet Mise à jour en chaîne ── */}
       {tab === "chaine" && (
-        <div style={{ maxWidth: 860, margin: "0 auto" }}>
-          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14 }}>
-            Colle une liste de références → ajuste les quantités avec + / −
-          </div>
-
-          {bulkItems.length === 0 && (
-            <div style={desktop ? { background: "#fff", border: "1px solid #e8ecf3", borderRadius: 16, padding: "20px 22px", boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.08)" } : undefined}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: desktop ? "#94a3b8" : C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>
-                Références (1 par ligne, ou séparées par virgule/point-virgule)
-              </div>
-              <textarea
-                value={bulkText}
-                onChange={e => setBulkText(e.target.value)}
-                placeholder={"1010205\n1010206\n1010207\n..."}
-                rows={8}
-                style={{ width: "100%", padding: "12px", border: `1.5px solid ${desktop ? "#e8ecf3" : C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "monospace", resize: "vertical" as const, outline: "none", boxSizing: "border-box" as const, background: desktop ? "#fafbfd" : undefined }}
-              />
-              <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
-                <button onClick={parseBulkRefs} disabled={bulkParsing || !bulkText.trim()}
-                  style={{ padding: desktop ? "11px 26px" : "10px 24px", borderRadius: desktop ? 11 : 9, border: "none", background: C.blue, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: !bulkText.trim() ? 0.5 : 1, boxShadow: desktop && bulkText.trim() ? "0 8px 20px -8px rgba(37,99,235,.5)" : "none" }}>
-                  {bulkParsing ? "Recherche..." : "→ Rechercher les références"}
-                </button>
-              </div>
+        <div style={{ maxWidth: desktop ? "none" : 860, margin: "0 auto" }}>
+          {!desktop && (
+            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14 }}>
+              Colle une liste de références → ajuste les quantités avec + / −
             </div>
           )}
+
+          {bulkItems.length === 0 && (() => {
+            // Compte en direct les références détectées (même logique que parseBulkRefs)
+            const detected = Array.from(new Set(bulkText
+              .split(/\n/).map(l => l.trim()).filter(Boolean)
+              .flatMap(line => line.split(/[,;|\t]+/).map(p => p.trim()).filter(Boolean).map(part => part.split(/\s+/)[0]))
+              .filter(tok => /^[A-Za-z0-9]{4,}$/.test(tok))));
+            if (!desktop) return (
+              <>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>
+                  Références (1 par ligne, ou séparées par virgule/point-virgule)
+                </div>
+                <textarea
+                  value={bulkText}
+                  onChange={e => setBulkText(e.target.value)}
+                  placeholder={"1010205\n1010206\n1010207\n..."}
+                  rows={8}
+                  style={{ width: "100%", padding: "12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "monospace", resize: "vertical" as const, outline: "none", boxSizing: "border-box" as const }}
+                />
+                <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
+                  <button onClick={parseBulkRefs} disabled={bulkParsing || !bulkText.trim()}
+                    style={{ padding: "10px 24px", borderRadius: 9, border: "none", background: C.blue, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: !bulkText.trim() ? 0.5 : 1 }}>
+                    {bulkParsing ? "Recherche..." : "→ Rechercher les références"}
+                  </button>
+                </div>
+              </>
+            );
+            return (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 20, alignItems: "start" }}>
+                {/* Zone de saisie */}
+                <div style={{ background: "#fff", border: "1px solid #e8ecf3", borderRadius: 16, padding: "20px 22px", boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.08)" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>Colle ta liste de références</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: detected.length > 0 ? "#16a34a" : "#94a3b8", background: detected.length > 0 ? "#dcfce7" : "#f4f6fb", padding: "3px 10px", borderRadius: 9, transition: "all .15s" }}>
+                      {detected.length > 0 ? `${detected.length} référence${detected.length > 1 ? "s" : ""} détectée${detected.length > 1 ? "s" : ""}` : "en attente"}
+                    </span>
+                  </div>
+                  <textarea
+                    value={bulkText}
+                    onChange={e => setBulkText(e.target.value)}
+                    placeholder={"1010205\n1010206\n1010207\n…\n\nTu peux aussi coller un export brut (réf + nom + qté) :\nseules les références seront extraites."}
+                    rows={11}
+                    autoFocus
+                    style={{ width: "100%", padding: "14px", border: "1.5px solid #e8ecf3", borderRadius: 12, fontSize: 13.5, fontFamily: "monospace", resize: "vertical" as const, outline: "none", boxSizing: "border-box" as const, background: "#fafbfd", lineHeight: 1.6 }}
+                  />
+                  <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12 }}>
+                    {bulkText.trim() && <button onClick={() => setBulkText("")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12.5, color: "#94a3b8", fontFamily: "inherit", fontWeight: 600 }}>Effacer</button>}
+                    <button onClick={parseBulkRefs} disabled={bulkParsing || detected.length === 0}
+                      style={{ padding: "12px 28px", borderRadius: 11, border: "none", background: detected.length > 0 ? C.blue : "#e8ecf3", color: detected.length > 0 ? "#fff" : "#94a3b8", fontSize: 14, fontWeight: 700, cursor: detected.length > 0 ? "pointer" : "default", fontFamily: "inherit", boxShadow: detected.length > 0 ? "0 8px 20px -8px rgba(37,99,235,.5)" : "none", transition: "all .15s" }}>
+                      {bulkParsing ? "Recherche…" : detected.length > 0 ? `→ Charger ${detected.length} référence${detected.length > 1 ? "s" : ""}` : "→ Rechercher"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Guide */}
+                <div style={{ background: "#fff", border: "1px solid #e8ecf3", borderRadius: 16, padding: "18px 20px", boxShadow: "0 1px 2px rgba(15,23,42,.04)" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" as const, color: "#94a3b8", marginBottom: 14 }}>Comment ça marche</div>
+                  {[
+                    { n: "1", t: "Colle tes références", d: "Une par ligne, ou séparées par virgule, point-virgule, tabulation. Les exports bruts sont acceptés." },
+                    { n: "2", t: "Charge les produits", d: "Chaque référence est retrouvée avec son stock par emplacement et par lot." },
+                    { n: "3", t: "Ajuste avec + / −", d: "Modifie les quantités ligne par ligne, puis applique tout en une fois dans Odoo." },
+                  ].map((s, i) => (
+                    <div key={i} style={{ display: "flex", gap: 12, marginBottom: i < 2 ? 16 : 0 }}>
+                      <div style={{ width: 26, height: 26, borderRadius: 8, background: "#eef2ff", color: "#2563eb", fontSize: 12.5, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{s.n}</div>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{s.t}</div>
+                        <div style={{ fontSize: 12, color: "#64748b", marginTop: 2, lineHeight: 1.5 }}>{s.d}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
 
           {bulkItems.length > 0 && (
             <>
