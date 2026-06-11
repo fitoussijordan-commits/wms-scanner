@@ -2709,7 +2709,7 @@ export default function Page() {
       <main style={isDesktopUI
         ? { marginLeft: 248, padding: screen === "home" ? "28px 36px 60px" : "28px 24px 60px" }
         : { maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px" }}>
-       <div style={isDesktopUI ? { maxWidth: screen === "home" ? 1240 : screen === "waitingOrders" ? 1120 : screen === "inventory" ? 1000 : 720, margin: "0 auto" } : undefined}>
+       <div style={isDesktopUI ? { maxWidth: screen === "home" ? 1240 : screen === "waitingOrders" ? 1120 : (screen === "inventory" || screen === "productImport") ? 1000 : 720, margin: "0 auto" } : undefined}>
 
         {/* ===== HOME (PDA / mobile) ===== */}
         {screen === "home" && !isDesktopUI && <>
@@ -3374,7 +3374,7 @@ export default function Page() {
           <InventoryScreen session={session} onBack={goHome} onToast={showToast} initialProduct={inventoryInitProduct} desktop={isDesktopUI} />
         )}
         {screen === "productImport" && session && (
-          <ProductImportScreen session={session} onBack={goHome} onToast={showToast} />
+          <ProductImportScreen session={session} onBack={goHome} onToast={showToast} desktop={isDesktopUI} />
         )}
         {screen === "supplierImport" && session && odoo.isAdmin(session) && (
           <SupplierImportScreen session={session} onBack={goHome} onToast={showToast} />
@@ -6927,7 +6927,7 @@ function applyMapping(row: any[], headers: string[], mapping: ColMapping): Impor
   };
 }
 
-function ProductImportScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+function ProductImportScreen({ session, onBack, onToast, desktop }: { session: any; onBack: () => void; onToast: (m: string) => void; desktop?: boolean }) {
   const [tab, setTab] = useState<"import" | "create" | "seuils" | "nonvendable">("import");
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [checking, setChecking] = useState(false);
@@ -7044,7 +7044,9 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
   // ── Vue fiche produit ────────────────────────────────────────────
   if (form) {
     return (
-      <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto" }}>
+      <div style={desktop
+        ? { padding: "24px 28px", maxWidth: 580, margin: "0 auto", background: "#fff", border: "1px solid #e8ecf3", borderRadius: 18, boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.08)" }
+        : { padding: "20px 16px", maxWidth: 480, margin: "0 auto" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
           <button onClick={() => { setForm(null); setCurrentIdx(null); }} style={{ ...iconBtn, background: C.bg, borderRadius: 10, padding: 8 }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
@@ -7127,7 +7129,9 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
       ["nbUnitesCarton", "Nb unités/carton"], ["unite", "Unité/pièce"], ["hsCode", "Code douanier"],
     ];
     return (
-      <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto" }}>
+      <div style={desktop
+        ? { padding: "24px 28px", maxWidth: 580, margin: "0 auto", background: "#fff", border: "1px solid #e8ecf3", borderRadius: 18, boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.08)" }
+        : { padding: "20px 16px", maxWidth: 480, margin: "0 auto" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
           <button onClick={() => { setShowMapping(false); setRawHeaders([]); setRawData([]); setFileName(""); }} style={{ ...iconBtn, background: C.bg, borderRadius: 10, padding: 8 }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
@@ -7161,24 +7165,31 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
 
   // ── Vue liste ────────────────────────────────────────────────────
   return (
-    <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto" }}>
+    <div style={desktop ? { padding: 0 } : { padding: "20px 16px", maxWidth: 480, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-        <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 10, padding: 8 }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
-        </button>
+        {!desktop && (
+          <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 10, padding: 8 }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+          </button>
+        )}
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Gestion articles</div>
-          {fileName && <div style={{ fontSize: 12, color: C.textMuted }}>{fileName}</div>}
+          <div style={{ fontSize: desktop ? 21 : 18, fontWeight: 700, letterSpacing: desktop ? -0.4 : 0, color: desktop ? "#0f172a" : C.text }}>Gestion articles</div>
+          <div style={{ fontSize: desktop ? 13 : 12, color: desktop ? "#64748b" : C.textMuted, marginTop: desktop ? 3 : 0 }}>{fileName || (desktop ? "Import Excel, création, seuils d'alerte et stock non vendable" : "")}</div>
         </div>
       </div>
 
       {/* Tab bar */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 20, background: C.bg, borderRadius: 12, padding: 4 }}>
+      <div style={desktop
+        ? { display: "inline-flex", gap: 4, margin: "6px 0 22px", background: "#fff", border: "1px solid #e8ecf3", borderRadius: 13, padding: 4, boxShadow: "0 1px 2px rgba(15,23,42,.04)" }
+        : { display: "flex", gap: 4, marginBottom: 20, background: C.bg, borderRadius: 12, padding: 4 }}>
         {([["import", "Import Excel"], ["create", "Créer article"], ["seuils", "Seuils d'alerte"], ["nonvendable", "Stock non vendable"]] as const).map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)}
-            style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600,
-              background: tab === t ? C.white : "transparent", color: tab === t ? C.text : C.textMuted,
-              boxShadow: tab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none", transition: "all 0.15s" }}>
+            style={desktop
+              ? { padding: "9px 18px", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13.5, fontWeight: 600,
+                  background: tab === t ? "#eef2ff" : "transparent", color: tab === t ? "#2563eb" : "#64748b", transition: "all 0.15s" }
+              : { flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600,
+                  background: tab === t ? C.white : "transparent", color: tab === t ? C.text : C.textMuted,
+                  boxShadow: tab === t ? "0 1px 4px rgba(0,0,0,0.08)" : "none", transition: "all 0.15s" }}>
             {label}
           </button>
         ))}
@@ -7192,40 +7203,44 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
         <NonVendableTab session={session} onToast={onToast} />
       ) : rows.length === 0 ? (
         // ── Upload zone ──
-        <div>
+        <div style={desktop ? { maxWidth: 640 } : undefined}>
           <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
             onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
-          <div onClick={() => fileRef.current?.click()}
-            style={{ border: `2px dashed ${C.border}`, borderRadius: 16, padding: "48px 24px", textAlign: "center" as const, cursor: "pointer", background: C.bg }}>
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="1.5" style={{ marginBottom: 16 }}>
+          <div onClick={() => fileRef.current?.click()} className={desktop ? "dk-tool" : undefined}
+            style={desktop
+              ? { border: "2px dashed #c7d2e3", borderRadius: 18, padding: "56px 32px", textAlign: "center" as const, cursor: "pointer", background: "#fff", boxShadow: "0 1px 2px rgba(15,23,42,.04)" }
+              : { border: `2px dashed ${C.border}`, borderRadius: 16, padding: "48px 24px", textAlign: "center" as const, cursor: "pointer", background: C.bg }}>
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke={desktop ? "#94a3b8" : C.textMuted} strokeWidth="1.5" style={{ marginBottom: 16 }}>
               <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
               <line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/>
             </svg>
-            <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 8 }}>Importer le fichier Excel marketing</div>
-            <div style={{ fontSize: 13, color: C.textMuted }}>Colonnes détectées automatiquement</div>
-            <div style={{ marginTop: 16, display: "inline-block", padding: "10px 24px", background: C.blue, color: "#fff", borderRadius: 10, fontSize: 14, fontWeight: 600 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: desktop ? "#0f172a" : C.text, marginBottom: 8 }}>Importer le fichier Excel marketing</div>
+            <div style={{ fontSize: 13, color: desktop ? "#64748b" : C.textMuted }}>Glisse ou clique — colonnes détectées automatiquement</div>
+            <div style={{ marginTop: 16, display: "inline-block", padding: "10px 24px", background: C.blue, color: "#fff", borderRadius: 10, fontSize: 14, fontWeight: 600, boxShadow: desktop ? "0 8px 20px -8px rgba(37,99,235,.5)" : "none" }}>
               Choisir le fichier
             </div>
           </div>
 
         </div>
       ) : checking ? (
-        <div style={{ textAlign: "center" as const, padding: 40, color: C.textMuted }}>
+        <div style={{ textAlign: "center" as const, padding: 40, color: C.textMuted, ...(desktop ? { background: "#fff", border: "1px solid #e8ecf3", borderRadius: 16, maxWidth: 640 } : {}) }}>
           <div style={{ fontSize: 14 }}>Vérification dans Odoo...</div>
           <div style={{ marginTop: 8, fontSize: 12 }}>{rows.length} produits analysés</div>
         </div>
       ) : (
-        <div>
+        <div style={desktop ? { maxWidth: 820 } : undefined}>
           {/* Stats */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: desktop ? 14 : 10, marginBottom: 20 }}>
             {[
-              { label: "Total", value: rows.length, color: C.text },
+              { label: "Total", value: rows.length, color: desktop ? "#0f172a" : C.text },
               { label: "Déjà dans Odoo", value: existing.length, color: C.green },
               { label: "À créer", value: missing.length, color: missing.length > 0 ? C.orange : C.green },
             ].map(s => (
-              <div key={s.label} style={{ background: C.bg, borderRadius: 12, padding: "12px 10px", textAlign: "center" as const }}>
-                <div style={{ fontSize: 24, fontWeight: 800, color: s.color }}>{s.value}</div>
-                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{s.label}</div>
+              <div key={s.label} style={desktop
+                ? { background: "#fff", border: "1px solid #e8ecf3", borderRadius: 14, padding: "14px 12px", textAlign: "center" as const, boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.06)" }
+                : { background: C.bg, borderRadius: 12, padding: "12px 10px", textAlign: "center" as const }}>
+                <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: desktop ? -0.5 : 0, color: s.color }}>{s.value}</div>
+                <div style={{ fontSize: 11, color: desktop ? "#64748b" : C.textMuted, marginTop: 2, ...(desktop ? { fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: 0.5 } : {}) }}>{s.label}</div>
               </div>
             ))}
           </div>
@@ -7233,7 +7248,7 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
           {/* CTA si manquants */}
           {missing.length > 0 && (
             <button onClick={() => openForm(missing[0], rows.indexOf(missing[0]))}
-              style={{ width: "100%", padding: 16, background: C.blue, color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginBottom: 20 }}>
+              style={{ width: "100%", padding: desktop ? 14 : 16, background: C.blue, color: "#fff", border: "none", borderRadius: 12, fontSize: desktop ? 14 : 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginBottom: 20, boxShadow: desktop ? "0 8px 20px -8px rgba(37,99,235,.5)" : "none" }}>
               → Créer les {missing.length} produits manquants
             </button>
           )}
@@ -7244,7 +7259,27 @@ function ProductImportScreen({ session, onBack, onToast }: { session: any; onBac
           )}
 
           {/* Liste manquants */}
-          {missing.length > 0 && (
+          {missing.length > 0 && desktop && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.orange, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 10 }}>À créer ({missing.length})</div>
+              <div style={{ background: "#fff", border: "1px solid #e8ecf3", borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.04)" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "110px minmax(220px,1fr) 150px 110px 36px", gap: 12, padding: "9px 16px", background: "#fafbfd", borderBottom: "1px solid #e8ecf3", fontSize: 10.5, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase" as const, color: "#94a3b8" }}>
+                  <span>Réf</span><span>Nom</span><span>EAN</span><span>Prix HT</span><span></span>
+                </div>
+                {missing.map((row, i) => (
+                  <div key={row.ref} className="dk-row" onClick={() => openForm(row, rows.indexOf(row))}
+                    style={{ display: "grid", gridTemplateColumns: "110px minmax(220px,1fr) 150px 110px 36px", gap: 12, padding: "11px 16px", alignItems: "center", borderBottom: i < missing.length - 1 ? "1px solid #e8ecf3" : "none", cursor: "pointer" }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: C.orange, fontFamily: "monospace" }}>{row.ref}</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{row.name || "(sans nom)"}</span>
+                    <span style={{ fontSize: 11.5, color: row.barcode ? "#64748b" : "#cbd5e1", fontFamily: "monospace" }}>{row.barcode || "—"}</span>
+                    <span style={{ fontSize: 12, color: row.prixHT ? "#64748b" : "#cbd5e1" }}>{row.prixHT ? `${row.prixHT} €` : "—"}</span>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {missing.length > 0 && !desktop && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: C.orange, textTransform: "uppercase" as const, letterSpacing: 0.5, marginBottom: 10 }}>À créer ({missing.length})</div>
               {missing.map((row, i) => (
