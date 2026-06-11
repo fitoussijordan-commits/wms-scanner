@@ -1467,10 +1467,24 @@ export default function Page() {
           const names: string[] = newPickings.map((p: any) => p.name || p.origin || `#${p.id}`);
           setNewOrderNotif({ count: newPickings.length, names });
 
+          // Auto-disparition après 8s
+          setTimeout(() => setNewOrderNotif(null), 8000);
+
           // Son de notification
           if (localStorage.getItem("wms_notif_sound") !== "false") {
             playNotifSound();
           }
+
+          // Enregistrement Supabase → visible dans la cloche
+          try {
+            await createNotification({
+              type: "new_order",
+              title: `${newPickings.length} nouvelle${newPickings.length > 1 ? "s" : ""} commande${newPickings.length > 1 ? "s" : ""} en attente`,
+              body: names.join(", "),
+              meta: { ids: newPickings.map((p: any) => p.id), names },
+            });
+            refreshNotifs();
+          } catch {}
 
           // Notification navigateur
           if (typeof Notification !== "undefined" && Notification.permission === "granted") {
@@ -2625,46 +2639,67 @@ export default function Page() {
         );
       })()}
 
-      {/* ── Panneau notifications du jour (cloche header) ── */}
+      {/* ── Page notifications plein écran ── */}
       {showNotifs && (
-        <div onClick={() => setShowNotifs(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 10000, display: "flex", justifyContent: "flex-start", alignItems: isDesktopUI ? "flex-end" : "flex-start", ...(isDesktopUI ? { padding: "12px 12px 16px 260px" } : { justifyContent: "flex-end", padding: "64px 12px 12px" }) }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: C.white, borderRadius: 16, width: "100%", maxWidth: 380, maxHeight: "80vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 50px rgba(0,0,0,0.25)" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="1.8"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
-                <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Notifications du jour</span>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <button onClick={refreshNotifs} title="Rafraîchir" style={{ ...iconBtn, padding: 6 }}>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
-                </button>
-                <button onClick={() => setShowNotifs(false)} style={{ ...iconBtn, padding: 6 }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-              </div>
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 10000,
+          background: C.bg, display: "flex", flexDirection: "column",
+          ...(isDesktopUI ? { left: 248 } : {}),
+        }}>
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "16px 20px", background: C.white, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+            <button onClick={() => setShowNotifs(false)} style={{ ...iconBtn, padding: 8 }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>Notifications du jour</div>
+              <div style={{ fontSize: 12, color: C.textMuted, marginTop: 1 }}>{notifs.length} notification{notifs.length > 1 ? "s" : ""}</div>
             </div>
-            <div style={{ overflowY: "auto", padding: 12 }}>
-              {notifs.length === 0 ? (
-                <div style={{ textAlign: "center", color: C.textMuted, fontSize: 13, padding: "30px 0" }}>Aucune notification aujourd'hui</div>
-              ) : notifs.map(n => {
-                const t = new Date(n.created_at);
-                const hh = `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
-                return (
-                  <div key={n.id} style={{ display: "flex", gap: 10, padding: "10px 12px", marginBottom: 8, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10 }}>
-                    <div style={{ width: 30, height: 30, borderRadius: 8, background: "#fef2f2", border: "1px solid #fecaca", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{n.title}</span>
-                        <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{hh}</span>
-                      </div>
-                      {n.body && <div style={{ fontSize: 12, color: C.textSec, marginTop: 3, lineHeight: 1.4 }}>{n.body}</div>}
-                    </div>
+            <button onClick={refreshNotifs} title="Rafraîchir" style={{ ...iconBtn, padding: 8 }}>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            </button>
+          </div>
+
+          {/* Liste */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 10, maxWidth: 760, width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+            {notifs.length === 0 ? (
+              <div style={{ textAlign: "center", color: C.textMuted, fontSize: 14, padding: "60px 0", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke={C.border} strokeWidth="1.5"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+                Aucune notification aujourd'hui
+              </div>
+            ) : notifs.map(n => {
+              const t = new Date(n.created_at);
+              const hh = `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+              const isOrder = n.type === "new_order";
+              const iconBg = isOrder ? "#fefce8" : "#fef2f2";
+              const iconBorder = isOrder ? "#fde68a" : "#fecaca";
+              const iconColor = isOrder ? "#d97706" : "#dc2626";
+              const icon = isOrder
+                ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconColor} strokeWidth="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+                : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconColor} strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+              return (
+                <div key={n.id} style={{ display: "flex", gap: 14, padding: "14px 16px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 10, background: iconBg, border: `1px solid ${iconBorder}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    {icon}
                   </div>
-                );
-              })}
-            </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: C.text, lineHeight: 1.3 }}>{n.title}</span>
+                      <span style={{ fontSize: 12, color: C.textMuted, flexShrink: 0, marginTop: 1 }}>{hh}</span>
+                    </div>
+                    {n.body && <div style={{ fontSize: 13, color: C.textSec, marginTop: 5, lineHeight: 1.5 }}>{n.body}</div>}
+                    {isOrder && (
+                      <button
+                        onClick={() => { setShowNotifs(false); loadPickings(); setScreen("prep"); }}
+                        style={{ marginTop: 10, padding: "6px 14px", background: "#fef9c3", border: "1px solid #fde68a", borderRadius: 8, fontSize: 12, fontWeight: 700, color: "#92400e", cursor: "pointer", fontFamily: "inherit" }}
+                      >
+                        Voir les commandes →
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
