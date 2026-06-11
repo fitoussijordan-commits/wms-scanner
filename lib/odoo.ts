@@ -2905,3 +2905,80 @@ export async function fetchCarrierSaleOrders(
 
   return Array.from(byRef.values());
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// ÉDITION RAPIDE FICHE PRODUIT (desktop admin) — alternative légère à Odoo
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface ProductQuickEditData {
+  product: any;
+  tmplId: number;
+  dimFields: string[];          // champs dimensions présents sur cette base (module product_dimension ou équivalent)
+  dimLabels: Record<string, string>;
+  dims: Record<string, number>;
+  suppliers: Array<{ id: number; partner_id: [number, string]; product_code: string | false; product_name: string | false }>;
+}
+
+export async function getProductQuickEdit(session: OdooSession, productId: number): Promise<ProductQuickEditData> {
+  const prods = await searchRead(session, "product.product",
+    [["id", "=", productId]],
+    ["id", "name", "default_code", "barcode", "sale_ok", "weight", "volume", "product_tmpl_id", "active"], 1);
+  const prod = prods[0];
+  if (!prod) throw new Error("Produit introuvable");
+  const tmplId = prod.product_tmpl_id[0];
+
+  // Détecte dynamiquement les champs dimensions disponibles sur cette base
+  let dimFields: string[] = [];
+  const dimLabels: Record<string, string> = {};
+  const dims: Record<string, number> = {};
+  try {
+    const fg = await callMethod(session, "product.template", "fields_get",
+      [["product_length", "product_width", "product_height"]], { attributes: ["string"] });
+    dimFields = Object.keys(fg || {});
+    for (const f of dimFields) dimLabels[f] = (fg[f]?.string as string) || f;
+    if (dimFields.length) {
+      const tmpls = await searchRead(session, "product.template", [["id", "=", tmplId]], dimFields, 1);
+      if (tmpls[0]) for (const f of dimFields) dims[f] = tmpls[0][f] || 0;
+    }
+  } catch { dimFields = []; }
+
+  // Lignes fournisseur (variante OU template)
+  const suppliers = await searchRead(session, "product.supplierinfo",
+    ["|", ["product_id", "=", productId], "&", ["product_id", "=", false], ["product_tmpl_id", "=", tmplId]],
+    ["id", "partner_id", "product_code", "product_name"], 10);
+
+  return { product: prod, tmplId, dimFields, dimLabels, dims, suppliers };
+}
+
+export async function saveProductQuickEdit(session: OdooSession, params: {
+  productId: number; tmplId: number;
+  barcode?: string;
+  saleOk?: boolean;
+  weight?: number;
+  volume?: number;
+  dims?: Record<string, number>;
+  supplierCodes?: Array<{ id: number; product_code: string }>;
+}) {
+  const { productId, tmplId, barcode, saleOk, weight, volume, dims, supplierCodes } = params;
+
+  // EAN → product.product (false pour effacer)
+  if (barcode !== undefined) {
+    await write(session, "product.product", [productId], { barcode: barcode.trim() || false });
+  }
+
+  // Vendable / poids / volume / dimensions → product.template
+  const tmplVals: any = {};
+  if (saleOk !== undefined) tmplVals.sale_ok = saleOk;
+  if (weight !== undefined && !isNaN(weight)) tmplVals.weight = weight;
+  if (volume !== undefined && !isNaN(volume)) tmplVals.volume = volume;
+  if (dims) for (const [k, v] of Object.entries(dims)) { if (!isNaN(v)) tmplVals[k] = v; }
+  if (Object.keys(tmplVals).length) await write(session, "product.template", [tmplId], tmplVals);
+
+  // Réf fournisseur → product.supplierinfo
+  if (supplierCodes?.length) {
+    await Promise.all(supplierCodes.map(s =>
+      write(session, "product.supplierinfo", [s.id], { product_code: s.product_code.trim() || false })
+    ));
+  }
+  return true;
+}

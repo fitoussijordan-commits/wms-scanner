@@ -1047,6 +1047,8 @@ export default function Page() {
 
   // ── UI desktop (refonte) : ≥1024px ET non tactile — le PDA garde l'UI actuelle ──
   const [isDesktopUI, setIsDesktopUI] = useState(false);
+  // ── Édition rapide fiche produit (desktop + admin uniquement) ──
+  const [quickEditProductId, setQuickEditProductId] = useState<number | null>(null);
   useEffect(() => {
     const check = () => setIsDesktopUI(!("ontouchstart" in window) && window.innerWidth >= 1024);
     check();
@@ -2492,9 +2494,9 @@ export default function Page() {
           if (searchId !== homeSearchIdRef.current) return;
           const items = results.map((r: odoo.GlobalSearchResult) => {
             if (r.type === "location") return { kind: "location", label: r.data.complete_name || r.data.name, code: r.data.barcode || r.data.name };
-            if (r.type === "product") return { kind: "product", label: r.data.name, ref: r.data.default_code, code: r.data.barcode || r.data.default_code };
-            if (r.type === "lot") { const prod = r.data.product; return { kind: "lot", label: prod?.name || r.data.lot.product_id[1], ref: prod?.default_code, lotName: r.data.lot.name, code: r.data.lot.name }; }
-            if (r.type === "supplier_ref") return { kind: "product", label: r.data.name, ref: r.data.default_code, code: r.data.barcode || r.data.default_code, supplierRef: r.supplierRef };
+            if (r.type === "product") return { kind: "product", label: r.data.name, ref: r.data.default_code, code: r.data.barcode || r.data.default_code, productId: r.data.id };
+            if (r.type === "lot") { const prod = r.data.product; return { kind: "lot", label: prod?.name || r.data.lot.product_id[1], ref: prod?.default_code, lotName: r.data.lot.name, code: r.data.lot.name, productId: prod?.id || r.data.lot.product_id[0] }; }
+            if (r.type === "supplier_ref") return { kind: "product", label: r.data.name, ref: r.data.default_code, code: r.data.barcode || r.data.default_code, supplierRef: r.supplierRef, productId: r.data.id };
             return null;
           }).filter(Boolean);
           setHomeResults(items);
@@ -2885,28 +2887,39 @@ export default function Page() {
                 {homeResults.length > 0 && (
                   <div style={{ marginTop: 10, background: "#fff", borderRadius: 13, padding: 6, maxHeight: 280, overflowY: "auto" as const }}>
                     {homeResults.map((r: any, i: number) => (
-                      <button key={i}
-                        onClick={() => { setHomeResults([]); setHomeQuery(""); doLookup(r.code); }}
-                        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: "none", border: "none", borderRadius: 9, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
-                        <div>
-                          {r.kind === "location" ? (
-                            <div style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>📍 {r.label}</div>
-                          ) : r.kind === "lot" ? (
-                            <>
-                              <div style={{ fontSize: 13, fontWeight: 700, color: DK.text }}>{r.label}</div>
-                              {r.ref && <div style={{ fontSize: 11, color: DK.text3 }}>Réf: {r.ref}</div>}
-                              <div style={{ fontSize: 11, color: "#2563eb" }}>🏷 Lot: {r.lotName}</div>
-                            </>
-                          ) : (
-                            <>
-                              <div style={{ fontSize: 13, fontWeight: 700, color: DK.text }}>{r.label}</div>
-                              {r.ref && <div style={{ fontSize: 11, color: DK.text3 }}>Réf: {r.ref}</div>}
-                              {r.supplierRef && <div style={{ fontSize: 11, color: "#7c3aed" }}>🏭 {r.supplierRef}</div>}
-                            </>
-                          )}
-                        </div>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={DK.text3} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-                      </button>
+                      <div key={i} className="dk-row" style={{ display: "flex", alignItems: "center", borderRadius: 9 }}>
+                        <button
+                          onClick={() => { setHomeResults([]); setHomeQuery(""); doLookup(r.code); }}
+                          style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, minWidth: 0 }}>
+                          <div style={{ minWidth: 0 }}>
+                            {r.kind === "location" ? (
+                              <div style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>📍 {r.label}</div>
+                            ) : r.kind === "lot" ? (
+                              <>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: DK.text }}>{r.label}</div>
+                                {r.ref && <div style={{ fontSize: 11, color: DK.text3 }}>Réf: {r.ref}</div>}
+                                <div style={{ fontSize: 11, color: "#2563eb" }}>🏷 Lot: {r.lotName}</div>
+                              </>
+                            ) : (
+                              <>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: DK.text }}>{r.label}</div>
+                                {r.ref && <div style={{ fontSize: 11, color: DK.text3 }}>Réf: {r.ref}</div>}
+                                {r.supplierRef && <div style={{ fontSize: 11, color: "#7c3aed" }}>🏭 {r.supplierRef}</div>}
+                              </>
+                            )}
+                          </div>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={DK.text3} strokeWidth="2" style={{ flexShrink: 0 }}><polyline points="9 18 15 12 9 6"/></svg>
+                        </button>
+                        {/* Édition rapide — admin uniquement */}
+                        {r.productId && session && odoo.isAdmin(session) && (
+                          <button
+                            onClick={e => { e.stopPropagation(); setQuickEditProductId(r.productId); }}
+                            title="Modifier la fiche produit"
+                            style={{ flexShrink: 0, width: 34, height: 34, margin: "0 6px", borderRadius: 9, border: "1px solid #e8ecf3", background: "#f4f6fb", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b" }}>
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                          </button>
+                        )}
+                      </div>
                     ))}
                   </div>
                 )}
@@ -3491,7 +3504,167 @@ export default function Page() {
       {/* Print Modal — rendered at root level for z-index */}
       {printReq && <PrintModal req={printReq} onClose={() => setPrintReq(null)} onToast={showToast} />}
 
+      {/* Édition rapide fiche produit — desktop + admin uniquement */}
+      {isDesktopUI && quickEditProductId !== null && session && odoo.isAdmin(session) && (
+        <ProductQuickEditModal
+          session={session}
+          productId={quickEditProductId}
+          onClose={() => setQuickEditProductId(null)}
+          onToast={showToast}
+        />
+      )}
+
     </Shell>
+  );
+}
+
+// ============================================
+// ÉDITION RAPIDE FICHE PRODUIT (desktop + admin)
+// ============================================
+function ProductQuickEditModal({ session, productId, onClose, onToast }: { session: any; productId: number; onClose: () => void; onToast: (m: string) => void }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [data, setData] = useState<odoo.ProductQuickEditData | null>(null);
+  // Form state
+  const [saleOk, setSaleOk] = useState(true);
+  const [barcode, setBarcode] = useState("");
+  const [weight, setWeight] = useState("");
+  const [volume, setVolume] = useState("");
+  const [dims, setDims] = useState<Record<string, string>>({});
+  const [supplierCodes, setSupplierCodes] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const d = await odoo.getProductQuickEdit(session, productId);
+        setData(d);
+        setSaleOk(!!d.product.sale_ok);
+        setBarcode(d.product.barcode || "");
+        setWeight(d.product.weight ? String(d.product.weight) : "");
+        setVolume(d.product.volume ? String(d.product.volume) : "");
+        const dm: Record<string, string> = {};
+        for (const f of d.dimFields) dm[f] = d.dims[f] ? String(d.dims[f]) : "";
+        setDims(dm);
+        const sc: Record<number, string> = {};
+        for (const s of d.suppliers) sc[s.id] = (s.product_code as string) || "";
+        setSupplierCodes(sc);
+      } catch (e: any) { onToast("❌ " + e.message); onClose(); }
+      setLoading(false);
+    })();
+  }, [productId]);
+
+  const save = async () => {
+    if (!data) return;
+    setSaving(true);
+    try {
+      await odoo.saveProductQuickEdit(session, {
+        productId,
+        tmplId: data.tmplId,
+        barcode,
+        saleOk,
+        weight: weight === "" ? undefined : parseFloat(weight),
+        volume: volume === "" ? undefined : parseFloat(volume),
+        dims: Object.fromEntries(Object.entries(dims).filter(([, v]) => v !== "").map(([k, v]) => [k, parseFloat(v)])),
+        supplierCodes: data.suppliers.map(s => ({ id: s.id, product_code: supplierCodes[s.id] ?? "" })),
+      });
+      onToast("✅ Fiche produit mise à jour");
+      onClose();
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setSaving(false);
+  };
+
+  const lbl: React.CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase" as const, color: "#94a3b8", marginBottom: 6, display: "block" };
+  const inp: React.CSSProperties = { width: "100%", boxSizing: "border-box" as const, padding: "10px 12px", border: "1.5px solid #e8ecf3", borderRadius: 10, fontSize: 14, fontFamily: "inherit", outline: "none", background: "#fafbfd", color: "#0f172a" };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, animation: "fadeIn .15s" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 18, width: "100%", maxWidth: 560, maxHeight: "88vh", overflowY: "auto" as const, boxShadow: "0 24px 64px -12px rgba(15,23,42,.35)", animation: "slideUp .2s" }}>
+        {/* En-tête */}
+        <div style={{ padding: "18px 22px 14px", borderBottom: "1px solid #e8ecf3", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, position: "sticky" as const, top: 0, background: "#fff", zIndex: 1 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase" as const, color: "#2563eb", marginBottom: 4 }}>✏️ Fiche produit</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", lineHeight: 1.3 }}>{loading ? "Chargement…" : data?.product.name}</div>
+            {data?.product.default_code && <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>Réf : {data.product.default_code}</div>}
+          </div>
+          <button onClick={onClose} style={{ flexShrink: 0, width: 32, height: 32, borderRadius: 9, border: "1px solid #e8ecf3", background: "#f4f6fb", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b" }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+
+        {loading ? (
+          <div style={{ padding: 50, textAlign: "center" as const, color: "#94a3b8", fontSize: 14 }}>Chargement de la fiche…</div>
+        ) : data && (
+          <div style={{ padding: "18px 22px 22px" }}>
+            {/* Peut être vendu */}
+            <button onClick={() => setSaleOk(v => !v)}
+              style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "13px 15px", background: saleOk ? "#f0fdf4" : "#fef2f2", border: `1.5px solid ${saleOk ? "#bbf7d0" : "#fecaca"}`, borderRadius: 12, cursor: "pointer", fontFamily: "inherit", marginBottom: 18, transition: "all .15s" }}>
+              <div style={{ width: 40, height: 22, borderRadius: 11, background: saleOk ? "#16a34a" : "#cbd5e1", position: "relative" as const, transition: "background .15s", flexShrink: 0 }}>
+                <div style={{ position: "absolute" as const, top: 2, left: saleOk ? 20 : 2, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }} />
+              </div>
+              <div style={{ textAlign: "left" as const }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: saleOk ? "#166534" : "#b91c1c" }}>{saleOk ? "Peut être vendu" : "Ne peut pas être vendu"}</div>
+                <div style={{ fontSize: 11.5, color: saleOk ? "#16a34a" : "#dc2626" }}>{saleOk ? "Visible à la vente dans Odoo" : "Retiré de la vente"}</div>
+              </div>
+            </button>
+
+            {/* EAN */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={lbl}>Code EAN / code-barres</label>
+              <input value={barcode} onChange={e => setBarcode(e.target.value)} placeholder="Ex : 4020829007512" style={{ ...inp, fontFamily: "monospace", letterSpacing: 0.5 }} />
+              {barcode && !/^\d{8}$|^\d{12,14}$/.test(barcode.trim()) && (
+                <div style={{ fontSize: 11, color: "#d97706", marginTop: 4 }}>⚠ Format inhabituel (EAN-8/12/13/14 attendu) — sera enregistré tel quel</div>
+              )}
+            </div>
+
+            {/* Réf fournisseur */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={lbl}>Référence{data.suppliers.length > 1 ? "s" : ""} fournisseur</label>
+              {data.suppliers.length === 0 && <div style={{ fontSize: 12.5, color: "#94a3b8", fontStyle: "italic" as const, padding: "8px 0" }}>Aucune ligne fournisseur sur cette fiche</div>}
+              {data.suppliers.map(s => (
+                <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <span style={{ flexShrink: 0, width: 160, fontSize: 12.5, fontWeight: 600, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }} title={s.partner_id?.[1]}>{s.partner_id?.[1] || "Fournisseur"}</span>
+                  <input value={supplierCodes[s.id] ?? ""} onChange={e => setSupplierCodes(prev => ({ ...prev, [s.id]: e.target.value }))} placeholder="Réf. fournisseur" style={{ ...inp, fontFamily: "monospace" }} />
+                </div>
+              ))}
+            </div>
+
+            {/* Poids + volume + dimensions */}
+            <div style={{ marginBottom: 22 }}>
+              <label style={lbl}>Poids & dimensions</label>
+              <div style={{ display: "grid", gridTemplateColumns: data.dimFields.length ? "1fr 1fr" : "1fr 1fr", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 4 }}>Poids (kg)</div>
+                  <input type="number" step="0.001" min="0" value={weight} onChange={e => setWeight(e.target.value)} placeholder="0.000" style={inp} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 4 }}>Volume (m³)</div>
+                  <input type="number" step="0.001" min="0" value={volume} onChange={e => setVolume(e.target.value)} placeholder="0.000" style={inp} />
+                </div>
+                {data.dimFields.map(f => (
+                  <div key={f}>
+                    <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 4 }}>{data.dimLabels[f] || f}</div>
+                    <input type="number" step="0.01" min="0" value={dims[f] ?? ""} onChange={e => setDims(prev => ({ ...prev, [f]: e.target.value }))} placeholder="0" style={inp} />
+                  </div>
+                ))}
+              </div>
+              {!data.dimFields.length && (
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6 }}>Longueur / largeur / hauteur non disponibles sur cette base Odoo (module dimensions absent)</div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", borderTop: "1px solid #e8ecf3", paddingTop: 16 }}>
+              <button onClick={onClose} style={{ padding: "11px 20px", borderRadius: 10, border: "1px solid #e8ecf3", background: "#fff", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: "#64748b" }}>Annuler</button>
+              <button onClick={save} disabled={saving}
+                style={{ padding: "11px 26px", borderRadius: 10, border: "none", background: saving ? "#cbd5e1" : "#2563eb", fontSize: 13.5, fontWeight: 700, cursor: saving ? "default" : "pointer", fontFamily: "inherit", color: "#fff", boxShadow: saving ? "none" : "0 8px 20px -8px rgba(37,99,235,.5)" }}>
+                {saving ? "Enregistrement…" : "✓ Enregistrer dans Odoo"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
