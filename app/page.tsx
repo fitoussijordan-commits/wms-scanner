@@ -11314,12 +11314,14 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   };
   const isEchantillon = (ml: any) => getLineCode(ml).startsWith("5");
 
-  // Décompte séparé articles / échantillons
-  const prodLines  = displayLines.filter((ml: any) => !isEchantillon(ml));
-  const echanLines = displayLines.filter((ml: any) => isEchantillon(ml));
-  const doneProd   = prodLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).length;
-  const doneEchan  = echanLines.filter((ml: any) => getQty(ml) >= (ml.reserved_uom_qty || 0)).length;
-  const hasEchan   = echanLines.length > 0;
+  // Décompte séparé articles / échantillons (en unités, comme totalUnits)
+  const prodLines    = displayLines.filter((ml: any) => !isEchantillon(ml));
+  const echanLines   = displayLines.filter((ml: any) => isEchantillon(ml));
+  const totalProdU   = prodLines.reduce((s: number, ml: any) => s + (ml.reserved_uom_qty || 0), 0);
+  const totalEchanU  = echanLines.reduce((s: number, ml: any) => s + (ml.reserved_uom_qty || 0), 0);
+  const doneProdU    = prodLines.reduce((s: number, ml: any) => s + Math.min(getQty(ml), ml.reserved_uom_qty || 0), 0);
+  const doneEchanU   = echanLines.reduce((s: number, ml: any) => s + Math.min(getQty(ml), ml.reserved_uom_qty || 0), 0);
+  const hasEchan     = echanLines.length > 0;
 
   // Progression par colis (= par picking source) — utile seulement en groupe
   const colisProgress = useMemo(() => {
@@ -11524,8 +11526,8 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
             </span>
             {hasEchan ? (
               <span style={{ fontSize: 11, color: C.textMuted, display: "flex", gap: 6 }}>
-                <span title="Articles">📦 {doneProd}/{prodLines.length}</span>
-                <span title="Échantillons">🧪 {doneEchan}/{echanLines.length}</span>
+                <span title="Articles">📦 {doneProdU}/{totalProdU}</span>
+                <span title="Échantillons">🧪 {doneEchanU}/{totalEchanU}</span>
               </span>
             ) : (
               <span style={{ fontSize: 11, color: C.textMuted }}>produits</span>
