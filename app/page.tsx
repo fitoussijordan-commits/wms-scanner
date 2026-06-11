@@ -11844,18 +11844,19 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
       {/* ── Liste rapide des articles restants ── */}
       {!allDone && (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
             Restant ({totalLines - doneLines})
           </div>
-          {displayLines.filter((ml: any) => getQty(ml) < (ml.reserved_uom_qty || 0)).slice(0, 8).map((ml: any, i: number) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${C.border}`, opacity: ml.id === currentLine?.id ? 1 : 0.5 }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: ml.id === currentLine?.id ? C.blue : C.border, flexShrink: 0 }} />
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: ml.id === currentLine?.id ? C.blue : C.border, flexShrink: 0 }} />
-              <div style={{ flex: 1, fontSize: 12, color: C.text, fontWeight: ml.id === currentLine?.id ? 700 : 400 }}>{ml.product_id[1]}</div>
-              <div style={{ fontSize: 11, color: C.textMuted }}>{shortLoc(ml.location_id?.[1] || "")}</div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: C.textSec }}>{getQty(ml)}/{ml.reserved_uom_qty || 0}</div>
-            </div>
-          ))}
+          <div style={{ maxHeight: 260, overflowY: "auto", borderRadius: 10, border: `1px solid ${C.border}`, background: C.white }}>
+            {displayLines.filter((ml: any) => getQty(ml) < (ml.reserved_uom_qty || 0)).map((ml: any, i: number, arr: any[]) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderBottom: i < arr.length - 1 ? `1px solid ${C.border}` : "none", opacity: ml.id === currentLine?.id ? 1 : 0.6, background: ml.id === currentLine?.id ? "#eff6ff" : "transparent" }}>
+                <div style={{ width: 6, height: 6, borderRadius: "50%", background: ml.id === currentLine?.id ? C.blue : C.border, flexShrink: 0 }} />
+                <div style={{ flex: 1, fontSize: 12, color: C.text, fontWeight: ml.id === currentLine?.id ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ml.product_id[1]}</div>
+                <div style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{shortLoc(ml.location_id?.[1] || "")}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.textSec, flexShrink: 0 }}>{getQty(ml)}/{ml.reserved_uom_qty || 0}</div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
