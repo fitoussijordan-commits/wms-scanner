@@ -2825,13 +2825,13 @@ export default function Page() {
           const kpis = [
             { label: "En attente", count: ccData?.waitingToday.count ?? null, color: "#d97706", soft: "#fef3c7", onClick: () => setScreen("waitingOrders") },
             { label: "En préparation", count: ccData?.inPrep.count ?? null, color: "#7c3aed", soft: "#f3e8ff", onClick: () => { loadPickings(); setScreen("prep"); } },
-            { label: "À emballer", count: ccData?.outToPackToday.count ?? null, color: "#0d9488", soft: "#ccfbf1", onClick: () => { loadPickings(); setScreen("prep"); } },
+            { label: "À emballer", count: ccData?.outToPackToday.count ?? null, color: "#0d9488", soft: "#ccfbf1", onClick: () => { setPackingPickingId(null); setScreen("packing"); } },
             { label: "E-shop", count: ccData?.eshopWaiting.count ?? null, color: "#db2777", soft: "#fce7f3", onClick: () => setScreen("eshop") },
           ];
           const flow = [
             { label: "En attente", icon: "⏳", soft: "#fef3c7", color: "#d97706", d: ccData?.waitingToday, onClick: () => setScreen("waitingOrders") },
             { label: "En préparation", icon: "📦", soft: "#f3e8ff", color: "#7c3aed", d: ccData?.inPrep, onClick: () => { loadPickings(); setScreen("prep"); } },
-            { label: "À emballer", icon: "🎁", soft: "#ccfbf1", color: "#0d9488", d: ccData?.outToPackToday, onClick: () => { loadPickings(); setScreen("prep"); } },
+            { label: "À emballer", icon: "🎁", soft: "#ccfbf1", color: "#0d9488", d: ccData?.outToPackToday, onClick: () => { setPackingPickingId(null); setScreen("packing"); } },
             { label: "E-shop", icon: "🛒", soft: "#fce7f3", color: "#db2777", d: ccData?.eshopWaiting, onClick: () => setScreen("eshop") },
           ];
           return (
