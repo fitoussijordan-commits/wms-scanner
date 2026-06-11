@@ -1044,6 +1044,15 @@ export default function Page() {
   };
 
   const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order">("login");
+
+  // ── UI desktop (refonte) : ≥1024px ET non tactile — le PDA garde l'UI actuelle ──
+  const [isDesktopUI, setIsDesktopUI] = useState(false);
+  useEffect(() => {
+    const check = () => setIsDesktopUI(!("ontouchstart" in window) && window.innerWidth >= 1024);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
   const [packingPickingId, setPackingPickingId] = useState<number | null>(null);
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2470,11 +2479,149 @@ export default function Page() {
   // ===================== RENDER =====================
   const classicStep = !src ? 0 : !dst ? 1 : 2;
 
+  // ── Recherche rapide (partagée mobile / desktop) ──
+  const onHomeQueryChange = (val: string) => {
+    setHomeQuery(val);
+    if (homeDebounceRef.current) clearTimeout(homeDebounceRef.current);
+    if (val.trim().length >= 2 && session) {
+      homeDebounceRef.current = setTimeout(async () => {
+        const searchId = ++homeSearchIdRef.current;
+        setHomeSearching(true);
+        try {
+          const results = await odoo.globalSearch(session, val.trim());
+          if (searchId !== homeSearchIdRef.current) return;
+          const items = results.map((r: odoo.GlobalSearchResult) => {
+            if (r.type === "location") return { kind: "location", label: r.data.complete_name || r.data.name, code: r.data.barcode || r.data.name };
+            if (r.type === "product") return { kind: "product", label: r.data.name, ref: r.data.default_code, code: r.data.barcode || r.data.default_code };
+            if (r.type === "lot") { const prod = r.data.product; return { kind: "lot", label: prod?.name || r.data.lot.product_id[1], ref: prod?.default_code, lotName: r.data.lot.name, code: r.data.lot.name }; }
+            if (r.type === "supplier_ref") return { kind: "product", label: r.data.name, ref: r.data.default_code, code: r.data.barcode || r.data.default_code, supplierRef: r.supplierRef };
+            return null;
+          }).filter(Boolean);
+          setHomeResults(items);
+        } catch { /* silently ignore */ }
+        setHomeSearching(false);
+      }, 350);
+    } else {
+      setHomeResults([]);
+      setHomeSearching(false);
+    }
+  };
+  const submitHomeQuery = () => {
+    if (!homeQuery.trim()) return;
+    if (homeDebounceRef.current) clearTimeout(homeDebounceRef.current);
+    setHomeResults([]);
+    const q = homeQuery.trim();
+    setHomeQuery("");
+    doLookup(q);
+  };
+
+  // ── Opérations & outils (partagés mobile / desktop / sidebar) ──
+  const opsItems = [
+    { key: "transfer", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Transfert", desc: "Déplacer du stock entre emplacements", color: "#2563eb", soft: "#eff6ff", onClick: () => { resetTransfer(); setScreen("transfer"); }, badge: null as number | null },
+    { key: "prep", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>, label: "Préparation", desc: "Picking des bons de sortie", color: "#7c3aed", soft: "#f3e8ff", onClick: () => { loadPickings(); setScreen("prep"); }, badge: pickings.length > 0 ? pickings.length : null },
+    { key: "waitingOrders", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>, label: "En attente", desc: "Commandes du jour à traiter", color: "#f59e0b", soft: "#fef3c7", onClick: () => setScreen("waitingOrders"), badge: badgeWaiting },
+    { key: "packing", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Emballage", desc: "Colis prêts à emballer et expédier", color: "#0d9488", soft: "#ccfbf1", onClick: () => { setPackingPickingId(null); setScreen("packing"); }, badge: badgePacking },
+    { key: "arrival", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Arrivage", desc: "Réception des livraisons fournisseur", color: "#059669", soft: "#ecfdf5", onClick: () => setScreen("arrival"), badge: null },
+    { key: "eshop", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>, label: "E-shop", desc: "Commandes SendCloud · MR & Colissimo", color: "#db2777", soft: "#fce7f3", onClick: () => setScreen("eshop"), badge: badgeEshop },
+  ];
+  const toolItems = [
+    { key: "inventory", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>, label: "Ajustement", onClick: () => setScreen("inventory"), admin: false, badge: null as number | null, badgeColor: "" },
+    { key: "freeScan", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="3" y="17" width="5" height="5" rx="1"/><line x1="12" y1="5" x2="21" y2="5"/><line x1="12" y1="12" x2="21" y2="12"/><line x1="12" y1="19" x2="21" y2="19"/></svg>, label: "Scan libre", onClick: () => setScreen("freeScan"), admin: false, badge: null, badgeColor: "" },
+    { key: "returns", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Retours", onClick: () => setScreen("returns"), admin: false, badge: badgeReturns, badgeColor: "#ea580c" },
+    { key: "productImport", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Gestion articles", onClick: () => setScreen("productImport"), admin: false, badge: null, badgeColor: "" },
+    { key: "supplierImport", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>, label: "Import WALA", onClick: () => setScreen("supplierImport"), admin: true, badge: null, badgeColor: "" },
+    { key: "negativeStock", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true, badge: badgeNegStock, badgeColor: "#ef4444" },
+    { key: "reprintLabel", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: false, badge: null, badgeColor: "" },
+    { key: "labels", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels"), admin: false, badge: null, badgeColor: "" },
+    { key: "dashboard", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; }, admin: true, badge: null, badgeColor: "" },
+    { key: "order", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>, label: "Commande", onClick: () => setScreen("order"), admin: false, badge: null, badgeColor: "" },
+  ];
+  const visibleTools = toolItems.filter(t => !t.admin || (session && odoo.isAdmin(session)));
+
   if (screen === "login") return <Login onLogin={login} loading={loading} error={error} />;
 
   return (
-    <Shell toast={toast} flash={scanFlash}>
-      <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} />
+    <Shell toast={toast} flash={scanFlash} desktop={isDesktopUI}>
+      {!isDesktopUI && <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} />}
+
+      {/* ── Sidebar desktop (refonte) ── */}
+      {isDesktopUI && session && (() => {
+        const DK = { text: "#0f172a", text2: "#64748b", text3: "#94a3b8", border: "#e8ecf3", primary: "#2563eb" };
+        const navItem = (active: boolean): React.CSSProperties => ({
+          display: "flex", alignItems: "center", gap: 11, padding: "9px 10px", borderRadius: 10,
+          fontSize: 13.5, fontWeight: active ? 600 : 500, color: active ? DK.primary : DK.text2,
+          background: active ? "#eef2ff" : "none", border: "none", cursor: "pointer",
+          fontFamily: "inherit", width: "100%", textAlign: "left" as const,
+        });
+        const navBadge = (color: string): React.CSSProperties => ({
+          marginLeft: "auto", minWidth: 20, height: 20, padding: "0 6px", borderRadius: 10,
+          fontSize: 11, fontWeight: 700, color: "#fff", background: color,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        });
+        const label: React.CSSProperties = { fontSize: 10.5, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" as const, color: DK.text3, padding: "14px 10px 6px" };
+        return (
+          <aside style={{ position: "fixed", left: 0, top: 0, bottom: 0, width: 248, background: "#fff", borderRight: `1px solid ${DK.border}`, padding: "20px 14px 16px", display: "flex", flexDirection: "column" as const, zIndex: 200, overflowY: "auto" as const }}>
+            <button onClick={goHome} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px 18px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+              <img src={DH_LOGO} alt="Dr. Hauschka" style={{ height: 30, objectFit: "contain" }} />
+              <span style={{ fontSize: 9, color: DK.primary, fontWeight: 700, background: "#eef2ff", padding: "2px 6px", borderRadius: 5 }}>WMS</span>
+            </button>
+
+            <button className="dk-nav" onClick={goHome} style={navItem(screen === "home")}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+              Accueil
+            </button>
+
+            <div style={label}>Opérations</div>
+            {opsItems.map(it => (
+              <button key={it.key} className="dk-nav" onClick={it.onClick} style={navItem(screen === it.key)}>
+                <span style={{ display: "flex", color: screen === it.key ? DK.primary : DK.text2 }}>{it.icon}</span>
+                {it.label}
+                {it.badge != null && <span style={navBadge(it.color)}>{it.badge}</span>}
+              </button>
+            ))}
+
+            <div style={label}>Outils</div>
+            {visibleTools.map(it => (
+              <button key={it.key} className="dk-nav" onClick={it.onClick} style={navItem(screen === it.key)}>
+                <span style={{ display: "flex", color: screen === it.key ? DK.primary : DK.text2 }}>{it.icon}</span>
+                {it.label}
+                {it.badge != null && <span style={navBadge(it.badgeColor || "#6b7280")}>{it.badge}</span>}
+              </button>
+            ))}
+            {history.length > 0 && (
+              <button className="dk-nav" onClick={() => setScreen("history")} style={navItem(screen === "history")}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                Historique
+                <span style={{ marginLeft: "auto", fontSize: 11, color: DK.text3, fontWeight: 600 }}>{history.length}</span>
+              </button>
+            )}
+
+            <div style={{ marginTop: "auto", borderTop: `1px solid ${DK.border}`, paddingTop: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px 10px" }}>
+                <div style={{ width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg,#2563eb,#7c3aed)", color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  {(session?.name || "?").split(" ").map((p: string) => p[0]).slice(0, 2).join("").toUpperCase()}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: DK.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{session?.name}</div>
+                  <div style={{ fontSize: 11, color: "#10b981", fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981", display: "inline-block" }} />En ligne</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6, padding: "0 4px" }}>
+                <button className="dk-nav" onClick={openNotifs} title="Notifications" style={{ ...navItem(false), width: "auto", flex: 1, justifyContent: "center", position: "relative" as const }}>
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+                  {notifUnread > 0 && <span style={{ position: "absolute" as const, top: 4, right: 14, minWidth: 15, height: 15, padding: "0 4px", borderRadius: 8, background: "#ef4444", color: "#fff", fontSize: 9.5, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>{notifUnread > 9 ? "9+" : notifUnread}</span>}
+                </button>
+                <button className="dk-nav" onClick={() => setScreen("settings")} title="Paramètres" style={{ ...navItem(screen === "settings"), width: "auto", flex: 1, justifyContent: "center" }}>
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+                </button>
+                <button className="dk-nav" onClick={logout} title="Déconnexion" style={{ ...navItem(false), width: "auto", flex: 1, justifyContent: "center" }}>
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                </button>
+              </div>
+            </div>
+          </aside>
+        );
+      })()}
 
       {/* ── Panneau notifications du jour (cloche header) ── */}
       {showNotifs && (
@@ -2557,64 +2704,25 @@ export default function Page() {
         </div>
       )}
 
-      <main style={{ maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px" }}>
+      <main style={isDesktopUI
+        ? { marginLeft: 248, padding: screen === "home" ? "28px 36px 60px" : "28px 24px 60px" }
+        : { maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px" }}>
+       <div style={isDesktopUI ? { maxWidth: screen === "home" ? 1240 : 720, margin: "0 auto" } : undefined}>
 
-        {/* ===== HOME ===== */}
-        {screen === "home" && <>
+        {/* ===== HOME (PDA / mobile) ===== */}
+        {screen === "home" && !isDesktopUI && <>
           <Section>
             <SectionHeader icon={scanIcon} title="Recherche rapide" sub="Scanne ou tape un code" />
             <div style={{ display: "flex", gap: 8 }}>
               <input
                 style={{ ...inputStyle, flex: 1, width: "auto" }}
                 value={homeQuery}
-                onChange={e => {
-                  const val = e.target.value;
-                  setHomeQuery(val);
-                  if (homeDebounceRef.current) clearTimeout(homeDebounceRef.current);
-                  if (val.trim().length >= 2 && session) {
-                    homeDebounceRef.current = setTimeout(async () => {
-                      const searchId = ++homeSearchIdRef.current;
-                      setHomeSearching(true);
-                      try {
-                        const results = await odoo.globalSearch(session, val.trim());
-                        if (searchId !== homeSearchIdRef.current) return;
-                        const items = results.map((r: odoo.GlobalSearchResult) => {
-                          if (r.type === "location") return { kind: "location", label: r.data.complete_name || r.data.name, code: r.data.barcode || r.data.name };
-                          if (r.type === "product") return { kind: "product", label: r.data.name, ref: r.data.default_code, code: r.data.barcode || r.data.default_code };
-                          if (r.type === "lot") { const prod = r.data.product; return { kind: "lot", label: prod?.name || r.data.lot.product_id[1], ref: prod?.default_code, lotName: r.data.lot.name, code: r.data.lot.name }; }
-                          if (r.type === "supplier_ref") return { kind: "product", label: r.data.name, ref: r.data.default_code, code: r.data.barcode || r.data.default_code, supplierRef: r.supplierRef };
-                          return null;
-                        }).filter(Boolean);
-                        setHomeResults(items);
-                      } catch { /* silently ignore */ }
-                      setHomeSearching(false);
-                    }, 350);
-                  } else {
-                    setHomeResults([]);
-                    setHomeSearching(false);
-                  }
-                }}
-                onKeyDown={e => {
-                  if (e.key === "Enter" && homeQuery.trim()) {
-                    if (homeDebounceRef.current) clearTimeout(homeDebounceRef.current);
-                    setHomeResults([]);
-                    const q = homeQuery.trim();
-                    setHomeQuery("");
-                    doLookup(q);
-                  }
-                }}
+                onChange={e => onHomeQueryChange(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") submitHomeQuery(); }}
                 placeholder="Code-barres, réf, lot, emplacement, Pal-XXXX..."
               />
               <button
-                onClick={() => {
-                  if (homeQuery.trim()) {
-                    if (homeDebounceRef.current) clearTimeout(homeDebounceRef.current);
-                    setHomeResults([]);
-                    const q = homeQuery.trim();
-                    setHomeQuery("");
-                    doLookup(q);
-                  }
-                }}
+                onClick={submitHomeQuery}
                 style={{ padding: "0 18px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 16, cursor: "pointer", flexShrink: 0 }}>→</button>
               <button
                 onClick={startCamera}
@@ -2671,17 +2779,9 @@ export default function Page() {
           <div style={{ marginTop: 20 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginBottom: 10, paddingLeft: 2 }}>Opérations</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {[
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Transfert", color: "#2563eb", onClick: () => { resetTransfer(); setScreen("transfer"); }, badge: null },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>, label: "Préparation", color: "#7c3aed", onClick: () => { loadPickings(); setScreen("prep"); }, badge: pickings.length > 0 ? pickings.length : null },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>, label: "En attente", color: "#f59e0b", onClick: () => setScreen("waitingOrders"), badge: badgeWaiting },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Emballage", color: "#0d9488", onClick: () => { setPackingPickingId(null); setScreen("packing"); }, badge: badgePacking },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>, label: "Arrivage", color: "#059669", onClick: () => setScreen("arrival"), badge: null },
-                // { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>, label: "Palettes WMS", color: "#0f766e", onClick: () => setScreen("palettes"), badge: null },
-                { icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#374151" strokeWidth="1.5"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>, label: "E-shop", color: "#db2777", onClick: () => setScreen("eshop"), badge: badgeEshop },
-              ].map((btn, i) => (
+              {opsItems.map((btn, i) => (
                 <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 8, padding: "18px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, cursor: "pointer", fontFamily: "inherit", boxShadow: C.shadow, position: "relative" as const }}>
-                  <div style={{ width: 40, height: 40, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>{btn.icon}</div>
+                  <div style={{ width: 40, height: 40, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: "#374151" }}>{btn.icon}</div>
                   <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{btn.label}</span>
                   {btn.badge !== null ? (
                     <div style={{ position: "absolute" as const, top: 7, right: 7, minWidth: 20, height: 20, borderRadius: 10, background: btn.color, color: "#fff", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 5px" }}>{btn.badge}</div>
@@ -2694,19 +2794,8 @@ export default function Page() {
 
             <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginTop: 20, marginBottom: 10, paddingLeft: 2 }}>Outils</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-              {[
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>, label: "Ajustement", onClick: () => setScreen("inventory"), admin: false },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="3" y="17" width="5" height="5" rx="1"/><line x1="12" y1="5" x2="21" y2="5"/><line x1="12" y1="12" x2="21" y2="12"/><line x1="12" y1="19" x2="21" y2="19"/></svg>, label: "Scan libre", onClick: () => setScreen("freeScan"), admin: false },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Retours", onClick: () => setScreen("returns"), admin: false, badge: badgeReturns, badgeColor: "#ea580c" },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Gestion articles", onClick: () => setScreen("productImport"), admin: false, badge: null, badgeColor: "" },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>, label: "Import WALA", onClick: () => setScreen("supplierImport"), admin: true, badge: null, badgeColor: "" },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true, badge: badgeNegStock, badgeColor: "#ef4444" },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: false },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels"), admin: false },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; }, admin: true },
-                { icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>, label: "Commande", onClick: () => setScreen("order"), admin: false },
-              ].filter(btn => !btn.admin || (session && odoo.isAdmin(session))).map((btn, i) => (
-                <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 6, padding: "14px 6px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", position: "relative" as const }}>
+              {visibleTools.map((btn, i) => (
+                <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 6, padding: "14px 6px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", position: "relative" as const, color: "#6b7280" }}>
                   {btn.icon}
                   <span style={{ fontSize: 11, fontWeight: 600, color: C.textSec }}>{btn.label}</span>
                   {(btn as any).badge != null && (
@@ -2725,6 +2814,201 @@ export default function Page() {
             )}
           </div>
         </>}
+
+        {/* ===== HOME (desktop — refonte) ===== */}
+        {screen === "home" && isDesktopUI && (() => {
+          const DK = { text: "#0f172a", text2: "#64748b", text3: "#94a3b8", border: "#e8ecf3", shadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.08)" };
+          const card: React.CSSProperties = { background: "#fff", border: `1px solid ${DK.border}`, borderRadius: 16, boxShadow: DK.shadow };
+          const secTitle: React.CSSProperties = { fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" as const, color: DK.text3, margin: "0 0 12px 2px" };
+          const kpis = [
+            { label: "En attente", count: ccData?.waitingToday.count ?? null, color: "#d97706", soft: "#fef3c7", onClick: () => setScreen("waitingOrders") },
+            { label: "En préparation", count: ccData?.inPrep.count ?? null, color: "#7c3aed", soft: "#f3e8ff", onClick: () => { loadPickings(); setScreen("prep"); } },
+            { label: "À emballer", count: ccData?.outToPackToday.count ?? null, color: "#0d9488", soft: "#ccfbf1", onClick: () => { loadPickings(); setScreen("prep"); } },
+            { label: "E-shop", count: ccData?.eshopWaiting.count ?? null, color: "#db2777", soft: "#fce7f3", onClick: () => setScreen("eshop") },
+          ];
+          const flow = [
+            { label: "En attente", icon: "⏳", soft: "#fef3c7", color: "#d97706", d: ccData?.waitingToday, onClick: () => setScreen("waitingOrders") },
+            { label: "En préparation", icon: "📦", soft: "#f3e8ff", color: "#7c3aed", d: ccData?.inPrep, onClick: () => { loadPickings(); setScreen("prep"); } },
+            { label: "À emballer", icon: "🎁", soft: "#ccfbf1", color: "#0d9488", d: ccData?.outToPackToday, onClick: () => { loadPickings(); setScreen("prep"); } },
+            { label: "E-shop", icon: "🛒", soft: "#fce7f3", color: "#db2777", d: ccData?.eshopWaiting, onClick: () => setScreen("eshop") },
+          ];
+          return (
+            <div style={{ animation: "fadeIn .2s" }}>
+              {/* Greeting */}
+              <div style={{ marginBottom: 22 }}>
+                <h1 style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.4, color: DK.text }}>Bonjour {(session?.name || "").split(" ")[0]} 👋</h1>
+                <p style={{ fontSize: 13, color: DK.text2, marginTop: 3, textTransform: "capitalize" as const }}>
+                  {new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · voici l'activité de l'entrepôt
+                </p>
+              </div>
+
+              {/* KPI strip */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 26 }}>
+                {kpis.map((k, i) => (
+                  <button key={i} className="dk-kpi" onClick={k.onClick} style={{ ...card, padding: "16px 18px", display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+                    <div style={{ width: 42, height: 42, borderRadius: 12, background: k.soft, color: k.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, flexShrink: 0 }}>
+                      {k.count == null ? "·" : ""}
+                      {k.count != null && <span style={{ fontSize: 17 }}>{["⏳", "📦", "🎁", "🛒"][i]}</span>}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.6, lineHeight: 1, color: (k.count ?? 0) > 0 ? DK.text : DK.text3 }}>{k.count ?? "—"}</div>
+                      <div style={{ fontSize: 11.5, fontWeight: 600, color: DK.text2, marginTop: 4, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{k.label}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Search hero */}
+              <div style={{ background: "linear-gradient(120deg,#0f172a 0%,#1e2a4a 60%,#26335c 100%)", borderRadius: 20, padding: "24px 28px", marginBottom: 26, color: "#fff", boxShadow: "0 12px 32px -12px rgba(15,23,42,.4)" }}>
+                <div style={{ fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 9 }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  Recherche rapide
+                </div>
+                <p style={{ fontSize: 12.5, color: "#94a3b8", margin: "3px 0 14px" }}>Scanne ou tape un code — barres, réf, lot, emplacement, Pal-X</p>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 11, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 13, padding: "0 16px", height: 50 }}>
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.8"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input
+                      value={homeQuery}
+                      onChange={e => onHomeQueryChange(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") submitHomeQuery(); }}
+                      placeholder="Code-barres, réf, lot, emplacement, Pal-XXXX…"
+                      style={{ flex: 1, background: "none", border: "none", outline: "none", color: "#fff", fontSize: 14.5, fontFamily: "inherit" }}
+                    />
+                  </div>
+                  <button onClick={submitHomeQuery} style={{ height: 50, padding: "0 22px", borderRadius: 13, border: "none", background: "#2563eb", color: "#fff", fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
+                    Rechercher
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                  </button>
+                </div>
+                {homeSearching && <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 8 }}>Recherche en cours…</div>}
+                {homeResults.length > 0 && (
+                  <div style={{ marginTop: 10, background: "#fff", borderRadius: 13, padding: 6, maxHeight: 280, overflowY: "auto" as const }}>
+                    {homeResults.map((r: any, i: number) => (
+                      <button key={i}
+                        onClick={() => { setHomeResults([]); setHomeQuery(""); doLookup(r.code); }}
+                        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: "none", border: "none", borderRadius: 9, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+                        <div>
+                          {r.kind === "location" ? (
+                            <div style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>📍 {r.label}</div>
+                          ) : r.kind === "lot" ? (
+                            <>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: DK.text }}>{r.label}</div>
+                              {r.ref && <div style={{ fontSize: 11, color: DK.text3 }}>Réf: {r.ref}</div>}
+                              <div style={{ fontSize: 11, color: "#2563eb" }}>🏷 Lot: {r.lotName}</div>
+                            </>
+                          ) : (
+                            <>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: DK.text }}>{r.label}</div>
+                              {r.ref && <div style={{ fontSize: 11, color: DK.text3 }}>Réf: {r.ref}</div>}
+                              {r.supplierRef && <div style={{ fontSize: 11, color: "#7c3aed" }}>🏭 {r.supplierRef}</div>}
+                            </>
+                          )}
+                        </div>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={DK.text3} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {error && <Alert type="error">{error}</Alert>}
+              {lookupType === "product" && lookupResult && <ProductResult product={lookupResult} stock={lookupStock} onRename={rename} />}
+              {lookupType === "lot" && lookupResult && <LotResult lot={lookupResult.lot} product={lookupResult.product} stock={lookupStock} />}
+              {lookupType === "location" && lookupResult && <LocationResult location={lookupResult} stock={lookupStock} onRename={rename} />}
+              {lookupType === "palette" && lookupResult && <PaletteResult data={lookupResult} session={session} />}
+
+              {/* Opérations + Centre de contrôle */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 26, alignItems: "start" }}>
+                <div>
+                  <div style={secTitle}>Opérations</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 28 }}>
+                    {opsItems.map((btn, i) => (
+                      <button key={i} className="dk-op" onClick={btn.onClick} style={{ ...card, padding: 20, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, position: "relative" as const }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 14 }}>
+                          <div style={{ width: 46, height: 46, borderRadius: 13, background: btn.soft, color: btn.color, display: "flex", alignItems: "center", justifyContent: "center" }}>{btn.icon}</div>
+                          {btn.badge != null ? (
+                            <span style={{ minWidth: 24, height: 24, padding: "0 7px", borderRadius: 12, background: btn.color, color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{btn.badge}</span>
+                          ) : (
+                            <span style={{ width: 8, height: 8, borderRadius: "50%", background: btn.color, marginTop: 8, animation: "pulse 2s infinite" }} />
+                          )}
+                        </div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: DK.text }}>{btn.label}</div>
+                        <div style={{ fontSize: 12, color: DK.text2, marginTop: 3, lineHeight: 1.45 }}>{btn.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div style={secTitle}>Outils</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
+                    {visibleTools.map((btn, i) => (
+                      <button key={i} className="dk-tool" onClick={btn.onClick} style={{ ...card, borderRadius: 13, padding: "14px 8px", display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 8, cursor: "pointer", fontFamily: "inherit", position: "relative" as const, color: DK.text2 }}>
+                        {btn.icon}
+                        <span style={{ fontSize: 11.5, fontWeight: 600, color: DK.text2, textAlign: "center" as const }}>{btn.label}</span>
+                        {btn.badge != null && (
+                          <span style={{ position: "absolute" as const, top: 8, right: 8, minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: btn.badgeColor || "#6b7280", color: "#fff", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{btn.badge}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Centre de contrôle — timeline */}
+                <div style={{ ...card, overflow: "hidden" }}>
+                  <div style={{ padding: "16px 18px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: `1px solid ${DK.border}` }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: DK.text, display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: 4, background: ccLoading ? "#f59e0b" : "#10b981", boxShadow: ccLoading ? "0 0 6px #f59e0b" : "0 0 6px #10b981" }} />
+                      Centre de contrôle
+                    </div>
+                    <button onClick={() => ccRefreshRef.current && ccRefreshRef.current()} title="Actualiser" style={{ background: "none", border: "none", cursor: "pointer", color: DK.text3, fontSize: 14, padding: 4, fontFamily: "inherit" }}>↻</button>
+                  </div>
+                  <div style={{ padding: "14px 18px" }}>
+                    {flow.map((f, i) => {
+                      const count = f.d?.count ?? 0;
+                      const names = (f.d?.names ?? []).slice(0, 3);
+                      const rest = count - names.length;
+                      return (
+                        <div key={i} style={{ display: "flex", gap: 13, position: "relative" as const, paddingBottom: i < flow.length - 1 ? 16 : 4 }}>
+                          {i < flow.length - 1 && <span style={{ position: "absolute" as const, left: 14, top: 32, bottom: 0, width: 2, background: DK.border }} />}
+                          <div style={{ width: 29, height: 29, borderRadius: 9, background: f.soft, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, flexShrink: 0, zIndex: 1 }}>{f.icon}</div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+                              <span style={{ fontSize: 12.5, fontWeight: 700, color: DK.text }}>{f.label}</span>
+                              <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: -0.3, color: count > 0 ? f.color : DK.text3 }}>{ccData ? count : "—"}</span>
+                            </div>
+                            {names.length > 0 && (
+                              <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 5, marginTop: 7 }}>
+                                {names.map((n: string, j: number) => (
+                                  <button key={j} className="dk-chip" onClick={f.onClick} style={{ fontSize: 10.5, fontWeight: 600, color: DK.text2, background: "#f4f6fb", border: `1px solid ${DK.border}`, borderRadius: 7, padding: "3.5px 8px", cursor: "pointer", fontFamily: "inherit" }}>{n}</button>
+                                ))}
+                                {rest > 0 && <span style={{ fontSize: 10.5, color: DK.text3, padding: "3.5px 8px" }}>+{rest} autre{rest > 1 ? "s" : ""}</span>}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {badgeNegStock != null && badgeNegStock > 0 && (
+                    <button onClick={() => setScreen("negativeStock")} style={{ margin: "0 18px 16px", width: "calc(100% - 36px)", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 11, padding: "11px 13px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                      <span style={{ flex: 1 }}>
+                        <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#b91c1c" }}>{badgeNegStock} stock{badgeNegStock > 1 ? "s" : ""} négatif{badgeNegStock > 1 ? "s" : ""}</span>
+                        <span style={{ display: "block", fontSize: 11, color: "#dc2626" }}>à corriger</span>
+                      </span>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#b91c1c" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+                    </button>
+                  )}
+                  {ccData && (
+                    <div style={{ padding: "11px 18px", background: "#fafbfd", borderTop: `1px solid ${DK.border}`, fontSize: 10.5, color: DK.text3 }}>
+                      Mis à jour à {ccData.lastUpdate} · actualisation auto toutes les 60s
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ===== TRANSFER ===== */}
         {screen === "transfer" && <>
@@ -3117,10 +3401,11 @@ export default function Page() {
         {screen === "order" && session && (
           <OrderScreen session={session} onBack={goHome} onToast={showToast} />
         )}
+       </div>
       </main>
 
-      {/* ── Control Center — desktop + home only ── */}
-      {screen === "home" && session && (
+      {/* ── Control Center — ancien panneau flottant (PDA/tablette ≥1024 tactile uniquement) ── */}
+      {screen === "home" && session && !isDesktopUI && (
         <div style={{ position: "fixed", top: 60, right: 12, width: 340, display: "none", padding: "14px 0 0 0", maxHeight: "calc(100vh - 72px)", overflowY: "auto" as const }}
           className="cc-panel"
         >
@@ -3476,11 +3761,11 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
 // ============================================
 // SHARED COMPONENTS
 // ============================================
-function Shell({ children, toast, flash }: { children: React.ReactNode; toast: string; flash?: "ok" | "err" | null }) {
+function Shell({ children, toast, flash, desktop }: { children: React.ReactNode; toast: string; flash?: "ok" | "err" | null; desktop?: boolean }) {
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans', 'SF Pro Display', -apple-system, sans-serif" }}>
+    <div style={{ minHeight: "100vh", background: desktop ? "#f4f6fb" : C.bg, fontFamily: desktop ? "'Inter', 'DM Sans', -apple-system, sans-serif" : "'DM Sans', 'SF Pro Display', -apple-system, sans-serif" }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap');
         @keyframes slideUp { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:translateY(0) } }
         @keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
         @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.5 } }
@@ -3488,6 +3773,17 @@ function Shell({ children, toast, flash }: { children: React.ReactNode; toast: s
         * { box-sizing: border-box; margin: 0; padding: 0; }
         input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         input[type=number] { -moz-appearance: textfield; }
+        /* ── Refonte desktop ── */
+        .dk-nav { transition: background .15s, color .15s; }
+        .dk-nav:hover { background: #f1f5f9 !important; color: #0f172a !important; }
+        .dk-op { transition: transform .18s, box-shadow .18s; }
+        .dk-op:hover { transform: translateY(-3px); box-shadow: 0 4px 8px rgba(15,23,42,.06), 0 16px 32px -8px rgba(15,23,42,.14) !important; }
+        .dk-kpi { transition: transform .18s, box-shadow .18s; }
+        .dk-kpi:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(15,23,42,.06), 0 16px 32px -8px rgba(15,23,42,.14) !important; }
+        .dk-tool { transition: transform .15s, box-shadow .15s; }
+        .dk-tool:hover { transform: translateY(-2px); box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.12) !important; }
+        .dk-chip { transition: border-color .12s, color .12s; }
+        .dk-chip:hover { border-color: #c7d2e3 !important; color: #0f172a !important; }
       `}</style>
       {flash && (
         <div key={flash + Date.now()} style={{
