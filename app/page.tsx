@@ -9268,8 +9268,8 @@ function InventoryScreen({ session, onBack, onToast, initialProduct, desktop }: 
           </div>
 
           {bulkItems.length === 0 && (
-            <>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>
+            <div style={desktop ? { background: "#fff", border: "1px solid #e8ecf3", borderRadius: 16, padding: "20px 22px", boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.08)" } : undefined}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: desktop ? "#94a3b8" : C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>
                 Références (1 par ligne, ou séparées par virgule/point-virgule)
               </div>
               <textarea
@@ -9277,15 +9277,15 @@ function InventoryScreen({ session, onBack, onToast, initialProduct, desktop }: 
                 onChange={e => setBulkText(e.target.value)}
                 placeholder={"1010205\n1010206\n1010207\n..."}
                 rows={8}
-                style={{ width: "100%", padding: "12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "monospace", resize: "vertical", outline: "none", boxSizing: "border-box" as const }}
+                style={{ width: "100%", padding: "12px", border: `1.5px solid ${desktop ? "#e8ecf3" : C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "monospace", resize: "vertical" as const, outline: "none", boxSizing: "border-box" as const, background: desktop ? "#fafbfd" : undefined }}
               />
               <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
                 <button onClick={parseBulkRefs} disabled={bulkParsing || !bulkText.trim()}
-                  style={{ padding: "10px 24px", borderRadius: 9, border: "none", background: C.blue, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: !bulkText.trim() ? 0.5 : 1 }}>
+                  style={{ padding: desktop ? "11px 26px" : "10px 24px", borderRadius: desktop ? 11 : 9, border: "none", background: C.blue, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: !bulkText.trim() ? 0.5 : 1, boxShadow: desktop && bulkText.trim() ? "0 8px 20px -8px rgba(37,99,235,.5)" : "none" }}>
                   {bulkParsing ? "Recherche..." : "→ Rechercher les références"}
                 </button>
               </div>
-            </>
+            </div>
           )}
 
           {bulkItems.length > 0 && (
@@ -9298,16 +9298,49 @@ function InventoryScreen({ session, onBack, onToast, initialProduct, desktop }: 
 
               <div style={{ display: "grid", gap: 10 }}>
                 {bulkItems.map((item, idx) => (
-                  <div key={idx} style={{ background: item.error ? C.redSoft : C.bg, border: `1px solid ${item.error ? C.redBorder : C.border}`, borderRadius: 10, padding: "12px 14px" }}>
+                  <div key={idx} style={desktop
+                    ? { background: item.error ? "#fef2f2" : "#fff", border: `1px solid ${item.error ? "#fecaca" : "#e8ecf3"}`, borderRadius: 14, padding: "14px 16px", boxShadow: item.error ? "none" : "0 1px 2px rgba(15,23,42,.04)" }
+                    : { background: item.error ? C.redSoft : C.bg, border: `1px solid ${item.error ? C.redBorder : C.border}`, borderRadius: 10, padding: "12px 14px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: item.quants.length > 0 ? 10 : 0 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, fontFamily: "monospace", background: C.white, border: `1px solid ${C.border}`, borderRadius: 4, padding: "2px 6px" }}>{item.rawRef}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: desktop ? "#2563eb" : C.textMuted, fontFamily: "monospace", background: desktop ? "#eef2ff" : C.white, border: desktop ? "none" : `1px solid ${C.border}`, borderRadius: desktop ? 6 : 4, padding: desktop ? "3px 8px" : "2px 6px" }}>{item.rawRef}</span>
                       {item.product ? (
-                        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{item.product.name}</span>
+                        <span style={{ fontSize: desktop ? 13.5 : 13, fontWeight: 700, color: desktop ? "#0f172a" : C.text }}>{item.product.name}</span>
                       ) : (
                         <span style={{ fontSize: 12, color: C.red, fontWeight: 600 }}>⚠ {item.error || "Non trouvé"}</span>
                       )}
                     </div>
-                    {item.quants.length > 0 && (
+                    {item.quants.length > 0 && desktop && (
+                      /* ── Tableau desktop ── */
+                      <div style={{ border: "1px solid #e8ecf3", borderRadius: 10, overflow: "hidden" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(150px,1.3fr) minmax(110px,1fr) 80px 140px 100px 36px", gap: 12, padding: "7px 12px", background: "#fafbfd", borderBottom: "1px solid #e8ecf3", fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase" as const, color: "#94a3b8" }}>
+                          <span>Emplacement</span><span>Lot</span><span>Stock</span><span>Δ</span><span>Nouveau</span><span></span>
+                        </div>
+                        {item.quants.map((q, qi) => {
+                          const delta = item.deltas[q.id] || 0;
+                          const newQty = q.quantity + delta;
+                          const changed = delta !== 0;
+                          return (
+                            <div key={q.id} className="dk-row" style={{ display: "grid", gridTemplateColumns: "minmax(150px,1.3fr) minmax(110px,1fr) 80px 140px 100px 36px", gap: 12, padding: "8px 12px", alignItems: "center", borderBottom: qi < item.quants.length - 1 ? "1px solid #e8ecf3" : "none", background: changed ? "#f0f7ff" : "transparent" }}>
+                              <span style={{ fontSize: 12.5, color: "#0f172a", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{shortLocName(q.location_id?.[1] || "?")}</span>
+                              <span style={{ fontSize: 11.5, color: q.lot_id ? C.blue : "#cbd5e1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{q.lot_id ? q.lot_id[1] : "—"}</span>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: "#64748b", fontFamily: "monospace" }}>{q.quantity}</span>
+                              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                <button onClick={() => setBulkDelta(idx, q.id, delta - 1)}
+                                  style={{ width: 26, height: 26, borderRadius: 6, border: "1px solid #e8ecf3", background: "#f4f6fb", cursor: "pointer", fontSize: 15, fontWeight: 700, color: C.red, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}>−</button>
+                                <span style={{ minWidth: 38, textAlign: "center" as const, fontSize: 13.5, fontWeight: 800, color: delta > 0 ? C.green : delta < 0 ? C.red : "#cbd5e1", fontFamily: "monospace" }}>
+                                  {delta > 0 ? `+${delta}` : delta === 0 ? "0" : delta}
+                                </span>
+                                <button onClick={() => setBulkDelta(idx, q.id, delta + 1)}
+                                  style={{ width: 26, height: 26, borderRadius: 6, border: "1px solid #e8ecf3", background: "#f4f6fb", cursor: "pointer", fontSize: 15, fontWeight: 700, color: C.green, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}>+</button>
+                              </div>
+                              <span style={{ fontSize: 13, fontWeight: 800, color: changed ? (newQty >= 0 ? C.blue : C.red) : "#cbd5e1", fontFamily: "monospace" }}>{changed ? `→ ${Math.max(0, newQty)}` : "—"}</span>
+                              <span>{changed && <button onClick={() => setBulkDelta(idx, q.id, 0)} title="Annuler" style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", fontSize: 13, padding: 2, fontFamily: "inherit" }}>↺</button>}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {item.quants.length > 0 && !desktop && (
                       <div style={{ display: "grid", gap: 6 }}>
                         {item.quants.map(q => {
                           const delta = item.deltas[q.id] || 0;
@@ -9414,7 +9447,54 @@ function InventoryScreen({ session, onBack, onToast, initialProduct, desktop }: 
                   </span>
                 </div>
 
-                {/* Cartes liste */}
+                {/* Tableau desktop */}
+                {desktop && (
+                  <div style={{ background: "#fff", border: "1px solid #e8ecf3", borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.08)" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "36px 90px minmax(180px,1.6fr) minmax(100px,0.9fr) minmax(110px,1fr) 95px 235px", gap: 12, padding: "9px 16px", background: "#fafbfd", borderBottom: "1px solid #e8ecf3", fontSize: 10.5, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase" as const, color: "#94a3b8", alignItems: "center" }}>
+                      <input type="checkbox" checked={allVisible && visible.length > 0} onChange={() => setOrphanSelected(allVisible ? new Set() : new Set(visible.map(m => m.id)))} style={{ width: 16, height: 16, cursor: "pointer", accentColor: C.blue }} />
+                      <span>Réf</span><span>Produit</span><span>Lot</span><span>Emplacement</span><span>Bloqué</span><span>Unités à retirer</span>
+                    </div>
+                    {visible.map((m, mi) => {
+                      const sel = orphanSelected.has(m.id);
+                      const corr = orphanCorrections[m.quantId] ?? Math.round(m.uncoveredQty);
+                      const maxCorr = Math.round(m.qty);
+                      const setCorr = (v: number) => setOrphanCorrections(prev => ({ ...prev, [m.quantId]: Math.max(0, Math.min(maxCorr, v)) }));
+                      return (
+                        <div key={m.id} className="dk-row" onClick={() => toggleRow(m.id)}
+                          style={{ display: "grid", gridTemplateColumns: "36px 90px minmax(180px,1.6fr) minmax(100px,0.9fr) minmax(110px,1fr) 95px 235px", gap: 12, padding: "10px 16px", alignItems: "center", borderBottom: mi < visible.length - 1 ? "1px solid #e8ecf3" : "none", background: sel ? "#f0f7ff" : "transparent", cursor: "pointer" }}>
+                          <input type="checkbox" readOnly checked={sel} style={{ width: 16, height: 16, cursor: "pointer", accentColor: C.blue }} />
+                          <span style={{ fontWeight: 800, fontFamily: "monospace", fontSize: 11.5, color: C.blue, background: "#dbeafe", borderRadius: 5, padding: "2px 6px", textAlign: "center" as const }}>{m.ref || "—"}</span>
+                          <span style={{ fontWeight: 600, fontSize: 12.5, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }} title={m.name}>{m.name}</span>
+                          <span style={{ fontFamily: "monospace", fontSize: 11, color: m.lotName ? "#64748b" : "#cbd5e1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{m.lotName || "—"}</span>
+                          <span style={{ fontSize: 11.5, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>📍 {shortLocName(m.locationName)}</span>
+                          <span style={{ fontSize: 12.5, fontWeight: 800, color: C.red }}>
+                            {Math.round(m.uncoveredQty)}{m.uncoveredQty < m.qty && <span style={{ fontWeight: 400, color: "#94a3b8" }}>/{Math.round(m.qty)}</span>}
+                          </span>
+                          <div onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                            {sel ? (
+                              <>
+                                <button onClick={() => setCorr(corr - 1)} disabled={corr <= 0}
+                                  style={{ width: 26, height: 26, borderRadius: 6, border: "1px solid #e8ecf3", background: corr <= 0 ? "#f4f6fb" : "#fff", fontSize: 15, fontWeight: 700, cursor: corr <= 0 ? "not-allowed" : "pointer", fontFamily: "inherit", color: corr <= 0 ? "#cbd5e1" : C.red, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>−</button>
+                                <input type="number" value={corr} min={0} max={maxCorr}
+                                  onChange={e => setCorr(Number(e.target.value))}
+                                  style={{ width: 52, textAlign: "center" as const, padding: "4px 4px", border: `1.5px solid ${corr > 0 ? C.red : "#e8ecf3"}`, borderRadius: 7, fontSize: 13.5, fontWeight: 800, fontFamily: "inherit", outline: "none", color: corr > 0 ? C.red : "#94a3b8", background: "#fff" }} />
+                                <button onClick={() => setCorr(corr + 1)} disabled={corr >= maxCorr}
+                                  style={{ width: 26, height: 26, borderRadius: 6, border: "1px solid #e8ecf3", background: corr >= maxCorr ? "#f4f6fb" : "#fff", fontSize: 15, fontWeight: 700, cursor: corr >= maxCorr ? "not-allowed" : "pointer", fontFamily: "inherit", color: corr >= maxCorr ? "#cbd5e1" : "#16a34a", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>+</button>
+                                <button onClick={() => setCorr(maxCorr)}
+                                  style={{ padding: "4px 9px", borderRadius: 6, border: `1px solid ${C.red}`, background: corr === maxCorr ? C.red : "#fff", color: corr === maxCorr ? "#fff" : C.red, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Tout</button>
+                              </>
+                            ) : (
+                              <span style={{ fontSize: 12, color: "#cbd5e1" }}>sélectionner pour corriger</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Cartes liste (mobile) */}
+                {!desktop && (
                 <div style={{ display: "flex", flexDirection: "column" as const, gap: 8 }}>
                   {visible.map(m => {
                     const sel = orphanSelected.has(m.id);
@@ -9470,6 +9550,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct, desktop }: 
                     );
                   })}
                 </div>
+                )}
                 <div style={{ marginTop: 10, fontSize: 12, color: C.textMuted, textAlign: "center" as const }}>
                   {visible.length} ligne(s) · {orphanSelected.size} sélectionnée(s) · Cliquer pour sélectionner
                 </div>
