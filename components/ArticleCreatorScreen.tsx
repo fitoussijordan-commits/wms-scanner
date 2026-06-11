@@ -943,7 +943,7 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
                     background: i % 2 === 0 ? "#fff" : "#fafafa",
                     borderBottom: i < filtered.length - 1 ? "1px solid #f3f4f6" : "none",
                   }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#374151", fontFamily: "monospace" }}>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: "#374151", fontFamily: "'Courier New', monospace", letterSpacing: "0.04em", fontVariantNumeric: "slashed-zero" }}>
                       {row.default_code || "—"}
                     </span>
                     <span style={{ fontSize: 12, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }} title={row.name}>
