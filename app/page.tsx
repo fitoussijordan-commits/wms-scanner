@@ -2627,7 +2627,7 @@ export default function Page() {
 
       {/* ── Panneau notifications du jour (cloche header) ── */}
       {showNotifs && (
-        <div onClick={() => setShowNotifs(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 10000, display: "flex", justifyContent: "flex-end", alignItems: "flex-start", padding: "64px 12px 12px" }}>
+        <div onClick={() => setShowNotifs(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 10000, display: "flex", justifyContent: "flex-start", alignItems: isDesktopUI ? "flex-end" : "flex-start", ...(isDesktopUI ? { padding: "12px 12px 16px 260px" } : { justifyContent: "flex-end", padding: "64px 12px 12px" }) }}>
           <div onClick={e => e.stopPropagation()} style={{ background: C.white, borderRadius: 16, width: "100%", maxWidth: 380, maxHeight: "80vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 50px rgba(0,0,0,0.25)" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
