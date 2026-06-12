@@ -2921,13 +2921,29 @@ export default function Page() {
                 <WeatherWidget />
               </div>
 
-              {/* KPI strip */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 26 }}>
-                {kpis.map((k, i) => (
+              {/* KPI strip — aligné sur la même grille 1fr/360px que le contenu en dessous */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 26, marginBottom: 26 }}>
+                {/* 3 KPI gauche */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
+                  {kpis.slice(0, 3).map((k, i) => (
+                    <button key={i} className="dk-kpi" onClick={k.onClick} style={{ ...card, padding: "16px 18px", display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+                      <div style={{ width: 42, height: 42, borderRadius: 12, background: k.soft, color: k.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, flexShrink: 0 }}>
+                        {k.count == null ? "·" : ""}
+                        {k.count != null && <span style={{ fontSize: 17 }}>{["⏳", "📦", "🎁", "🛒"][i]}</span>}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.6, lineHeight: 1, color: (k.count ?? 0) > 0 ? DK.text : DK.text3 }}>{k.count ?? "—"}</div>
+                        <div style={{ fontSize: 11.5, fontWeight: 600, color: DK.text2, marginTop: 4, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{k.label}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                {/* 1 KPI droite — aligné avec le Centre de contrôle */}
+                {kpis.slice(3).map((k, i) => (
                   <button key={i} className="dk-kpi" onClick={k.onClick} style={{ ...card, padding: "16px 18px", display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
                     <div style={{ width: 42, height: 42, borderRadius: 12, background: k.soft, color: k.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, flexShrink: 0 }}>
                       {k.count == null ? "·" : ""}
-                      {k.count != null && <span style={{ fontSize: 17 }}>{["⏳", "📦", "🎁", "🛒"][i]}</span>}
+                      {k.count != null && <span style={{ fontSize: 17 }}>🛒</span>}
                     </div>
                     <div>
                       <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.6, lineHeight: 1, color: (k.count ?? 0) > 0 ? DK.text : DK.text3 }}>{k.count ?? "—"}</div>
