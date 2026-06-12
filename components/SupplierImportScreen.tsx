@@ -206,6 +206,7 @@ export default function SupplierImportScreen({
 
     const lotsDuplicate: string[] = [];
     let lotsCreated = 0;
+    let createdPoId: number | null = null; // pour rollback si échec après création PO
 
     try {
       // 1. Fournisseur
@@ -224,6 +225,7 @@ export default function SupplierImportScreen({
       }));
       const invoiceNo = matchedLines[0]?.invoiceNo || "";
       const poResult = await odoo.createAndConfirmPO(session, partnerId, poLines, { partnerRef: invoiceNo });
+      createdPoId = poResult.poId; // mémorise pour rollback
       updateLastLog(`Bon de commande créé et confirmé : ${poResult.poName}`, "ok");
 
       // 3. Réception
@@ -255,6 +257,7 @@ export default function SupplierImportScreen({
       await odoo.setReceptionLots(session, poResult.pickingId, poResult.locationId, poResult.locationDestId, receptionLines);
       updateLastLog("Lots et quantités affectés — réception prête à valider dans Odoo", "ok");
 
+      createdPoId = null; // succès — plus besoin de rollback
       setImportResult({
         poName: poResult.poName,
         pickingName: poResult.pickingName,
@@ -266,6 +269,16 @@ export default function SupplierImportScreen({
       onToast(`Import réussi — ${poResult.poName} · ${poResult.pickingName}`);
     } catch (err: any) {
       updateLastLog(`Erreur : ${err.message}`, "error");
+      // Rollback automatique : annuler + supprimer le PO si créé
+      if (createdPoId !== null) {
+        addLog("Annulation du bon de commande créé…", "running");
+        try {
+          await odoo.cancelAndDeletePO(session, createdPoId);
+          updateLastLog("Bon de commande annulé et supprimé", "ok");
+        } catch {
+          updateLastLog("Impossible d'annuler le bon de commande — supprimez-le manuellement dans Odoo", "warn");
+        }
+      }
       setImportError(err.message || "Erreur inconnue");
     }
   };

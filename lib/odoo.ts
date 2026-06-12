@@ -53,6 +53,9 @@ export async function create(session: OdooSession, model: string, values: any) {
 export async function write(session: OdooSession, model: string, ids: number[], values: any) {
   return call(session, "/web/dataset/call_kw", { model, method: "write", args: [ids, values], kwargs: {} });
 }
+export async function unlink(session: OdooSession, model: string, ids: number[]) {
+  return call(session, "/web/dataset/call_kw", { model, method: "unlink", args: [ids], kwargs: {} });
+}
 
 // ============================================
 // PRODUCT FIELDS
@@ -2191,6 +2194,16 @@ export async function createAndConfirmPO(
     locationId: Array.isArray(picking.location_id) ? picking.location_id[0] : picking.location_id,
     locationDestId: Array.isArray(picking.location_dest_id) ? picking.location_dest_id[0] : picking.location_dest_id,
   };
+}
+
+/** Annule puis supprime un bon de commande (rollback en cas d'échec d'import) */
+export async function cancelAndDeletePO(session: OdooSession, poId: number): Promise<void> {
+  try {
+    await callMethod(session, "purchase.order", "button_cancel", [[poId]]);
+  } catch {} // ignore si déjà annulé
+  try {
+    await unlink(session, "purchase.order", [poId]);
+  } catch {} // ignore si non supprimable
 }
 
 /** Vérifie si un lot existe, le crée sinon. Retourne {id, existed} */
