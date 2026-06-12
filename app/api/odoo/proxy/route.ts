@@ -17,9 +17,9 @@ function isEndpointAllowed(endpoint: string): boolean {
 }
 
 export async function POST(req: NextRequest) {
-  // ── Rate limiting : 120 req / 60s par IP ─────────────────────────────────
+  // ── Rate limiting : 300 req / 60s par IP (marge pour imports WALA avec nombreux lots) ──
   const ip = getClientIp(req);
-  const rl = checkRateLimit(`proxy:${ip}`, 120, 60_000);
+  const rl = checkRateLimit(`proxy:${ip}`, 300, 60_000);
   if (!rl.allowed) {
     return NextResponse.json(
       { error: "Trop de requêtes" },
