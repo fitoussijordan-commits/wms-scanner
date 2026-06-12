@@ -263,15 +263,19 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
     setValidating(true);
     setError("");
     try {
-      // 1. Set qty_done on each move line
+      // 1. Set qty_done on each move line + effacer les package_id hérités de l'expédition
       for (const line of selected.lines) {
         const key   = line.moveLineId ?? line.moveId;
         const qty   = parseFloat(qtyEdits[key] ?? String(line.demandQty));
         const safeQty = isNaN(qty) ? line.demandQty : qty;
 
         if (line.moveLineId) {
-          // Write qty_done on existing move line
-          await odoo.write(session, "stock.move.line", [line.moveLineId], { qty_done: safeQty });
+          // Effacer result_package_id et package_id pour éviter l'erreur "même colis deux fois"
+          await odoo.write(session, "stock.move.line", [line.moveLineId], {
+            qty_done: safeQty,
+            result_package_id: false,
+            package_id: false,
+          });
         } else {
           // No move line — write quantity_done on stock.move (triggers line creation)
           await odoo.write(session, "stock.move", [line.moveId], { quantity_done: safeQty });
