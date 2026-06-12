@@ -1029,6 +1029,44 @@ function getProductRemainingAtLoc(lines: any[], locId: number, productId: number
 }
 
 // ============================================
+// MÉTÉO BONDY
+// ============================================
+const WMO_ICONS: Record<number, string> = {
+  0:"☀️",1:"🌤️",2:"⛅",3:"☁️",45:"🌫️",48:"🌫️",
+  51:"🌦️",53:"🌦️",55:"🌧️",61:"🌧️",63:"🌧️",65:"🌧️",
+  71:"🌨️",73:"🌨️",75:"❄️",80:"🌦️",81:"🌧️",82:"⛈️",
+  95:"⛈️",96:"⛈️",99:"⛈️",
+};
+const WMO_LABELS: Record<number, string> = {
+  0:"Ensoleillé",1:"Peu nuageux",2:"Partiellement nuageux",3:"Couvert",
+  45:"Brouillard",48:"Brouillard givrant",51:"Bruine légère",53:"Bruine",55:"Bruine forte",
+  61:"Pluie légère",63:"Pluie",65:"Pluie forte",71:"Neige légère",73:"Neige",75:"Neige forte",
+  80:"Averses légères",81:"Averses",82:"Averses fortes",95:"Orage",96:"Orage+grêle",99:"Orage fort",
+};
+function WeatherWidget() {
+  const [w, setW] = useState<{ temp: number; code: number } | null>(null);
+  useEffect(() => {
+    // Bondy 93140 : lat 48.9025, lon 2.4828
+    fetch("https://api.open-meteo.com/v1/forecast?latitude=48.9025&longitude=2.4828&current_weather=true")
+      .then(r => r.json())
+      .then(d => setW({ temp: Math.round(d.current_weather.temperature), code: d.current_weather.weathercode }))
+      .catch(() => {});
+  }, []);
+  if (!w) return null;
+  const icon = WMO_ICONS[w.code] ?? "🌡️";
+  const label = WMO_LABELS[w.code] ?? "";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", background: "#fff", border: "1px solid #e8ecf3", borderRadius: 12, boxShadow: "0 1px 3px rgba(15,23,42,.06)", flexShrink: 0 }}>
+      <span style={{ fontSize: 22 }}>{icon}</span>
+      <div>
+        <div style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", lineHeight: 1 }}>{w.temp}°C</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>Bondy · {label}</div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // MAIN APP
 // ============================================
 export default function Page() {
@@ -2873,11 +2911,14 @@ export default function Page() {
           return (
             <div style={{ animation: "fadeIn .2s" }}>
               {/* Greeting */}
-              <div style={{ marginBottom: 22 }}>
-                <h1 style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.4, color: DK.text }}>Bonjour {(session?.name || "").split(" ")[0]} 👋</h1>
-                <p style={{ fontSize: 13, color: DK.text2, marginTop: 3, textTransform: "capitalize" as const }}>
-                  {new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · voici l'activité de l'entrepôt
-                </p>
+              <div style={{ marginBottom: 22, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+                <div>
+                  <h1 style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.4, color: DK.text }}>Bonjour {(session?.name || "").split(" ")[0]} 👋</h1>
+                  <p style={{ fontSize: 13, color: DK.text2, marginTop: 3, textTransform: "capitalize" as const }}>
+                    {new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · voici l'activité de l'entrepôt
+                  </p>
+                </div>
+                <WeatherWidget />
               </div>
 
               {/* KPI strip */}
