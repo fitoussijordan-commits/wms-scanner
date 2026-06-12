@@ -1048,9 +1048,9 @@ export function PutawayTab({ session, onToast }: { session: odoo.OdooSession; on
         0
       );
 
-      const allStockProductIds: number[] = [...new Set(
+      const allStockProductIds: number[] = Array.from(new Set(
         quants.map((q: any) => Array.isArray(q.product_id) ? q.product_id[0] : q.product_id)
-      )];
+      ));
       const ruleProductIdSet = new Set(ruleProductIds);
       const noRuleProductIds = allStockProductIds.filter(id => !ruleProductIdSet.has(id));
 
