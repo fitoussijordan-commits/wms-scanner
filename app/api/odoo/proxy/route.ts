@@ -77,6 +77,14 @@ export async function POST(req: NextRequest) {
 
     const url = `${odooUrl.replace(/\/$/, "")}${endpoint}`;
 
+    // Timeout plus long pour les opérations lourdes (création PO, confirmation, réception)
+    const isHeavyOp = endpoint === "/web/dataset/call_kw" && (
+      (params?.model === "purchase.order" && (params?.method === "create" || params?.method === "button_confirm")) ||
+      (params?.model === "stock.picking" && params?.method === "action_assign") ||
+      (params?.model === "stock.move.line")
+    );
+    const timeoutMs = isHeavyOp ? 45_000 : 15_000;
+
     const odooRes = await fetchT(url, {
       method: "POST",
       headers,
@@ -86,7 +94,7 @@ export async function POST(req: NextRequest) {
         id: Date.now(),
         params,
       }),
-    });
+    }, timeoutMs);
 
     // Récupérer le session_id depuis les cookies de réponse
     const setCookies = odooRes.headers.getSetCookie?.() || [];

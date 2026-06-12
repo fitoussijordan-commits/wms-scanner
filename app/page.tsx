@@ -2551,7 +2551,7 @@ export default function Page() {
     { key: "reprintLabel", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: false, badge: null, badgeColor: "" },
     { key: "labels", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels"), admin: false, badge: null, badgeColor: "" },
     { key: "dashboard", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; }, admin: true, badge: null, badgeColor: "" },
-    { key: "order", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>, label: "Commande", onClick: () => setScreen("order"), admin: false, badge: null, badgeColor: "" },
+    { key: "order", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>, label: "Commande", onClick: () => { try { localStorage.setItem("wms_order_session", JSON.stringify(session)); } catch {} window.open("/order", "_blank"); }, admin: false, badge: null, badgeColor: "" },
   ];
   const visibleTools = toolItems.filter(t => !t.admin || (session && odoo.isAdmin(session)));
 
@@ -2565,20 +2565,20 @@ export default function Page() {
       {isDesktopUI && session && (() => {
         const DK = { text: "#0f172a", text2: "#64748b", text3: "#94a3b8", border: "#e8ecf3", primary: "#2563eb" };
         const navItem = (active: boolean): React.CSSProperties => ({
-          display: "flex", alignItems: "center", gap: 11, padding: "9px 10px", borderRadius: 10,
-          fontSize: 13.5, fontWeight: active ? 600 : 500, color: active ? DK.primary : DK.text2,
+          display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8,
+          fontSize: 12.5, fontWeight: active ? 600 : 500, color: active ? DK.primary : DK.text2,
           background: active ? "#eef2ff" : "none", border: "none", cursor: "pointer",
           fontFamily: "inherit", width: "100%", textAlign: "left" as const,
         });
         const navBadge = (color: string): React.CSSProperties => ({
-          marginLeft: "auto", minWidth: 20, height: 20, padding: "0 6px", borderRadius: 10,
-          fontSize: 11, fontWeight: 700, color: "#fff", background: color,
+          marginLeft: "auto", minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9,
+          fontSize: 10, fontWeight: 700, color: "#fff", background: color,
           display: "flex", alignItems: "center", justifyContent: "center",
         });
-        const label: React.CSSProperties = { fontSize: 10.5, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" as const, color: DK.text3, padding: "14px 10px 6px" };
+        const label: React.CSSProperties = { fontSize: 9.5, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" as const, color: DK.text3, padding: "8px 10px 4px" };
         return (
-          <aside style={{ position: "fixed", left: 0, top: 0, bottom: 0, width: 248, background: "#fff", borderRight: `1px solid ${DK.border}`, padding: "20px 14px 16px", display: "flex", flexDirection: "column" as const, zIndex: 200, overflowY: "auto" as const }}>
-            <button onClick={goHome} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px 18px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+          <aside style={{ position: "fixed", left: 0, top: 0, bottom: 0, width: 248, background: "#fff", borderRight: `1px solid ${DK.border}`, padding: "14px 10px 12px", display: "flex", flexDirection: "column" as const, zIndex: 200, overflowY: "hidden" as const }}>
+            <button onClick={goHome} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 10px 12px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
               <img src={DH_LOGO} alt="Dr. Hauschka" style={{ height: 30, objectFit: "contain" }} />
               <span style={{ fontSize: 9, color: DK.primary, fontWeight: 700, background: "#eef2ff", padding: "2px 6px", borderRadius: 5 }}>WMS</span>
             </button>
@@ -3449,7 +3449,7 @@ export default function Page() {
           <EshopScreen session={session} onBack={goHome} onToast={showToast} />
         )}
         {screen === "order" && session && (
-          <OrderScreen session={session} onBack={goHome} onToast={showToast} />
+          <OrderScreen session={session} onBack={goHome} onToast={showToast} desktop={isDesktopUI} />
         )}
        </div>
       </main>
