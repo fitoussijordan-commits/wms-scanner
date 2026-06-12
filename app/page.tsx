@@ -1124,7 +1124,6 @@ export default function Page() {
   const [homeSearching, setHomeSearching] = useState(false);
   const homeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const homeSearchIdRef = useRef(0);
-  const homeSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Caméra scan (recherche rapide)
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
@@ -1363,21 +1362,6 @@ export default function Page() {
 
   const logout = () => { setSession(null); clearSess(); setScreen("login"); resetTransfer(); };
   const goHome = () => { setScreen("home"); resetTransfer(); clearLookup(); setInventoryInitProduct(null); };
-
-  // Desktop : focus auto du champ recherche sur la home + raccourci "/"
-  useEffect(() => {
-    if (screen !== "home" || !isDesktopUI) return;
-    const t = setTimeout(() => homeSearchInputRef.current?.focus(), 150);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "/") return;
-      const el = e.target as HTMLElement;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-      e.preventDefault();
-      homeSearchInputRef.current?.focus();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => { clearTimeout(t); window.removeEventListener("keydown", onKey); };
-  }, [screen, isDesktopUI]);
 
   // Charge le compteur de prépas en arrière-plan dès que la home est affichée
   useEffect(() => {
@@ -2637,7 +2621,6 @@ export default function Page() {
               <span style={{ fontSize: 9, color: DK.primary, fontWeight: 700, background: "#eef2ff", padding: "2px 6px", borderRadius: 5 }}>WMS</span>
             </button>
 
-            <div className="dk-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" as const }}>
             <button className="dk-nav" onClick={goHome} style={navItem(screen === "home")}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
               Accueil
@@ -2667,7 +2650,6 @@ export default function Page() {
                 <span style={{ marginLeft: "auto", fontSize: 11, color: DK.text3, fontWeight: 600 }}>{history.length}</span>
               </button>
             )}
-            </div>
 
             <div style={{ marginTop: "auto", borderTop: `1px solid ${DK.border}`, paddingTop: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px 10px" }}>
@@ -2914,46 +2896,26 @@ export default function Page() {
           const DK = { text: "#0f172a", text2: "#64748b", text3: "#94a3b8", border: "#e8ecf3", shadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.08)" };
           const card: React.CSSProperties = { background: "#fff", border: `1px solid ${DK.border}`, borderRadius: 16, boxShadow: DK.shadow };
           const secTitle: React.CSSProperties = { fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" as const, color: DK.text3, margin: "0 0 12px 2px" };
-          // KPI différenciés du flux commandes (le Centre de contrôle garde le détail du flux)
-          const flowTotal = ccData ? (ccData.waitingToday.count + ccData.inPrep.count + ccData.outToPackToday.count + ccData.eshopWaiting.count) : null;
           const kpis = [
-            { label: "Commandes en cours", count: flowTotal, color: "#2563eb", soft: "#eff6ff", onClick: () => setScreen("waitingOrders"),
-              icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
-            { label: "Retours à traiter", count: badgeReturns, color: "#ea580c", soft: "#ffedd5", onClick: () => setScreen("returns"),
-              icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg> },
-            { label: "Stocks négatifs", count: badgeNegStock, color: "#dc2626", soft: "#fee2e2", onClick: () => setScreen("negativeStock"),
-              icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> },
-            { label: "Notifications du jour", count: notifs.length, color: "#7c3aed", soft: "#f3e8ff", onClick: openNotifs,
-              icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg> },
+            { label: "En attente", count: ccData?.waitingToday.count ?? null, color: "#d97706", soft: "#fef3c7", onClick: () => setScreen("waitingOrders") },
+            { label: "En préparation", count: ccData?.inPrep.count ?? null, color: "#7c3aed", soft: "#f3e8ff", onClick: () => { loadPickings(); setScreen("prep"); } },
+            { label: "À emballer", count: ccData?.outToPackToday.count ?? null, color: "#0d9488", soft: "#ccfbf1", onClick: () => { setPackingPickingId(null); setScreen("packing"); } },
+            { label: "E-shop", count: ccData?.eshopWaiting.count ?? null, color: "#db2777", soft: "#fce7f3", onClick: () => setScreen("eshop") },
           ];
-          const kpiCard = (k: any, i: number) => (
-            <button key={i} className="dk-kpi" onClick={k.onClick} style={{ ...card, padding: "16px 18px", display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
-              <div style={{ width: 42, height: 42, borderRadius: 12, background: k.soft, color: k.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{k.icon}</div>
-              <div>
-                <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.6, lineHeight: 1, color: (k.count ?? 0) > 0 ? DK.text : DK.text3 }}>{k.count ?? "—"}</div>
-                <div style={{ fontSize: 11.5, fontWeight: 600, color: DK.text2, marginTop: 4, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{k.label}</div>
-              </div>
-            </button>
-          );
           const flow = [
-            { label: "En attente", soft: "#fef3c7", color: "#d97706", d: ccData?.waitingToday, onClick: () => setScreen("waitingOrders"),
-              icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> },
-            { label: "En préparation", soft: "#f3e8ff", color: "#7c3aed", d: ccData?.inPrep, onClick: () => { loadPickings(); setScreen("prep"); },
-              icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg> },
-            { label: "À emballer", soft: "#ccfbf1", color: "#0d9488", d: ccData?.outToPackToday, onClick: () => { setPackingPickingId(null); setScreen("packing"); },
-              icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg> },
-            { label: "E-shop", soft: "#fce7f3", color: "#db2777", d: ccData?.eshopWaiting, onClick: () => setScreen("eshop"),
-              icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg> },
+            { label: "En attente", icon: "⏳", soft: "#fef3c7", color: "#d97706", d: ccData?.waitingToday, onClick: () => setScreen("waitingOrders") },
+            { label: "En préparation", icon: "📦", soft: "#f3e8ff", color: "#7c3aed", d: ccData?.inPrep, onClick: () => { loadPickings(); setScreen("prep"); } },
+            { label: "À emballer", icon: "🎁", soft: "#ccfbf1", color: "#0d9488", d: ccData?.outToPackToday, onClick: () => { setPackingPickingId(null); setScreen("packing"); } },
+            { label: "E-shop", icon: "🛒", soft: "#fce7f3", color: "#db2777", d: ccData?.eshopWaiting, onClick: () => setScreen("eshop") },
           ];
-          const allClear = !!ccData && flow.every(f => (f.d?.count ?? 0) === 0);
           return (
             <div style={{ animation: "fadeIn .2s" }}>
               {/* Greeting */}
               <div style={{ marginBottom: 22, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
                 <div>
                   <h1 style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.4, color: DK.text }}>Bonjour {(session?.name || "").split(" ")[0]} 👋</h1>
-                  <p style={{ fontSize: 13, color: DK.text2, marginTop: 3 }}>
-                    <span style={{ textTransform: "capitalize" as const }}>{new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</span> · voici l'activité de l'entrepôt
+                  <p style={{ fontSize: 13, color: DK.text2, marginTop: 3, textTransform: "capitalize" as const }}>
+                    {new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · voici l'activité de l'entrepôt
                   </p>
                 </div>
                 <WeatherWidget />
@@ -2963,10 +2925,32 @@ export default function Page() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 26, marginBottom: 26 }}>
                 {/* 3 KPI gauche */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
-                  {kpis.slice(0, 3).map(kpiCard)}
+                  {kpis.slice(0, 3).map((k, i) => (
+                    <button key={i} className="dk-kpi" onClick={k.onClick} style={{ ...card, padding: "16px 18px", display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+                      <div style={{ width: 42, height: 42, borderRadius: 12, background: k.soft, color: k.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, flexShrink: 0 }}>
+                        {k.count == null ? "·" : ""}
+                        {k.count != null && <span style={{ fontSize: 17 }}>{["⏳", "📦", "🎁", "🛒"][i]}</span>}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.6, lineHeight: 1, color: (k.count ?? 0) > 0 ? DK.text : DK.text3 }}>{k.count ?? "—"}</div>
+                        <div style={{ fontSize: 11.5, fontWeight: 600, color: DK.text2, marginTop: 4, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{k.label}</div>
+                      </div>
+                    </button>
+                  ))}
                 </div>
                 {/* 1 KPI droite — aligné avec le Centre de contrôle */}
-                {kpis.slice(3).map((k, i) => kpiCard(k, i + 3))}
+                {kpis.slice(3).map((k, i) => (
+                  <button key={i} className="dk-kpi" onClick={k.onClick} style={{ ...card, padding: "16px 18px", display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+                    <div style={{ width: 42, height: 42, borderRadius: 12, background: k.soft, color: k.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, flexShrink: 0 }}>
+                      {k.count == null ? "·" : ""}
+                      {k.count != null && <span style={{ fontSize: 17 }}>🛒</span>}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.6, lineHeight: 1, color: (k.count ?? 0) > 0 ? DK.text : DK.text3 }}>{k.count ?? "—"}</div>
+                      <div style={{ fontSize: 11.5, fontWeight: 600, color: DK.text2, marginTop: 4, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{k.label}</div>
+                    </div>
+                  </button>
+                ))}
               </div>
 
               {/* Search hero */}
@@ -2977,17 +2961,15 @@ export default function Page() {
                 </div>
                 <p style={{ fontSize: 12.5, color: "#94a3b8", margin: "3px 0 14px" }}>Scanne ou tape un code — barres, réf, lot, emplacement, Pal-X</p>
                 <div style={{ display: "flex", gap: 10 }}>
-                  <div className="dk-search" style={{ flex: 1, display: "flex", alignItems: "center", gap: 11, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 13, padding: "0 16px", height: 50 }}>
+                  <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 11, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 13, padding: "0 16px", height: 50 }}>
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.8"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                     <input
-                      ref={homeSearchInputRef}
                       value={homeQuery}
                       onChange={e => onHomeQueryChange(e.target.value)}
                       onKeyDown={e => { if (e.key === "Enter") submitHomeQuery(); }}
                       placeholder="Code-barres, réf, lot, emplacement, Pal-XXXX…"
                       style={{ flex: 1, background: "none", border: "none", outline: "none", color: "#fff", fontSize: 14.5, fontFamily: "inherit" }}
                     />
-                    <span title="Appuie sur / pour rechercher" style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", border: "1px solid rgba(255,255,255,.16)", borderRadius: 6, padding: "2px 8px", flexShrink: 0 }}>/</span>
                   </div>
                   <button onClick={submitHomeQuery} style={{ height: 50, padding: "0 22px", borderRadius: 13, border: "none", background: "#2563eb", color: "#fff", fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
                     Rechercher
@@ -3087,12 +3069,6 @@ export default function Page() {
                     <button onClick={() => ccRefreshRef.current && ccRefreshRef.current()} title="Actualiser" style={{ background: "none", border: "none", cursor: "pointer", color: DK.text3, fontSize: 14, padding: 4, fontFamily: "inherit" }}>↻</button>
                   </div>
                   <div style={{ padding: "14px 18px" }}>
-                    {allClear && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 9, background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 11, padding: "10px 13px", marginBottom: 14 }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: "#047857" }}>Tout est traité — aucune commande en cours</span>
-                      </div>
-                    )}
                     {flow.map((f, i) => {
                       const count = f.d?.count ?? 0;
                       const names = (f.d?.names ?? []).slice(0, 3);
@@ -3100,7 +3076,7 @@ export default function Page() {
                       return (
                         <div key={i} style={{ display: "flex", gap: 13, position: "relative" as const, paddingBottom: i < flow.length - 1 ? 16 : 4 }}>
                           {i < flow.length - 1 && <span style={{ position: "absolute" as const, left: 14, top: 32, bottom: 0, width: 2, background: DK.border }} />}
-                          <div style={{ width: 29, height: 29, borderRadius: 9, background: f.soft, color: f.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, zIndex: 1 }}>{f.icon}</div>
+                          <div style={{ width: 29, height: 29, borderRadius: 9, background: f.soft, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, flexShrink: 0, zIndex: 1 }}>{f.icon}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
                               <span style={{ fontSize: 12.5, fontWeight: 700, color: DK.text }}>{f.label}</span>
@@ -4087,12 +4063,6 @@ function Shell({ children, toast, flash, desktop }: { children: React.ReactNode;
         .dk-chip:hover { border-color: #c7d2e3 !important; color: #0f172a !important; }
         .dk-row { transition: background .12s; }
         .dk-row:hover { background: #fafbfd; }
-        .dk-search { transition: border-color .15s, background .15s, box-shadow .15s; }
-        .dk-search:focus-within { border-color: rgba(96,165,250,.7) !important; background: rgba(255,255,255,.12) !important; box-shadow: 0 0 0 3px rgba(37,99,235,.28); }
-        .dk-scroll { scrollbar-width: thin; scrollbar-color: #e2e8f0 transparent; }
-        .dk-scroll::-webkit-scrollbar { width: 5px; }
-        .dk-scroll::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 3px; }
-        .dk-scroll::-webkit-scrollbar-track { background: transparent; }
       `}</style>
       {flash && (
         <div key={flash + Date.now()} style={{
