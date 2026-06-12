@@ -2745,7 +2745,7 @@ export default function Page() {
       <main style={isDesktopUI
         ? { marginLeft: 248, padding: screen === "home" ? "28px 36px 60px" : "28px 24px 60px" }
         : { maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px" }}>
-       <div style={isDesktopUI ? { maxWidth: screen === "home" ? 1240 : screen === "waitingOrders" ? 1120 : (screen === "inventory" || screen === "productImport") ? 1000 : 720, margin: "0 auto" } : undefined}>
+       <div style={isDesktopUI ? { maxWidth: screen === "home" ? 1240 : screen === "waitingOrders" ? 1400 : (screen === "inventory" || screen === "productImport") ? 1000 : 720, margin: "0 auto" } : undefined}>
 
         {/* ===== HOME (PDA / mobile) ===== */}
         {screen === "home" && !isDesktopUI && <>
@@ -8796,11 +8796,19 @@ function WaitingOrdersScreen({
     ];
     return (
       <div style={{ animation: "fadeIn .2s" }}>
-        {/* En-tête */}
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, marginBottom: 18 }}>
-          <div>
-            <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.4, color: D.text }}>Commandes en attente</div>
-            <div style={{ fontSize: 13, color: D.t2, marginTop: 3 }}>En attente de disponibilité · regroupées par date d'expédition puis par client</div>
+        {/* En-tête desktop */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 22 }}>
+          <button onClick={onBack} className="dk-tool" style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", border: `1px solid ${D.border}`, borderRadius: 11, padding: "8px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: D.t2, fontFamily: "inherit", boxShadow: "0 1px 2px rgba(15,23,42,.04)", flexShrink: 0 }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="15 18 9 12 15 6"/></svg>
+            Accueil
+          </button>
+          <div style={{ width: 1, height: 20, background: D.border }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.4, color: D.text, display: "flex", alignItems: "center", gap: 10 }}>
+              Commandes en attente
+              {lateCount > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: "#b91c1c", background: "#fef2f2", border: "1px solid #fecaca", padding: "3px 9px", borderRadius: 8 }}>⚠ {lateCount} en retard</span>}
+            </div>
+            <div style={{ fontSize: 13, color: D.t2, marginTop: 2 }}>En attente de disponibilité · regroupées par date d'expédition puis par client</div>
           </div>
           <button onClick={load} disabled={loading} className="dk-tool" style={{ background: "#fff", border: `1px solid ${D.border}`, borderRadius: 11, padding: "9px 16px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: D.t2, fontFamily: "inherit", boxShadow: "0 1px 2px rgba(15,23,42,.04)", flexShrink: 0 }}>
             {loading ? "…" : "↻ Actualiser"}

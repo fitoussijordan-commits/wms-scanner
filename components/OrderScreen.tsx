@@ -22,6 +22,7 @@ interface Props {
   session: odoo.OdooSession;
   onBack: () => void;
   onToast: (msg: string, type?: "success" | "error" | "info") => void;
+  desktop?: boolean;
 }
 interface CartItem { product: any; qty: number; unitPrice: number; }
 interface FreeRule {
@@ -148,7 +149,7 @@ function computeFreeItems(cart: Record<number, CartItem>, rules: FreeRule[]): Fr
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-export default function OrderScreen({ session, onBack, onToast }: Props) {
+export default function OrderScreen({ session, onBack, onToast, desktop }: Props) {
   const [step, setStep] = useState<"client" | "catalog">("client");
   const [client, setClient] = useState<any>(null);
   const [priceItems, setPriceItems] = useState<PriceItem[]>([]); // items pricelist du client
@@ -241,7 +242,7 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
 
   // Écran confirmation finale
   if (done) return (
-    <div style={{ position: "fixed", inset: 0, background: "linear-gradient(135deg, #0f766e 0%, #7c3aed 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', sans-serif" }}>
+    <div style={{ position: "fixed", inset: 0, left: desktop ? 248 : 0, background: "linear-gradient(135deg, #0f766e 0%, #7c3aed 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', sans-serif" }}>
       <div style={{ background: "#fff", borderRadius: 24, padding: "48px 40px", maxWidth: 480, width: "90%", textAlign: "center", boxShadow: C.shadowXl }}>
         <div style={{ fontSize: 64, marginBottom: 16 }}>🎉</div>
         <div style={{ fontSize: 26, fontWeight: 800, color: C.text, marginBottom: 8 }}>Devis créé !</div>
@@ -264,7 +265,7 @@ export default function OrderScreen({ session, onBack, onToast }: Props) {
   );
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 150, background: C.bg, display: "flex", flexDirection: "column" as const, fontFamily: "'DM Sans', sans-serif", overflow: "hidden" }}>
+    <div style={{ position: "fixed", inset: 0, left: desktop ? 248 : 0, zIndex: 150, background: C.bg, display: "flex", flexDirection: "column" as const, fontFamily: "'DM Sans', sans-serif", overflow: "hidden" }}>
 
       {/* ── Top bar ── */}
       <div style={{ height: 56, background: "#fff", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", padding: "0 20px", gap: 16, flexShrink: 0, boxShadow: C.shadow }}>
