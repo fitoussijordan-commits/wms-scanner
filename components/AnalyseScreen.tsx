@@ -57,6 +57,18 @@ interface Props {
   onToast: (msg: string, type?: "success" | "error" | "info") => void;
 }
 
+// ── Extraction automatique des références produits ───────────────────────────
+function extractRefs(text: string): string[] {
+  // 1. Refs numériques pures (5+ chiffres) — ex: 1010214
+  const numRefs = text.match(/\b\d{5,}\b/g);
+  if (numRefs && numRefs.length >= 2) return Array.from(new Set(numRefs));
+  // 2. Refs alphanumériques (4+ chars, au moins un chiffre) — ex: REF001
+  const alphaRefs = text.match(/\b(?=[A-Z0-9]*\d)[A-Z0-9-_]{4,}\b/gi);
+  if (alphaRefs && alphaRefs.length >= 1) return Array.from(new Set(alphaRefs));
+  // 3. Fallback : split classique par séparateurs
+  return text.split(/[\n\r,;]+/).map(r => r.trim()).filter(Boolean);
+}
+
 // ── LocalStorage helpers ─────────────────────────────────────────────────────
 const LS_KEY = "wms_offres_config";
 
@@ -473,12 +485,32 @@ function ParametrageTab({ onToast }: { onToast: Props["onToast"] }) {
             <textarea
               value={formProduits}
               onChange={e => setFormProduits(e.target.value)}
+              onPaste={e => {
+                const pasted = e.clipboardData.getData("text");
+                const refs = extractRefs(pasted);
+                if (refs.length >= 2) {
+                  e.preventDefault();
+                  setFormProduits(prev => {
+                    const existing = prev.split(/[\n\r,;]+/).map(r => r.trim()).filter(Boolean);
+                    const merged = Array.from(new Set([...existing, ...refs]));
+                    return merged.join("\n");
+                  });
+                }
+              }}
               placeholder={"REF001\nREF002\nREF003"}
               rows={6}
               style={{ width: "100%", boxSizing: "border-box" as const, padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "monospace", background: C.bg, color: C.text, resize: "vertical" as const }}
             />
-            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>
-              {formProduits.split(/[\n\r,;]+/).filter(r => r.trim()).length} produit(s) saisi(s)
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: C.textMuted }}>
+                {formProduits.split(/[\n\r,;]+/).filter(r => r.trim()).length} produit(s) saisi(s)
+              </div>
+              {formProduits.trim() && (
+                <button type="button" onClick={() => setFormProduits(extractRefs(formProduits).join("\n"))}
+                  style={{ fontSize: 11, fontWeight: 700, color: C.blue, background: C.blueSoft, border: `1px solid ${C.blue}33`, borderRadius: 6, padding: "3px 9px", cursor: "pointer", fontFamily: "inherit" }}>
+                  🧹 Nettoyer
+                </button>
+              )}
             </div>
           </div>
         </div>

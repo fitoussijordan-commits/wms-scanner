@@ -235,13 +235,24 @@ export default function SupplierImportScreen({
       addLog(`Création des lots (${matchedLines.length} lignes)…`, "running");
       const receptionLines: odoo.ReceptionLotLine[] = [];
 
+      const lotIdCache: Record<string, number> = {}; // évite de re-créer/rechercher le même lot (lignes dupliquées)
       for (const line of matchedLines) {
-        if (!line.lotNo) continue;
-        const { id: lotId, existed } = await odoo.getOrCreateLot(session, line.productId, line.lotNo, line.expiryDate);
-        if (existed) {
-          if (!lotsDuplicate.includes(line.lotNo)) lotsDuplicate.push(line.lotNo);
-        } else {
-          lotsCreated++;
+        if (!line.lotNo) {
+          // Pas de lot — la quantité doit quand même être affectée à sa ligne de réception
+          receptionLines.push({ productId: line.productId, lotId: null, lotName: "", qty: line.qty, uomId: line.uomId });
+          continue;
+        }
+        const cacheKey = `${line.productId}|${line.lotNo}`;
+        let lotId = lotIdCache[cacheKey];
+        if (!lotId) {
+          const { id, existed } = await odoo.getOrCreateLot(session, line.productId, line.lotNo, line.expiryDate);
+          lotId = id;
+          lotIdCache[cacheKey] = id;
+          if (existed) {
+            if (!lotsDuplicate.includes(line.lotNo)) lotsDuplicate.push(line.lotNo);
+          } else {
+            lotsCreated++;
+          }
         }
         receptionLines.push({ productId: line.productId, lotId, lotName: line.lotNo, qty: line.qty, uomId: line.uomId });
       }

@@ -2229,13 +2229,16 @@ export async function getOrCreateLot(
 
 export interface ReceptionLotLine {
   productId: number;
-  lotId: number;
+  lotId: number | null; // null = ligne sans numéro de lot
   lotName: string;
   qty: number;
   uomId: number;
 }
 
-/** Affecte lots et quantités aux lignes de mouvement de la réception */
+/** Affecte lots et quantités aux lignes de mouvement de la réception.
+ *  IMPORTANT : écrit qty_done sur CHAQUE ligne. Sans ça, à la validation Odoo
+ *  remplit la demande totale du move (groupée par produit) sur la première
+ *  ligne → les produits multi-lots finissent avec tout le stock sur un seul lot. */
 export async function setReceptionLots(
   session: OdooSession,
   pickingId: number,
@@ -2243,6 +2246,15 @@ export async function setReceptionLots(
   locationDestId: number,
   lines: ReceptionLotLine[]
 ): Promise<void> {
+  // Fusionner les lignes même produit + même lot (packing lists avec lignes dupliquées)
+  const mergedMap: Record<string, ReceptionLotLine> = {};
+  for (const l of lines) {
+    const key = `${l.productId}|${l.lotId ?? "nolot"}`;
+    if (mergedMap[key]) mergedMap[key].qty += l.qty;
+    else mergedMap[key] = { ...l };
+  }
+  const mergedLines = Object.values(mergedMap);
+
   // Récupérer les mouvements et lignes de mouvement existants
   const moves = await searchRead(
     session, "stock.move",
@@ -2265,16 +2277,19 @@ export async function setReceptionLots(
     mlPool[pid].push(ml);
   }
 
-  for (const line of lines) {
+  for (const line of mergedLines) {
     const pool = mlPool[line.productId];
     const ml = pool?.shift();
 
     if (ml) {
-      // lot_id (many2one) + lot_name (char) pour forcer l'affectation dans Odoo
-      await write(session, "stock.move.line", [ml.id], {
-        lot_id: line.lotId,
-        lot_name: line.lotName,
-      });
+      // lot_id (many2one) + lot_name (char) pour forcer l'affectation dans Odoo,
+      // et qty_done = quantité de CE lot (pas la demande totale du move)
+      const vals: any = { qty_done: line.qty };
+      if (line.lotId) {
+        vals.lot_id = line.lotId;
+        vals.lot_name = line.lotName;
+      }
+      await write(session, "stock.move.line", [ml.id], vals);
     } else {
       // Créer une nouvelle ligne de mouvement (produit avec plusieurs lots)
       const move = moves.find((m: any) => {
@@ -2282,16 +2297,20 @@ export async function setReceptionLots(
         return pid === line.productId;
       });
       if (!move) continue; // Skip si pas de mouvement trouvé
-      await create(session, "stock.move.line", {
+      const vals: any = {
         picking_id: pickingId,
         move_id: move.id,
         product_id: line.productId,
         product_uom_id: line.uomId,
-        lot_id: line.lotId,
-        lot_name: line.lotName,
+        qty_done: line.qty,
         location_id: locationId,
         location_dest_id: locationDestId,
-      });
+      };
+      if (line.lotId) {
+        vals.lot_id = line.lotId;
+        vals.lot_name = line.lotName;
+      }
+      await create(session, "stock.move.line", vals);
     }
   }
 }
