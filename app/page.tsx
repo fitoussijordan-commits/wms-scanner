@@ -2565,17 +2565,17 @@ export default function Page() {
       {isDesktopUI && session && (() => {
         const DK = { text: "#0f172a", text2: "#64748b", text3: "#94a3b8", border: "#e8ecf3", primary: "#2563eb" };
         const navItem = (active: boolean): React.CSSProperties => ({
-          display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8,
-          fontSize: 12.5, fontWeight: active ? 600 : 500, color: active ? DK.primary : DK.text2,
+          display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 9,
+          fontSize: 13, fontWeight: active ? 600 : 500, color: active ? DK.primary : DK.text2,
           background: active ? "#eef2ff" : "none", border: "none", cursor: "pointer",
           fontFamily: "inherit", width: "100%", textAlign: "left" as const,
         });
         const navBadge = (color: string): React.CSSProperties => ({
-          marginLeft: "auto", minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9,
-          fontSize: 10, fontWeight: 700, color: "#fff", background: color,
+          marginLeft: "auto", minWidth: 20, height: 20, padding: "0 6px", borderRadius: 10,
+          fontSize: 11, fontWeight: 700, color: "#fff", background: color,
           display: "flex", alignItems: "center", justifyContent: "center",
         });
-        const label: React.CSSProperties = { fontSize: 9.5, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" as const, color: DK.text3, padding: "8px 10px 4px" };
+        const label: React.CSSProperties = { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase" as const, color: DK.text3, padding: "12px 12px 4px" };
         return (
           <aside style={{ position: "fixed", left: 0, top: 0, bottom: 0, width: 248, background: "#fff", borderRight: `1px solid ${DK.border}`, padding: "14px 10px 12px", display: "flex", flexDirection: "column" as const, zIndex: 200, overflowY: "hidden" as const }}>
             <button onClick={goHome} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 10px 12px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
