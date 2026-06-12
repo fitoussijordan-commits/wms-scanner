@@ -1453,7 +1453,8 @@ export default function Page() {
         const notifEnabled = localStorage.getItem("wms_notif_enabled") !== "false";
         if (!notifEnabled) return;
 
-        const all = await odoo.getWaitingPickings(session);
+        // Version légère : seulement id/name/dates, pas d'enrichissement sale.order
+        const all = await odoo.getWaitingPickingsLight(session);
         // Filtre sur la date du jour — même champ que WaitingOrdersScreen (shipping_date)
         const todayPickings = all.filter((p: any) => {
           const d: string = p.shipping_date || p.scheduled_date || p.date_deadline || "";

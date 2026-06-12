@@ -350,26 +350,54 @@ export async function renameLocation(session: OdooSession, locationId: number, n
 // COMMANDES EN ATTENTE — même logique que getOutgoingPickings, état != assigned
 // ============================================
 
-export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
-  // Même picking types que getOutgoingPickings
-  const types = await searchRead(session, "stock.picking.type", [["code", "=", "internal"], ["name", "ilike", "pick"]], ["id", "name"], 10);
-  let typeIds = types.map((t: any) => t.id);
-  if (!typeIds.length) {
-    const types2 = await searchRead(session, "stock.picking.type", [["sequence_code", "=", "PICK"]], ["id"], 10);
-    typeIds = types2.map((t: any) => t.id);
-  }
-  if (!typeIds.length) {
-    const types3 = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
-    typeIds = types3.map((t: any) => t.id);
-  }
-  if (!typeIds.length) return [];
+// Cache module-level des IDs statiques (picking types + tag "Transmise")
+// Clé = sessionId pour isoler les différentes instances Odoo
+const _waitingCache: Record<string, {
+  pickTypeIds: number[];
+  outTypeIds: number[];
+  transmiseTagIds: number[];
+}> = {};
 
-  // Trouver l'ID du tag "Transmise" — seules ces commandes doivent apparaître
-  const transmiseTags = await searchRead(session, "crm.tag", [["name", "ilike", "transmise"]], ["id", "name"], 10);
-  const transmiseTagIds: number[] = transmiseTags.map((t: any) => t.id);
+async function _resolveWaitingIds(session: OdooSession) {
+  const key = session.config.url + "|" + session.config.db;
+  if (_waitingCache[key]) return _waitingCache[key];
+
+  // Résolution picking type PICK + outgoing + tag "Transmise" en parallèle
+  const [pickTypesResult, outTypesResult, transmiseTagsResult] = await Promise.all([
+    // Picking type PICK (cascade 3 essais regroupés)
+    searchRead(session, "stock.picking.type", [["code", "=", "internal"], ["name", "ilike", "pick"]], ["id"], 10)
+      .then(async (t: any[]) => {
+        if (t.length) return t;
+        const t2 = await searchRead(session, "stock.picking.type", [["sequence_code", "=", "PICK"]], ["id"], 10);
+        if (t2.length) return t2;
+        return searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+      }),
+    // Picking type OUT (pour l'enrichissement date)
+    searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10),
+    // Tag "Transmise"
+    searchRead(session, "crm.tag", [["name", "ilike", "transmise"]], ["id"], 10),
+  ]);
+
+  const result = {
+    pickTypeIds: (pickTypesResult as any[]).map((t: any) => t.id),
+    outTypeIds: (outTypesResult as any[]).map((t: any) => t.id),
+    transmiseTagIds: (transmiseTagsResult as any[]).map((t: any) => t.id),
+  };
+  _waitingCache[key] = result;
+  return result;
+}
+
+/** Invalide le cache (utile si les picking types changent côté Odoo) */
+export function invalidateWaitingCache() {
+  for (const k of Object.keys(_waitingCache)) delete _waitingCache[k];
+}
+
+export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
+  const { pickTypeIds, outTypeIds, transmiseTagIds } = await _resolveWaitingIds(session);
+  if (!pickTypeIds.length) return [];
 
   const domain: any[] = [
-    ["picking_type_id", "in", typeIds],
+    ["picking_type_id", "in", pickTypeIds],
     ["state", "in", ["confirmed", "waiting", "partially_available"]],
   ];
   if (transmiseTagIds.length > 0) {
@@ -384,35 +412,32 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
     "scheduled_date asc, date_deadline asc, id asc"
   );
 
-  // Même enrichissement date depuis OUT lié + sale.order (identique à getOutgoingPickings)
+  // Enrichissement date depuis OUT lié + sale.order
   const groupIds = Array.from(new Set(pickings.map((p: any) => p.group_id?.[0]).filter(Boolean)));
-  if (groupIds.length > 0) {
-    const outTypes = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
-    const outTypeIds = outTypes.map((t: any) => t.id);
-    if (outTypeIds.length > 0) {
-      const outPickings = await searchRead(
-        session, "stock.picking",
-        [["group_id", "in", groupIds], ["picking_type_id", "in", outTypeIds]],
-        ["id", "group_id", "scheduled_date", "date_deadline", "origin"],
-        500
-      );
-      const outByGroup: Record<number, any> = {};
-      for (const op of outPickings) { if (op.group_id) outByGroup[op.group_id[0]] = op; }
-      const soNames = Array.from(new Set(outPickings.map((op: any) => op.origin).filter(Boolean)));
-      const salesMap: Record<string, any> = {};
-      if (soNames.length > 0) {
-        const sales = await searchRead(session, "sale.order",
-          [["name", "in", soNames]], ["id", "name", "commitment_date", "expected_date"], soNames.length);
-        for (const s of sales) salesMap[s.name] = s;
-      }
-      for (const p of pickings) {
-        const gid = p.group_id?.[0];
-        if (gid && outByGroup[gid]) {
-          const outP = outByGroup[gid];
-          const sale = outP.origin ? salesMap[outP.origin] : null;
-          p.shipping_date = sale?.commitment_date || sale?.expected_date || outP.date_deadline || outP.scheduled_date || null;
-          if (!p.origin && outP.origin) p.origin = outP.origin;
-        }
+  if (groupIds.length > 0 && outTypeIds.length > 0) {
+    const outPickings = await searchRead(
+      session, "stock.picking",
+      [["group_id", "in", groupIds], ["picking_type_id", "in", outTypeIds]],
+      ["id", "group_id", "scheduled_date", "date_deadline", "origin"],
+      500
+    );
+    const outByGroup: Record<number, any> = {};
+    for (const op of outPickings) { if (op.group_id) outByGroup[op.group_id[0]] = op; }
+
+    const soNames = Array.from(new Set(outPickings.map((op: any) => op.origin).filter(Boolean)));
+    const salesMap: Record<string, any> = {};
+    if (soNames.length > 0) {
+      const sales = await searchRead(session, "sale.order",
+        [["name", "in", soNames]], ["id", "name", "commitment_date", "expected_date"], soNames.length);
+      for (const s of sales) salesMap[s.name] = s;
+    }
+    for (const p of pickings) {
+      const gid = p.group_id?.[0];
+      if (gid && outByGroup[gid]) {
+        const outP = outByGroup[gid];
+        const sale = outP.origin ? salesMap[outP.origin] : null;
+        p.shipping_date = sale?.commitment_date || sale?.expected_date || outP.date_deadline || outP.scheduled_date || null;
+        if (!p.origin && outP.origin) p.origin = outP.origin;
       }
     }
   }
@@ -430,6 +455,33 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
     const db = b.shipping_date || "9999";
     return da < db ? -1 : da > db ? 1 : 0;
   });
+
+  return pickings;
+}
+
+/** Version légère pour le polling — ne récupère que les champs nécessaires à la détection de nouvelles commandes */
+export async function getWaitingPickingsLight(session: OdooSession): Promise<{ id: number; name: string; shipping_date: string | null; scheduled_date: string | null; date_deadline: string | null; x_studio_date_dexpdition_prvue: string | null }[]> {
+  const { pickTypeIds, transmiseTagIds } = await _resolveWaitingIds(session);
+  if (!pickTypeIds.length) return [];
+
+  const domain: any[] = [
+    ["picking_type_id", "in", pickTypeIds],
+    ["state", "in", ["confirmed", "waiting", "partially_available"]],
+  ];
+  if (transmiseTagIds.length > 0) {
+    domain.push(["x_studio_etiquettes_commande", "in", transmiseTagIds]);
+  }
+
+  const pickings = await searchRead(
+    session, "stock.picking",
+    domain,
+    ["id", "name", "scheduled_date", "date_deadline", "x_studio_date_dexpdition_prvue", "origin"],
+    200
+  );
+
+  for (const p of pickings) {
+    p.shipping_date = p.x_studio_date_dexpdition_prvue || p.date_deadline || p.scheduled_date || null;
+  }
 
   return pickings;
 }
