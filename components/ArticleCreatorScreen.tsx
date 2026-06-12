@@ -987,3 +987,367 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PutawayTab — Stratégie de rangement
+// ─────────────────────────────────────────────────────────────────────────────
+
+type PutawayRow = {
+  ruleId: number;
+  productId: number;
+  productName: string;
+  productCode: string;
+  ruleLocation: string;
+  ruleLocationId: number;
+  realLocation: string;
+  realLocationId: number | null;
+  realQty: number;
+  divergent: boolean;
+  updating: boolean;
+};
+
+type NoPutawayRow = {
+  productId: number;
+  productName: string;
+  productCode: string;
+  realLocation: string;
+  realLocationId: number;
+  realQty: number;
+  creating: boolean;
+};
+
+export function PutawayTab({ session, onToast }: { session: odoo.OdooSession; onToast: (msg: string, type?: "success"|"error"|"info") => void }) {
+  const [rows, setRows] = useState<PutawayRow[]>([]);
+  const [noPutaway, setNoPutaway] = useState<NoPutawayRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<"all" | "divergent" | "ok">("all");
+  const [confirmRow, setConfirmRow] = useState<PutawayRow | NoPutawayRow | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rules = await odoo.searchRead(
+        session, "stock.putaway.rule",
+        [["product_id", "!=", false]],
+        ["id", "product_id", "location_in_id", "location_out_id"],
+        0
+      );
+
+      const ruleProductIds = rules.map((r: any) =>
+        Array.isArray(r.product_id) ? r.product_id[0] : r.product_id
+      );
+
+      const quants = await odoo.searchRead(
+        session, "stock.quant",
+        [
+          ["product_id", "in", ruleProductIds],
+          ["location_id.usage", "=", "internal"],
+          ["quantity", ">", 0],
+        ],
+        ["product_id", "location_id", "quantity"],
+        0
+      );
+
+      const allStockProductIds: number[] = [...new Set(
+        quants.map((q: any) => Array.isArray(q.product_id) ? q.product_id[0] : q.product_id)
+      )];
+      const ruleProductIdSet = new Set(ruleProductIds);
+      const noRuleProductIds = allStockProductIds.filter(id => !ruleProductIdSet.has(id));
+
+      const noRuleProducts = noRuleProductIds.length > 0
+        ? await odoo.searchRead(
+            session, "product.product",
+            [["id", "in", noRuleProductIds]],
+            ["id", "name", "default_code"],
+            0
+          )
+        : [];
+
+      type QuantEntry = { locationId: number; locationName: string; qty: number };
+      const quantsByProduct: Record<number, QuantEntry[]> = {};
+      for (const q of quants) {
+        const pid = Array.isArray(q.product_id) ? q.product_id[0] : q.product_id;
+        const lid = Array.isArray(q.location_id) ? q.location_id[0] : q.location_id;
+        const lname = Array.isArray(q.location_id) ? q.location_id[1] : String(lid);
+        if (!quantsByProduct[pid]) quantsByProduct[pid] = [];
+        quantsByProduct[pid].push({ locationId: lid, locationName: lname, qty: q.quantity });
+      }
+
+      const built: PutawayRow[] = rules.map((r: any) => {
+        const pid = Array.isArray(r.product_id) ? r.product_id[0] : r.product_id;
+        const pname = Array.isArray(r.product_id) ? r.product_id[1] : "";
+        const pcode = pname.match(/^\[([^\]]+)\]/)?.[1] ?? "";
+        const cleanName = pname.replace(/^\[[^\]]+\]\s*/, "");
+        const destId = Array.isArray(r.location_out_id) ? r.location_out_id[0] : r.location_out_id;
+        const destName = Array.isArray(r.location_out_id) ? r.location_out_id[1] : String(destId);
+        const entries = (quantsByProduct[pid] ?? []).sort((a, b) => b.qty - a.qty);
+        const dominant = entries[0] ?? null;
+        return {
+          ruleId: r.id,
+          productId: pid,
+          productName: cleanName,
+          productCode: pcode,
+          ruleLocation: destName,
+          ruleLocationId: destId,
+          realLocation: dominant?.locationName ?? "Aucun stock",
+          realLocationId: dominant?.locationId ?? null,
+          realQty: dominant?.qty ?? 0,
+          divergent: dominant ? dominant.locationId !== destId : false,
+          updating: false,
+        };
+      });
+
+      const noRuleMap: Record<number, any> = {};
+      for (const p of noRuleProducts) noRuleMap[p.id] = p;
+
+      const noPut: NoPutawayRow[] = noRuleProductIds
+        .map(pid => {
+          const p = noRuleMap[pid];
+          if (!p) return null;
+          const entries = (quantsByProduct[pid] ?? []).sort((a, b) => b.qty - a.qty);
+          const dominant = entries[0];
+          if (!dominant) return null;
+          const pname = p.name || "";
+          const pcode = p.default_code || pname.match(/^\[([^\]]+)\]/)?.[1] || "";
+          const cleanName = pname.replace(/^\[[^\]]+\]\s*/, "");
+          return {
+            productId: pid,
+            productName: cleanName,
+            productCode: pcode,
+            realLocation: dominant.locationName,
+            realLocationId: dominant.locationId,
+            realQty: dominant.qty,
+            creating: false,
+          };
+        })
+        .filter(Boolean) as NoPutawayRow[];
+
+      setRows(built.sort((a, b) => (b.divergent ? 1 : 0) - (a.divergent ? 1 : 0)));
+      setNoPutaway(noPut.sort((a, b) => b.realQty - a.realQty).slice(0, 50));
+    } catch (e: any) {
+      onToast("Erreur chargement : " + (e?.message ?? e), "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [session]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const updateRule = async (row: PutawayRow) => {
+    if (!row.realLocationId) return;
+    setRows(prev => prev.map(r => r.ruleId === row.ruleId ? { ...r, updating: true } : r));
+    try {
+      await odoo.write(session, "stock.putaway.rule", [row.ruleId], { location_out_id: row.realLocationId });
+      onToast(`✓ Règle mise à jour → ${row.realLocation}`, "success");
+      setRows(prev => prev.map(r => r.ruleId === row.ruleId
+        ? { ...r, ruleLocation: row.realLocation, ruleLocationId: row.realLocationId!, divergent: false, updating: false }
+        : r
+      ));
+    } catch (e: any) {
+      onToast("Erreur : " + (e?.message ?? e), "error");
+      setRows(prev => prev.map(r => r.ruleId === row.ruleId ? { ...r, updating: false } : r));
+    }
+    setConfirmRow(null);
+  };
+
+  const createRule = async (row: NoPutawayRow) => {
+    if (!row.realLocationId) return;
+    setNoPutaway(prev => prev.map(r => r.productId === row.productId ? { ...r, creating: true } : r));
+    try {
+      const stockLocs = await odoo.searchRead(
+        session, "stock.location",
+        [["complete_name", "=", "WH/Stock"], ["usage", "=", "internal"]],
+        ["id"], 1
+      );
+      const stockLocId = stockLocs[0]?.id;
+      if (!stockLocId) throw new Error("Emplacement WH/Stock introuvable");
+      await odoo.create(session, "stock.putaway.rule", {
+        product_id: row.productId,
+        location_in_id: stockLocId,
+        location_out_id: row.realLocationId,
+      });
+      onToast(`✓ Règle créée : → ${row.realLocation}`, "success");
+      setNoPutaway(prev => prev.filter(r => r.productId !== row.productId));
+    } catch (e: any) {
+      onToast("Erreur : " + (e?.message ?? e), "error");
+      setNoPutaway(prev => prev.map(r => r.productId === row.productId ? { ...r, creating: false } : r));
+    }
+    setConfirmRow(null);
+  };
+
+  const S = {
+    card: { background: "#fff", border: "1px solid #e8ecf3", borderRadius: 14, boxShadow: "0 1px 2px rgba(15,23,42,.04)" } as React.CSSProperties,
+    badge: (color: string, bg: string): React.CSSProperties => ({
+      display: "inline-flex", alignItems: "center", padding: "2px 9px", borderRadius: 20,
+      fontSize: 11, fontWeight: 700, color, background: bg, whiteSpace: "nowrap",
+    }),
+    row: { borderBottom: "1px solid #f1f5f9", padding: "13px 16px" } as React.CSSProperties,
+  };
+
+  const q = search.toLowerCase();
+  const filteredRows = rows.filter(r => {
+    const matchSearch = !q || r.productCode.toLowerCase().includes(q) || r.productName.toLowerCase().includes(q);
+    const matchFilter = filter === "all" || (filter === "divergent" ? r.divergent : !r.divergent);
+    return matchSearch && matchFilter;
+  });
+
+  const divergentCount = rows.filter(r => r.divergent).length;
+
+  const Spinner = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      style={{ animation: "spin 1s linear infinite" }}>
+      <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+    </svg>
+  );
+
+  return (
+    <div style={{ maxWidth: 900 }}>
+      {/* Stats */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" as const }}>
+        {[
+          { emoji: "📦", count: rows.length, label: "Règles actives", highlight: false },
+          { emoji: "⚠️", count: divergentCount, label: "Divergences", highlight: divergentCount > 0 },
+          { emoji: "🔍", count: noPutaway.length, label: "Sans règle", highlight: false },
+        ].map(({ emoji, count, label, highlight }) => (
+          <div key={label} style={{ ...S.card, padding: "12px 18px", display: "flex", gap: 10, alignItems: "center", borderColor: highlight ? "#fca5a5" : "#e8ecf3" }}>
+            <span style={{ fontSize: 20 }}>{emoji}</span>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, color: highlight ? "#dc2626" : "#0f172a" }}>{count}</div>
+              <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>{label}</div>
+            </div>
+          </div>
+        ))}
+        <button onClick={load} disabled={loading} style={{ marginLeft: "auto", alignSelf: "center", padding: "9px 16px", borderRadius: 10, border: "1px solid #e8ecf3", background: "#fff", cursor: loading ? "wait" : "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: "#64748b", display: "flex", alignItems: "center", gap: 7 }}>
+          {loading ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>}
+          Actualiser
+        </button>
+      </div>
+
+      {/* Filtres */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" as const }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher réf, désignation…"
+          style={{ flex: "1 1 220px", padding: "9px 14px", borderRadius: 10, border: "1px solid #e2e8f0", fontFamily: "inherit", fontSize: 13, outline: "none", color: "#0f172a" }} />
+        {(["all", "divergent", "ok"] as const).map(f => (
+          <button key={f} onClick={() => setFilter(f)}
+            style={{ padding: "8px 14px", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12.5, fontWeight: 600,
+              background: filter === f ? "#eef2ff" : "#f1f5f9", color: filter === f ? "#2563eb" : "#64748b" }}>
+            {f === "all" ? "Tout" : f === "divergent" ? `⚠ Divergences (${divergentCount})` : "✓ OK"}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ display: "flex", justifyContent: "center", padding: 60, color: "#94a3b8" }}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}>
+            <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+        </div>
+      ) : (
+        <>
+          {filteredRows.length > 0 && (
+            <div style={{ ...S.card, overflow: "hidden", marginBottom: 24 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 100px 44px", padding: "9px 16px", background: "#f8fafc", borderBottom: "1px solid #e8ecf3", fontSize: 10.5, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.07em", textTransform: "uppercase" as const, gap: 12 }}>
+                <span>Réf</span><span>Désignation</span><span>Règle → Réel</span><span style={{ textAlign: "center" }}>Statut</span><span/>
+              </div>
+              {filteredRows.map(row => (
+                <div key={row.ruleId} style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 100px 44px", ...S.row, alignItems: "center", gap: 12, background: row.divergent ? "#fffbeb" : "#fff" }}>
+                  <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#374151" }}>{row.productCode}</span>
+                  <span style={{ fontSize: 13, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }} title={row.productName}>{row.productName}</span>
+                  <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                    <div><span style={{ color: "#7c3aed", fontWeight: 600 }}>Règle :</span> <span style={{ color: "#64748b" }}>{row.ruleLocation}</span></div>
+                    <div><span style={{ fontWeight: 600, color: row.divergent ? "#b45309" : "#16a34a" }}>Réel :</span> <span style={{ color: row.divergent ? "#b45309" : "#16a34a" }}>{row.realLocation}</span>{row.realQty > 0 && <span style={{ color: "#94a3b8", marginLeft: 5 }}>({row.realQty % 1 === 0 ? row.realQty : row.realQty.toFixed(1)})</span>}</div>
+                  </div>
+                  <div style={{ textAlign: "center" }}>
+                    {row.divergent ? <span style={S.badge("#b45309", "#fef3c7")}>⚠ Décalé</span> : <span style={S.badge("#166534", "#dcfce7")}>✓ OK</span>}
+                  </div>
+                  <button disabled={!row.divergent || !row.realLocationId || row.updating} onClick={() => setConfirmRow(row)}
+                    title={row.divergent ? `Mettre à jour → ${row.realLocation}` : "Déjà à jour"}
+                    style={{ width: 34, height: 34, borderRadius: 9, border: "none", cursor: row.divergent && row.realLocationId ? "pointer" : "default",
+                      background: row.divergent && row.realLocationId ? "#dbeafe" : "#f1f5f9",
+                      color: row.divergent && row.realLocationId ? "#2563eb" : "#cbd5e1",
+                      display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {row.updating ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {noPutaway.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" as const, color: "#94a3b8", margin: "0 0 12px 2px" }}>
+                Articles sans règle de rangement ({noPutaway.length})
+              </div>
+              <div style={{ ...S.card, overflow: "hidden" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 44px", padding: "9px 16px", background: "#f8fafc", borderBottom: "1px solid #e8ecf3", fontSize: 10.5, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.07em", textTransform: "uppercase" as const, gap: 12 }}>
+                  <span>Réf</span><span>Désignation</span><span>Stock actuel</span><span/>
+                </div>
+                {noPutaway.map(row => (
+                  <div key={row.productId} style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 44px", ...S.row, alignItems: "center", gap: 12 }}>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#374151" }}>{row.productCode}</span>
+                    <span style={{ fontSize: 13, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }} title={row.productName}>{row.productName}</span>
+                    <div style={{ fontSize: 12 }}>
+                      <span style={{ fontWeight: 600, color: "#d97706" }}>📍 {row.realLocation}</span>
+                      <span style={{ color: "#94a3b8", marginLeft: 5 }}>({row.realQty % 1 === 0 ? row.realQty : row.realQty.toFixed(1)})</span>
+                    </div>
+                    <button disabled={row.creating} onClick={() => setConfirmRow(row)}
+                      style={{ width: 34, height: 34, borderRadius: 9, border: "none", cursor: "pointer", background: "#fef3c7", color: "#b45309", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {row.creating ? <Spinner /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {filteredRows.length === 0 && !loading && rows.length > 0 && (
+            <div style={{ textAlign: "center" as const, padding: 40, color: "#94a3b8", fontSize: 14 }}>Aucun résultat pour cette recherche</div>
+          )}
+        </>
+      )}
+
+      {/* Modale confirmation */}
+      {confirmRow && (
+        <div style={{ position: "fixed" as const, inset: 0, background: "rgba(15,23,42,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
+          onClick={() => setConfirmRow(null)}>
+          <div style={{ background: "#fff", borderRadius: 18, padding: "28px 32px", maxWidth: 440, width: "90%", boxShadow: "0 24px 48px -12px rgba(15,23,42,.35)" }}
+            onClick={e => e.stopPropagation()}>
+            {"ruleId" in confirmRow ? (
+              <>
+                <div style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", marginBottom: 6 }}>Modifier la stratégie de rangement</div>
+                <div style={{ fontSize: 13, color: "#64748b", marginBottom: 20, lineHeight: 1.6 }}>
+                  Destination pour <strong>{confirmRow.productCode}</strong> :<br/>
+                  <span style={{ color: "#7c3aed", fontWeight: 600 }}>{(confirmRow as PutawayRow).ruleLocation}</span>{" → "}<span style={{ color: "#16a34a", fontWeight: 600 }}>{confirmRow.realLocation}</span>
+                </div>
+                <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 10, padding: "11px 14px", fontSize: 12.5, color: "#92400e", marginBottom: 20 }}>
+                  ⚠️ Les transferts de réception <strong>en cours</strong> peuvent encore pointer vers l'ancien emplacement. Vérifiez avant de valider.
+                </div>
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button onClick={() => setConfirmRow(null)} style={{ padding: "9px 18px", borderRadius: 10, border: "1px solid #e2e8f0", background: "#fff", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: "#64748b" }}>Annuler</button>
+                  <button onClick={() => updateRule(confirmRow as PutawayRow)} style={{ padding: "9px 18px", borderRadius: 10, border: "none", background: "#2563eb", color: "#fff", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600 }}>Mettre à jour</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 17, fontWeight: 700, color: "#0f172a", marginBottom: 6 }}>Créer une règle de rangement</div>
+                <div style={{ fontSize: 13, color: "#64748b", marginBottom: 20, lineHeight: 1.6 }}>
+                  <strong>{confirmRow.productCode} — {confirmRow.productName}</strong><br/>
+                  Destination : <span style={{ color: "#16a34a", fontWeight: 600 }}>{confirmRow.realLocation}</span>
+                </div>
+                <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 10, padding: "11px 14px", fontSize: 12.5, color: "#92400e", marginBottom: 20 }}>
+                  ⚠️ Les prochaines réceptions seront automatiquement orientées vers cet emplacement.
+                </div>
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button onClick={() => setConfirmRow(null)} style={{ padding: "9px 18px", borderRadius: 10, border: "1px solid #e2e8f0", background: "#fff", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: "#64748b" }}>Annuler</button>
+                  <button onClick={() => createRule(confirmRow as NoPutawayRow)} style={{ padding: "9px 18px", borderRadius: 10, border: "none", background: "#d97706", color: "#fff", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600 }}>Créer la règle</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      <style>{`@keyframes putaway-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}

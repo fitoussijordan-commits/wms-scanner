@@ -9,7 +9,7 @@ import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
 import SupplierImportScreen from "@/components/SupplierImportScreen";
-import ArticleCreatorScreen, { SeuilsTab, CreationTab, NonVendableTab } from "@/components/ArticleCreatorScreen";
+import ArticleCreatorScreen, { SeuilsTab, CreationTab, NonVendableTab, PutawayTab } from "@/components/ArticleCreatorScreen";
 import FreeScanScreen from "@/components/FreeScanScreen";
 import ReturnsScreen from "@/components/ReturnsScreen";
 import PackingScreen from "@/components/PackingScreen";
@@ -7021,7 +7021,7 @@ function applyMapping(row: any[], headers: string[], mapping: ColMapping): Impor
 }
 
 function ProductImportScreen({ session, onBack, onToast, desktop }: { session: any; onBack: () => void; onToast: (m: string) => void; desktop?: boolean }) {
-  const [tab, setTab] = useState<"import" | "create" | "seuils" | "nonvendable">("import");
+  const [tab, setTab] = useState<"import" | "create" | "seuils" | "nonvendable" | "putaway">("import");
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [checking, setChecking] = useState(false);
   const [currentIdx, setCurrentIdx] = useState<number | null>(null);
@@ -7267,7 +7267,7 @@ function ProductImportScreen({ session, onBack, onToast, desktop }: { session: a
         )}
         <div>
           <div style={{ fontSize: desktop ? 21 : 18, fontWeight: 700, letterSpacing: desktop ? -0.4 : 0, color: desktop ? "#0f172a" : C.text }}>Gestion articles</div>
-          <div style={{ fontSize: desktop ? 13 : 12, color: desktop ? "#64748b" : C.textMuted, marginTop: desktop ? 3 : 0 }}>{fileName || (desktop ? "Import Excel, création, seuils d'alerte et stock non vendable" : "")}</div>
+          <div style={{ fontSize: desktop ? 13 : 12, color: desktop ? "#64748b" : C.textMuted, marginTop: desktop ? 3 : 0 }}>{fileName || (desktop ? "Import Excel, création, seuils d'alerte, stock non vendable et stratégie de rangement" : "")}</div>
         </div>
       </div>
 
@@ -7275,7 +7275,7 @@ function ProductImportScreen({ session, onBack, onToast, desktop }: { session: a
       <div style={desktop
         ? { display: "inline-flex", gap: 4, margin: "6px 0 22px", background: "#fff", border: "1px solid #e8ecf3", borderRadius: 13, padding: 4, boxShadow: "0 1px 2px rgba(15,23,42,.04)" }
         : { display: "flex", gap: 4, marginBottom: 20, background: C.bg, borderRadius: 12, padding: 4 }}>
-        {([["import", "Import Excel"], ["create", "Créer article"], ["seuils", "Seuils d'alerte"], ["nonvendable", "Stock non vendable"]] as const).map(([t, label]) => (
+        {([["import", "Import Excel"], ["create", "Créer article"], ["seuils", "Seuils d'alerte"], ["nonvendable", "Stock non vendable"], ["putaway", "Stratégie de rangement"]] as const).map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)}
             style={desktop
               ? { padding: "9px 18px", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13.5, fontWeight: 600,
@@ -7299,6 +7299,10 @@ function ProductImportScreen({ session, onBack, onToast, desktop }: { session: a
       ) : tab === "nonvendable" ? (
         <div style={desktop ? { maxWidth: 752, margin: "0 0 0 -16px" } : undefined}>
           <NonVendableTab session={session} onToast={onToast} />
+        </div>
+      ) : tab === "putaway" ? (
+        <div style={desktop ? { maxWidth: 960, margin: "0 0 0 -16px" } : undefined}>
+          <PutawayTab session={session} onToast={onToast} />
         </div>
       ) : rows.length === 0 ? (
         // ── Upload zone ──
