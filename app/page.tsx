@@ -1136,8 +1136,12 @@ export default function Page() {
   const stopCameraScanner = () => {
     cameraActiveRef.current = false;
     if (cameraFrameRef.current) { cancelAnimationFrame(cameraFrameRef.current); cameraFrameRef.current = null; }
-    if (cameraScannerRef.current) { try { cameraScannerRef.current.reset(); } catch {} cameraScannerRef.current = null; }
+    // @zxing/browser v0.2 : decodeFromVideoDevice renvoie des "controls" avec .stop()
+    // (il n'y a pas de .reset() — sans ce stop la boucle de décodage tournait en fond
+    //  et renvoyait l'ancien code à la capture suivante)
+    if (cameraScannerRef.current) { try { cameraScannerRef.current.stop(); } catch {} cameraScannerRef.current = null; }
     if (cameraStreamRef.current) { cameraStreamRef.current.getTracks().forEach(t => t.stop()); cameraStreamRef.current = null; }
+    if (cameraVideoRef.current) { try { cameraVideoRef.current.srcObject = null; } catch {} }
     setCameraOpen(false);
   };
 
@@ -1187,8 +1191,7 @@ export default function Page() {
           const { BrowserMultiFormatReader } = await import("@zxing/browser");
           if (!cameraActiveRef.current) return;
           const reader = new BrowserMultiFormatReader();
-          cameraScannerRef.current = reader;
-          await reader.decodeFromVideoDevice(undefined, video, (result) => {
+          const controls = await reader.decodeFromVideoDevice(undefined, video, (result) => {
             if (result && cameraActiveRef.current) {
               const val = result.getText();
               stopCameraScanner();
@@ -1196,6 +1199,9 @@ export default function Page() {
               doLookup(val);
             }
           });
+          // Stocke les controls (et non le reader) : c'est .stop() qui arrête vraiment la boucle
+          if (!cameraActiveRef.current) { try { controls.stop(); } catch {} return; }
+          cameraScannerRef.current = controls;
         } catch {
           showToast("⚠ Impossible d'accéder à la caméra");
           stopCameraScanner();
@@ -1209,8 +1215,9 @@ export default function Page() {
       clearTimeout(t);
       cameraActiveRef.current = false;
       if (cameraFrameRef.current) { cancelAnimationFrame(cameraFrameRef.current); cameraFrameRef.current = null; }
-      if (cameraScannerRef.current) { try { cameraScannerRef.current.reset(); } catch {} cameraScannerRef.current = null; }
+      if (cameraScannerRef.current) { try { cameraScannerRef.current.stop(); } catch {} cameraScannerRef.current = null; }
       if (cameraStreamRef.current) { cameraStreamRef.current.getTracks().forEach(t => t.stop()); cameraStreamRef.current = null; }
+      if (cameraVideoRef.current) { try { cameraVideoRef.current.srcObject = null; } catch {} }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraOpen]);
@@ -2664,7 +2671,7 @@ export default function Page() {
         });
         const label: React.CSSProperties = { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase" as const, color: DK.text3, padding: "12px 12px 4px" };
         return (
-          <aside style={{ position: "fixed", left: 0, top: 0, bottom: 0, width: 248, background: "#fff", borderRight: `1px solid ${DK.border}`, padding: "14px 10px 12px", display: "flex", flexDirection: "column" as const, zIndex: 200, overflowY: "hidden" as const }}>
+          <aside className="dk-sidebar" style={{ position: "fixed", left: 0, top: 0, bottom: 0, width: 248, height: "100vh", maxHeight: "100vh", background: "#fff", borderRight: `1px solid ${DK.border}`, padding: "14px 10px 12px", display: "flex", flexDirection: "column" as const, zIndex: 200, overflowY: "auto" as const, boxSizing: "border-box" as const }}>
             <button onClick={goHome} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 10px 12px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
               <img src={DH_LOGO} alt="Dr. Hauschka" style={{ height: 30, objectFit: "contain" }} />
               <span style={{ fontSize: 9, color: DK.primary, fontWeight: 700, background: "#eef2ff", padding: "2px 6px", borderRadius: 5 }}>WMS</span>
@@ -2700,7 +2707,7 @@ export default function Page() {
               </button>
             )}
 
-            <div style={{ marginTop: "auto", borderTop: `1px solid ${DK.border}`, paddingTop: 12 }}>
+            <div data-footer style={{ marginTop: "auto", borderTop: `1px solid ${DK.border}`, paddingTop: 12, flexShrink: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px 10px" }}>
                 <div style={{ width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg,#2563eb,#7c3aed)", color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   {(session?.name || "?").split(" ").map((p: string) => p[0]).slice(0, 2).join("").toUpperCase()}
@@ -4118,8 +4125,14 @@ function Shell({ children, toast, flash, desktop }: { children: React.ReactNode;
         input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         input[type=number] { -moz-appearance: textfield; }
         /* ── Refonte desktop ── */
-        .dk-nav { transition: background .15s, color .15s; }
+        .dk-nav { transition: background .15s, color .15s; flex-shrink: 0; }
         .dk-nav:hover { background: #f1f5f9 !important; color: #0f172a !important; }
+        /* Sidebar : défile si l'écran est trop court, scrollbar discrète */
+        .dk-sidebar { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+        .dk-sidebar::-webkit-scrollbar { width: 6px; }
+        .dk-sidebar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .dk-sidebar::-webkit-scrollbar-track { background: transparent; }
+        .dk-sidebar > div[data-footer] { flex-shrink: 0; }
         .dk-op { transition: transform .18s, box-shadow .18s; }
         .dk-op:hover { transform: translateY(-3px); box-shadow: 0 4px 8px rgba(15,23,42,.06), 0 16px 32px -8px rgba(15,23,42,.14) !important; }
         .dk-kpi { transition: transform .18s, box-shadow .18s; }
