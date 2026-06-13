@@ -28,6 +28,11 @@ interface Props {
 const calcCounted = (e: WmsInventoryEntry) =>
   (Number(e.colis) || 0) * (Number(e.unitsPerColis) || 0) + (Number(e.vrac) || 0);
 
+// Zones du plan magasin (libellés génériques — PAS des emplacements Odoo).
+// 16 zones cliquables : A (rack gauche), B→I (colonnes Zone B), R1→R7 (rayons picking).
+const ZONE_B = ["B", "C", "D", "E", "F", "G", "H", "I"];
+const ZONE_R = ["R1", "R2", "R3", "R4", "R5", "R6", "R7"];
+
 // ════════════════════════════════════════════════════════════════
 //  VUE 1 — liste des sessions d'inventaire
 // ════════════════════════════════════════════════════════════════
@@ -135,14 +140,19 @@ function SessionList({ onBack, onToast, onOpen }: Props & { onOpen: (s: WmsInven
 function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }: Props & { sess: WmsInventorySession }) {
   const isAdmin = odoo.isAdmin(session);
   const [entries, setEntries] = useState<WmsInventoryEntry[]>(sess.entries || []);
-  const [locInput, setLocInput] = useState("");
-  const [activeLoc, setActiveLoc] = useState<{ id: number; name: string } | null>(null);
+  const [activeAisle, setActiveAisle] = useState("");
   const [scanInput, setScanInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [matching, setMatching] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [showResults, setShowResults] = useState(false);
+  const [flashKey, setFlashKey] = useState<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    if (!flashKey) return;
+    const t = setTimeout(() => setFlashKey(null), 1200);
+    return () => clearTimeout(t);
+  }, [flashKey]);
 
   // Persistance debouncée vers Supabase
   const persist = useCallback((next: WmsInventoryEntry[]) => {
@@ -175,74 +185,42 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
       const packMap = await odoo.getPackagingQtyForProducts(session, [productId]);
       const unitsPerColis = packMap[productId] || 0;
 
-      const locId = sess.mode === "location" ? (activeLoc?.id ?? null) : null;
-      const locName = sess.mode === "location" ? (activeLoc?.name ?? "") : "";
+      const locName = sess.mode === "location" ? activeAisle : "";
 
-      // ligne existante = même produit + même lot + même emplacement
+      // ligne existante = même produit + même lot + même allée
       const idx = entries.findIndex(e =>
-        e.productId === productId && (e.lotId ?? 0) === (lotId ?? 0) && (e.locationId ?? 0) === (locId ?? 0));
-      let next: WmsInventoryEntry[];
+        e.productId === productId && (e.lotId ?? 0) === (lotId ?? 0) && (e.locationName || "") === (locName || ""));
       if (idx >= 0) {
-        next = [...entries];
-        next[idx] = { ...next[idx], vrac: (Number(next[idx].vrac) || 0) + 1 };
-      } else {
-        const e: WmsInventoryEntry = {
-          productId, productName, odooRef, barcode, lotId, lotName,
-          locationId: locId, locationName: locName,
-          colis: 0, unitsPerColis, vrac: 1, counted: 0,
-        };
-        next = [e, ...entries];
+        // la ligne existe déjà → on ne touche PAS aux quantités, on signale juste
+        setFlashKey(`${entries[idx].productId}-${entries[idx].lotId ?? 0}-${entries[idx].locationName || ""}`);
+        onToast(`Déjà dans la liste : ${lotName || odooRef || productName}`, "info");
+        setBusy(false); return;
       }
+      // nouvelle ligne créée à 0 (colis + vrac à saisir au clavier)
+      const e: WmsInventoryEntry = {
+        productId, productName, odooRef, barcode, lotId, lotName,
+        locationId: null, locationName: locName,
+        colis: 0, unitsPerColis, vrac: 0, counted: 0,
+      };
+      const next = [e, ...entries];
       persist(next);
-      onToast(lotName ? `+1 ${lotName}` : `+1 ${odooRef || productName}`, "success");
+      setFlashKey(`${productId}-${lotId ?? 0}-${locName || ""}`);
+      onToast(`Ligne ajoutée : ${lotName || odooRef || productName}`, "success");
     } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
     setBusy(false);
-  }, [session, entries, activeLoc, sess.mode, persist, onToast]);
+  }, [session, entries, activeAisle, sess.mode, persist, onToast]);
 
-  // Scan PDA/caméra routé depuis page.tsx
+  // Scan PDA/caméra routé depuis page.tsx — seulement si une zone est active (mode emplacement)
   useEffect(() => {
-    if (scanCode) { addByCode(scanCode); onScanConsumed?.(); }
+    if (scanCode) {
+      if (sess.mode === "location" && !activeAisle) { onToast("Choisis d'abord une zone sur le plan", "info"); onScanConsumed?.(); return; }
+      addByCode(scanCode); onScanConsumed?.();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanCode]);
 
-  // ── Charger le théorique d'un emplacement (mode allée) → pré-remplit les lignes à compter ──
-  const loadLocation = async () => {
-    const q = locInput.trim();
-    if (!q) return;
-    setBusy(true);
-    try {
-      const locs = await odoo.findLocationsByName(session, q);
-      if (!locs.length) { onToast(`Emplacement "${q}" introuvable`, "error"); setBusy(false); return; }
-      const loc = locs[0];
-      setActiveLoc({ id: loc.id, name: loc.complete_name || loc.name });
-      // pré-charge les produits présents (théorique) pour cet emplacement, à 0 compté
-      const quants = await odoo.getProductsAtLocation(session, loc.id);
-      const productIds = Array.from(new Set(quants.map((qq: any) => qq.product_id[0]))) as number[];
-      const packMap = await odoo.getPackagingQtyForProducts(session, productIds);
-      const preload: WmsInventoryEntry[] = quants.map((qq: any) => ({
-        productId: qq.product_id[0],
-        productName: qq.product_id[1],
-        odooRef: qq.product_ref || "",
-        barcode: qq.product_barcode || "",
-        lotId: qq.lot_id ? qq.lot_id[0] : null,
-        lotName: qq.lot_name || (qq.lot_id ? qq.lot_id[1] : ""),
-        locationId: loc.id,
-        locationName: loc.complete_name || loc.name,
-        colis: 0, unitsPerColis: packMap[qq.product_id[0]] || 0, vrac: 0, counted: 0,
-      }));
-      // fusionne sans écraser les lignes déjà comptées de cet emplacement
-      const existing = entries.filter(e => e.locationId === loc.id);
-      const merged = [...entries];
-      for (const p of preload) {
-        const has = existing.find(e => e.productId === p.productId && (e.lotId ?? 0) === (p.lotId ?? 0));
-        if (!has) merged.unshift(p);
-      }
-      persist(merged);
-      setLocInput("");
-      onToast(`📍 ${loc.complete_name || loc.name} — ${preload.length} réf. à compter`, "info");
-    } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
-    setBusy(false);
-  };
+  // Compte de lignes par zone (pour le statut de couleur sur le plan)
+  const countByZone = (zone: string) => entries.filter(e => e.locationName === zone).length;
 
   const updateField = (i: number, field: "colis" | "unitsPerColis" | "vrac", val: string) => {
     const n = Math.max(0, Number(val) || 0);
@@ -266,7 +244,6 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
         matchedAt: new Date().toISOString(),
       }));
       persist(next);
-      setShowResults(true);
       onToast("Matching effectué ✓", "success");
     } catch (e: any) { onToast("Erreur matching : " + e.message, "error"); }
     setMatching(false);
@@ -363,7 +340,7 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
   const totalCounted = entries.reduce((n, e) => n + calcCounted(e), 0);
 
   return (
-    <div style={{ padding: "16px 14px 100px", maxWidth: 980, margin: "0 auto", fontFamily: "'DM Sans', sans-serif" }}>
+    <div style={{ padding: "14px 12px 110px", maxWidth: 980, margin: "0 auto", fontFamily: "'DM Sans', sans-serif" }}>
       {/* En-tête */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
         <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
@@ -382,23 +359,25 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
         </button>
       </div>
 
-      {/* Mode emplacement : charger une allée */}
-      {sess.mode === "location" && (
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 12, boxShadow: C.shadow }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Allée / emplacement à compter</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input value={locInput} onChange={e => setLocInput(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") loadLocation(); }}
-              placeholder="Nom ou code d'emplacement (ex: A-01)"
-              style={{ flex: 1, padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.bg }} />
-            <button onClick={loadLocation} disabled={busy}
-              style={{ padding: "0 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: busy ? 0.6 : 1 }}>Charger</button>
-          </div>
-          {activeLoc && <div style={{ marginTop: 8, fontSize: 13, color: C.blue, fontWeight: 600 }}>📍 Emplacement actif : {activeLoc.name}</div>}
+      {/* Mode emplacement, aucune zone choisie → PLAN CLIQUABLE plein écran */}
+      {sess.mode === "location" && !activeAisle && (
+        <WarehousePlan countByZone={countByZone} onPick={z => setActiveAisle(z)} />
+      )}
+
+      {/* Mode emplacement, zone active → bandeau zone + bouton retour plan */}
+      {sess.mode === "location" && activeAisle && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: C.blueSoft, border: `1.5px solid ${C.blue}`, borderRadius: 12, padding: "10px 14px", marginBottom: 12 }}>
+          <button onClick={() => setActiveAisle("")} style={{ background: C.white, border: `1px solid ${C.blue}`, color: C.blue, borderRadius: 8, padding: "6px 10px", fontWeight: 700, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+            Plan
+          </button>
+          <div style={{ fontSize: 15, fontWeight: 800, color: C.blue }}>Zone {activeAisle}</div>
+          <div style={{ fontSize: 12, color: C.textSec, marginLeft: "auto" }}>{countByZone(activeAisle)} ligne{countByZone(activeAisle) > 1 ? "s" : ""}</div>
         </div>
       )}
 
-      {/* Scan manuel (complément au PDA/caméra) */}
+      {/* Scan manuel — caché tant qu'aucune zone n'est choisie en mode emplacement */}
+      {!(sess.mode === "location" && !activeAisle) && (
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 14, boxShadow: C.shadow }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Scanner un lot / une référence</div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -410,9 +389,10 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
             style={{ padding: "0 16px", background: C.purple, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: busy ? 0.6 : 1 }}>+ Ajouter</button>
         </div>
       </div>
+      )}
 
-      {/* Boutons matching / corrections */}
-      {entries.length > 0 && (
+      {/* Boutons matching / corrections — masqués sur l'écran plan */}
+      {!(sess.mode === "location" && !activeAisle) && entries.length > 0 && (
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
           <button onClick={runMatching} disabled={matching}
             style={{ flex: 1, minWidth: 160, padding: "12px", background: C.amber, color: "#fff", border: "none", borderRadius: 11, fontWeight: 800, fontSize: 14, cursor: "pointer", opacity: matching ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
@@ -429,7 +409,7 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
       )}
 
       {/* Bandeau résultats matching */}
-      {matchedCount > 0 && (
+      {!(sess.mode === "location" && !activeAisle) && matchedCount > 0 && (
         <div style={{ display: "flex", gap: 8, marginBottom: 12, fontSize: 12 }}>
           <span style={{ background: C.greenSoft, color: "#16a34a", borderRadius: 8, padding: "5px 10px", fontWeight: 700 }}>✓ {matchedCount - ecartCount} OK</span>
           <span style={{ background: C.redSoft, color: C.red, borderRadius: 8, padding: "5px 10px", fontWeight: 700 }}>⚠ {ecartCount} écart{ecartCount > 1 ? "s" : ""}</span>
@@ -437,20 +417,30 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
         </div>
       )}
 
-      {/* Lignes */}
-      {entries.length === 0 ? (
-        <div style={{ textAlign: "center", color: C.textMuted, padding: 40, fontSize: 14 }}>
-          {sess.mode === "location" ? "Charge un emplacement ou scanne un lot pour démarrer" : "Scanne un lot ou une référence pour démarrer"}
-        </div>
-      ) : entries.map((e, i) => {
+      {/* Lignes — filtrées sur la zone active en mode emplacement (index réel conservé) */}
+      {!(sess.mode === "location" && !activeAisle) && (
+        (() => {
+          const visible = entries
+            .map((e, i) => ({ e, i }))
+            .filter(({ e }) => sess.mode !== "location" || e.locationName === activeAisle);
+          if (visible.length === 0) {
+            return (
+              <div style={{ textAlign: "center", color: C.textMuted, padding: 40, fontSize: 14 }}>
+                {sess.mode === "location" ? `Scanne un lot pour l'ajouter à la zone ${activeAisle}` : "Scanne un lot ou une référence pour démarrer"}
+              </div>
+            );
+          }
+          return visible.map(({ e, i }) => {
         const counted = calcCounted(e);
         const hasMatch = !!e.matchedAt;
         const d = hasMatch ? counted - (e.theoretical ?? 0) : 0;
-        const bg = !hasMatch ? C.white : d === 0 ? C.greenSoft : C.redSoft;
-        const bd = !hasMatch ? C.border : d === 0 ? "#bbf7d0" : "#fecaca";
+        const lineKey = `${e.productId}-${e.lotId ?? 0}-${e.locationName || ""}`;
+        const isFlash = flashKey === lineKey;
+        const bg = isFlash ? "#fef9c3" : !hasMatch ? C.white : d === 0 ? C.greenSoft : C.redSoft;
+        const bd = isFlash ? "#facc15" : !hasMatch ? C.border : d === 0 ? "#bbf7d0" : "#fecaca";
         return (
-          <div key={`${e.productId}-${e.lotId ?? 0}-${e.locationId ?? 0}-${i}`}
-            style={{ background: bg, border: `1px solid ${bd}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
+          <div key={`${lineKey}-${i}`}
+            style={{ background: bg, border: `1px solid ${bd}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8, transition: "background .3s, border-color .3s" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis" }}>{e.productName}</div>
@@ -466,16 +456,18 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
               </button>
             </div>
 
-            {/* Saisie colis + vrac */}
-            <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
-              <Field label="Colis" value={e.colis} onChange={v => updateField(i, "colis", v)} />
-              <span style={{ color: C.textMuted, paddingBottom: 8 }}>×</span>
-              <Field label="U./colis" value={e.unitsPerColis} onChange={v => updateField(i, "unitsPerColis", v)} highlight={!e.unitsPerColis} />
-              <span style={{ color: C.textMuted, paddingBottom: 8 }}>+</span>
-              <Field label="Vrac" value={e.vrac} onChange={v => updateField(i, "vrac", v)} />
-              <div style={{ marginLeft: "auto", textAlign: "right", paddingBottom: 2 }}>
-                <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700 }}>TOTAL COMPTÉ</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{counted}</div>
+            {/* Saisie colis + vrac (tactile PDA) */}
+            <div style={{ display: "flex", gap: 6, marginTop: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+                <Field label="Colis" value={e.colis} onChange={v => updateField(i, "colis", v)} />
+                <span style={{ color: C.textMuted, paddingBottom: 9, fontSize: 14 }}>×</span>
+                <Field label="U./colis" value={e.unitsPerColis} onChange={v => updateField(i, "unitsPerColis", v)} highlight={!e.unitsPerColis} />
+                <span style={{ color: C.textMuted, paddingBottom: 9, fontSize: 14 }}>+</span>
+                <Field label="Vrac" value={e.vrac} onChange={v => updateField(i, "vrac", v)} />
+              </div>
+              <div style={{ textAlign: "right", paddingBottom: 2, minWidth: 70 }}>
+                <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700 }}>TOTAL</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: C.text }}>{counted}</div>
               </div>
             </div>
 
@@ -496,18 +488,87 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
             )}
           </div>
         );
-      })}
+          });
+        })()
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Plan magasin cliquable (SVG) — 16 zones avec couleur de statut
+// ════════════════════════════════════════════════════════════════
+function WarehousePlan({ countByZone, onPick }: { countByZone: (z: string) => number; onPick: (z: string) => void }) {
+  const fill = (z: string) => (countByZone(z) > 0 ? "#bbf7d0" : "#e5e7eb");
+  const stroke = (z: string) => (countByZone(z) > 0 ? "#16a34a" : "#94a3b8");
+  const txt = (z: string) => (countByZone(z) > 0 ? "#15803d" : "#475569");
+
+  const Zone = ({ x, y, w, h, z, label }: { x: number; y: number; w: number; h: number; z: string; label?: string }) => {
+    const n = countByZone(z);
+    return (
+      <g style={{ cursor: "pointer" }} onClick={() => onPick(z)}>
+        <rect x={x} y={y} width={w} height={h} rx={6} fill={fill(z)} stroke={stroke(z)} strokeWidth={1.5} />
+        <text x={x + w / 2} y={y + h / 2 - (n > 0 ? 5 : 0)} textAnchor="middle" dominantBaseline="middle" fontSize={15} fontWeight={800} fill={txt(z)}>{label ?? z}</text>
+        {n > 0 && <text x={x + w / 2} y={y + h / 2 + 13} textAnchor="middle" dominantBaseline="middle" fontSize={10} fontWeight={700} fill={txt(z)}>{n} ligne{n > 1 ? "s" : ""}</text>}
+      </g>
+    );
+  };
+
+  return (
+    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, marginBottom: 14, boxShadow: C.shadow }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>Plan magasin — clique une zone à compter</div>
+        <div style={{ display: "flex", gap: 12, fontSize: 11, color: C.textMuted }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "#e5e7eb", border: "1px solid #94a3b8", display: "inline-block" }} /> à faire</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "#bbf7d0", border: "1px solid #16a34a", display: "inline-block" }} /> comptée</span>
+        </div>
+      </div>
+      <svg viewBox="0 0 560 360" style={{ width: "100%", height: "auto", display: "block" }} fontFamily="'DM Sans', sans-serif">
+        {/* === ZONE B — racks de stockage (haut) : colonnes B..I === */}
+        <text x={280} y={16} textAnchor="middle" fontSize={12} fontWeight={800} fill={C.text}>ZONE B — Rack de stockage</text>
+        {ZONE_B.map((z, k) => {
+          const rack = Math.floor(k / 2);
+          const inRack = k % 2;
+          const x = 78 + rack * 120 + inRack * 52;
+          return <Zone key={z} x={x} y={24} w={48} h={66} z={z} />;
+        })}
+
+        {/* === ZONE A — rack gauche === */}
+        <text x={42} y={132} textAnchor="middle" fontSize={11} fontWeight={800} fill={C.text}>ZONE A</text>
+        <Zone x={14} y={140} w={56} h={110} z="A" />
+
+        {/* === ZONE C — rayons picking R1..R7 === */}
+        <text x={310} y={132} textAnchor="middle" fontSize={12} fontWeight={800} fill={C.text}>ZONE C — Rayons picking</text>
+        {ZONE_R.map((z, k) => {
+          const perRow = 4;
+          const row = Math.floor(k / perRow);
+          const col = k % perRow;
+          const x = 90 + col * 112;
+          const y = 150 + row * 92;
+          return <Zone key={z} x={x} y={y} w={96} h={74} z={z} />;
+        })}
+      </svg>
     </div>
   );
 }
 
 function Field({ label, value, onChange, highlight }: { label: string; value: number; onChange: (v: string) => void; highlight?: boolean }) {
+  const stepBtn: React.CSSProperties = {
+    width: 34, height: 38, border: `1.5px solid ${highlight ? "#fdba74" : "#e5e7eb"}`, background: highlight ? "#fff7ed" : "#f8fafc",
+    color: "#1a1a2e", fontSize: 20, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", userSelect: "none", fontFamily: "inherit",
+  };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       <span style={{ fontSize: 10, color: highlight ? "#ea580c" : "#6b7280", fontWeight: 700 }}>{label}</span>
-      <input type="number" inputMode="numeric" value={value || ""} onChange={e => onChange(e.target.value)}
-        onFocus={e => e.target.select()}
-        style={{ width: 64, padding: "7px 8px", border: `1.5px solid ${highlight ? "#fdba74" : "#e5e7eb"}`, borderRadius: 8, fontSize: 15, fontWeight: 700, textAlign: "center", fontFamily: "inherit", background: highlight ? "#fff7ed" : "#fff", color: "#1a1a2e" }} />
+      <div style={{ display: "flex", alignItems: "stretch" }}>
+        <button type="button" onClick={() => onChange(String(Math.max(0, (Number(value) || 0) - 1)))}
+          style={{ ...stepBtn, borderRight: "none", borderRadius: "8px 0 0 8px" }}>−</button>
+        <input type="number" inputMode="numeric" value={value || ""} onChange={e => onChange(e.target.value)}
+          onFocus={e => e.target.select()}
+          style={{ width: 54, padding: "7px 4px", border: `1.5px solid ${highlight ? "#fdba74" : "#e5e7eb"}`, fontSize: 16, fontWeight: 700, textAlign: "center", fontFamily: "inherit", background: highlight ? "#fff7ed" : "#fff", color: "#1a1a2e", MozAppearance: "textfield" as any }} />
+        <button type="button" onClick={() => onChange(String((Number(value) || 0) + 1))}
+          style={{ ...stepBtn, borderLeft: "none", borderRadius: "0 8px 8px 0" }}>+</button>
+      </div>
     </div>
   );
 }
