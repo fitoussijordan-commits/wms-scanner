@@ -3099,3 +3099,98 @@ export async function saveProductQuickEdit(session: OdooSession, params: {
   }
   return true;
 }
+
+// ============================================
+// INVENTAIRE TOURNANT
+// ============================================
+
+// Unités par colis (product.packaging.qty) pour une liste de produits.
+// Retourne un map productId -> qty (la plus grande quantité de packaging trouvée).
+export async function getPackagingQtyForProducts(
+  session: OdooSession,
+  productIds: number[]
+): Promise<Record<number, number>> {
+  const out: Record<number, number> = {};
+  if (!productIds.length) return out;
+  try {
+    const packs = await searchRead(
+      session, "product.packaging",
+      [["product_id", "in", productIds], ["qty", ">", 0]],
+      ["product_id", "qty"],
+      1000
+    );
+    for (const p of packs) {
+      const pid = Array.isArray(p.product_id) ? p.product_id[0] : p.product_id;
+      const q = Number(p.qty) || 0;
+      // garde la plus grande (colis le plus représentatif)
+      if (q > 0 && (!out[pid] || q > out[pid])) out[pid] = q;
+    }
+  } catch {
+    // product.packaging peut être indisponible selon la config → pas bloquant
+  }
+  return out;
+}
+
+// Emplacement(s) internes correspondant à un nom/code d'allée (recherche partielle).
+export async function findLocationsByName(session: OdooSession, query: string): Promise<any[]> {
+  const q = query.trim();
+  if (!q) return [];
+  // exact barcode d'abord
+  const byBc = await searchRead(
+    session, "stock.location",
+    [["barcode", "=", q], ["usage", "=", "internal"]],
+    ["id", "name", "complete_name", "barcode"], 5
+  );
+  if (byBc.length) return byBc;
+  // sinon recherche par nom complet (ilike) — utile pour "Allée A", "A-", etc.
+  return searchRead(
+    session, "stock.location",
+    ["|", ["complete_name", "ilike", q], ["name", "ilike", q], ["usage", "=", "internal"]],
+    ["id", "name", "complete_name", "barcode"], 50, "complete_name"
+  );
+}
+
+// Théorique pour une liste de combinaisons (produit/lot/emplacement).
+// Retourne pour chaque clé: { quantId, theoretical } d'après stock.quant temps réel.
+export interface TheoreticalRow { productId: number; lotId: number | null; locationId: number | null; quantId: number | null; theoretical: number; }
+
+export async function getInventoryTheoretical(
+  session: OdooSession,
+  keys: { productId: number; lotId: number | null; locationId: number | null }[]
+): Promise<TheoreticalRow[]> {
+  if (!keys.length) return [];
+  const productIds = Array.from(new Set(keys.map(k => k.productId)));
+  // On récupère tous les quants internes des produits concernés en une requête
+  const quants = await searchRead(
+    session, "stock.quant",
+    [["product_id", "in", productIds], ["location_id.usage", "=", "internal"]],
+    ["id", "product_id", "lot_id", "location_id", "quantity"],
+    2000
+  );
+  const qKey = (pid: number, lot: number | null, loc: number | null) => `${pid}|${lot ?? 0}|${loc ?? 0}`;
+  // Map scommande exacte produit+lot+emplacement
+  const exact: Record<string, { quantId: number; qty: number }> = {};
+  // Agrégat produit+lot (tous emplacements) pour le mode scan libre (locationId null)
+  const byProdLot: Record<string, { quantId: number; qty: number }> = {};
+  for (const q of quants) {
+    const pid = Array.isArray(q.product_id) ? q.product_id[0] : q.product_id;
+    const lot = q.lot_id ? (Array.isArray(q.lot_id) ? q.lot_id[0] : q.lot_id) : null;
+    const loc = q.location_id ? (Array.isArray(q.location_id) ? q.location_id[0] : q.location_id) : null;
+    const qty = Number(q.quantity) || 0;
+    exact[qKey(pid, lot, loc)] = { quantId: q.id, qty };
+    const plKey = `${pid}|${lot ?? 0}`;
+    if (!byProdLot[plKey]) byProdLot[plKey] = { quantId: q.id, qty: 0 };
+    byProdLot[plKey].qty += qty;
+    // garde le quant avec le plus de stock comme cible de correction par défaut
+    if (qty > exact[qKey(pid, lot, loc)].qty - 1) byProdLot[plKey].quantId = q.id;
+  }
+  return keys.map(k => {
+    if (k.locationId != null) {
+      const hit = exact[qKey(k.productId, k.lotId, k.locationId)];
+      return { ...k, quantId: hit?.quantId ?? null, theoretical: hit?.qty ?? 0 };
+    }
+    // mode scan libre : somme sur tous les emplacements pour ce produit+lot
+    const hit = byProdLot[`${k.productId}|${k.lotId ?? 0}`];
+    return { ...k, quantId: hit?.quantId ?? null, theoretical: hit?.qty ?? 0 };
+  });
+}

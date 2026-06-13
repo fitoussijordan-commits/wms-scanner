@@ -11,6 +11,7 @@ import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/co
 import SupplierImportScreen from "@/components/SupplierImportScreen";
 import ArticleCreatorScreen, { SeuilsTab, CreationTab, NonVendableTab, PutawayTab } from "@/components/ArticleCreatorScreen";
 import FreeScanScreen from "@/components/FreeScanScreen";
+import InventoryCountScreen from "@/components/InventoryCountScreen";
 import ReturnsScreen from "@/components/ReturnsScreen";
 import PackingScreen from "@/components/PackingScreen";
 import OrderScreen from "@/components/OrderScreen";
@@ -1081,7 +1082,7 @@ export default function Page() {
     setIsDark(val);
   };
 
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount">("login");
 
   // ── UI desktop (refonte) : ≥1024px ET non tactile — le PDA garde l'UI actuelle ──
   const [isDesktopUI, setIsDesktopUI] = useState(false);
@@ -1256,6 +1257,7 @@ export default function Page() {
   // Refs so doPrepScan always reads current values (avoids stale closure)
   const prepStepRef = useRef<typeof prepStep>(null);
   const paletteScanRef = useRef<((code: string) => void) | null>(null);
+  const [inventoryScanCode, setInventoryScanCode] = useState<string | null>(null);
   const pickingMoveLinesRef = useRef<any[]>([]);
   const selectedPickingRef = useRef<any>(null);
 
@@ -1383,6 +1385,9 @@ export default function Page() {
     }
     else if (screen === "palettes") {
       if (paletteScanRef.current) paletteScanRef.current(code);
+    }
+    else if (screen === "inventoryCount") {
+      setInventoryScanCode(code);
     }
     setTimeout(() => {
       document.querySelectorAll("input").forEach((el) => {
@@ -2638,6 +2643,7 @@ export default function Page() {
   const toolItems = [
     { key: "inventory", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>, label: "Ajustement", onClick: () => setScreen("inventory"), admin: false, badge: null as number | null, badgeColor: "" },
     { key: "freeScan", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="3" y="17" width="5" height="5" rx="1"/><line x1="12" y1="5" x2="21" y2="5"/><line x1="12" y1="12" x2="21" y2="12"/><line x1="12" y1="19" x2="21" y2="19"/></svg>, label: "Scan libre", onClick: () => setScreen("freeScan"), admin: false, badge: null, badgeColor: "" },
+    { key: "inventoryCount", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 2h6a1 1 0 011 1v1a1 1 0 01-1 1H9a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><path d="M9 13l2 2 4-4"/></svg>, label: "Inventaire", onClick: () => setScreen("inventoryCount"), admin: false, badge: null, badgeColor: "" },
     { key: "returns", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Retours", onClick: () => setScreen("returns"), admin: false, badge: badgeReturns, badgeColor: "#ea580c" },
     { key: "productImport", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Gestion articles", onClick: () => setScreen("productImport"), admin: false, badge: null, badgeColor: "" },
     { key: "supplierImport", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>, label: "Import WALA", onClick: () => setScreen("supplierImport"), admin: true, badge: null, badgeColor: "" },
@@ -3522,6 +3528,9 @@ export default function Page() {
         )}
         {screen === "freeScan" && session && (
           <FreeScanScreen session={session} onBack={goHome} onToast={showToast} />
+        )}
+        {screen === "inventoryCount" && session && (
+          <InventoryCountScreen session={session} onBack={goHome} onToast={showToast} scanCode={inventoryScanCode} onScanConsumed={() => setInventoryScanCode(null)} />
         )}
         {screen === "returns" && session && (
           <ReturnsScreen session={session} onBack={goHome} onToast={showToast} />

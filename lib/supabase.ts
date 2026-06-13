@@ -250,6 +250,85 @@ export async function deleteScanSession(id: string): Promise<void> {
 }
 
 // ══════════════════════════════════════════
+// INVENTAIRE TOURNANT (cross-device)
+// ══════════════════════════════════════════
+
+// Une ligne comptée. Le théorique Odoo est rapatriré au moment du "matching".
+export interface WmsInventoryEntry {
+  // Identité produit / lot comptés
+  productId: number;
+  productName: string;
+  odooRef: string;          // default_code
+  barcode: string;
+  lotId: number | null;
+  lotName: string;          // "" si pas de lot
+  locationId: number | null;
+  locationName: string;     // "" si mode scan libre
+  // Saisie
+  colis: number;            // nombre de colis
+  unitsPerColis: number;    // unités par colis (product.packaging.qty), 0 si inconnu
+  vrac: number;             // unités en vrac
+  // Calculé / matching (rempli au moment du matching)
+  counted: number;          // colis * unitsPerColis + vrac
+  theoretical?: number;     // stock Odoo au moment du matching
+  quantId?: number | null;  // id du stock.quant correspondant (pour appliquer la correction)
+  matchedAt?: string;       // ISO date du dernier matching
+}
+
+export interface WmsInventorySession {
+  id: string;
+  name: string;
+  date: string;
+  mode: "location" | "scan";
+  status: "open" | "closed";
+  entries: WmsInventoryEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+export async function loadInventorySessions(): Promise<WmsInventorySession[]> {
+  const { data, error } = await sb
+    .from("wms_inventory_sessions")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw new Error(error.message);
+  return (data || []) as WmsInventorySession[];
+}
+
+export async function createInventorySession(name: string, mode: "location" | "scan"): Promise<WmsInventorySession> {
+  const date = new Date().toISOString().slice(0, 10);
+  const { data, error } = await sb
+    .from("wms_inventory_sessions")
+    .insert({ name, date, mode, entries: [] })
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data as WmsInventorySession;
+}
+
+export async function updateInventoryEntries(id: string, entries: WmsInventoryEntry[]): Promise<void> {
+  const { error } = await sb
+    .from("wms_inventory_sessions")
+    .update({ entries, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function setInventoryStatus(id: string, status: "open" | "closed"): Promise<void> {
+  const { error } = await sb
+    .from("wms_inventory_sessions")
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteInventorySession(id: string): Promise<void> {
+  const { error } = await sb.from("wms_inventory_sessions").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // NOTIFICATIONS (cloche header — partagées entre postes)
 // ══════════════════════════════════════════
 
