@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WMS — Refonte accueil (maquette)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f4f6fb; --surface:#ffffff; --border:#e8ecf3;
+    --text:#0f172a; --text2:#64748b; --text3:#94a3b8;
+    --primary:#2563eb;
+    --transfert:#2563eb; --prep:#7c3aed; --attente:#f59e0b;
+    --emballage:#0d9488; --arrivage:#059669; --eshop:#db2777;
+    --danger:#ef4444; --retours:#ea580c;
+    --shadow:0 1px 2px rgba(15,23,42,.04),0 8px 24px -8px rgba(15,23,42,.08);
+    --shadow-hover:0 4px 8px rgba(15,23,42,.06),0 16px 32px -8px rgba(15,23,42,.14);
+    --radius:16px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+
+  /* ───── Layout ───── */
+  .shell{display:grid;grid-template-columns:248px 1fr;min-height:100vh}
+
+  /* ───── Sidebar ───── */
+  aside{background:var(--surface);border-right:1px solid var(--border);padding:20px 14px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh}
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 10px 20px}
+  .brand .logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,#0f172a,#334155);color:#fff;display:grid;place-items:center;font-weight:800;font-size:13px;letter-spacing:.5px}
+  .brand b{font-size:15px;font-weight:700;display:block;line-height:1.2}
+  .brand span{font-size:11px;color:var(--text3);font-weight:500}
+  .nav-label{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);padding:14px 10px 6px}
+  .nav-item{display:flex;align-items:center;gap:11px;padding:9.5px 10px;border-radius:10px;font-size:13.5px;font-weight:500;color:var(--text2);cursor:pointer;transition:all .15s;position:relative;text-decoration:none}
+  .nav-item:hover{background:var(--bg);color:var(--text)}
+  .nav-item.active{background:#eef2ff;color:var(--primary);font-weight:600}
+  .nav-item svg{width:18px;height:18px;flex-shrink:0}
+  .nav-item .badge{margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:10px;font-size:11px;font-weight:700;color:#fff;display:grid;place-items:center}
+  .sidebar-foot{margin-top:auto;border-top:1px solid var(--border);padding-top:12px}
+  .user{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;cursor:pointer}
+  .user:hover{background:var(--bg)}
+  .avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center}
+  .user b{font-size:13px;font-weight:600;display:block}
+  .user span{font-size:11px;color:#10b981;font-weight:500;display:flex;align-items:center;gap:4px}
+  .dot{width:6px;height:6px;border-radius:50%;background:#10b981;display:inline-block}
+
+  /* ───── Main ───── */
+  main{padding:28px 36px 48px;max-width:1280px;width:100%;margin:0 auto}
+  .topline{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
+  .topline h1{font-size:21px;font-weight:700;letter-spacing:-.02em}
+  .topline p{font-size:13px;color:var(--text2);margin-top:3px}
+  .top-actions{display:flex;gap:10px;align-items:center}
+  .icon-btn{width:38px;height:38px;border-radius:11px;background:var(--surface);border:1px solid var(--border);display:grid;place-items:center;cursor:pointer;color:var(--text2);transition:all .15s;position:relative}
+  .icon-btn:hover{color:var(--text);box-shadow:var(--shadow)}
+  .icon-btn .ping{position:absolute;top:8px;right:9px;width:7px;height:7px;border-radius:50%;background:var(--danger);border:1.5px solid #fff}
+
+  /* ───── KPI strip ───── */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:26px}
+  .kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;display:flex;align-items:center;gap:14px;box-shadow:var(--shadow);cursor:pointer;transition:all .18s}
+  .kpi:hover{transform:translateY(-2px);box-shadow:var(--shadow-hover)}
+  .kpi .ico{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;flex-shrink:0}
+  .kpi .num{font-size:24px;font-weight:800;letter-spacing:-.03em;line-height:1}
+  .kpi .lbl{font-size:11.5px;font-weight:600;color:var(--text2);margin-top:4px;text-transform:uppercase;letter-spacing:.04em}
+  .kpi .trend{margin-left:auto;font-size:11px;font-weight:600;padding:3px 8px;border-radius:8px}
+
+  /* ───── Search hero ───── */
+  .search-hero{background:linear-gradient(120deg,#0f172a 0%,#1e2a4a 60%,#26335c 100%);border-radius:20px;padding:26px 28px;margin-bottom:26px;color:#fff;position:relative;overflow:hidden;box-shadow:0 12px 32px -12px rgba(15,23,42,.4)}
+  .search-hero::after{content:"";position:absolute;right:-60px;top:-80px;width:280px;height:280px;border-radius:50%;background:radial-gradient(circle,rgba(37,99,235,.35),transparent 70%)}
+  .search-hero h2{font-size:16px;font-weight:700;display:flex;align-items:center;gap:9px}
+  .search-hero p{font-size:12.5px;color:#94a3b8;margin:3px 0 14px}
+  .search-row{display:flex;gap:10px;position:relative;z-index:1}
+  .search-input{flex:1;display:flex;align-items:center;gap:11px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:13px;padding:0 16px;height:50px;transition:all .15s}
+  .search-input:focus-within{background:rgba(255,255,255,.13);border-color:rgba(255,255,255,.35)}
+  .search-input svg{color:#94a3b8;flex-shrink:0}
+  .search-input input{flex:1;background:none;border:none;outline:none;color:#fff;font-size:14.5px;font-family:inherit}
+  .search-input input::placeholder{color:#7c8aa5}
+  .search-input kbd{font-family:inherit;font-size:11px;color:#94a3b8;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:3px 7px}
+  .btn-scan{height:50px;padding:0 20px;border-radius:13px;border:none;background:var(--primary);color:#fff;font-size:14px;font-weight:600;font-family:inherit;display:flex;align-items:center;gap:9px;cursor:pointer;transition:all .15s}
+  .btn-scan:hover{background:#1d4ed8;transform:translateY(-1px)}
+  .btn-cam{width:50px;height:50px;border-radius:13px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#cbd5e1;display:grid;place-items:center;cursor:pointer;transition:all .15s}
+  .btn-cam:hover{background:rgba(255,255,255,.14)}
+
+  /* ───── Sections ───── */
+  .section-title{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin:0 0 12px 2px;display:flex;align-items:center;gap:8px}
+  .grid-2col{display:grid;grid-template-columns:1fr 360px;gap:26px;align-items:start}
+
+  /* Opérations */
+  .ops{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:28px}
+  .op{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;cursor:pointer;transition:all .18s;box-shadow:var(--shadow);position:relative;overflow:hidden}
+  .op::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--op-c);opacity:0;transition:opacity .18s}
+  .op:hover{transform:translateY(-3px);box-shadow:var(--shadow-hover);border-color:transparent}
+  .op:hover::before{opacity:1}
+  .op .head{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px}
+  .op .ico{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;background:var(--op-bg);color:var(--op-c)}
+  .op .badge{min-width:24px;height:24px;padding:0 7px;border-radius:12px;background:var(--op-c);color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center}
+  .op .live{width:8px;height:8px;border-radius:50%;background:var(--op-c);margin-top:8px;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .op h3{font-size:15px;font-weight:700;letter-spacing:-.01em}
+  .op p{font-size:12px;color:var(--text2);margin-top:3px;line-height:1.45}
+
+  /* Outils */
+  .tools{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  .tool{background:var(--surface);border:1px solid var(--border);border-radius:13px;padding:14px 10px;display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;transition:all .15s;position:relative}
+  .tool:hover{box-shadow:var(--shadow);transform:translateY(-2px);border-color:#d8dfe9}
+  .tool svg{color:var(--text2)}
+  .tool span{font-size:11.5px;font-weight:600;color:var(--text2);text-align:center}
+  .tool:hover span,.tool:hover svg{color:var(--text)}
+  .tool .mini-badge{position:absolute;top:8px;right:8px;min-width:18px;height:18px;border-radius:9px;font-size:10px;font-weight:700;color:#fff;display:grid;place-items:center;padding:0 5px}
+
+  /* ───── Panneau activité ───── */
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+  .panel-head{padding:16px 18px 12px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
+  .panel-head h3{font-size:13.5px;font-weight:700;display:flex;align-items:center;gap:8px}
+  .panel-head .refresh{font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px}
+  .flow{padding:14px 18px;display:flex;flex-direction:column;gap:2px}
+  .flow-step{display:flex;gap:13px;position:relative;padding-bottom:16px}
+  .flow-step:last-child{padding-bottom:4px}
+  .flow-step::before{content:"";position:absolute;left:14px;top:30px;bottom:0;width:2px;background:var(--border)}
+  .flow-step:last-child::before{display:none}
+  .flow-ico{width:29px;height:29px;border-radius:9px;display:grid;place-items:center;flex-shrink:0;z-index:1;font-size:13px}
+  .flow-body{flex:1;min-width:0}
+  .flow-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+  .flow-top b{font-size:12.5px;font-weight:700}
+  .flow-top .n{font-size:17px;font-weight:800;letter-spacing:-.02em}
+  .chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+  .chip{font-size:10.5px;font-weight:600;color:var(--text2);background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:3.5px 8px;cursor:pointer;transition:all .12s}
+  .chip:hover{border-color:#c7d2e3;color:var(--text)}
+  .chip.more{background:none;border-style:dashed}
+  .panel-foot{padding:11px 18px;background:#fafbfd;border-top:1px solid var(--border);font-size:10.5px;color:var(--text3);display:flex;align-items:center;gap:6px}
+  .alert-strip{margin:0 18px 16px;background:#fef2f2;border:1px solid #fecaca;border-radius:11px;padding:11px 13px;display:flex;align-items:center;gap:10px;cursor:pointer}
+  .alert-strip b{font-size:12px;color:#b91c1c}
+  .alert-strip span{font-size:11px;color:#dc2626}
+  .alert-strip .go{margin-left:auto;color:#b91c1c}
+
+  @media (max-width:1100px){
+    .shell{grid-template-columns:1fr}
+    aside{display:none}
+    .grid-2col{grid-template-columns:1fr}
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .ops{grid-template-columns:repeat(2,1fr)}
+    .tools{grid-template-columns:repeat(3,1fr)}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- ═══════════ SIDEBAR ═══════════ -->
+  <aside>
+    <div class="brand">
+      <div class="logo">DH</div>
+      <div><b>Dr. Hauschka</b><span>WMS · Entrepôt</span></div>
+    </div>
+
+    <div class="nav-label">Opérations</div>
+    <a class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Accueil</a>
+    <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>Transfert</a>
+    <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="1" y="3" width="15" height="13" rx="1"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>Préparation<span class="badge" style="background:var(--prep)">2</span></a>
+    <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/></svg>Emballage<span class="badge" style="background:var(--emballage)">7</span></a>
+    <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>E-shop<span class="badge" style="background:var(--eshop)">10</span></a>
+    <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>Arrivage</a>
+
+    <div class="nav-label">Outils</div>
+    <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>Ajustement</a>
+    <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>Retours</a>
+    <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>Stock négatif<span class="badge" style="background:var(--danger)">4</span></a>
+    <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>Dashboard</a>
+
+    <div class="sidebar-foot">
+      <div class="user">
+        <div class="avatar">JF</div>
+        <div><b>Jordan Fitoussi</b><span><i class="dot"></i>En ligne</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══════════ MAIN ═══════════ -->
+  <main>
+    <div class="topline">
+      <div>
+        <h1>Bonjour Jordan 👋</h1>
+        <p>Jeudi 11 juin · voici l'activité de l'entrepôt ce matin</p>
+      </div>
+      <div class="top-actions">
+        <div class="icon-btn"><span class="ping"></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg></div>
+        <div class="icon-btn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></div>
+      </div>
+    </div>
+
+    <!-- KPI strip -->
+    <div class="kpis">
+      <div class="kpi">
+        <div class="ico" style="background:#fef3c7;color:#d97706"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+        <div><div class="num">0</div><div class="lbl">En attente</div></div>
+        <span class="trend" style="background:#ecfdf5;color:#059669">✓ à jour</span>
+      </div>
+      <div class="kpi">
+        <div class="ico" style="background:#f3e8ff;color:var(--prep)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="1" y="3" width="15" height="13" rx="1"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></div>
+        <div><div class="num">2</div><div class="lbl">En préparation</div></div>
+      </div>
+      <div class="kpi">
+        <div class="ico" style="background:#ccfbf1;color:var(--emballage)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/></svg></div>
+        <div><div class="num">7</div><div class="lbl">À emballer</div></div>
+        <span class="trend" style="background:#fff7ed;color:#ea580c">priorité</span>
+      </div>
+      <div class="kpi">
+        <div class="ico" style="background:#fce7f3;color:var(--eshop)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg></div>
+        <div><div class="num">10</div><div class="lbl">E-shop</div></div>
+      </div>
+    </div>
+
+    <!-- Search hero -->
+    <div class="search-hero">
+      <h2><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>Recherche rapide</h2>
+      <p>Scanne ou tape un code — barres, réf, lot, emplacement, Pal-X</p>
+      <div class="search-row">
+        <div class="search-input">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" placeholder="Code-barres, réf, lot, emplacement…">
+          <kbd>⌘ K</kbd>
+        </div>
+        <button class="btn-scan"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>Rechercher</button>
+        <button class="btn-cam"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
+      </div>
+    </div>
+
+    <div class="grid-2col">
+      <div>
+        <!-- Opérations -->
+        <div class="section-title">Opérations</div>
+        <div class="ops">
+          <div class="op" style="--op-c:var(--transfert);--op-bg:#eff6ff">
+            <div class="head">
+              <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg></div>
+              <div class="live"></div>
+            </div>
+            <h3>Transfert</h3><p>Déplacer du stock entre emplacements</p>
+          </div>
+          <div class="op" style="--op-c:var(--prep);--op-bg:#f3e8ff">
+            <div class="head">
+              <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="1" y="3" width="15" height="13" rx="1"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></div>
+              <span class="badge">2</span>
+            </div>
+            <h3>Préparation</h3><p>Picking des bons de sortie</p>
+          </div>
+          <div class="op" style="--op-c:var(--attente);--op-bg:#fef3c7">
+            <div class="head">
+              <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+              <div class="live"></div>
+            </div>
+            <h3>En attente</h3><p>Commandes du jour à traiter</p>
+          </div>
+          <div class="op" style="--op-c:var(--emballage);--op-bg:#ccfbf1">
+            <div class="head">
+              <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><line x1="12" y1="22" x2="12" y2="11"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg></div>
+              <span class="badge">7</span>
+            </div>
+            <h3>Emballage</h3><p>Colis prêts à emballer et expédier</p>
+          </div>
+          <div class="op" style="--op-c:var(--arrivage);--op-bg:#ecfdf5">
+            <div class="head">
+              <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg></div>
+              <div class="live"></div>
+            </div>
+            <h3>Arrivage</h3><p>Réception des livraisons fournisseur</p>
+          </div>
+          <div class="op" style="--op-c:var(--eshop);--op-bg:#fce7f3">
+            <div class="head">
+              <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg></div>
+              <span class="badge">10</span>
+            </div>
+            <h3>E-shop</h3><p>Commandes SendCloud · Mondial Relay & Colissimo</p>
+          </div>
+        </div>
+
+        <!-- Outils -->
+        <div class="section-title">Outils</div>
+        <div class="tools">
+          <div class="tool"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg><span>Ajustement</span></div>
+          <div class="tool"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="3" y="17" width="5" height="5" rx="1"/><line x1="12" y1="5" x2="21" y2="5"/><line x1="12" y1="12" x2="21" y2="12"/><line x1="12" y1="19" x2="21" y2="19"/></svg><span>Scan libre</span></div>
+          <div class="tool"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg><span>Retours</span></div>
+          <div class="tool"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg><span>Gestion articles</span></div>
+          <div class="tool"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span>Import WALA</span></div>
+          <div class="tool"><span class="mini-badge" style="background:var(--danger)">4</span><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.7"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span>Stock négatif</span></div>
+          <div class="tool"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg><span>Réimpr. étiq.</span></div>
+          <div class="tool"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg><span>Étiquettes</span></div>
+          <div class="tool"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg><span>Dashboard</span></div>
+          <div class="tool"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg><span>Commande</span></div>
+        </div>
+      </div>
+
+      <!-- ───── Centre de contrôle ───── -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Centre de contrôle</h3>
+          <span class="refresh"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>auto · 60s</span>
+        </div>
+
+        <div class="flow">
+          <div class="flow-step">
+            <div class="flow-ico" style="background:#fef3c7">⏳</div>
+            <div class="flow-body">
+              <div class="flow-top"><b>En attente</b><span class="n" style="color:#d97706">0</span></div>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-ico" style="background:#f3e8ff">📦</div>
+            <div class="flow-body">
+              <div class="flow-top"><b>En préparation</b><span class="n" style="color:var(--prep)">2</span></div>
+              <div class="chips"><span class="chip">WH/PICK/39584</span><span class="chip">WH/PICK/39038</span></div>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-ico" style="background:#ccfbf1">🎁</div>
+            <div class="flow-body">
+              <div class="flow-top"><b>À emballer</b><span class="n" style="color:var(--emballage)">7</span></div>
+              <div class="chips"><span class="chip">WH/OUT/38264</span><span class="chip">WH/OUT/38725</span><span class="chip">WH/OUT/39136</span><span class="chip more">+4 autres</span></div>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-ico" style="background:#fce7f3">🛒</div>
+            <div class="flow-body">
+              <div class="flow-top"><b>E-shop</b><span class="n" style="color:var(--eshop)">10</span></div>
+              <div class="chips"><span class="chip">ECDE2642894</span><span class="chip">ECDE2642892</span><span class="chip">ECDE2642889</span><span class="chip more">+7 autres</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="alert-strip">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <div><b>4 stocks négatifs</b><br><span>à corriger avant l'inventaire</span></div>
+          <svg class="go" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+
+        <div class="panel-foot">
+          <i class="dot"></i>Mis à jour à 08:51:01 · actualisation auto toutes les 60s
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>
