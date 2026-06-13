@@ -273,33 +273,48 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
     setSelected(el.id);
   };
 
-  // Drag
-  const onMouseDown = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    setSelected(id);
-    const el = template.elements.find(el => el.id === id)!;
-    setDragging({ id, ox: e.clientX - mm2px(el.x), oy: e.clientY - mm2px(el.y) });
+  // Coordonnées pointeur (souris OU tactile)
+  const ptXY = (e: MouseEvent | TouchEvent | React.MouseEvent | React.TouchEvent) => {
+    const t = (e as TouchEvent).touches?.[0] || (e as TouchEvent).changedTouches?.[0];
+    if (t) return { x: t.clientX, y: t.clientY };
+    return { x: (e as MouseEvent).clientX, y: (e as MouseEvent).clientY };
   };
 
-  const onResizeDown = (e: React.MouseEvent, id: string) => {
+  // Drag (début) — souris + tactile
+  const startDrag = (e: React.MouseEvent | React.TouchEvent, id: string) => {
     e.stopPropagation();
+    if ("touches" in e) e.preventDefault();
+    setSelected(id);
     const el = template.elements.find(el => el.id === id)!;
-    setResizing({ id, ox: e.clientX, oy: e.clientY, ow: el.w, oh: el.h });
+    const { x, y } = ptXY(e);
+    setDragging({ id, ox: x - mm2px(el.x), oy: y - mm2px(el.y) });
+  };
+
+  const startResize = (e: React.MouseEvent | React.TouchEvent, id: string) => {
+    e.stopPropagation();
+    if ("touches" in e) e.preventDefault();
+    const el = template.elements.find(el => el.id === id)!;
+    const { x, y } = ptXY(e);
+    setResizing({ id, ox: x, oy: y, ow: el.w, oh: el.h });
   };
 
   useEffect(() => {
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: MouseEvent | TouchEvent) => {
+      if (!dragging && !resizing) return;
+      // empêche le scroll de la page pendant la manipulation tactile
+      if ("touches" in e && e.cancelable) e.preventDefault();
+      const { x: cx, y: cy } = ptXY(e);
       if (dragging) {
-        const x = snap(px2mm(e.clientX - dragging.ox));
-        const y = snap(px2mm(e.clientY - dragging.oy));
+        const x = snap(px2mm(cx - dragging.ox));
+        const y = snap(px2mm(cy - dragging.oy));
         updateEl(dragging.id, {
           x: Math.max(0, Math.min(template.widthMM - 2, x)),
           y: Math.max(0, Math.min(template.heightMM - 1, y)),
         });
       }
       if (resizing) {
-        const dw = px2mm(e.clientX - resizing.ox);
-        const dh = px2mm(e.clientY - resizing.oy);
+        const dw = px2mm(cx - resizing.ox);
+        const dh = px2mm(cy - resizing.oy);
         updateEl(resizing.id, {
           w: Math.max(2, snap(resizing.ow + dw)),
           h: Math.max(1, snap(resizing.oh + dh)),
@@ -309,7 +324,16 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
     const onUp = () => { setDragging(null); setResizing(null); };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+    window.addEventListener("touchcancel", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+      window.removeEventListener("touchcancel", onUp);
+    };
   }, [dragging, resizing, updateEl, template]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -380,7 +404,8 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
               return (
                 <div
                   key={el.id}
-                  onMouseDown={e => onMouseDown(e, el.id)}
+                  onMouseDown={e => startDrag(e, el.id)}
+                  onTouchStart={e => startDrag(e, el.id)}
                   style={{
                     position: "absolute",
                     left: el.x * PX_PER_MM * scale,
@@ -390,19 +415,27 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
                     outline: isSel ? `2px solid ${C.blue}` : "1px dashed transparent",
                     cursor: "move",
                     userSelect: "none" as const,
+                    touchAction: "none" as const,
                     boxSizing: "border-box" as const,
                   }}
                 >
                   <ElementPreview el={el} scale={scale} />
                   {isSel && (
                     <div
-                      onMouseDown={e => onResizeDown(e, el.id)}
+                      onMouseDown={e => startResize(e, el.id)}
+                      onTouchStart={e => startResize(e, el.id)}
                       style={{
-                        position: "absolute", right: -4, bottom: -4,
-                        width: 8, height: 8, background: C.blue,
-                        borderRadius: 2, cursor: "se-resize",
+                        position: "absolute", right: -10, bottom: -10,
+                        width: 22, height: 22, background: C.blue,
+                        border: "2px solid #fff",
+                        borderRadius: "50%", cursor: "se-resize",
+                        touchAction: "none" as const,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
                       }}
-                    />
+                    >
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                    </div>
                   )}
                 </div>
               );
