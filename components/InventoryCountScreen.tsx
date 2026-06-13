@@ -496,15 +496,74 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
 }
 
 // ════════════════════════════════════════════════════════════════
-//  Plan magasin cliquable (SVG) — 16 zones avec couleur de statut
+//  Sélecteur de zones — cartes en liste (PDA-friendly)
 // ════════════════════════════════════════════════════════════════
 function WarehousePlan({ countByZone, onPick }: { countByZone: (z: string) => number; onPick: (z: string) => void }) {
-  // palette : à faire (ardoise) / comptée (vert)
+  const ZoneCard = ({ z }: { z: string }) => {
+    const n = countByZone(z);
+    const done = n > 0;
+    return (
+      <button onClick={() => onPick(z)}
+        style={{
+          display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center",
+          gap: 2, padding: "14px 12px", minHeight: 64, borderRadius: 12, cursor: "pointer",
+          border: `1.5px solid ${done ? "#22c55e" : "#cbd5e1"}`,
+          background: done ? "#dcfce7" : C.white,
+          fontFamily: "inherit", textAlign: "left" as const, position: "relative" as const,
+          transition: "transform .1s",
+        }}>
+        <span style={{ fontSize: 18, fontWeight: 800, color: done ? "#15803d" : C.text }}>{z}</span>
+        <span style={{ fontSize: 11, fontWeight: 600, color: done ? "#16a34a" : C.textMuted }}>
+          {done ? `${n} ligne${n > 1 ? "s" : ""}` : "à faire"}
+        </span>
+        {done && <span style={{ position: "absolute", top: 10, right: 10, width: 9, height: 9, borderRadius: "50%", background: "#22c55e" }} />}
+      </button>
+    );
+  };
+
+  const Section = ({ title, zones, cols }: { title: string; zones: string[]; cols: number }) => (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 10 }}>{title}</div>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 10 }}>
+        {zones.map(z => <ZoneCard key={z} z={z} />)}
+      </div>
+    </div>
+  );
+
+  // Desktop = large écran non tactile → plan visuel SVG. Sinon (PDA/mobile) → cartes.
+  const [isDesktop, setIsDesktop] = useState(false);
+  useEffect(() => {
+    const check = () => setIsDesktop(!("ontouchstart" in window) && window.innerWidth >= 1024);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  return (
+    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 16, padding: "16px 14px", marginBottom: 14, boxShadow: "0 1px 6px rgba(15,23,42,0.06)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, flexWrap: "wrap", gap: 6 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>Choisis une zone à compter</div>
+      </div>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14 }}>Touche une carte pour démarrer le comptage</div>
+
+      {isDesktop ? (
+        <PlanSvg countByZone={countByZone} onPick={onPick} />
+      ) : (
+        <>
+          <Section title="Racks de stockage" zones={["A", ...ZONE_B]} cols={3} />
+          <Section title="Allées picking" zones={ZONE_R} cols={3} />
+        </>
+      )}
+    </div>
+  );
+}
+
+// Plan visuel SVG (desktop uniquement)
+function PlanSvg({ countByZone, onPick }: { countByZone: (z: string) => number; onPick: (z: string) => void }) {
   const done = (z: string) => countByZone(z) > 0;
   const fill = (z: string) => (done(z) ? "#dcfce7" : "#f1f5f9");
   const stroke = (z: string) => (done(z) ? "#22c55e" : "#cbd5e1");
   const txt = (z: string) => (done(z) ? "#15803d" : "#334155");
-
   const Zone = ({ x, y, w, h, z }: { x: number; y: number; w: number; h: number; z: string }) => {
     const n = countByZone(z);
     return (
@@ -516,49 +575,25 @@ function WarehousePlan({ countByZone, onPick }: { countByZone: (z: string) => nu
       </g>
     );
   };
-
   const SectionLabel = ({ x, y, w, text }: { x: number; y: number; w: number; text: string }) => (
     <text x={x + w / 2} y={y} textAnchor="middle" fontSize={12} fontWeight={800} fill="#64748b" letterSpacing={0.5}>{text}</text>
   );
-
-  // Layout — un seul niveau horizontal pour B..I et pour R1..R7
   const W = 1240;
-  const bW = 120, bH = 88, bGap = 12, bPairGap = 28;
-  const rW = 132, rH = 92, rGap = 12;
-
+  const bW = 120, bGap = 12, bPairGap = 28;
+  const rW = 132, rGap = 12;
   return (
-    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 16, padding: "16px 14px", marginBottom: 14, boxShadow: "0 1px 6px rgba(15,23,42,0.06)" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
-        <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>Plan magasin</div>
-        <div style={{ display: "flex", gap: 14, fontSize: 11, color: C.textMuted, fontWeight: 600 }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 12, borderRadius: 4, background: "#f1f5f9", border: "1.5px solid #cbd5e1", display: "inline-block" }} /> à faire</span>
-          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 12, borderRadius: 4, background: "#dcfce7", border: "1.5px solid #22c55e", display: "inline-block" }} /> comptée</span>
-        </div>
-      </div>
-      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 10 }}>Touche une zone pour la compter</div>
-
-      <svg viewBox={`0 0 ${W} 380`} style={{ width: "100%", height: "auto", display: "block" }} fontFamily="'DM Sans', sans-serif">
-        {/* === ZONE B — racks de stockage (haut), 8 colonnes B..I en une rangée === */}
-        <SectionLabel x={0} y={20} w={W} text="ZONE B — RACK DE STOCKAGE" />
-        {ZONE_B.map((z, k) => {
-          const pair = Math.floor(k / 2);
-          const inPair = k % 2;
-          const x = 40 + pair * (2 * bW + bGap + bPairGap) + inPair * (bW + bGap);
-          return <Zone key={z} x={x} y={34} w={bW} h={bH} z={z} />;
-        })}
-
-        {/* === ZONE A — rack gauche === */}
-        <SectionLabel x={20} y={186} w={120} text="ZONE A" />
-        <Zone x={40} y={200} w={120} h={150} z="A" />
-
-        {/* === ZONE C — rayons picking R1..R7 sur UNE seule rangée === */}
-        <SectionLabel x={190} y={186} w={W - 200} text="ZONE C — RAYONS PICKING" />
-        {ZONE_R.map((z, k) => {
-          const x = 200 + k * (rW + rGap);
-          return <Zone key={z} x={x} y={200} w={rW} h={rH} z={z} />;
-        })}
-      </svg>
-    </div>
+    <svg viewBox={`0 0 ${W} 380`} style={{ width: "100%", height: "auto", display: "block" }} fontFamily="'DM Sans', sans-serif">
+      <SectionLabel x={0} y={20} w={W} text="ZONE B — RACK DE STOCKAGE" />
+      {ZONE_B.map((z, k) => {
+        const pair = Math.floor(k / 2), inPair = k % 2;
+        const x = 40 + pair * (2 * bW + bGap + bPairGap) + inPair * (bW + bGap);
+        return <Zone key={z} x={x} y={34} w={bW} h={88} z={z} />;
+      })}
+      <SectionLabel x={20} y={186} w={120} text="ZONE A" />
+      <Zone x={40} y={200} w={120} h={150} z="A" />
+      <SectionLabel x={190} y={186} w={W - 200} text="ZONE C — RAYONS PICKING" />
+      {ZONE_R.map((z, k) => <Zone key={z} x={200 + k * (rW + rGap)} y={200} w={rW} h={92} z={z} />)}
+    </svg>
   );
 }
 

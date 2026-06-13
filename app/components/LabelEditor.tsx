@@ -167,6 +167,22 @@ function ElementPreview({ el, scale }: { el: LabelElement; scale: number }) {
   return <div style={{ width: w, height: h, background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#999" }}>img</div>;
 }
 
+// Bouton du pavé directionnel / taille — gros et tactile
+function PadBtn({ label, onTap }: { label: string; onTap: () => void }) {
+  return (
+    <button
+      onPointerDown={e => { e.preventDefault(); e.stopPropagation(); onTap(); }}
+      style={{
+        width: 38, height: 38, borderRadius: 9, border: `1px solid ${C.border}`,
+        background: C.bg, color: C.text, fontSize: 18, fontWeight: 700, cursor: "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit",
+        touchAction: "manipulation" as const, userSelect: "none" as const,
+      }}>
+      {label}
+    </button>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Properties panel
 // ─────────────────────────────────────────────────────────────────
@@ -196,6 +212,39 @@ function PropsPanel({ el, onChange, onDelete }: { el: LabelElement; onChange: (e
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: C.text, textTransform: "capitalize" as const }}>{el.type}</div>
         <button onClick={onDelete} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 18, lineHeight: 1 }}>🗑</button>
+      </div>
+
+      {/* Pavé directionnel + taille (positionnement tactile au pouce) */}
+      <div style={{ display: "flex", gap: 14, justifyContent: "center", alignItems: "center", marginBottom: 14, flexWrap: "wrap" as const }}>
+        <div>
+          <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, textTransform: "uppercase" as const, textAlign: "center" as const, marginBottom: 4 }}>Position</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 38px)", gridTemplateRows: "repeat(3, 38px)", gap: 4 }}>
+            <span />
+            <PadBtn label="↑" onTap={() => onChange({ ...el, y: Math.max(0, Math.round((el.y - SNAP) * 10) / 10) })} />
+            <span />
+            <PadBtn label="←" onTap={() => onChange({ ...el, x: Math.max(0, Math.round((el.x - SNAP) * 10) / 10) })} />
+            <span />
+            <PadBtn label="→" onTap={() => onChange({ ...el, x: Math.round((el.x + SNAP) * 10) / 10 })} />
+            <span />
+            <PadBtn label="↓" onTap={() => onChange({ ...el, y: Math.round((el.y + SNAP) * 10) / 10 })} />
+            <span />
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, textTransform: "uppercase" as const, textAlign: "center" as const, marginBottom: 4 }}>Taille</div>
+          <div style={{ display: "flex", flexDirection: "column" as const, gap: 6 }}>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 10, color: C.textMuted, width: 16 }}>L</span>
+              <PadBtn label="−" onTap={() => onChange({ ...el, w: Math.max(2, Math.round((el.w - SNAP) * 10) / 10) })} />
+              <PadBtn label="+" onTap={() => onChange({ ...el, w: Math.round((el.w + SNAP) * 10) / 10 })} />
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 10, color: C.textMuted, width: 16 }}>H</span>
+              <PadBtn label="−" onTap={() => onChange({ ...el, h: Math.max(1, Math.round((el.h - SNAP) * 10) / 10) })} />
+              <PadBtn label="+" onTap={() => onChange({ ...el, h: Math.round((el.h + SNAP) * 10) / 10 })} />
+            </div>
+          </div>
+        </div>
       </div>
 
       {row2(
@@ -273,93 +322,44 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
     setSelected(el.id);
   };
 
-  // Coordonnées pointeur (souris OU tactile)
-  const ptXY = (e: MouseEvent | TouchEvent | React.MouseEvent | React.TouchEvent) => {
-    const t = (e as TouchEvent).touches?.[0] || (e as TouchEvent).changedTouches?.[0];
-    if (t) return { x: t.clientX, y: t.clientY };
-    return { x: (e as MouseEvent).clientX, y: (e as MouseEvent).clientY };
-  };
-
-  // Drag (début) — souris + tactile
-  const startDrag = (e: React.MouseEvent | React.TouchEvent, id: string) => {
+  // ── Drag/Resize via POINTER EVENTS (unifie souris + tactile + stylet) ──
+  // Pointer Events + setPointerCapture = fiable sur mobile, pas de souci passive/touch-action.
+  const startDrag = (e: React.PointerEvent, id: string) => {
     e.stopPropagation();
-    if ("touches" in e) e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     setSelected(id);
     const el = template.elements.find(el => el.id === id)!;
-    const { x, y } = ptXY(e);
-    setDragging({ id, ox: x - mm2px(el.x), oy: y - mm2px(el.y) });
+    setDragging({ id, ox: e.clientX - mm2px(el.x), oy: e.clientY - mm2px(el.y) });
   };
 
-  const startResize = (e: React.MouseEvent | React.TouchEvent, id: string) => {
+  const startResize = (e: React.PointerEvent, id: string) => {
     e.stopPropagation();
-    if ("touches" in e) e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     const el = template.elements.find(el => el.id === id)!;
-    const { x, y } = ptXY(e);
-    setResizing({ id, ox: x, oy: y, ow: el.w, oh: el.h });
+    setResizing({ id, ox: e.clientX, oy: e.clientY, ow: el.w, oh: el.h });
   };
 
-  // Ref-callback : attache un touchstart NON-PASSIF (React met onTouchStart en passif,
-  // donc preventDefault y est ignoré sur mobile → le drag ne démarrait pas).
-  const dragRefs = useRef<Map<string, () => void>>(new Map());
-  const attachTouch = (id: string, kind: "drag" | "resize") => (node: HTMLDivElement | null) => {
-    const key = `${kind}:${id}`;
-    const prev = dragRefs.current.get(key);
-    if (prev) { prev(); dragRefs.current.delete(key); }
-    if (!node) return;
-    const handler = (ev: TouchEvent) => {
-      ev.stopPropagation();
-      if (ev.cancelable) ev.preventDefault();
-      const t = ev.touches[0];
-      const el = template.elements.find(e => e.id === id);
-      if (!el) return;
-      if (kind === "drag") {
-        setSelected(id);
-        setDragging({ id, ox: t.clientX - mm2px(el.x), oy: t.clientY - mm2px(el.y) });
-      } else {
-        setResizing({ id, ox: t.clientX, oy: t.clientY, ow: el.w, oh: el.h });
-      }
-    };
-    node.addEventListener("touchstart", handler, { passive: false });
-    dragRefs.current.set(key, () => node.removeEventListener("touchstart", handler));
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragging && !resizing) return;
+    if (dragging) {
+      const x = snap(px2mm(e.clientX - dragging.ox));
+      const y = snap(px2mm(e.clientY - dragging.oy));
+      updateEl(dragging.id, {
+        x: Math.max(0, Math.min(template.widthMM - 2, x)),
+        y: Math.max(0, Math.min(template.heightMM - 1, y)),
+      });
+    }
+    if (resizing) {
+      const dw = px2mm(e.clientX - resizing.ox);
+      const dh = px2mm(e.clientY - resizing.oy);
+      updateEl(resizing.id, {
+        w: Math.max(2, snap(resizing.ow + dw)),
+        h: Math.max(1, snap(resizing.oh + dh)),
+      });
+    }
   };
 
-  useEffect(() => {
-    const onMove = (e: MouseEvent | TouchEvent) => {
-      if (!dragging && !resizing) return;
-      // empêche le scroll de la page pendant la manipulation tactile
-      if ("touches" in e && e.cancelable) e.preventDefault();
-      const { x: cx, y: cy } = ptXY(e);
-      if (dragging) {
-        const x = snap(px2mm(cx - dragging.ox));
-        const y = snap(px2mm(cy - dragging.oy));
-        updateEl(dragging.id, {
-          x: Math.max(0, Math.min(template.widthMM - 2, x)),
-          y: Math.max(0, Math.min(template.heightMM - 1, y)),
-        });
-      }
-      if (resizing) {
-        const dw = px2mm(cx - resizing.ox);
-        const dh = px2mm(cy - resizing.oy);
-        updateEl(resizing.id, {
-          w: Math.max(2, snap(resizing.ow + dw)),
-          h: Math.max(1, snap(resizing.oh + dh)),
-        });
-      }
-    };
-    const onUp = () => { setDragging(null); setResizing(null); };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    window.addEventListener("touchmove", onMove, { passive: false });
-    window.addEventListener("touchend", onUp);
-    window.addEventListener("touchcancel", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      window.removeEventListener("touchmove", onMove);
-      window.removeEventListener("touchend", onUp);
-      window.removeEventListener("touchcancel", onUp);
-    };
-  }, [dragging, resizing, updateEl, template]);
+  const onPointerEnd = () => { setDragging(null); setResizing(null); };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -404,6 +404,9 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
           <div
             ref={canvasRef}
             onClick={() => setSelected(null)}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerEnd}
+            onPointerCancel={onPointerEnd}
             style={{
               position: "relative",
               width: canvasW, height: canvasH,
@@ -430,8 +433,7 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
               return (
                 <div
                   key={el.id}
-                  ref={attachTouch(el.id, "drag")}
-                  onMouseDown={e => startDrag(e, el.id)}
+                  onPointerDown={e => startDrag(e, el.id)}
                   style={{
                     position: "absolute",
                     left: el.x * PX_PER_MM * scale,
@@ -448,8 +450,7 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
                   <ElementPreview el={el} scale={scale} />
                   {isSel && (
                     <div
-                      ref={attachTouch(el.id, "resize")}
-                      onMouseDown={e => startResize(e, el.id)}
+                      onPointerDown={e => startResize(e, el.id)}
                       style={{
                         position: "absolute", right: -12, bottom: -12,
                         width: 26, height: 26, background: C.blue,
