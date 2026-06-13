@@ -292,9 +292,27 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
   const canvasRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const scale = 1;
-  const canvasW = template.widthMM * PX_PER_MM * scale;
-  const canvasH = template.heightMM * PX_PER_MM * scale;
+  // Largeur dispo (responsive) → on scale le canvas pour qu'il rentre à l'écran
+  const [availW, setAvailW] = useState(360);
+  const [isMobile, setIsMobile] = useState(true);
+  useEffect(() => {
+    const check = () => {
+      const w = window.innerWidth;
+      setIsMobile(w < 1024);
+      // marges : ~28px de padding latéral sur mobile, sinon réserve la colonne props
+      setAvailW(w < 1024 ? Math.min(w - 56, 600) : 460);
+    };
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  const baseW = template.widthMM * PX_PER_MM;
+  const baseH = template.heightMM * PX_PER_MM;
+  // scale ≤ 1 : si l'étiquette est plus large que l'espace dispo, on réduit
+  const scale = Math.min(1, availW / baseW);
+  const canvasW = baseW * scale;
+  const canvasH = baseH * scale;
 
   const updateEl = useCallback((id: string, patch: Partial<LabelElement>) => {
     onChange({ ...template, elements: template.elements.map(e => e.id === id ? { ...e, ...patch } : e) });
@@ -324,12 +342,16 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
 
   // ── Drag/Resize via POINTER EVENTS (unifie souris + tactile + stylet) ──
   // Pointer Events + setPointerCapture = fiable sur mobile, pas de souci passive/touch-action.
+  // Conversions tenant compte du scale du canvas (px écran ↔ mm réels)
+  const sMm2px = (mm: number) => mm * PX_PER_MM * scale;
+  const sPx2mm = (px: number) => px / (PX_PER_MM * scale);
+
   const startDrag = (e: React.PointerEvent, id: string) => {
     e.stopPropagation();
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     setSelected(id);
     const el = template.elements.find(el => el.id === id)!;
-    setDragging({ id, ox: e.clientX - mm2px(el.x), oy: e.clientY - mm2px(el.y) });
+    setDragging({ id, ox: e.clientX - sMm2px(el.x), oy: e.clientY - sMm2px(el.y) });
   };
 
   const startResize = (e: React.PointerEvent, id: string) => {
@@ -342,16 +364,16 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
   const onPointerMove = (e: React.PointerEvent) => {
     if (!dragging && !resizing) return;
     if (dragging) {
-      const x = snap(px2mm(e.clientX - dragging.ox));
-      const y = snap(px2mm(e.clientY - dragging.oy));
+      const x = snap(sPx2mm(e.clientX - dragging.ox));
+      const y = snap(sPx2mm(e.clientY - dragging.oy));
       updateEl(dragging.id, {
         x: Math.max(0, Math.min(template.widthMM - 2, x)),
         y: Math.max(0, Math.min(template.heightMM - 1, y)),
       });
     }
     if (resizing) {
-      const dw = px2mm(e.clientX - resizing.ox);
-      const dh = px2mm(e.clientY - resizing.oy);
+      const dw = sPx2mm(e.clientX - resizing.ox);
+      const dh = sPx2mm(e.clientY - resizing.oy);
       updateEl(resizing.id, {
         w: Math.max(2, snap(resizing.ow + dw)),
         h: Math.max(1, snap(resizing.oh + dh)),
@@ -398,9 +420,9 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
         <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageUpload} />
       </div>
 
-      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexDirection: isMobile ? "column" : "row" }}>
         {/* Canvas */}
-        <div>
+        <div style={isMobile ? { width: "100%", display: "flex", flexDirection: "column", alignItems: "center" } : undefined}>
           <div
             ref={canvasRef}
             onClick={() => setSelected(null)}
@@ -474,7 +496,7 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
         </div>
 
         {/* Properties */}
-        <div style={{ flex: 1, minWidth: 160 }}>
+        <div style={isMobile ? { width: "100%" } : { flex: 1, minWidth: 160 }}>
           {selEl ? (
             <PropsPanel
               el={selEl}
