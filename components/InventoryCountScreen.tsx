@@ -499,53 +499,63 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
 //  Plan magasin cliquable (SVG) — 16 zones avec couleur de statut
 // ════════════════════════════════════════════════════════════════
 function WarehousePlan({ countByZone, onPick }: { countByZone: (z: string) => number; onPick: (z: string) => void }) {
-  const fill = (z: string) => (countByZone(z) > 0 ? "#bbf7d0" : "#e5e7eb");
-  const stroke = (z: string) => (countByZone(z) > 0 ? "#16a34a" : "#94a3b8");
-  const txt = (z: string) => (countByZone(z) > 0 ? "#15803d" : "#475569");
+  // palette : à faire (ardoise) / comptée (vert)
+  const done = (z: string) => countByZone(z) > 0;
+  const fill = (z: string) => (done(z) ? "#dcfce7" : "#f1f5f9");
+  const stroke = (z: string) => (done(z) ? "#22c55e" : "#cbd5e1");
+  const txt = (z: string) => (done(z) ? "#15803d" : "#334155");
 
-  const Zone = ({ x, y, w, h, z, label }: { x: number; y: number; w: number; h: number; z: string; label?: string }) => {
+  const Zone = ({ x, y, w, h, z }: { x: number; y: number; w: number; h: number; z: string }) => {
     const n = countByZone(z);
     return (
       <g style={{ cursor: "pointer" }} onClick={() => onPick(z)}>
-        <rect x={x} y={y} width={w} height={h} rx={6} fill={fill(z)} stroke={stroke(z)} strokeWidth={1.5} />
-        <text x={x + w / 2} y={y + h / 2 - (n > 0 ? 5 : 0)} textAnchor="middle" dominantBaseline="middle" fontSize={15} fontWeight={800} fill={txt(z)}>{label ?? z}</text>
-        {n > 0 && <text x={x + w / 2} y={y + h / 2 + 13} textAnchor="middle" dominantBaseline="middle" fontSize={10} fontWeight={700} fill={txt(z)}>{n} ligne{n > 1 ? "s" : ""}</text>}
+        <rect x={x} y={y} width={w} height={h} rx={10} fill={fill(z)} stroke={stroke(z)} strokeWidth={2} />
+        {done(z) && <circle cx={x + w - 12} cy={y + 12} r={5} fill="#22c55e" />}
+        <text x={x + w / 2} y={y + h / 2 - (n > 0 ? 7 : 0)} textAnchor="middle" dominantBaseline="central" fontSize={17} fontWeight={800} fill={txt(z)}>{z}</text>
+        {n > 0 && <text x={x + w / 2} y={y + h / 2 + 12} textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight={700} fill="#16a34a">{n} ligne{n > 1 ? "s" : ""}</text>}
       </g>
     );
   };
 
+  const SectionLabel = ({ x, y, w, text }: { x: number; y: number; w: number; text: string }) => (
+    <text x={x + w / 2} y={y} textAnchor="middle" fontSize={12} fontWeight={800} fill="#64748b" letterSpacing={0.5}>{text}</text>
+  );
+
+  // Layout — un seul niveau horizontal pour B..I et pour R1..R7
+  const W = 1240;
+  const bW = 120, bH = 88, bGap = 12, bPairGap = 28;
+  const rW = 132, rH = 92, rGap = 12;
+
   return (
-    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, marginBottom: 14, boxShadow: C.shadow }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
-        <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>Plan magasin — clique une zone à compter</div>
-        <div style={{ display: "flex", gap: 12, fontSize: 11, color: C.textMuted }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "#e5e7eb", border: "1px solid #94a3b8", display: "inline-block" }} /> à faire</span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: "#bbf7d0", border: "1px solid #16a34a", display: "inline-block" }} /> comptée</span>
+    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 16, padding: "16px 14px", marginBottom: 14, boxShadow: "0 1px 6px rgba(15,23,42,0.06)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>Plan magasin</div>
+        <div style={{ display: "flex", gap: 14, fontSize: 11, color: C.textMuted, fontWeight: 600 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 12, borderRadius: 4, background: "#f1f5f9", border: "1.5px solid #cbd5e1", display: "inline-block" }} /> à faire</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 12, borderRadius: 4, background: "#dcfce7", border: "1.5px solid #22c55e", display: "inline-block" }} /> comptée</span>
         </div>
       </div>
-      <svg viewBox="0 0 560 360" style={{ width: "100%", height: "auto", display: "block" }} fontFamily="'DM Sans', sans-serif">
-        {/* === ZONE B — racks de stockage (haut) : colonnes B..I === */}
-        <text x={280} y={16} textAnchor="middle" fontSize={12} fontWeight={800} fill={C.text}>ZONE B — Rack de stockage</text>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 10 }}>Touche une zone pour la compter</div>
+
+      <svg viewBox={`0 0 ${W} 380`} style={{ width: "100%", height: "auto", display: "block" }} fontFamily="'DM Sans', sans-serif">
+        {/* === ZONE B — racks de stockage (haut), 8 colonnes B..I en une rangée === */}
+        <SectionLabel x={0} y={20} w={W} text="ZONE B — RACK DE STOCKAGE" />
         {ZONE_B.map((z, k) => {
-          const rack = Math.floor(k / 2);
-          const inRack = k % 2;
-          const x = 78 + rack * 120 + inRack * 52;
-          return <Zone key={z} x={x} y={24} w={48} h={66} z={z} />;
+          const pair = Math.floor(k / 2);
+          const inPair = k % 2;
+          const x = 40 + pair * (2 * bW + bGap + bPairGap) + inPair * (bW + bGap);
+          return <Zone key={z} x={x} y={34} w={bW} h={bH} z={z} />;
         })}
 
         {/* === ZONE A — rack gauche === */}
-        <text x={42} y={132} textAnchor="middle" fontSize={11} fontWeight={800} fill={C.text}>ZONE A</text>
-        <Zone x={14} y={140} w={56} h={110} z="A" />
+        <SectionLabel x={20} y={186} w={120} text="ZONE A" />
+        <Zone x={40} y={200} w={120} h={150} z="A" />
 
-        {/* === ZONE C — rayons picking R1..R7 === */}
-        <text x={310} y={132} textAnchor="middle" fontSize={12} fontWeight={800} fill={C.text}>ZONE C — Rayons picking</text>
+        {/* === ZONE C — rayons picking R1..R7 sur UNE seule rangée === */}
+        <SectionLabel x={190} y={186} w={W - 200} text="ZONE C — RAYONS PICKING" />
         {ZONE_R.map((z, k) => {
-          const perRow = 4;
-          const row = Math.floor(k / perRow);
-          const col = k % perRow;
-          const x = 90 + col * 112;
-          const y = 150 + row * 92;
-          return <Zone key={z} x={x} y={y} w={96} h={74} z={z} />;
+          const x = 200 + k * (rW + rGap);
+          return <Zone key={z} x={x} y={200} w={rW} h={rH} z={z} />;
         })}
       </svg>
     </div>

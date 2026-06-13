@@ -298,6 +298,31 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
     setResizing({ id, ox: x, oy: y, ow: el.w, oh: el.h });
   };
 
+  // Ref-callback : attache un touchstart NON-PASSIF (React met onTouchStart en passif,
+  // donc preventDefault y est ignoré sur mobile → le drag ne démarrait pas).
+  const dragRefs = useRef<Map<string, () => void>>(new Map());
+  const attachTouch = (id: string, kind: "drag" | "resize") => (node: HTMLDivElement | null) => {
+    const key = `${kind}:${id}`;
+    const prev = dragRefs.current.get(key);
+    if (prev) { prev(); dragRefs.current.delete(key); }
+    if (!node) return;
+    const handler = (ev: TouchEvent) => {
+      ev.stopPropagation();
+      if (ev.cancelable) ev.preventDefault();
+      const t = ev.touches[0];
+      const el = template.elements.find(e => e.id === id);
+      if (!el) return;
+      if (kind === "drag") {
+        setSelected(id);
+        setDragging({ id, ox: t.clientX - mm2px(el.x), oy: t.clientY - mm2px(el.y) });
+      } else {
+        setResizing({ id, ox: t.clientX, oy: t.clientY, ow: el.w, oh: el.h });
+      }
+    };
+    node.addEventListener("touchstart", handler, { passive: false });
+    dragRefs.current.set(key, () => node.removeEventListener("touchstart", handler));
+  };
+
   useEffect(() => {
     const onMove = (e: MouseEvent | TouchEvent) => {
       if (!dragging && !resizing) return;
@@ -388,6 +413,7 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
               cursor: "default",
               flexShrink: 0,
               overflow: "hidden",
+              touchAction: "none" as const,
             }}
           >
             {/* Grid dots */}
@@ -404,8 +430,8 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
               return (
                 <div
                   key={el.id}
+                  ref={attachTouch(el.id, "drag")}
                   onMouseDown={e => startDrag(e, el.id)}
-                  onTouchStart={e => startDrag(e, el.id)}
                   style={{
                     position: "absolute",
                     left: el.x * PX_PER_MM * scale,
@@ -422,11 +448,11 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
                   <ElementPreview el={el} scale={scale} />
                   {isSel && (
                     <div
+                      ref={attachTouch(el.id, "resize")}
                       onMouseDown={e => startResize(e, el.id)}
-                      onTouchStart={e => startResize(e, el.id)}
                       style={{
-                        position: "absolute", right: -10, bottom: -10,
-                        width: 22, height: 22, background: C.blue,
+                        position: "absolute", right: -12, bottom: -12,
+                        width: 26, height: 26, background: C.blue,
                         border: "2px solid #fff",
                         borderRadius: "50%", cursor: "se-resize",
                         touchAction: "none" as const,
