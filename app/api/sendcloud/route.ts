@@ -103,10 +103,14 @@ async function createParcelV2Direct(
     order.shipping_method?.id ||
     null;
 
-  // NB : on n'emprunte PLUS le shipment.id d'un colis récent au hasard.
-  // C'était la cause du bug "to_service_point required" : on héritait parfois
-  // d'une méthode POINT RELAIS sur une commande livrée à DOMICILE.
-  // Sans shipment, SendCloud applique les règles d'expédition par défaut (OK domicile).
+  // Indicateur de livraison de la commande (ex: "2. Livraison à domicile - Colissimo"
+  // ou "Point relais - Mondial Relay"). Sert à choisir la bonne méthode d'envoi.
+  const deliveryIndicator: string = String(
+    order.shipping_details?.delivery_indicator ||
+    details.shipping_details?.delivery_indicator ||
+    order.delivery_indicator || ""
+  );
+  const wantsServicePoint = /point\s*relais|relay|pickup|service\s*point/i.test(deliveryIndicator);
 
   const name =
     [addr.first_name, addr.last_name].filter(Boolean).join(" ") ||
@@ -132,6 +136,37 @@ async function createParcelV2Direct(
       return s + itemWeight(i) * q;
     }, 0)
   ).toFixed(3);
+
+  // Résolution de la méthode d'envoi (shipping_method) — REQUISE par V2.
+  // On interroge les méthodes SendCloud dispo pour le pays + poids, puis on choisit
+  // celle qui correspond au transporteur de la commande, en excluant les méthodes
+  // point relais sur une commande DOMICILE (et inversement).
+  if (!shipmentId) {
+    try {
+      const country = addr.country || addr.country_code || addr.country_iso_2 || "FR";
+      const sm = await scJson(`${V2}/shipping_methods?to_country=${country}&from_country=FR`, auth);
+      let methods: any[] = sm.shipping_methods || [];
+      methods = methods.filter((m: any) => {
+        const isSp = m.service_point_input && m.service_point_input !== "none";
+        return wantsServicePoint ? isSp : !isSp;
+      });
+      const wNum = parseFloat(totalWeight);
+      const inWeight = methods.filter((m: any) => {
+        const min = parseFloat(m.min_weight ?? "0");
+        const max = parseFloat(m.max_weight ?? "999");
+        return wNum >= min && wNum <= max;
+      });
+      const pool = inWeight.length ? inWeight : methods;
+      const lowerInd = deliveryIndicator.toLowerCase();
+      const byCarrier = pool.find((m: any) => {
+        const c = String(m.carrier || "").toLowerCase();
+        const n = String(m.name || "").toLowerCase();
+        return (c && lowerInd.includes(c)) || (lowerInd.includes("colissimo") && (c.includes("colissimo") || n.includes("colissimo")));
+      });
+      const chosen = byCarrier || pool[0];
+      if (chosen?.id) shipmentId = chosen.id;
+    } catch {}
+  }
 
   // ── Point relais (service point) ────────────────────────────────────────
   // Pour les envois en point relais, SendCloud EXIGE to_service_point (ID du point
