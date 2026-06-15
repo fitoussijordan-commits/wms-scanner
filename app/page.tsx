@@ -5621,6 +5621,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [packInput, setPackInput] = useState("");
   const [packInputErr, setPackInputErr] = useState("");
   const [packPrinting, setPackPrinting] = useState(false);
+  const [packBatchProgress, setPackBatchProgress] = useState("");
 
   const savePrepared = async (ids: Set<string>) => {
     setPreparedIds(ids);
@@ -5858,6 +5859,23 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       vibrateSuccess();
     } catch (e: any) { onToast(`⚠ Étiquette: ${e.message}`); vibrateError(); }
     setPrinting(false);
+  };
+
+  // Imprime en une fois BL + étiquette transport pour TOUTES les commandes fournies
+  const printAllOrders = async (orders: any[]) => {
+    if (packPrinting || !orders.length) return;
+    setPackPrinting(true);
+    let blOk = 0, labelOk = 0; const errors: string[] = [];
+    for (let i = 0; i < orders.length; i++) {
+      const p = orders[i];
+      setPackBatchProgress(`${i + 1}/${orders.length} — ${p.order_number}`);
+      try { await printPackingSlip(p); blOk++; } catch (e: any) { errors.push(`BL ${p.order_number}: ${e.message}`); }
+      try { await printLabelCore(p); labelOk++; } catch (e: any) { errors.push(`Étiq. ${p.order_number}: ${e.message}`); }
+    }
+    setPackPrinting(false);
+    setPackBatchProgress("");
+    if (errors.length) onToast(`⚠ ${errors.length} erreur(s) — ${blOk} BL, ${labelOk} étiq. OK · ${errors[0]}`);
+    else { onToast(`✅ ${blOk} BL + ${labelOk} étiquettes imprimés`); vibrateSuccess(); }
   };
 
   const markPrepared = async (parcelId: string) => {
@@ -6885,6 +6903,13 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           const preparedList = parcels.filter(p => preparedIds.has(p.order_number));
           return preparedList.length > 0 ? (
             <>
+              {/* Impression groupée de tout le lot préparé */}
+              <button
+                disabled={packPrinting}
+                onClick={() => printAllOrders(preparedList)}
+                style={{ width: "100%", padding: "14px 0", marginBottom: 14, background: packPrinting ? "#9ca3af" : C.green, color: "#fff", border: "none", borderRadius: 12, fontSize: 14, fontWeight: 800, cursor: packPrinting ? "default" : "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(22,163,74,0.3)" }}>
+                {packPrinting ? `🖨️ ${packBatchProgress}` : `🖨️ Imprimer tout le lot — BL + étiquettes (${preparedList.length})`}
+              </button>
               <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>
                 Prêtes à emballer ({preparedList.length})
               </div>
