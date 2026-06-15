@@ -103,13 +103,10 @@ async function createParcelV2Direct(
     order.shipping_method?.id ||
     null;
 
-  if (!shipmentId) {
-    try {
-      const recent = await scJson(`${V2}/parcels?integration_id=${INTEGRATION_ID}&limit=10`, auth);
-      const rp = (recent.parcels || []).find((p: any) => p.shipment?.id);
-      if (rp?.shipment?.id) shipmentId = rp.shipment.id;
-    } catch {}
-  }
+  // NB : on n'emprunte PLUS le shipment.id d'un colis récent au hasard.
+  // C'était la cause du bug "to_service_point required" : on héritait parfois
+  // d'une méthode POINT RELAIS sur une commande livrée à DOMICILE.
+  // Sans shipment, SendCloud applique les règles d'expédition par défaut (OK domicile).
 
   const name =
     [addr.first_name, addr.last_name].filter(Boolean).join(" ") ||
@@ -125,8 +122,11 @@ async function createParcelV2Direct(
     const n = parseFloat(String(v));
     return isFinite(n) ? n : 0;
   };
+  // Poids min 0.751 kg : certaines méthodes Colissimo refusent en dessous
+  // ("Minimum weight is 0.751 kg"). On plancher à 0.8 kg pour être tranquille.
+  const MIN_WEIGHT = 0.8;
   const totalWeight = Math.max(
-    0.1,
+    MIN_WEIGHT,
     rawItems.reduce((s: number, i: any) => {
       const q = Math.max(1, parseInt(String(i.quantity || 1)));
       return s + itemWeight(i) * q;
