@@ -1542,6 +1542,90 @@ export async function matchEshopSkus(
     if (found.length > 0) addMatch(sku, found[0], "name");
   }
 
+  if (remaining.size === 0) return result;
+
+  // ── Stratégie 4 : SKU "avantage fidélité" préfixé LR ──────────────────────
+  // Certains produits Shopware ont pour code : "LR" + référence fournisseur
+  // (ex: LR12345 → réf fournisseur 12345). On retire le préfixe LR et on
+  // rebranche sur la réf fournisseur (puis réf interne / barcode en secours).
+  const lrSkus = Array.from(remaining).filter(s => /^LR\d/i.test(s.trim()));
+  if (lrSkus.length > 0) {
+    // map code nettoyé → sku original (pour réattribuer le résultat au bon SKU)
+    const cleanToSku: Record<string, string> = {};
+    for (const sku of lrSkus) {
+      const clean = sku.trim().replace(/^LR/i, "");
+      if (clean) cleanToSku[clean] = sku;
+    }
+    const cleans = Object.keys(cleanToSku);
+
+    // a) réf fournisseur sur le code nettoyé
+    const sInfos = await searchRead(
+      session, "product.supplierinfo",
+      [["product_code", "in", cleans]],
+      ["id", "product_code", "product_id", "product_tmpl_id"],
+      cleans.length * 3
+    );
+    const lrTmplIds: number[] = [];
+    const lrTmplToSku: Record<number, string> = {};
+    for (const si of sInfos) {
+      const sku = cleanToSku[si.product_code];
+      if (!sku || !remaining.has(sku)) continue;
+      if (si.product_id) {
+        result[sku] = { product_id: si.product_id[0], product_name: si.product_id[1], default_code: "", barcode: "", match_method: "supplier_ref" };
+        remaining.delete(sku);
+      } else if (si.product_tmpl_id) {
+        lrTmplIds.push(si.product_tmpl_id[0]);
+        lrTmplToSku[si.product_tmpl_id[0]] = sku;
+      }
+    }
+    if (lrTmplIds.length > 0) {
+      const variants = await searchRead(
+        session, "product.product",
+        [["product_tmpl_id", "in", lrTmplIds]],
+        ["id", "name", "product_tmpl_id", "default_code", "barcode"],
+        lrTmplIds.length * 3
+      );
+      for (const v of variants) {
+        const tmplId = Array.isArray(v.product_tmpl_id) ? v.product_tmpl_id[0] : v.product_tmpl_id;
+        const sku = lrTmplToSku[tmplId];
+        if (sku && remaining.has(sku)) addMatch(sku, v, "supplier_ref");
+      }
+    }
+
+    // Enrichir les matchs LR sans default_code/barcode
+    const lrNeedsEnrich = lrSkus.filter(s => result[s] && !result[s].default_code && !result[s].barcode);
+    if (lrNeedsEnrich.length > 0) {
+      const ids = lrNeedsEnrich.map(s => result[s].product_id);
+      const products = await searchRead(session, "product.product", [["id", "in", ids]], ["id", "name", "default_code", "barcode"], ids.length);
+      const pMap: Record<number, any> = {};
+      for (const p of products) pMap[p.id] = p;
+      for (const s of lrNeedsEnrich) {
+        const p = pMap[result[s].product_id];
+        if (p) { result[s].default_code = p.default_code || ""; result[s].barcode = p.barcode || ""; result[s].product_name = p.name; }
+      }
+    }
+
+    // b) secours : réf interne (default_code) puis barcode sur le code nettoyé
+    const stillLr = lrSkus.filter(s => remaining.has(s));
+    for (const sku of stillLr) {
+      const clean = sku.trim().replace(/^LR/i, "");
+      if (!clean) continue;
+      let found = await searchRead(
+        session, "product.product",
+        [["default_code", "=ilike", clean], ["active", "in", [true, false]]],
+        ["id", "name", "default_code", "barcode"], 1
+      );
+      if (!found.length) {
+        found = await searchRead(
+          session, "product.product",
+          [["barcode", "=", clean]],
+          ["id", "name", "default_code", "barcode"], 1
+        );
+      }
+      if (found.length > 0) addMatch(sku, found[0], "supplier_ref");
+    }
+  }
+
   return result;
 }
 
