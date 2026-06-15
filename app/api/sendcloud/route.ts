@@ -33,18 +33,32 @@ const INTEGRATION_ID = 527093;
 // Marque une commande V3 comme traitée ("fulfilled") pour qu'elle sorte de la
 // liste des commandes ouvertes. Utile après création d'un colis via le fallback
 // V2 (le V3 create-labels-async, lui, ferme l'order automatiquement).
-async function markOrderFulfilled(auth: string, orderId: string | number): Promise<void> {
+// IMPORTANT : le PATCH /orders/{id} attend l'ID INTERNE Sendcloud (≠ order_id
+// externe). On le résout d'abord à partir de l'order_number.
+async function markOrderFulfilled(auth: string, orderNumber: string, externalOrderId?: string | number): Promise<void> {
   try {
-    await scJson(`${V3}/orders/${orderId}`, auth, {
+    // 1. Retrouver l'order V3 (id interne) par order_number
+    let internalId: string | number | null = null;
+    try {
+      const list = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&order_number=${encodeURIComponent(orderNumber)}`, auth);
+      const arr = list.data || list.results || list.orders || [];
+      const found = arr.find((o: any) => String(o.order_number) === String(orderNumber)) || arr[0];
+      if (found?.id) internalId = found.id;
+    } catch {}
+    // Fallback : tenter directement avec l'external order_id si la recherche échoue
+    const targetId = internalId ?? externalOrderId;
+    if (!targetId) { console.warn("[sendcloud] markOrderFulfilled: id introuvable pour", orderNumber); return; }
+
+    await scJson(`${V3}/orders/${targetId}`, auth, {
       method: "PATCH",
       body: JSON.stringify({
         order_details: { status: { code: "fulfilled", message: "Fulfilled" } },
       }),
     });
-    console.log("[sendcloud] order", orderId, "→ marqué fulfilled");
+    console.log("[sendcloud] order", orderNumber, "(id", targetId, ") → marqué fulfilled");
   } catch (e: any) {
     // Non bloquant : l'étiquette est déjà créée, on log juste l'échec de fermeture.
-    console.warn("[sendcloud] markOrderFulfilled échoué pour", orderId, ":", e.message);
+    console.warn("[sendcloud] markOrderFulfilled échoué pour", orderNumber, ":", e.message);
   }
 }
 
@@ -729,12 +743,23 @@ export async function POST(req: NextRequest) {
       // fermer manuellement l'order V3, que V2 ne ferme pas).
       let createdViaV2 = false;
 
-      // ── Helper: chercher un colis existant par order_number ──────────────
+      // Un colis est "annulé" si son statut le dit (id 1999/2000/2001 ou message "cancel").
+      // On ne doit JAMAIS réutiliser un colis annulé : son étiquette est morte.
+      const isCancelled = (p: any): boolean => {
+        const id = p?.status?.id;
+        const msg = String(p?.status?.message || "").toLowerCase();
+        return id === 1999 || id === 2000 || id === 2001 || /cancel|annul/.test(msg);
+      };
+
+      // ── Helper: chercher un colis existant NON ANNULÉ par order_number ─────
       const findParcel = async (): Promise<any | null> => {
         try {
           const d = await scJson(`${V2}/parcels?order_number=${encodeURIComponent(orderNumber)}`, auth);
-          const exact = (d.parcels || []).find((p: any) => String(p.order_number) === String(orderNumber));
-          if (exact) return exact;
+          const matches = (d.parcels || []).filter((p: any) => String(p.order_number) === String(orderNumber) && !isCancelled(p));
+          // Préfère un colis qui a déjà une étiquette, sinon le plus récent
+          const withLabel = matches.find((p: any) => p?.label?.label_printer || p?.label?.normal_printer?.[0]);
+          if (withLabel) return withLabel;
+          if (matches.length) return matches.sort((a: any, b: any) => (b.id || 0) - (a.id || 0))[0];
         } catch {}
         return null;
       };
@@ -851,7 +876,7 @@ export async function POST(req: NextRequest) {
                 if (!parcel) {
                   // colis V2 bien créé mais label pas encore prêt → on ferme déjà
                   // l'order V3 (le colis existe), puis 202 pour retry client
-                  await markOrderFulfilled(auth, orderId);
+                  await markOrderFulfilled(auth, orderNumber, orderId);
                   return NextResponse.json({
                     parcelId: v2Parcel.id,
                     tracking: v2Parcel.tracking_number || "",
@@ -906,7 +931,7 @@ export async function POST(req: NextRequest) {
 
       // Si le colis a été créé via le fallback V2, l'order V3 reste "Ouvert" :
       // on le marque fulfilled pour qu'il sorte des commandes ouvertes.
-      if (createdViaV2) await markOrderFulfilled(auth, orderId);
+      if (createdViaV2) await markOrderFulfilled(auth, orderNumber, orderId);
 
       const pdfBuffer = Buffer.from(await labelRes.arrayBuffer());
       return NextResponse.json({
