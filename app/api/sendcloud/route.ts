@@ -411,9 +411,85 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        // ── Fallback V2 direct (prix négatifs, ou V3 KO pour autre raison) ──
-        if (!parcel && createFailed) {
-          console.log("[label] fallback V2 direct pour:", orderNumber, "| negatives:", negativeDetectedGET);
+        // ── (A) Retry V3 si échec ET pas de prix négatifs ──────────────────
+        // Cas typique : point relais dont la résolution prend un léger délai côté
+        // SendCloud (comme le bouton "1 clic" de l'interface). On laisse passer
+        // ~3s, on re-déclenche create-labels-async sur l'order V3 déjà importé,
+        // puis on re-poll. On NE fait ce retry QUE pour les commandes SANS prix
+        // négatifs (les négatifs sont gérés par le fallback V2 plus bas).
+        if (!parcel && createFailed && negativeDetectedGET === false) {
+          console.log("[label] retry V3 create-labels-async pour:", orderNumber, "(échec initial, pas de négatifs)");
+          await new Promise(r => setTimeout(r, 3000));
+          let retryParcelId: number | null = null;
+          try {
+            const retryRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
+              method: "POST",
+              body: JSON.stringify({
+                integration_id: INTEGRATION_ID,
+                orders: [{ order_number: orderNumber }],
+              }),
+            });
+            const retryArr = retryRes?.data || [];
+            if (retryArr.length > 0 && retryArr[0].parcel_id) {
+              retryParcelId = retryArr[0].parcel_id;
+              console.log("[label] retry V3 parcel_id:", retryParcelId);
+            }
+            // Le retry a abouti → on annule l'état d'échec pour ne PAS tomber
+            // dans le fallback V2 (réservé aux prix négatifs).
+            createFailed = false;
+            createErrMsg = "";
+          } catch (retryErr: any) {
+            // Le retry a de nouveau échoué → on conserve le vrai message SendCloud
+            createErrMsg = retryErr.message;
+            console.warn("[label] retry V3 échoué:", retryErr.message);
+          }
+
+          // Re-poll si le retry a (re)lancé la génération (2500ms x 8)
+          if (!createFailed) {
+            if (retryParcelId) {
+              for (let i = 0; i < 8; i++) {
+                await new Promise(r => setTimeout(r, 2500));
+                try {
+                  const d = await scJson(`${V2}/parcels/${retryParcelId}`, auth);
+                  const candidate = d.parcel || d;
+                  if (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0]) {
+                    parcel = candidate;
+                    console.log("[label] label prête via retry V3 parcel_id:", retryParcelId);
+                    break;
+                  }
+                } catch {}
+              }
+            } else {
+              // Pas de parcel_id renvoyé → poll par order_number
+              for (let i = 0; i < 8; i++) {
+                await new Promise(r => setTimeout(r, 2500));
+                const candidate = await findParcel();
+                if (candidate?.label?.label_printer || candidate?.label?.normal_printer?.[0]) {
+                  parcel = candidate;
+                  break;
+                }
+              }
+            }
+            // Retry V3 OK mais étiquette pas encore prête → 202 pending (retry client)
+            if (!parcel) {
+              return NextResponse.json({
+                parcelId: retryParcelId,
+                tracking: "",
+                carrier: "",
+                labelBase64: null,
+                labelPending: true,
+                error: "Étiquette en cours de génération — réessaie dans 10 secondes",
+              }, { status: 202 });
+            }
+          }
+        }
+
+        // ── (B) Fallback V2 direct — UNIQUEMENT pour les prix négatifs ──────
+        // V3 rejette les commandes à prix négatifs : seul ce cas justifie de
+        // recréer le colis à la main via V2. Pour tout autre échec V3 (ex :
+        // point relais) après le retry V3 infructueux, on renvoie une 422 claire.
+        if (!parcel && createFailed && negativeDetectedGET === true) {
+          console.log("[label] fallback V2 direct pour:", orderNumber, "| prix négatifs");
           try {
             const v2Parcel = await createParcelV2Direct(auth, orderId!, orderNumber!, rawV3, clientShipmentId);
             if (v2Parcel?.label?.label_printer || v2Parcel?.label?.normal_printer?.[0]) {
@@ -438,7 +514,18 @@ export async function GET(req: NextRequest) {
               hint: fallbackErr.message,
             }, { status: 422 });
           }
-        } // fin if (!parcel && createFailed)
+        } // fin if (!parcel && createFailed && négatifs)
+
+        // ── (B bis) Autre échec V3 (non négatif) après retry → 422 claire ──
+        // On NE tente PAS V2 ici (réservé aux négatifs) : on renvoie le vrai
+        // message SendCloud pour aider à corriger (souvent un point relais/adresse).
+        if (!parcel && createFailed && negativeDetectedGET === false) {
+          console.warn("[label] échec V3 non récupérable (non négatif) pour:", orderNumber, "|", createErrMsg);
+          return NextResponse.json({
+            error: `Étiquette impossible : ${createErrMsg || "échec SendCloud V3"}`,
+            hint: "Vérifie le point relais / l'adresse dans SendCloud",
+          }, { status: 422 });
+        }
 
         // Last resort: return whatever parcel we find even without a label (client can retry)
         if (!parcel) {
