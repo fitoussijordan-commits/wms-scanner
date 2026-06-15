@@ -728,10 +728,53 @@ export async function POST(req: NextRequest) {
               }
             }
           }
+
+          // ─── Retry V3 : si échec SANS prix négatifs (ex: point relais dont
+          // la résolution prend un léger délai côté SendCloud, comme le 1-clic).
+          // On NE bascule PAS en V2 (qui perd le point relais) : on redonne sa
+          // chance à V3 avant d'abandonner.
+          if (v3Failed && !negativeDetected) {
+            console.log("[label POST] retry V3 pour", orderNumber, "(échec initial, pas de négatifs)");
+            await new Promise(r => setTimeout(r, 3000));
+            let retryParcelId: number | null = null;
+            try {
+              const retryRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
+                method: "POST",
+                body: JSON.stringify({ integration_id: INTEGRATION_ID, orders: [{ order_number: orderNumber }] }),
+              });
+              retryParcelId = retryRes?.data?.[0]?.parcel_id || null;
+              v3Failed = false; // le retry a relancé la génération → on ne tombe pas en V2
+              console.log("[label POST] retry V3 OK, parcel_id:", retryParcelId);
+            } catch (e: any) {
+              console.warn("[label POST] retry V3 échoué:", e.message);
+            }
+            if (!v3Failed) {
+              if (retryParcelId) {
+                parcel = await pollLabel(auth, retryParcelId, 15, 3000);
+              } else {
+                for (let i = 0; i < 12; i++) {
+                  await new Promise(r => setTimeout(r, 3000));
+                  const c = await findParcel();
+                  if (c && hasLabel(c)) { parcel = c; break; }
+                }
+              }
+              // Retry V3 OK mais étiquette pas encore prête → 202 (retry client)
+              if (!parcel) {
+                return NextResponse.json({
+                  parcelId: retryParcelId,
+                  labelPending: true,
+                  error: "Étiquette en cours — réessaie dans 10s",
+                }, { status: 202 });
+              }
+            }
+          }
         }
 
-        // ─── Voie B : V2 direct (fallback OU prix négatifs) ──────────────────
-        if (!parcel && v3Failed) {
+        // ─── Voie B : V2 direct — UNIQUEMENT pour les prix négatifs ──────────
+        // (V3 rejette les prix négatifs ; c'est le seul cas qui justifie de
+        // recréer le colis à la main. Pour les autres échecs V3, le retry
+        // ci-dessus a déjà tranché et on renvoie une erreur claire en bas.)
+        if (!parcel && v3Failed && negativeDetected) {
           try {
             const v2Parcel = await createParcelV2Direct(auth, orderId, orderNumber, raw, clientShipmentId);
             if (v2Parcel) {
@@ -774,7 +817,13 @@ export async function POST(req: NextRequest) {
         }
 
         if (!parcel) {
-          return NextResponse.json({ error: "Impossible de créer l'étiquette. Crée-la manuellement sur SendCloud puis réessaie." }, { status: 422 });
+          // V3 a échoué (et ce n'est pas un cas de prix négatifs traité en V2).
+          // Souvent : point relais pas encore résolu côté SendCloud. On invite à
+          // réessayer (le retry V3 marche généralement) ou à vérifier la commande.
+          return NextResponse.json({
+            error: "Étiquette pas encore prête côté SendCloud — réessaie dans quelques secondes. Si ça persiste, vérifie le point relais / l'adresse de la commande dans SendCloud.",
+            labelPending: true,
+          }, { status: 202 });
         }
       }
 
