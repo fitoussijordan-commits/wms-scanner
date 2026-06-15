@@ -2592,6 +2592,24 @@ export default function Page() {
     window.open(url, "_blank");
   };
 
+  // Revérifier la dispo Odoo depuis l'écran de prépa (sans imprimer) + rafraîchir les lignes affichées
+  const recheckPrepAvailability = async (picking: any) => {
+    if (!session || !picking) return;
+    try {
+      const ids: number[] = picking._groupIds || [picking.id];
+      for (const id of ids) {
+        try { await odoo.checkAvailability(session, id); } catch {}
+      }
+      const lines = await refreshGroupMoveLines(picking);
+      setPickingMoveLines(lines);
+      vibrateSuccess();
+      showToast("✅ Disponibilité revérifiée");
+    } catch (e: any) {
+      showToast("⚠ " + (e.message || "Échec de la vérif dispo"));
+      vibrateError();
+    }
+  };
+
   // ===================== RENDER =====================
   const classicStep = !src ? 0 : !dst ? 1 : 2;
 
@@ -3479,6 +3497,7 @@ export default function Page() {
             qtyOverrides={qtyOverrides}
             onValidate={validatePrepPicking}
             onValidateAndPack={validateAndPack}
+            onRecheckAvail={recheckPrepAvailability}
             onBack={() => {
               // Sauvegarder la progression dans le cache avant de quitter
               const lines = pickingMoveLinesRef.current.filter((ml: any) => (ml.reserved_uom_qty || 0) > 0);
@@ -4130,6 +4149,7 @@ function Shell({ children, toast, flash, desktop }: { children: React.ReactNode;
         @keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
         @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.5 } }
         @keyframes scanFlashAnim { 0% { opacity:0.55 } 100% { opacity:0 } }
+        @keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         input[type=number] { -moz-appearance: textfield; }
@@ -11494,7 +11514,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
 // ============================================
 // PREPARATION DETAIL SCREEN
 // ============================================
-function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onManualConfirmLoc, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, qtyOverrides, onValidate, onValidateAndPack, onBack, onReport, session }: any) {
+function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onManualConfirmLoc, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, qtyOverrides, onValidate, onValidateAndPack, onBack, onReport, onRecheckAvail, session }: any) {
   // ── qty helper: overrides take priority over moveLines data ──
   const getQty = (ml: any) => qtyOverrides?.[ml.id] !== undefined ? qtyOverrides[ml.id] : (ml.qty_done || 0);
 
@@ -11511,6 +11531,14 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   const [weightInput, setWeightInput] = useState("");
   const [showWeightModal, setShowWeightModal] = useState(false);
   const [reprintingBL, setReprintingBL] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
+
+  const recheckAvail = async () => {
+    if (!session || rechecking || !onRecheckAvail) return;
+    setRechecking(true);
+    try { await onRecheckAvail(picking); }
+    finally { setRechecking(false); }
+  };
 
   const reprintBL = async () => {
     if (!session || reprintingBL) return;
@@ -11811,6 +11839,9 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{picking.name}</div>
           {picking.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{picking.partner_id[1]}</div>}
         </div>
+        <button onClick={recheckAvail} disabled={rechecking} title="Revérifier la disponibilité dans Odoo" style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8, opacity: rechecking ? 0.5 : 1 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={rechecking ? C.textMuted : C.blue} strokeWidth="2" style={rechecking ? { animation: "spin 0.8s linear infinite" } : undefined}><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        </button>
         <button onClick={reprintBL} disabled={reprintingBL} title="Réimprimer le bon de préparation" style={{ ...iconBtn, background: reprintingBL ? C.bg : C.bg, borderRadius: 8, padding: 8, opacity: reprintingBL ? 0.5 : 1 }}>
           {reprintingBL
             ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
