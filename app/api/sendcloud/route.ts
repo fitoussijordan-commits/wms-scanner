@@ -193,7 +193,8 @@ async function createParcelV2Direct(
         ?? order.service_point_details?.id ?? null;
       if (wantsServicePoint && spId) {
         try {
-          const sp = await scJson(`${V2}/service-points/${encodeURIComponent(String(spId))}`, auth);
+          // ⚠ API service-points sur un domaine dédié (≠ panel.sendcloud.sc)
+          const sp = await scJson(`https://servicepoints.sendcloud.sc/api/v2/service-points/${encodeURIComponent(String(spId))}`, auth);
           spCarrier = String(sp?.carrier || sp?.service_point?.carrier || "").toLowerCase();
         } catch {}
       }
