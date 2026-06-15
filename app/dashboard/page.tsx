@@ -289,6 +289,7 @@ const TABS = [
   { key: "libre", label: "Mode Libre", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> },
   { key: "dlv", label: "Suivi DLV", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><circle cx="12" cy="16" r="2" fill="currentColor"/></svg> },
   { key: "transporteurs", label: "Analyse transporteurs", icon: I.truck },
+  { key: "reception", label: "Réception", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg> },
 ] as const;
 
 // ─── CATALOGUE — définition des colonnes disponibles ────────────────────────
@@ -459,6 +460,14 @@ export default function Dashboard() {
   const [tab, setTab] = useState<string>("stock-monitor");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // ─── Réception fournisseur ───────────────────────────────────────────────
+  interface RecepRow { odooRef: string; supplierRef: string; productName: string; qty: number; lot: string; pickingName: string; date: string; }
+  const [recVendors, setRecVendors] = useState<{ id: number; name: string }[]>([]);
+  const [recVendorId, setRecVendorId] = useState<number | null>(null);
+  const [recRows, setRecRows] = useState<RecepRow[]>([]);
+  const [recLoading, setRecLoading] = useState(false);
+  const [recVendorsLoading, setRecVendorsLoading] = useState(false);
 
   // ─── Analyse transporteurs ───────────────────────────────────────────────
   interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; options?: number; total: number; coutReel?: number; mois?: string }
@@ -1943,6 +1952,141 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   }, [session, consoMonths, stockMap]);
 
 
+  // ── Réception : liste des fournisseurs ayant des réceptions « Fait » ──
+  const loadRecVendors = useCallback(async () => {
+    if (!session) return;
+    setRecVendorsLoading(true); setError("");
+    try {
+      // Types de transfert "entrée" (incoming)
+      const inTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "incoming"]], ["id"], 50);
+      const inTypeIds = inTypes.map((t: any) => t.id);
+      // Pickings reçus (done) → on récupère les partenaires distincts
+      const pickings = await odoo.searchRead(
+        session, "stock.picking",
+        [["picking_type_id", "in", inTypeIds], ["state", "=", "done"]],
+        ["partner_id"], 5000, "id desc"
+      );
+      const byId: Record<number, string> = {};
+      for (const p of pickings) {
+        if (Array.isArray(p.partner_id) && p.partner_id[0]) byId[p.partner_id[0]] = p.partner_id[1];
+      }
+      const vendors = Object.entries(byId).map(([id, name]) => ({ id: Number(id), name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setRecVendors(vendors);
+    } catch (e: any) { setError(e.message); } finally { setRecVendorsLoading(false); }
+  }, [session]);
+
+  // ── Réception : charge les lignes reçues pour le fournisseur sélectionné ──
+  const loadReceptions = useCallback(async () => {
+    if (!session || !recVendorId) return;
+    setRecLoading(true); setError(""); setRecRows([]);
+    try {
+      const inTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "incoming"]], ["id"], 50);
+      const inTypeIds = inTypes.map((t: any) => t.id);
+      const pickings = await odoo.searchRead(
+        session, "stock.picking",
+        [["picking_type_id", "in", inTypeIds], ["state", "=", "done"], ["partner_id", "=", recVendorId]],
+        ["id", "name", "date_done", "scheduled_date"], 5000, "date_done desc"
+      );
+      if (!pickings.length) { setRecRows([]); setRecLoading(false); return; }
+      const pickById: Record<number, any> = {};
+      for (const p of pickings) pickById[p.id] = p;
+      const pickIds = pickings.map((p: any) => p.id);
+
+      // Lignes de mouvement réellement reçues (qté + lot)
+      const mls = await odoo.searchRead(
+        session, "stock.move.line",
+        [["picking_id", "in", pickIds], ["state", "=", "done"]],
+        ["product_id", "qty_done", "lot_id", "lot_name", "picking_id"], 20000
+      );
+
+      // Détails produits : ref Odoo (default_code) + template pour code fournisseur custom
+      const prodIds = Array.from(new Set(mls.map((m: any) => Array.isArray(m.product_id) ? m.product_id[0] : null).filter(Boolean)));
+      const prodById: Record<number, any> = {};
+      const tmplIds = new Set<number>();
+      if (prodIds.length) {
+        const prods = await odoo.searchRead(session, "product.product", [["id", "in", prodIds]], ["id", "default_code", "name", "product_tmpl_id"], 5000);
+        for (const p of prods) { prodById[p.id] = p; if (Array.isArray(p.product_tmpl_id)) tmplIds.add(p.product_tmpl_id[0]); }
+      }
+
+      // Réf fournisseur — source 1 : champ custom sur le template
+      const supRefByTmpl: Record<number, string> = {};
+      if (tmplIds.size) {
+        try {
+          const tmpls = await odoo.searchRead(session, "product.template", [["id", "in", Array.from(tmplIds)]], ["id", "x_studio_code_produit_fournisseur"], 5000);
+          for (const t of tmpls) if (t.x_studio_code_produit_fournisseur) supRefByTmpl[t.id] = String(t.x_studio_code_produit_fournisseur);
+        } catch { /* champ custom absent sur cette base : on ignore */ }
+      }
+      // Réf fournisseur — source 2 : product.supplierinfo de CE fournisseur
+      const supRefByTmpl2: Record<number, string> = {};
+      const supRefByProd: Record<number, string> = {};
+      if (tmplIds.size) {
+        try {
+          const sis = await odoo.searchRead(
+            session, "product.supplierinfo",
+            [["partner_id", "=", recVendorId], ["product_tmpl_id", "in", Array.from(tmplIds)]],
+            ["product_code", "product_tmpl_id", "product_id"], 10000
+          );
+          for (const si of sis) {
+            const code = String(si.product_code || "").trim();
+            if (!code) continue;
+            if (Array.isArray(si.product_id) && si.product_id[0]) supRefByProd[si.product_id[0]] = code;
+            else if (Array.isArray(si.product_tmpl_id) && si.product_tmpl_id[0]) supRefByTmpl2[si.product_tmpl_id[0]] = code;
+          }
+        } catch { /* ignore */ }
+      }
+
+      const rows: RecepRow[] = mls.map((m: any) => {
+        const pid = Array.isArray(m.product_id) ? m.product_id[0] : null;
+        const prod = pid ? prodById[pid] : null;
+        const tmplId = prod && Array.isArray(prod.product_tmpl_id) ? prod.product_tmpl_id[0] : null;
+        const supplierRef = (pid && supRefByProd[pid]) || (tmplId && supRefByTmpl2[tmplId]) || (tmplId && supRefByTmpl[tmplId]) || "";
+        const pick = Array.isArray(m.picking_id) ? pickById[m.picking_id[0]] : null;
+        const lot = (Array.isArray(m.lot_id) ? m.lot_id[1] : "") || m.lot_name || "";
+        return {
+          odooRef: prod?.default_code || "",
+          supplierRef,
+          productName: prod?.name || (Array.isArray(m.product_id) ? m.product_id[1] : ""),
+          qty: m.qty_done || 0,
+          lot,
+          pickingName: pick?.name || "",
+          date: (pick?.date_done || pick?.scheduled_date || "").substring(0, 10),
+        };
+      });
+      rows.sort((a, b) => (a.productName || "").localeCompare(b.productName || ""));
+      setRecRows(rows);
+    } catch (e: any) { setError(e.message); } finally { setRecLoading(false); }
+  }, [session, recVendorId]);
+
+  const recExportExcel = async () => {
+    if (!recRows.length) return;
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Réception", { views: [{ state: "frozen", ySplit: 1 }] });
+    ws.columns = [
+      { header: "Réf Odoo", key: "odooRef", width: 16 },
+      { header: "Réf fournisseur", key: "supplierRef", width: 18 },
+      { header: "Nom du produit", key: "productName", width: 46 },
+      { header: "Qté reçue", key: "qty", width: 12 },
+      { header: "Lot reçu", key: "lot", width: 16 },
+      { header: "Réception", key: "pickingName", width: 16 },
+      { header: "Date", key: "date", width: 12 },
+    ];
+    ws.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF7C3AED" } };
+    ws.getRow(1).alignment = { vertical: "middle" };
+    for (const r of recRows) ws.addRow(r);
+    ws.getColumn("qty").numFmt = "#,##0";
+    const vendorName = recVendors.find(v => v.id === recVendorId)?.name || "fournisseur";
+    const safe = vendorName.replace(/[^\w]+/g, "_").slice(0, 30);
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `reception_${safe}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  };
+
   const loadDeliveries = useCallback(async () => {
     if (!session) return; setLoading(true); setError(""); setPrepStats([]);
     try {
@@ -2303,6 +2447,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
     if (tab === "deliveries") loadDeliveries();
     if (tab === "stock-monitor" && smRows.length === 0) smLoad(smDeliveryMonth);
     if (tab === "dlv" && dlvRows.length === 0) loadDlv();
+    if (tab === "reception" && recVendors.length === 0) loadRecVendors();
   }, [tab, session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ══════════════════════════════════════════════════════
@@ -4839,6 +4984,82 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
             </div>
           );
         })()}
+
+        {/* ══════════════════ RÉCEPTION FOURNISSEUR ══════════════════ */}
+        {tab === "reception" && (
+          <div style={{ animation: "fadeIn .3s ease both" }}>
+            {/* Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 16 }}>
+              <div>
+                <h2 style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-.2px", marginBottom: 4, color: "#0f172a" }}>Réception</h2>
+                <p style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>Réceptions terminées (Fait) par fournisseur — réf Odoo, réf fournisseur, qté reçue et lot.</p>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <select
+                  value={recVendorId ?? ""}
+                  onChange={(e) => { const v = e.target.value ? Number(e.target.value) : null; setRecVendorId(v); setRecRows([]); }}
+                  className="wms-input"
+                  style={{ minWidth: 240, padding: "8px 12px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }}
+                  disabled={recVendorsLoading}
+                >
+                  <option value="">{recVendorsLoading ? "Chargement des fournisseurs…" : "— Choisir un fournisseur —"}</option>
+                  {recVendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                </select>
+                <button className="wms-btn wms-btn-primary" onClick={loadReceptions} disabled={!recVendorId || recLoading}>
+                  {recLoading ? <Spinner /> : I.refresh} Charger les réceptions
+                </button>
+                <button className="wms-btn" onClick={recExportExcel} disabled={!recRows.length}>
+                  Export Excel
+                </button>
+              </div>
+            </div>
+
+            {/* Résumé */}
+            {recRows.length > 0 && (
+              <div style={{ display: "flex", gap: 16, marginBottom: 16, fontSize: 13, color: "var(--text-muted)" }}>
+                <span><strong style={{ color: "var(--text-primary)" }}>{recRows.length}</strong> lignes reçues</span>
+                <span><strong style={{ color: "var(--text-primary)" }}>{new Set(recRows.map(r => r.odooRef || r.productName)).size}</strong> produits distincts</span>
+                <span><strong style={{ color: "var(--text-primary)" }}>{Math.round(recRows.reduce((s, r) => s + r.qty, 0)).toLocaleString("fr-FR")}</strong> unités au total</span>
+                {recRows.some(r => !r.supplierRef) && (
+                  <span style={{ color: "#d97706", fontWeight: 600 }}>⚠ {recRows.filter(r => !r.supplierRef).length} sans réf fournisseur</span>
+                )}
+              </div>
+            )}
+
+            {/* Tableau */}
+            {recRows.length > 0 ? (
+              <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden" }}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: "var(--bg-subtle, #f8fafc)", textAlign: "left" }}>
+                        {["Réf Odoo", "Réf fournisseur", "Nom du produit", "Qté reçue", "Lot reçu", "Réception"].map((h, i) => (
+                          <th key={i} style={{ padding: "10px 14px", fontWeight: 700, color: "var(--text-muted)", whiteSpace: "nowrap", borderBottom: "1px solid var(--border)", textAlign: i === 3 ? "right" : "left" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recRows.map((r, i) => (
+                        <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                          <td style={{ padding: "9px 14px", fontFamily: "monospace", fontWeight: 600, color: "#0f172a", whiteSpace: "nowrap" }}>{r.odooRef || "—"}</td>
+                          <td style={{ padding: "9px 14px", fontFamily: "monospace", color: r.supplierRef ? "#0f172a" : "#dc2626", whiteSpace: "nowrap" }}>{r.supplierRef || "(manquant)"}</td>
+                          <td style={{ padding: "9px 14px", color: "var(--text-primary)" }}>{r.productName}</td>
+                          <td style={{ padding: "9px 14px", textAlign: "right", fontWeight: 600, color: "#0f172a" }}>{Math.round(r.qty).toLocaleString("fr-FR")}</td>
+                          <td style={{ padding: "9px 14px", fontFamily: "monospace", color: "var(--text-muted)", whiteSpace: "nowrap" }}>{r.lot || "—"}</td>
+                          <td style={{ padding: "9px 14px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>{r.pickingName}{r.date ? ` · ${r.date}` : ""}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div style={{ padding: "40px 0", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
+                {recLoading ? "Chargement des réceptions…" : recVendorId ? "Aucune réception trouvée pour ce fournisseur. Cliquez sur « Charger les réceptions »." : "Choisissez un fournisseur puis cliquez sur « Charger les réceptions »."}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ══════════════════ ASSISTANT IA ODOO ══════════════════ */}
         {tab === "assistant" && (
