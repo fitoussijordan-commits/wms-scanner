@@ -1865,6 +1865,79 @@ export async function getQuantsForProduct(session: OdooSession, productId: numbe
   return quants;
 }
 
+// ============================================
+// VOLUME COMMANDE → reco emballage
+// ============================================
+
+// Parse "165mm x 28mm x 36mm" (ou "16,5 x 2,8 x 3,6 cm") → volume en cm³.
+// Retourne 0 si non parsable.
+export function parseDimsToCm3(raw: string): number {
+  if (!raw) return 0;
+  const s = String(raw).toLowerCase();
+  const nums = (s.match(/[\d]+(?:[.,]\d+)?/g) || []).map(n => parseFloat(n.replace(",", ".")));
+  if (nums.length < 3) return 0;
+  let [l, w, h] = nums;
+  // unité : mm par défaut si "mm" présent, sinon cm
+  if (/mm/.test(s)) { l /= 10; w /= 10; h /= 10; }
+  const v = l * w * h;
+  return isFinite(v) && v > 0 ? v : 0;
+}
+
+// Calcule le volume total (cm³) d'un ensemble de lignes { productId, quantity }.
+// Lit x_dimensions sur product.template (fallback volume m³ si dispo).
+export async function getOrderVolumeCm3(
+  session: OdooSession,
+  lines: { productId: number; quantity: number }[]
+): Promise<{ totalCm3: number; missing: number[] }> {
+  const ids = Array.from(new Set(lines.map(l => l.productId).filter(Boolean)));
+  if (!ids.length) return { totalCm3: 0, missing: [] };
+  const prods = await searchRead(
+    session, "product.product",
+    [["id", "in", ids]],
+    ["id", "product_tmpl_id", "volume"], ids.length
+  );
+  const tmplIds = Array.from(new Set(prods.map((p: any) => p.product_tmpl_id?.[0]).filter(Boolean)));
+  const tmpls = tmplIds.length
+    ? await searchRead(session, "product.template", [["id", "in", tmplIds]], ["id", "x_dimensions", "volume"], tmplIds.length)
+    : [];
+  const tmplMap: Record<number, any> = {};
+  for (const t of tmpls) tmplMap[t.id] = t;
+  const volByProduct: Record<number, number> = {};
+  for (const p of prods) {
+    const t = tmplMap[p.product_tmpl_id?.[0]];
+    let cm3 = parseDimsToCm3(t?.x_dimensions || "");
+    if (!cm3) {
+      const m3 = parseFloat(String(t?.volume ?? p.volume ?? 0));
+      if (m3 > 0) cm3 = m3 * 1_000_000; // m³ → cm³
+    }
+    volByProduct[p.id] = cm3;
+  }
+  let total = 0;
+  const missing: number[] = [];
+  for (const l of lines) {
+    const v = volByProduct[l.productId] || 0;
+    if (!v) missing.push(l.productId);
+    total += v * Math.max(1, l.quantity);
+  }
+  return { totalCm3: total, missing };
+}
+
+// Recommande un carton selon le volume total. marge = fraction utilisable (0.8 = -20%).
+export interface CartonReco { carton: "petit" | "grand"; count: number; label: string; }
+export function recommendCarton(
+  totalCm3: number,
+  petitCm3: number,
+  grandCm3: number,
+  marge = 0.8
+): CartonReco {
+  const petit = Math.max(1, petitCm3 * marge);
+  const grand = Math.max(1, grandCm3 * marge);
+  if (totalCm3 <= petit) return { carton: "petit", count: 1, label: "Petit carton" };
+  if (totalCm3 <= grand) return { carton: "grand", count: 1, label: "Grand carton" };
+  const count = Math.ceil(totalCm3 / grand);
+  return { carton: "grand", count, label: `${count} grands cartons` };
+}
+
 // Apply inventory adjustment: set inventory_quantity then call action_apply_inventory
 export async function applyInventoryAdjustment(
   session: OdooSession,
