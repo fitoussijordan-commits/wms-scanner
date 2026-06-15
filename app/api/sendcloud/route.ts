@@ -30,35 +30,42 @@ async function scJson(url: string, auth: string, options?: RequestInit) {
 // ─── Helpers partagés (négatifs / V2 direct) ─────────────────────────────────
 const INTEGRATION_ID = 527093;
 
-// Marque une commande V3 comme traitée ("fulfilled") pour qu'elle sorte de la
-// liste des commandes ouvertes. Utile après création d'un colis via le fallback
-// V2 (le V3 create-labels-async, lui, ferme l'order automatiquement).
-// IMPORTANT : le PATCH /orders/{id} attend l'ID INTERNE Sendcloud (≠ order_id
-// externe). On le résout d'abord à partir de l'order_number.
-async function markOrderFulfilled(auth: string, orderNumber: string, externalOrderId?: string | number): Promise<void> {
+// Sort une commande V3 de la file SendCloud après qu'un colis a été créé via le
+// fallback V2 (sinon l'order garde son bouton "créer étiquette" → risque de doublon).
+// Stratégie : cancel d'abord (réversible), DELETE en secours. Le DELETE cible l'ID
+// INTERNE Sendcloud (≠ order_id externe) — ce qui manquait dans l'ancienne version.
+async function consumeV3Order(auth: string, orderNumber: string, externalOrderId?: string | number): Promise<void> {
+  // Résoudre l'id interne par order_number
+  let internalId: string | number | null = null;
   try {
-    // 1. Retrouver l'order V3 (id interne) par order_number
-    let internalId: string | number | null = null;
-    try {
-      const list = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&order_number=${encodeURIComponent(orderNumber)}`, auth);
-      const arr = list.data || list.results || list.orders || [];
-      const found = arr.find((o: any) => String(o.order_number) === String(orderNumber)) || arr[0];
-      if (found?.id) internalId = found.id;
-    } catch {}
-    // Fallback : tenter directement avec l'external order_id si la recherche échoue
-    const targetId = internalId ?? externalOrderId;
-    if (!targetId) { console.warn("[sendcloud] markOrderFulfilled: id introuvable pour", orderNumber); return; }
+    const list = await scJson(`${V3}/orders?integration_id=${INTEGRATION_ID}&order_number=${encodeURIComponent(orderNumber)}`, auth);
+    const arr = list.data || list.results || list.orders || [];
+    const found = arr.find((o: any) => String(o.order_number) === String(orderNumber)) || arr[0];
+    if (found?.id) internalId = found.id;
+  } catch {}
 
-    await scJson(`${V3}/orders/${targetId}`, auth, {
-      method: "PATCH",
-      body: JSON.stringify({
-        order_details: { status: { code: "fulfilled", message: "Fulfilled" } },
-      }),
+  // 1) cancel (le plus propre)
+  try {
+    await scJson(`${V3}/orders/cancel`, auth, {
+      method: "POST",
+      body: JSON.stringify({ orders: [{ order_number: orderNumber }] }),
     });
-    console.log("[sendcloud] order", orderNumber, "(id", targetId, ") → marqué fulfilled");
+    console.log("[consume V3]", orderNumber, "annulée OK");
+    return;
   } catch (e: any) {
-    // Non bloquant : l'étiquette est déjà créée, on log juste l'échec de fermeture.
-    console.warn("[sendcloud] markOrderFulfilled échoué pour", orderNumber, ":", e.message);
+    console.warn("[consume V3] cancel échoué pour", orderNumber, ":", e.message);
+  }
+
+  // 2) DELETE par id interne (puis external en dernier recours)
+  const targetId = internalId ?? externalOrderId;
+  if (targetId) {
+    try {
+      await scJson(`${V3}/orders/${encodeURIComponent(String(targetId))}`, auth, { method: "DELETE" });
+      console.log("[consume V3]", orderNumber, "(id", targetId, ") supprimée OK");
+      return;
+    } catch (e: any) {
+      console.warn("[consume V3] DELETE échoué pour", orderNumber, ":", e.message);
+    }
   }
 }
 
@@ -740,7 +747,7 @@ export async function POST(req: NextRequest) {
       const { order_id: orderId, order_number: orderNumber, order_raw: raw, shipment_id: clientShipmentId } = body;
       if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
       // Mémorise si le colis a été créé via le fallback V2 (→ il faut alors
-      // fermer manuellement l'order V3, que V2 ne ferme pas).
+      // sortir l'order V3 de la file SendCloud, que V2 ne consomme pas).
       let createdViaV2 = false;
 
       // Un colis est "annulé" si son statut le dit (id 1999/2000/2001 ou message "cancel").
@@ -876,7 +883,7 @@ export async function POST(req: NextRequest) {
                 if (!parcel) {
                   // colis V2 bien créé mais label pas encore prêt → on ferme déjà
                   // l'order V3 (le colis existe), puis 202 pour retry client
-                  await markOrderFulfilled(auth, orderNumber, orderId);
+                  await consumeV3Order(auth, orderNumber, orderId);
                   return NextResponse.json({
                     parcelId: v2Parcel.id,
                     tracking: v2Parcel.tracking_number || "",
@@ -931,7 +938,7 @@ export async function POST(req: NextRequest) {
 
       // Si le colis a été créé via le fallback V2, l'order V3 reste "Ouvert" :
       // on le marque fulfilled pour qu'il sorte des commandes ouvertes.
-      if (createdViaV2) await markOrderFulfilled(auth, orderNumber, orderId);
+      if (createdViaV2) await consumeV3Order(auth, orderNumber, orderId);
 
       const pdfBuffer = Buffer.from(await labelRes.arrayBuffer());
       return NextResponse.json({
