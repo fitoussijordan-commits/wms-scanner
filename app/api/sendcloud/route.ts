@@ -127,6 +127,32 @@ async function createParcelV2Direct(
     }, 0)
   ).toFixed(3);
 
+  // ── Point relais (service point) ────────────────────────────────────────
+  // Pour les envois en point relais, SendCloud EXIGE to_service_point (ID du point
+  // choisi par le client), sinon : 400 "A service point is required".
+  // On cherche l'ID dans tous les emplacements connus de la structure order V3/V2.
+  const servicePointId =
+    order.to_service_point ??
+    order.service_point_id ??
+    order.servicePoint?.id ??
+    order.service_point?.id ??
+    details.to_service_point ??
+    details.service_point_id ??
+    details.service_point?.id ??
+    order.shipping_address?.to_service_point ??
+    addr.service_point_id ??
+    addr.to_service_point ??
+    order.checkout_payload?.service_point?.id ??
+    order.checkout_payload?.to_service_point ??
+    null;
+  // to_post_number : requis uniquement pour DHL Allemagne en point relais
+  const postNumber =
+    order.to_post_number ??
+    details.to_post_number ??
+    addr.to_post_number ??
+    order.checkout_payload?.to_post_number ??
+    null;
+
   const v2Payload: any = {
     parcel: {
       name,
@@ -146,10 +172,12 @@ async function createParcelV2Direct(
       request_label: true,
       ...(parcelItems.length > 0 && { parcel_items: parcelItems }),
       ...(shipmentId ? { shipment: { id: shipmentId } } : {}),
+      ...(servicePointId ? { to_service_point: Number(servicePointId) } : {}),
+      ...(postNumber ? { to_post_number: String(postNumber) } : {}),
     },
   };
 
-  console.log("[V2 direct] order:", orderNumber, "| netTotal:", netTotal.toFixed(2), "| items+:", parcelItems.length, "| shipment:", shipmentId, "| weight:", totalWeight);
+  console.log("[V2 direct] order:", orderNumber, "| netTotal:", netTotal.toFixed(2), "| items+:", parcelItems.length, "| shipment:", shipmentId, "| servicePoint:", servicePointId, "| weight:", totalWeight);
 
   const result = await scJson(`${V2}/parcels`, auth, {
     method: "POST",
@@ -642,8 +670,11 @@ export async function POST(req: NextRequest) {
             }
           } catch (v2Err: any) {
             console.error("[label POST] V2 direct échoué:", v2Err.message);
+            const isServicePoint = /service_point|service point|to_service_point/i.test(v2Err.message || "");
             return NextResponse.json({
-              error: negativeDetected
+              error: isServicePoint
+                ? `Commande en point relais sans point relais associé dans SendCloud. Le client n'a pas (ou plus) de point relais sélectionné : à compléter manuellement dans SendCloud avant d'imprimer l'étiquette.`
+                : negativeDetected
                 ? `Impossible de créer l'étiquette malgré le bypass V2 : ${v2Err.message}`
                 : `V3 et V2 ont échoué : ${v2Err.message}`,
             }, { status: 422 });
