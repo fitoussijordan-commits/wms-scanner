@@ -6217,26 +6217,28 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
         {/* Current article card */}
         {allScanned || isPrepared ? (
-          <div style={{ background: C.greenSoft, border: `2px solid ${C.green}`, borderRadius: 20, padding: 32, textAlign: "center", marginBottom: 16 }}>
-            <div style={{ fontSize: 40, marginBottom: 8 }}>✅</div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: C.green }}>Tout préparé !</div>
+          <div style={{ background: C.greenSoft, border: `1px solid ${C.greenBorder}`, borderRadius: 14, padding: 32, textAlign: "center", marginBottom: 16 }}>
+            <div style={{ width: 56, height: 56, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: C.green }}>Tout préparé !</div>
             <div style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>{items.length} articles scannés</div>
           </div>
         ) : currentItem ? (
           <div style={{
-            background: locConfirmed ? "#f0fdf4" : "#f8fafc",
-            border: `2px solid ${locConfirmed ? C.green : C.blue}`,
-            borderRadius: 20, padding: 20, marginBottom: 16,
+            background: locConfirmed ? C.greenSoft : C.blueSoft,
+            border: `1.5px solid ${locConfirmed ? C.green : C.blue}`,
+            borderRadius: 14, padding: 20, marginBottom: 16,
             transition: "background .3s, border-color .3s"
           }}>
             {/* Step indicator */}
             <div style={{ fontSize: 11, fontWeight: 700, color: locConfirmed ? C.green : C.blue, letterSpacing: 0.5, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
               {currentItem._isChariot ? (
-                <><span style={{ background: "#7c3aed", color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>🛒</span> <span style={{ color: "#7c3aed" }}>ARTICLE SUR LE CHARIOT ESHOP</span></>
+                <><span style={{ background: C.blue, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11V6a3 3 0 016 0v5"/><path d="M5 11h14l-1.2 9.2a2 2 0 01-2 1.8H8.2a2 2 0 01-2-1.8L5 11z"/></svg></span> <span style={{ color: C.blue }}>ARTICLE SUR LE CHARIOT ESHOP</span></>
               ) : !locConfirmed ? (
                 <><span style={{ background: C.blue, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>1</span> SCANNER L'EMPLACEMENT</>
               ) : (
-                <><span style={{ background: C.green, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>✓</span> EMPLACEMENT OK — SCANNER L'ARTICLE</>
+                <><span style={{ background: C.green, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg></span> EMPLACEMENT OK — SCANNER L'ARTICLE</>
               )}
             </div>
 
@@ -6245,8 +6247,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
               <button
                 onClick={() => setLocConfirmed(true)}
                 style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, width: "100%", border: "none", cursor: "pointer", padding: 0, background: "none", fontFamily: "inherit" }}>
-                <div style={{ background: locConfirmed ? C.greenSoft : C.blueSoft, border: `1px solid ${locConfirmed ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 20, fontWeight: 900, color: locConfirmed ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center" }}>
-                  📍 {shortLoc(currentLocName) || "Emplacement inconnu"}
+                <div style={{ background: locConfirmed ? C.greenSoft : C.blueSoft, border: `1px solid ${locConfirmed ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 20, fontWeight: 700, color: locConfirmed ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                  {shortLoc(currentLocName) || "Emplacement inconnu"}
                 </div>
                 {locConfirmed && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
@@ -6255,7 +6258,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             )}
 
             {/* Article name */}
-            <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b", marginBottom: 4, lineHeight: 1.3 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4, lineHeight: 1.3 }}>
               {getMatch(currentItem.sku)?.product_name || currentItem.description || currentItem.sku}
             </div>
             <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14 }}>
@@ -6267,8 +6270,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             {currentItem._isChariot ? (
               <button
                 onClick={() => adjustQty(currentItem.sku, currentItem.quantity || 1)}
-                style={{ width: "100%", padding: "16px 0", borderRadius: 14, border: "none", background: "#7c3aed", color: "#fff", fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(124,58,237,0.35)" }}>
-                ✓ OK — Article sur le chariot ({currentItem.quantity || 1} unité{(currentItem.quantity || 1) > 1 ? "s" : ""})
+                style={{ width: "100%", padding: "16px 0", borderRadius: 10, border: "none", background: C.blue, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                OK — Article sur le chariot ({currentItem.quantity || 1} unité{(currentItem.quantity || 1) > 1 ? "s" : ""})
               </button>
             ) : (
               <div>
@@ -6280,7 +6284,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                     −
                   </button>
                   <div style={{ flex: 1, textAlign: "center", padding: "12px 4px" }}>
-                    <span style={{ fontSize: 36, fontWeight: 900, color: C.text }}>{scannedSkus[currentItem.sku] || 0}</span>
+                    <span style={{ fontSize: 36, fontWeight: 700, color: C.text }}>{scannedSkus[currentItem.sku] || 0}</span>
                     <span style={{ fontSize: 18, color: C.textMuted, margin: "0 4px" }}>/</span>
                     <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{currentItem.quantity || 1}</span>
                     <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 4 }}>Units</span>
@@ -6295,8 +6299,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                 {locConfirmed && (scannedSkus[currentItem.sku] || 0) > 0 && (scannedSkus[currentItem.sku] || 0) < (currentItem.quantity || 1) && (
                   <button
                     onClick={() => adjustQty(currentItem.sku, currentItem.quantity || 1)}
-                    style={{ width: "100%", padding: "11px 0", borderRadius: 12, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(34,197,94,0.35)" }}>
-                    ✓ Tout mettre — {currentItem.quantity || 1} unité{(currentItem.quantity || 1) > 1 ? "s" : ""}
+                    style={{ width: "100%", padding: "11px 0", borderRadius: 10, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                    Tout mettre — {currentItem.quantity || 1} unité{(currentItem.quantity || 1) > 1 ? "s" : ""}
                   </button>
                 )}
               </div>
@@ -6312,7 +6317,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
               placeholder={currentItem?._isChariot ? "Article sur le chariot — appuyer OK" : !locConfirmed ? "Scanner l'emplacement..." : "Scanner l'article..."}
             />
             {scanError && (
-              <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", marginTop: 6, fontSize: 12, color: "#dc2626" }}>
+              <div style={{ background: C.redSoft, border: `1px solid ${C.redBorder}`, borderRadius: 8, padding: "8px 12px", marginTop: 6, fontSize: 12, color: C.red }}>
                 {scanError}
               </div>
             )}
@@ -6323,8 +6328,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         {/* Done items (collapsible) */}
         {doneItems.length > 0 && (
           <details style={{ marginBottom: 16 }}>
-            <summary style={{ fontSize: 12, fontWeight: 700, color: C.green, cursor: "pointer", letterSpacing: 0.5, textTransform: "uppercase" as const, padding: "8px 0", userSelect: "none" as const }}>
-              ✓ Préparés ({doneItems.length}) — appuyer pour modifier
+            <summary style={{ fontSize: 12, fontWeight: 700, color: C.green, cursor: "pointer", letterSpacing: 0.5, textTransform: "uppercase" as const, padding: "8px 0", userSelect: "none" as const, display: "flex", alignItems: "center", gap: 6 }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+              Préparés ({doneItems.length}) — appuyer pour modifier
             </summary>
             <div style={{ marginTop: 8 }}>
               {doneItems.map((item: any) => {
@@ -6333,13 +6339,13 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                   <div key={item.sku} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 6, background: C.greenSoft, border: `1px solid ${C.greenBorder}`, borderRadius: 10 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{getMatch(item.sku)?.product_name || item.description || item.sku}</div>
-                      <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
-                        {item._isChariot ? "🛒 Chariot" : loc ? shortLoc(loc.location_name) : "—"}
+                      <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}>
+                        {item._isChariot ? (<><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11V6a3 3 0 016 0v5"/><path d="M5 11h14l-1.2 9.2a2 2 0 01-2 1.8H8.2a2 2 0 01-2-1.8L5 11z"/></svg>Chariot</>) : loc ? shortLoc(loc.location_name) : "—"}
                         <span style={{ color: C.green, fontWeight: 700, marginLeft: 6 }}>{scannedSkus[item.sku] || item.quantity}/{item.quantity}</span>
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                      <button onClick={() => adjustQty(item.sku, (scannedSkus[item.sku] || 0) - 1)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#dc2626" }}>−</button>
+                      <button onClick={() => adjustQty(item.sku, (scannedSkus[item.sku] || 0) - 1)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.red }}>−</button>
                       <button onClick={() => adjustQty(item.sku, (scannedSkus[item.sku] || 0) + 1)} disabled={(scannedSkus[item.sku] || 0) >= (item.quantity || 1)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.blue, opacity: (scannedSkus[item.sku] || 0) >= (item.quantity || 1) ? 0.3 : 1 }}>+</button>
                     </div>
                   </div>
@@ -6363,7 +6369,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                   <div style={{ width: 6, height: 6, borderRadius: "50%", background: isCurrent ? C.blue : C.border, flexShrink: 0 }} />
                   <div style={{ width: 6, height: 6, borderRadius: "50%", background: isCurrent ? C.blue : C.border, flexShrink: 0 }} />
                   <div style={{ flex: 1, fontSize: 12, color: C.text, fontWeight: isCurrent ? 700 : 400 }}>{getMatch(item.sku)?.product_name || item.description || item.sku}</div>
-                  <div style={{ fontSize: 11, color: C.textMuted }}>{item._isChariot ? "🛒" : loc ? shortLoc(loc.location_name) : "—"}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted, display: "flex", alignItems: "center" }}>{item._isChariot ? (<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11V6a3 3 0 016 0v5"/><path d="M5 11h14l-1.2 9.2a2 2 0 01-2 1.8H8.2a2 2 0 01-2-1.8L5 11z"/></svg>) : loc ? shortLoc(loc.location_name) : "—"}</div>
                   <div style={{ fontSize: 11, fontWeight: 700, color: C.textSec }}>{scannedSkus[item.sku] || 0}/{item.quantity || 1}</div>
                 </div>
               );
@@ -6386,8 +6392,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             disabled={scannedCount === 0}
           />
         ) : (
-          <div style={{ textAlign: "center" as const, padding: "16px 0", color: C.green, fontSize: 14, fontWeight: 700 }}>
-            ✓ Commande déjà préparée
+          <div style={{ textAlign: "center" as const, padding: "16px 0", color: C.green, fontSize: 14, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+            Commande déjà préparée
           </div>
         )}
       </>
@@ -6404,8 +6411,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           {parcels.length > 0 && (
             <button
               onClick={async () => { for (const p of parcels) await doPrintOrderBarcode(p); }}
-              style={{ ...iconBtn, background: "#fef3c7", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700, color: "#92400e", border: `1px solid #f59e0b` }}>
-              🖨️ Tout imprimer
+              style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700, color: C.blue, border: `1px solid ${C.blueBorder}`, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+              Tout imprimer
             </button>
           )}
           <button onClick={loadParcels} disabled={loading} style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
@@ -6424,16 +6432,17 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-                  <span style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{p.order_number}</span>
-                  {isPrepared && <span style={{ fontSize: 10, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "1px 7px", borderRadius: 6 }}>✓ Préparé</span>}
+                  <span style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{p.order_number}</span>
+                  {isPrepared && <span style={{ fontSize: 10, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "1px 7px", borderRadius: 6, display: "inline-flex", alignItems: "center", gap: 4 }}><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>Préparé</span>}
                 </div>
                 <div style={{ fontSize: 12, color: C.textSec, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{p.name} — {p.city}</div>
                 <div style={{ fontSize: 11, color: C.textMuted }}>{items.length} article{items.length > 1 ? "s" : ""}</div>
               </div>
               <button
                 onClick={() => doPrintOrderBarcode(p)}
-                style={{ flexShrink: 0, padding: "10px 14px", background: "#db2777", color: "#fff", border: "none", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                🏷️ Code-barre
+                style={{ flexShrink: 0, padding: "10px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                Code-barre
               </button>
             </div>
           </div>
@@ -6494,14 +6503,19 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             {waveSelectMode && waveOrders.size > 0 && (
               <button
                 onClick={() => { setWaveActive(true); setWaveScannedSkus({}); setWaveLocConfirmed(false); setWaveScanError(""); setEshopTab("wave"); }}
-                style={{ padding: "7px 12px", background: "#db2777", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                🧺 Liste de prélèvement ({waveOrders.size})
+                style={{ padding: "7px 12px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11V6a3 3 0 016 0v5"/><path d="M5 11h14l-1.2 9.2a2 2 0 01-2 1.8H8.2a2 2 0 01-2-1.8L5 11z"/></svg>
+                Liste de prélèvement ({waveOrders.size})
               </button>
             )}
             <button
               onClick={() => { setWaveSelectMode(m => !m); if (waveSelectMode) setWaveOrders(new Set()); }}
-              style={{ padding: "7px 12px", background: waveSelectMode ? "#fce7f3" : C.bg, color: waveSelectMode ? "#9d174d" : C.textSec, border: `1.5px solid ${waveSelectMode ? "#db2777" : C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-              {waveSelectMode ? "✕ Annuler" : "☑ Sélection lot"}
+              style={{ padding: "7px 12px", background: waveSelectMode ? C.blueSoft : C.bg, color: waveSelectMode ? C.blue : C.textSec, border: `1.5px solid ${waveSelectMode ? C.blue : C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              {waveSelectMode ? (
+                <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>Annuler</>
+              ) : (
+                <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>Sélection lot</>
+              )}
             </button>
           </div>
         </div>
@@ -6541,28 +6555,28 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             <div
               key={p.id}
               onClick={() => waveSelectMode ? toggleWaveOrder(p.order_number) : openPrepOrder(p)}
-              style={{ ...cardStyle, marginBottom: 8, padding: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10, background: isSelected ? "#fce7f3" : C.white, border: `1.5px solid ${isSelected ? "#db2777" : hasShortage ? "#ef4444" : C.border}` }}
+              style={{ ...cardStyle, marginBottom: 8, padding: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10, background: isSelected ? C.blueSoft : C.white, border: `1.5px solid ${isSelected ? C.blue : hasShortage ? C.red : C.border}` }}
             >
               {waveSelectMode && (
-                <div style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${isSelected ? "#db2777" : C.border}`, background: isSelected ? "#db2777" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <div style={{ width: 22, height: 22, borderRadius: 6, border: `1.5px solid ${isSelected ? C.blue : C.border}`, background: isSelected ? C.blue : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   {isSelected && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
                 </div>
               )}
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 800, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
                   {p.order_number}
                   {hasShortage && (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="#ef4444" stroke="none">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.red} strokeWidth="2">
                       <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-                      <line x1="12" y1="9" x2="12" y2="13" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
-                      <line x1="12" y1="17" x2="12.01" y2="17" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
+                      <line x1="12" y1="9" x2="12" y2="13"/>
+                      <line x1="12" y1="17" x2="12.01" y2="17"/>
                     </svg>
                   )}
                 </div>
                 <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
-                <div style={{ fontSize: 11, color: hasShortage ? "#ef4444" : C.textMuted }}>
+                <div style={{ fontSize: 11, color: hasShortage ? C.red : C.textMuted }}>
                   {(p.parcel_items || []).length} article(s)
-                  {hasShortage && ` · ⚠ ${missingItems.length} manquant${missingItems.length > 1 ? "s" : ""}`}
+                  {hasShortage && ` · ${missingItems.length} manquant${missingItems.length > 1 ? "s" : ""}`}
                 </div>
               </div>
               {!waveSelectMode && <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>}
@@ -6656,11 +6670,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       <>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-          <button onClick={cancelWave} style={{ ...iconBtn, background: "#fee2e2", borderRadius: 8, padding: 8 }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+          <button onClick={cancelWave} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>Liste de prélèvement</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Liste de prélèvement</div>
             <div style={{ fontSize: 12, color: C.textSec }}>{waveOrders.size} commande{waveOrders.size > 1 ? "s" : ""} · {items.length} référence{items.length > 1 ? "s" : ""}</div>
           </div>
         </div>
@@ -6668,7 +6682,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         {/* Commandes chips (figées) */}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const, marginBottom: 12 }}>
           {Array.from(waveOrders).map(on => (
-            <span key={on} style={{ fontSize: 11, fontWeight: 700, background: "#fce7f3", color: "#9d174d", padding: "3px 9px", borderRadius: 99, border: "1px solid #fbcfe8" }}>{on}</span>
+            <span key={on} style={{ fontSize: 11, fontWeight: 700, background: C.blueSoft, color: C.blue, padding: "3px 9px", borderRadius: 99, border: `1px solid ${C.blueBorder}` }}>{on}</span>
           ))}
         </div>
 
@@ -6689,17 +6703,17 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                 return (
                   <div key={op.orderNumber} style={{
                     display: "flex", alignItems: "center", gap: 5,
-                    background: orderDone ? C.greenSoft : "#f0f5ff",
+                    background: orderDone ? C.greenSoft : C.blueSoft,
                     border: `1px solid ${orderDone ? C.greenBorder : C.blueBorder}`,
                     borderRadius: 8, padding: "4px 10px",
                   }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: orderDone ? "#166534" : "#1e40af" }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: orderDone ? C.green : C.blue }}>
                       {op.orderNumber}
                     </span>
-                    <span style={{ fontSize: 12, fontWeight: 800, color: orderDone ? C.green : C.blue, fontFamily: "monospace" }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: orderDone ? C.green : C.blue, fontFamily: "monospace" }}>
                       {op.done}/{op.total}
                     </span>
-                    {orderDone && <span style={{ fontSize: 12 }}>✓</span>}
+                    {orderDone && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
                   </div>
                 );
               })}
@@ -6709,37 +6723,42 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
         {/* Carte article courant */}
         {allDone ? (
-          <div style={{ background: C.greenSoft, border: `2px solid ${C.green}`, borderRadius: 20, padding: 28, textAlign: "center", marginBottom: 16 }}>
-            <div style={{ fontSize: 36, marginBottom: 8 }}>✅</div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: C.green }}>Tout prélevé !</div>
+          <div style={{ background: C.greenSoft, border: `1px solid ${C.greenBorder}`, borderRadius: 14, padding: 28, textAlign: "center", marginBottom: 16 }}>
+            <div style={{ width: 52, height: 52, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: C.green }}>Tout prélevé !</div>
             <div style={{ fontSize: 13, color: C.textSec, marginTop: 4, marginBottom: 16 }}>{items.length} articles pour {waveOrders.size} commandes</div>
             {/* Impression en masse BL + étiquettes */}
             <button onClick={printAllWave} disabled={wavePrinting}
-              style={{ width: "100%", padding: "14px 0", borderRadius: 12, border: "none", background: wavePrinting ? "#9ca3af" : C.blue, color: "#fff", fontSize: 14, fontWeight: 800, cursor: wavePrinting ? "default" : "pointer", fontFamily: "inherit", marginBottom: 10, boxShadow: "0 2px 8px rgba(37,99,235,0.25)" }}>
-              {wavePrinting ? `🖨️ ${wavePrintProgress}` : `🖨️ Imprimer BL + étiquettes (${waveOrders.size})`}
+              style={{ width: "100%", padding: "14px 0", borderRadius: 10, border: "none", background: wavePrinting ? C.textMuted : C.blue, color: "#fff", fontSize: 14, fontWeight: 700, cursor: wavePrinting ? "default" : "pointer", fontFamily: "inherit", marginBottom: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+              {wavePrinting ? wavePrintProgress : `Imprimer BL + étiquettes (${waveOrders.size})`}
             </button>
-            <button onClick={completeWave} disabled={wavePrinting} style={{ width: "100%", padding: "14px 0", borderRadius: 12, border: "none", background: wavePrinting ? "#9ca3af" : C.green, color: "#fff", fontSize: 14, fontWeight: 800, cursor: wavePrinting ? "default" : "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(34,197,94,0.3)" }}>
-              ✓ Marquer les commandes comme préparées
+            <button onClick={completeWave} disabled={wavePrinting} style={{ width: "100%", padding: "14px 0", borderRadius: 10, border: "none", background: wavePrinting ? C.textMuted : C.green, color: "#fff", fontSize: 14, fontWeight: 700, cursor: wavePrinting ? "default" : "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+              Marquer les commandes comme préparées
             </button>
           </div>
         ) : currentItem ? (
-          <div style={{ background: waveLocConfirmed ? "#f0fdf4" : "#f8fafc", border: `2px solid ${waveLocConfirmed ? C.green : C.blue}`, borderRadius: 20, padding: 20, marginBottom: 16, transition: "background .3s, border-color .3s" }}>
+          <div style={{ background: waveLocConfirmed ? C.greenSoft : C.blueSoft, border: `1.5px solid ${waveLocConfirmed ? C.green : C.blue}`, borderRadius: 14, padding: 20, marginBottom: 16, transition: "background .3s, border-color .3s" }}>
             {/* Step indicator */}
             <div style={{ fontSize: 11, fontWeight: 700, color: waveLocConfirmed ? C.green : C.blue, letterSpacing: 0.5, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
               {currentItem._isChariot ? (
-                <><span style={{ background: "#7c3aed", color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>🛒</span><span style={{ color: "#7c3aed" }}>ARTICLE SUR LE CHARIOT ESHOP</span></>
+                <><span style={{ background: C.blue, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11V6a3 3 0 016 0v5"/><path d="M5 11h14l-1.2 9.2a2 2 0 01-2 1.8H8.2a2 2 0 01-2-1.8L5 11z"/></svg></span><span style={{ color: C.blue }}>ARTICLE SUR LE CHARIOT ESHOP</span></>
               ) : !waveLocConfirmed ? (
                 <><span style={{ background: C.blue, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>1</span> SCANNER L'EMPLACEMENT</>
               ) : (
-                <><span style={{ background: C.green, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>✓</span> EMPLACEMENT OK — SCANNER L'ARTICLE</>
+                <><span style={{ background: C.green, color: "#fff", borderRadius: "50%", width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg></span> EMPLACEMENT OK — SCANNER L'ARTICLE</>
               )}
             </div>
 
             {/* Location */}
             {!currentItem._isChariot && (
               <button onClick={() => setWaveLocConfirmed(true)} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, width: "100%", border: "none", cursor: "pointer", padding: 0, background: "none", fontFamily: "inherit" }}>
-                <div style={{ background: waveLocConfirmed ? C.greenSoft : C.blueSoft, border: `1px solid ${waveLocConfirmed ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 20, fontWeight: 900, color: waveLocConfirmed ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center" }}>
-                  📍 {currentItem.location || "Emplacement inconnu"}
+                <div style={{ background: waveLocConfirmed ? C.greenSoft : C.blueSoft, border: `1px solid ${waveLocConfirmed ? C.greenBorder : C.blueBorder}`, borderRadius: 10, padding: "10px 14px", fontSize: 20, fontWeight: 700, color: waveLocConfirmed ? C.green : C.blue, letterSpacing: 0.5, flex: 1, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                  {currentItem.location || "Emplacement inconnu"}
                 </div>
                 {waveLocConfirmed && <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
@@ -6748,7 +6767,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             )}
 
             {/* Article name + ref */}
-            <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b", marginBottom: 4, lineHeight: 1.3 }}>{currentItem.name}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4, lineHeight: 1.3 }}>{currentItem.name}</div>
             <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>
               SKU: {currentItem.sku}{currentItem.ref && currentItem.ref !== currentItem.sku && <span> · Réf: {currentItem.ref}</span>}
             </div>
@@ -6756,7 +6775,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             {/* Dispatch badges */}
             <div style={{ display: "flex", gap: 5, flexWrap: "wrap" as const, marginBottom: 14 }}>
               {currentItem.dispatch.map(d => (
-                <span key={d.orderNumber} style={{ fontSize: 12, fontWeight: 700, background: "#fce7f3", color: "#9d174d", padding: "3px 9px", borderRadius: 6 }}>
+                <span key={d.orderNumber} style={{ fontSize: 12, fontWeight: 700, background: C.blueSoft, color: C.blue, padding: "3px 9px", borderRadius: 6, border: `1px solid ${C.blueBorder}` }}>
                   {d.orderNumber} → {d.qty}
                 </span>
               ))}
@@ -6764,8 +6783,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
             {/* Chariot confirm OR qty counter */}
             {currentItem._isChariot ? (
-              <button onClick={() => adjustWaveQty(currentItem.sku, currentItem.totalQty)} style={{ width: "100%", padding: "16px 0", borderRadius: 14, border: "none", background: "#7c3aed", color: "#fff", fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(124,58,237,0.35)" }}>
-                ✓ OK — Article sur le chariot ({currentItem.totalQty} unité{currentItem.totalQty > 1 ? "s" : ""})
+              <button onClick={() => adjustWaveQty(currentItem.sku, currentItem.totalQty)} style={{ width: "100%", padding: "16px 0", borderRadius: 10, border: "none", background: C.blue, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                OK — Article sur le chariot ({currentItem.totalQty} unité{currentItem.totalQty > 1 ? "s" : ""})
               </button>
             ) : (
               <div>
@@ -6773,7 +6793,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                   <button onClick={() => { if (!waveLocConfirmed) setWaveLocConfirmed(true); adjustWaveQty(currentItem.sku, (waveScannedSkus[currentItem.sku] || 0) - 1); }} disabled={(waveScannedSkus[currentItem.sku] || 0) <= 0}
                     style={{ width: 64, flexShrink: 0, background: C.bg, border: "none", fontSize: 28, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", borderRight: `1px solid ${C.border}`, opacity: ((waveScannedSkus[currentItem.sku] || 0) <= 0) ? 0.3 : 1 }}>−</button>
                   <div style={{ flex: 1, textAlign: "center", padding: "12px 4px" }}>
-                    <span style={{ fontSize: 36, fontWeight: 900, color: C.text }}>{waveScannedSkus[currentItem.sku] || 0}</span>
+                    <span style={{ fontSize: 36, fontWeight: 700, color: C.text }}>{waveScannedSkus[currentItem.sku] || 0}</span>
                     <span style={{ fontSize: 18, color: C.textMuted, margin: "0 4px" }}>/</span>
                     <span style={{ fontSize: 20, fontWeight: 700, color: C.textSec }}>{currentItem.totalQty}</span>
                   </div>
@@ -6781,8 +6801,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                     style={{ width: 64, flexShrink: 0, background: C.blue, border: "none", fontSize: 28, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", opacity: ((waveScannedSkus[currentItem.sku] || 0) >= currentItem.totalQty) ? 0.3 : 1 }}>+</button>
                 </div>
                 {(waveScannedSkus[currentItem.sku] || 0) > 0 && (waveScannedSkus[currentItem.sku] || 0) < currentItem.totalQty && (
-                  <button onClick={() => { if (!waveLocConfirmed) setWaveLocConfirmed(true); adjustWaveQty(currentItem.sku, currentItem.totalQty); }} style={{ width: "100%", padding: "11px 0", borderRadius: 12, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(34,197,94,0.35)" }}>
-                    ✓ Tout mettre — {currentItem.totalQty} unité{currentItem.totalQty > 1 ? "s" : ""}
+                  <button onClick={() => { if (!waveLocConfirmed) setWaveLocConfirmed(true); adjustWaveQty(currentItem.sku, currentItem.totalQty); }} style={{ width: "100%", padding: "11px 0", borderRadius: 10, border: "none", background: C.green, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                    Tout mettre — {currentItem.totalQty} unité{currentItem.totalQty > 1 ? "s" : ""}
                   </button>
                 )}
               </div>
@@ -6794,28 +6815,29 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         {!allDone && (
           <div style={{ marginBottom: 12 }}>
             <InputBar onSubmit={handleWaveScan} placeholder={currentItem?._isChariot ? "Article sur le chariot — appuyer OK" : !waveLocConfirmed ? "Scanner l'emplacement..." : "Scanner l'article..."} />
-            {waveScanError && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", marginTop: 6, fontSize: 12, color: "#dc2626" }}>{waveScanError}</div>}
+            {waveScanError && <div style={{ background: C.redSoft, border: `1px solid ${C.redBorder}`, borderRadius: 8, padding: "8px 12px", marginTop: 6, fontSize: 12, color: C.red }}>{waveScanError}</div>}
           </div>
         )}
 
         {/* Articles prélevés */}
         {doneItems.length > 0 && (
           <details style={{ marginBottom: 16 }}>
-            <summary style={{ fontSize: 12, fontWeight: 700, color: C.green, cursor: "pointer", letterSpacing: 0.5, textTransform: "uppercase" as const, padding: "8px 0", userSelect: "none" as const }}>
-              ✓ Prélevés ({doneItems.length}) — appuyer pour modifier
+            <summary style={{ fontSize: 12, fontWeight: 700, color: C.green, cursor: "pointer", letterSpacing: 0.5, textTransform: "uppercase" as const, padding: "8px 0", userSelect: "none" as const, display: "flex", alignItems: "center", gap: 6 }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+              Prélevés ({doneItems.length}) — appuyer pour modifier
             </summary>
             <div style={{ marginTop: 8 }}>
               {doneItems.map(item => (
                 <div key={item.sku} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 6, background: C.greenSoft, border: `1px solid ${C.greenBorder}`, borderRadius: 10 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{item.name}</div>
-                    <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
-                      {item._isChariot ? "🛒 Chariot" : item.location}
+                    <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}>
+                      {item._isChariot ? (<><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11V6a3 3 0 016 0v5"/><path d="M5 11h14l-1.2 9.2a2 2 0 01-2 1.8H8.2a2 2 0 01-2-1.8L5 11z"/></svg>Chariot</>) : item.location}
                       <span style={{ color: C.green, fontWeight: 700, marginLeft: 6 }}>{waveScannedSkus[item.sku] || item.totalQty}/{item.totalQty}</span>
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                    <button onClick={() => adjustWaveQty(item.sku, (waveScannedSkus[item.sku] || 0) - 1)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#dc2626" }}>−</button>
+                    <button onClick={() => adjustWaveQty(item.sku, (waveScannedSkus[item.sku] || 0) - 1)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.red }}>−</button>
                   </div>
                 </div>
               ))}
@@ -6833,7 +6855,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                 <div key={item.sku} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${C.border}`, opacity: isCurrent ? 1 : 0.5 }}>
                   <div style={{ width: 6, height: 6, borderRadius: "50%", background: isCurrent ? C.blue : C.border, flexShrink: 0 }} />
                   <div style={{ flex: 1, fontSize: 12, color: C.text, fontWeight: isCurrent ? 700 : 400 }}>{item.name}</div>
-                  <div style={{ fontSize: 11, color: C.textMuted }}>{item._isChariot ? "🛒" : item.location}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted, display: "flex", alignItems: "center" }}>{item._isChariot ? (<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11V6a3 3 0 016 0v5"/><path d="M5 11h14l-1.2 9.2a2 2 0 01-2 1.8H8.2a2 2 0 01-2-1.8L5 11z"/></svg>) : item.location}</div>
                   <div style={{ fontSize: 11, fontWeight: 700, color: C.textSec }}>{waveScannedSkus[item.sku] || 0}/{item.totalQty}</div>
                 </div>
               );
@@ -6858,7 +6880,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
             </button>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{packOrder.order_number}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{packOrder.order_number}</div>
               <div style={{ fontSize: 12, color: C.textSec }}>{packOrder.name} — {packOrder.city}</div>
               <div style={{ fontSize: 11, color: C.textMuted }}>{(packOrder.parcel_items || []).filter((it: any) => parseFloat(it.value || "0") >= 0).length} article(s)</div>
             </div>
@@ -6867,14 +6889,16 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             <button
               disabled={packPrinting}
               onClick={async () => { setPackPrinting(true); await printPackingSlip(packOrder); setPackPrinting(false); }}
-              style={{ padding: "16px 0", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(59,130,246,0.3)" }}>
-              📄 Imprimer le BL
+              style={{ padding: "16px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              Imprimer le BL
             </button>
             <button
               disabled={packPrinting}
               onClick={async () => { setPackPrinting(true); await printLabel(packOrder); setPackPrinting(false); }}
-              style={{ padding: "16px 0", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(124,58,237,0.3)" }}>
-              🚚 Imprimer l'étiquette transport
+              style={{ padding: "16px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="1" y="3" width="15" height="13"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+              Imprimer l'étiquette transport
             </button>
             <button
               disabled={packPrinting}
@@ -6885,8 +6909,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                 setPackPrinting(false);
                 onToast(`✓ BL + étiquette pour ${packOrder.order_number}`);
               }}
-              style={{ padding: "16px 0", background: C.green, color: "#fff", border: "none", borderRadius: 14, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(22,163,74,0.3)" }}>
-              ✅ Imprimer BL + Étiquette
+              style={{ padding: "16px 0", background: C.green, color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+              Imprimer BL + Étiquette
             </button>
           </div>
         </>
@@ -6934,17 +6959,18 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
               <button
                 disabled={packPrinting}
                 onClick={() => printAllOrders(preparedList)}
-                style={{ width: "100%", padding: "14px 0", marginBottom: 14, background: packPrinting ? "#9ca3af" : C.green, color: "#fff", border: "none", borderRadius: 12, fontSize: 14, fontWeight: 800, cursor: packPrinting ? "default" : "pointer", fontFamily: "inherit", boxShadow: "0 2px 10px rgba(22,163,74,0.3)" }}>
-                {packPrinting ? `🖨️ ${packBatchProgress}` : `🖨️ Imprimer tout le lot — BL + étiquettes (${preparedList.length})`}
+                style={{ width: "100%", padding: "14px 0", marginBottom: 14, background: packPrinting ? C.textMuted : C.green, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: packPrinting ? "default" : "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                {packPrinting ? packBatchProgress : `Imprimer tout le lot — BL + étiquettes (${preparedList.length})`}
               </button>
               <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, marginBottom: 8, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>
                 Prêtes à emballer ({preparedList.length})
               </div>
               {preparedList.map((p: any) => (
                 <div key={p.id} onClick={() => setPackOrder(p)} style={{ ...cardStyle, marginBottom: 8, padding: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 18 }}>📦</span>
+                  <span style={{ display: "inline-flex", color: C.blue }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></span>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{p.order_number}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{p.order_number}</div>
                     <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
                   </div>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
@@ -6959,10 +6985,10 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
   // ── MAIN RENDER ────────────────────────────────────────────────────────────
   const TABS = [
-    { key: "orders", label: "📦 Commandes" },
-    { key: "prep",   label: "🔍 Préparation" },
-    { key: "pack",   label: "📫 Emballage" },
-    { key: "wave",   label: `🧺${waveOrders.size > 0 ? ` (${waveOrders.size})` : ""}` },
+    { key: "orders", label: (<span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>Commandes</span>) },
+    { key: "prep",   label: (<span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Préparation</span>) },
+    { key: "pack",   label: (<span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22 6 12 13 2 6"/></svg>Emballage</span>) },
+    { key: "wave",   label: (<span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11V6a3 3 0 016 0v5"/><path d="M5 11h14l-1.2 9.2a2 2 0 01-2 1.8H8.2a2 2 0 01-2-1.8L5 11z"/></svg>{waveOrders.size > 0 ? ` (${waveOrders.size})` : ""}</span>) },
   ] as const;
 
   return (
@@ -6980,8 +7006,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
           {TABS.map(({ key, label }) => (
             <button key={key} onClick={() => setEshopTab(key)} style={{
-              flex: 1, padding: "9px 0", border: `1.5px solid ${eshopTab === key ? "#db2777" : C.border}`,
-              background: eshopTab === key ? "#fce7f3" : C.white, color: eshopTab === key ? "#9d174d" : C.textSec,
+              flex: 1, padding: "9px 0", border: `1.5px solid ${eshopTab === key ? C.blue : C.border}`,
+              background: eshopTab === key ? C.blueSoft : C.white, color: eshopTab === key ? C.blue : C.textSec,
               borderRadius: 10, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
             }}>{label}</button>
           ))}
