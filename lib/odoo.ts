@@ -26,8 +26,35 @@ export async function authenticate(config: OdooConfig, login: string, password: 
   return { uid: result.uid, name: result.name || result.username || login, login: login.toLowerCase(), sessionId: sid || result.session_id || "", config };
 }
 
+// Clés localStorage où les pages persistent la session (dashboard + app principale)
+const SESSION_STORAGE_KEYS = ["wms_dash_s", "wms_s"];
+
+// Odoo fait tourner le cookie session_id à chaque requête. On persiste la valeur
+// rafraîchie pour ne pas continuer à envoyer un session_id périmé (→ "Session Expired").
+function persistRefreshedSession(session: OdooSession, newSessionId?: string | null) {
+  if (!newSessionId || newSessionId === session.sessionId) return;
+  // Mutation en place : les états React tiennent une référence vers cet objet,
+  // donc les appels suivants utiliseront automatiquement le sessionId à jour.
+  session.sessionId = newSessionId;
+  if (typeof window === "undefined") return;
+  for (const key of SESSION_STORAGE_KEYS) {
+    try {
+      const raw = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
+      if (!raw) continue;
+      const stored = JSON.parse(raw);
+      if (stored && stored.sessionId !== undefined) {
+        stored.sessionId = newSessionId;
+        const serialized = JSON.stringify(stored);
+        if (window.localStorage.getItem(key)) window.localStorage.setItem(key, serialized);
+        if (window.sessionStorage.getItem(key)) window.sessionStorage.setItem(key, serialized);
+      }
+    } catch {}
+  }
+}
+
 async function call(session: OdooSession, endpoint: string, params: any) {
-  const { result } = await rpc(session.config, endpoint, params, session.sessionId);
+  const { result, sessionId: refreshed } = await rpc(session.config, endpoint, params, session.sessionId);
+  persistRefreshedSession(session, refreshed);
   return result;
 }
 
