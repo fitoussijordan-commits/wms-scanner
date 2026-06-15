@@ -183,12 +183,32 @@ async function createParcelV2Direct(
   if (!shipmentId) {
     try {
       const country = addr.country || addr.country_code || addr.country_iso_2 || "FR";
+
+      // Si point relais : récupérer le CARRIER réel du point (Mondial Relay, Colissimo…)
+      // via l'API service-points → la méthode choisie doit être du MÊME carrier,
+      // sinon SendCloud refuse "Service point carrier does not match shipping method".
+      let spCarrier = "";
+      const spId = order.shipping_details?.service_point_details?.id
+        ?? details.shipping_details?.service_point_details?.id
+        ?? order.service_point_details?.id ?? null;
+      if (wantsServicePoint && spId) {
+        try {
+          const sp = await scJson(`${V2}/service-points/${encodeURIComponent(String(spId))}`, auth);
+          spCarrier = String(sp?.carrier || sp?.service_point?.carrier || "").toLowerCase();
+        } catch {}
+      }
+
       const sm = await scJson(`${V2}/shipping_methods?to_country=${country}&from_country=FR`, auth);
       let methods: any[] = sm.shipping_methods || [];
       methods = methods.filter((m: any) => {
         const isSp = m.service_point_input && m.service_point_input !== "none";
         return wantsServicePoint ? isSp : !isSp;
       });
+      // Filtre par carrier du point relais si connu
+      if (spCarrier) {
+        const sameCarrier = methods.filter((m: any) => String(m.carrier || "").toLowerCase() === spCarrier);
+        if (sameCarrier.length) methods = sameCarrier;
+      }
       const wNum = parseFloat(totalWeight);
       const inWeight = methods.filter((m: any) => {
         const min = parseFloat(m.min_weight ?? "0");
@@ -200,6 +220,7 @@ async function createParcelV2Direct(
       const byCarrier = pool.find((m: any) => {
         const c = String(m.carrier || "").toLowerCase();
         const n = String(m.name || "").toLowerCase();
+        if (spCarrier) return c === spCarrier; // point relais : carrier exact
         return (c && lowerInd.includes(c)) || (lowerInd.includes("colissimo") && (c.includes("colissimo") || n.includes("colissimo")));
       });
       const chosen = byCarrier || pool[0];
