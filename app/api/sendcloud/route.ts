@@ -237,7 +237,7 @@ async function createParcelV2Direct(
   const postNumberSp = order.shipping_details?.service_point_details?.post_number ?? order.service_point_details?.post_number ?? null;
   // to_post_number : requis uniquement pour DHL Allemagne en point relais
   const postNumber =
-    postNumberSp ||
+    postNumberSp ??
     order.to_post_number ??
     details.to_post_number ??
     addr.to_post_number ??
