@@ -212,6 +212,15 @@ async function createParcelV2Direct(
   // choisi par le client), sinon : 400 "A service point is required".
   // On cherche l'ID dans tous les emplacements connus de la structure order V3/V2.
   const servicePointId =
+    // Structure V3 : shipping_details.service_point_details.{id | carrier_service_point_id}
+    order.shipping_details?.service_point_details?.id ??
+    order.shipping_details?.service_point_details?.carrier_service_point_id ??
+    details.shipping_details?.service_point_details?.id ??
+    order.service_point_details?.id ??
+    order.service_point_details?.carrier_service_point_id ??
+    details.service_point_details?.id ??
+    details.service_point_details?.carrier_service_point_id ??
+    // Autres chemins connus (V2 / variations)
     order.to_service_point ??
     order.service_point_id ??
     order.servicePoint?.id ??
@@ -225,8 +234,10 @@ async function createParcelV2Direct(
     order.checkout_payload?.service_point?.id ??
     order.checkout_payload?.to_service_point ??
     null;
+  const postNumberSp = order.shipping_details?.service_point_details?.post_number ?? order.service_point_details?.post_number ?? null;
   // to_post_number : requis uniquement pour DHL Allemagne en point relais
   const postNumber =
+    postNumberSp ||
     order.to_post_number ??
     details.to_post_number ??
     addr.to_post_number ??
