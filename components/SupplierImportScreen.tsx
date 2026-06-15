@@ -119,6 +119,8 @@ export default function SupplierImportScreen({
   const [packingLines, setPackingLines] = useState<PackingLine[]>([]);
   const [matchedLines, setMatchedLines] = useState<MatchedLine[]>([]);
   const [missingArticles, setMissingArticles] = useState<{ articleNo: string; description: string }[]>([]);
+  // Collisions : plusieurs codes fournisseur WALA pointant vers le MÊME produit Odoo
+  const [collisions, setCollisions] = useState<{ productId: number; name: string; articleNos: string[] }[]>([]);
   const [fileName, setFileName] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState("");
@@ -184,6 +186,18 @@ export default function SupplierImportScreen({
           }
         }
       }
+
+      // Détection de collisions : 2 codes WALA distincts → même produit Odoo.
+      // C'est ce qui provoque la fusion des quantités/lots sur un seul produit.
+      const byProduct: Record<number, { name: string; arts: Set<string> }> = {};
+      for (const ml of matched) {
+        if (!byProduct[ml.productId]) byProduct[ml.productId] = { name: ml.name, arts: new Set() };
+        byProduct[ml.productId].arts.add(ml.articleNo);
+      }
+      const cols = Object.entries(byProduct)
+        .filter(([, v]) => v.arts.size > 1)
+        .map(([pid, v]) => ({ productId: Number(pid), name: v.name, articleNos: Array.from(v.arts) }));
+      setCollisions(cols);
 
       setMatchedLines(matched);
       setMissingArticles(missing);
@@ -424,6 +438,29 @@ export default function SupplierImportScreen({
               </div>
             )}
 
+            {/* COLLISIONS — bloque l'import : 2 codes WALA → 1 seul produit Odoo */}
+            {collisions.length > 0 && (
+              <div style={{ ...S.errorCard, border: "2px solid #dc2626" }}>
+                <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 8, color: "#b91c1c" }}>
+                  ⛔ {collisions.length} collision{collisions.length > 1 ? "s" : ""} de correspondance — import bloqué
+                </div>
+                <p style={{ fontSize: 13, color: "#7f1d1d", marginBottom: 10 }}>
+                  Plusieurs codes fournisseur WALA différents pointent vers le <strong>même produit Odoo</strong>. Si on importe, leurs quantités et lots seraient <strong>fusionnés sur un seul produit</strong> (l'autre ne recevrait rien). Corrige la correspondance dans Odoo (un produit Odoo = un seul code fournisseur WALA) avant de réimporter.
+                </p>
+                <div style={{ maxHeight: 180, overflowY: "auto", background: "#fff5f5", borderRadius: 6, padding: 10 }}>
+                  {collisions.map(c => (
+                    <div key={c.productId} style={{ padding: "6px 0", borderBottom: "1px solid #fecaca", fontSize: 13 }}>
+                      <span style={{ color: "#374151", fontWeight: 600 }}>{c.name}</span>
+                      <span style={{ color: "#9ca3af" }}> (produit Odoo #{c.productId})</span>
+                      <div style={{ marginTop: 2 }}>
+                        codes WALA : {c.articleNos.map(a => <code key={a} style={{ color: "#dc2626", fontWeight: 700, marginRight: 8 }}>{a}</code>)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Refs manquantes — on liste et on laisse le choix (annuler / forcer) */}
             {missingArticles.length > 0 && (
               <div style={S.errorCard}>
@@ -498,24 +535,24 @@ export default function SupplierImportScreen({
             {missingArticles.length === 0 ? (
               /* Tout est OK : changer de fichier + import vert */
               <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-                <button onClick={() => { setStep("upload"); setMatchedLines([]); setMissingArticles([]); }} style={S.btnSecondary}>
+                <button onClick={() => { setStep("upload"); setMatchedLines([]); setMissingArticles([]); setCollisions([]); }} style={S.btnSecondary}>
                   ← Changer de fichier
                 </button>
                 {matchedLines.length > 0 && (
-                  <button onClick={runImport} style={S.btnPrimary}>
-                    🚀 Lancer l'import Odoo
+                  <button onClick={runImport} disabled={collisions.length > 0} style={{ ...S.btnPrimary, ...(collisions.length > 0 ? { opacity: .5, cursor: "not-allowed" } : {}) }}>
+                    {collisions.length > 0 ? "⛔ Corrige les collisions d'abord" : "🚀 Lancer l'import Odoo"}
                   </button>
                 )}
               </div>
             ) : (
               /* Réfs manquantes : annuler (rouge) + forcer (orange) */
               <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-                <button onClick={() => { setStep("upload"); setMatchedLines([]); setMissingArticles([]); setPackingLines([]); setFileName(""); }} style={S.btnDanger}>
+                <button onClick={() => { setStep("upload"); setMatchedLines([]); setMissingArticles([]); setCollisions([]); setPackingLines([]); setFileName(""); }} style={S.btnDanger}>
                   ✕ Annuler l'import
                 </button>
                 {matchedLines.length > 0 && (
-                  <button onClick={runImport} style={S.btnWarning}>
-                    ⚠️ Forcer l'import ({matchedLines.length} ligne{matchedLines.length > 1 ? "s" : ""}, {missingArticles.length} ignorée{missingArticles.length > 1 ? "s" : ""})
+                  <button onClick={runImport} disabled={collisions.length > 0} style={{ ...S.btnWarning, ...(collisions.length > 0 ? { opacity: .5, cursor: "not-allowed" } : {}) }}>
+                    {collisions.length > 0 ? "⛔ Corrige les collisions d'abord" : `⚠️ Forcer l'import (${matchedLines.length} ligne${matchedLines.length > 1 ? "s" : ""}, ${missingArticles.length} ignorée${missingArticles.length > 1 ? "s" : ""})`}
                   </button>
                 )}
               </div>
@@ -620,7 +657,7 @@ export default function SupplierImportScreen({
             </div>
 
             <div style={{ display: "flex", gap: 10 }}>
-              <button onClick={() => { setStep("upload"); setMatchedLines([]); setMissingArticles([]); setImportResult(null); setImportLogs([]); }} style={S.btnPrimary}>
+              <button onClick={() => { setStep("upload"); setMatchedLines([]); setMissingArticles([]); setCollisions([]); setImportResult(null); setImportLogs([]); }} style={S.btnPrimary}>
                 + Nouvel import
               </button>
               <button onClick={onBack} style={S.btnSecondary}>

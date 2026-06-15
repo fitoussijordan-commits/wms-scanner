@@ -2043,35 +2043,12 @@ export async function matchWalaArticles(
   if (!articleCodes.length) return {};
   const map: Record<string, any> = {};
 
-  // ── Passe 1 : champ custom sur le template (x_studio_code_produit_fournisseur) ──
-  const templates = await searchRead(
-    session, "product.template",
-    [["x_studio_code_produit_fournisseur", "in", articleCodes]],
-    ["id", "name", "default_code", "x_studio_code_produit_fournisseur", "product_variant_ids", "uom_id"],
-    0
-  );
-  for (const t of templates) {
-    const code = t.x_studio_code_produit_fournisseur;
-    const productId = Array.isArray(t.product_variant_ids) ? t.product_variant_ids[0] : null;
-    if (code && productId) {
-      map[String(code).trim()] = {
-        templateId: t.id,
-        productId,
-        name: t.name,
-        defaultCode: t.default_code || "",
-        uomId: Array.isArray(t.uom_id) ? t.uom_id[0] : t.uom_id,
-        uomName: Array.isArray(t.uom_id) ? t.uom_id[1] : "",
-      };
-    }
-  }
-
-  // ── Passe 2 : Référence Fournisseur standard (product.supplierinfo.product_code) ──
-  // pour les codes non trouvés via le champ custom.
-  const remaining = articleCodes.filter(c => !(String(c).trim() in map));
-  if (remaining.length) {
+  // ── Passe 1 (PRIORITAIRE) : Référence Fournisseur standard (product.supplierinfo.product_code) ──
+  // C'est le champ que l'utilisateur tient à jour. La réf custom est figée → ne jamais la privilégier.
+  {
     const sis = await searchRead(
       session, "product.supplierinfo",
-      [["product_code", "in", remaining]],
+      [["product_code", "in", articleCodes]],
       ["id", "product_code", "product_id", "product_tmpl_id"],
       0
     );
@@ -2125,6 +2102,34 @@ export async function matchWalaArticles(
         map[code] = { templateId, productId, name, defaultCode, uomId, uomName };
       }
     }
+  }
+
+  // ── Passe 2 (FALLBACK) : champ custom figé x_studio_code_produit_fournisseur ──
+  // Uniquement pour les codes non résolus via la Référence Fournisseur ci-dessus.
+  const remaining = articleCodes.filter(c => !(String(c).trim() in map));
+  if (remaining.length) {
+    try {
+      const templates = await searchRead(
+        session, "product.template",
+        [["x_studio_code_produit_fournisseur", "in", remaining]],
+        ["id", "name", "default_code", "x_studio_code_produit_fournisseur", "product_variant_ids", "uom_id"],
+        0
+      );
+      for (const t of templates) {
+        const code = String(t.x_studio_code_produit_fournisseur || "").trim();
+        const productId = Array.isArray(t.product_variant_ids) ? t.product_variant_ids[0] : null;
+        if (code && productId && !map[code]) {
+          map[code] = {
+            templateId: t.id,
+            productId,
+            name: t.name,
+            defaultCode: t.default_code || "",
+            uomId: Array.isArray(t.uom_id) ? t.uom_id[0] : t.uom_id,
+            uomName: Array.isArray(t.uom_id) ? t.uom_id[1] : "",
+          };
+        }
+      }
+    } catch { /* champ custom absent sur cette base : on ignore */ }
   }
 
   return map;
@@ -2304,11 +2309,26 @@ export async function setReceptionLots(
     mlPool[pid].push(ml);
   }
 
+  // Index des moves par produit — une ligne ne peut être rattachée qu'à un move
+  // du MÊME produit. On ne réutilise jamais le move d'un autre produit.
+  const moveByProduct: Record<number, any> = {};
+  for (const m of moves) {
+    const pid = Array.isArray(m.product_id) ? m.product_id[0] : m.product_id;
+    if (pid != null && !(pid in moveByProduct)) moveByProduct[pid] = m;
+  }
+
+  // Lignes qu'on n'a pas pu rattacher à un mouvement de leur propre produit :
+  // on REFUSE de les affecter ailleurs (sinon lot/qté d'un produit atterrit sur un autre).
+  const orphans: ReceptionLotLine[] = [];
+
   for (const line of mergedLines) {
     const pool = mlPool[line.productId];
     const ml = pool?.shift();
 
     if (ml) {
+      // Sécurité : la move.line doit bien appartenir au produit attendu.
+      const mlPid = Array.isArray(ml.product_id) ? ml.product_id[0] : ml.product_id;
+      if (mlPid !== line.productId) { orphans.push(line); continue; }
       // lot_id (many2one) + lot_name (char) pour forcer l'affectation dans Odoo,
       // et qty_done = quantité de CE lot (pas la demande totale du move)
       const vals: any = { qty_done: line.qty };
@@ -2318,12 +2338,14 @@ export async function setReceptionLots(
       }
       await write(session, "stock.move.line", [ml.id], vals);
     } else {
-      // Créer une nouvelle ligne de mouvement (produit avec plusieurs lots)
-      const move = moves.find((m: any) => {
-        const pid = Array.isArray(m.product_id) ? m.product_id[0] : m.product_id;
-        return pid === line.productId;
-      });
-      if (!move) continue; // Skip si pas de mouvement trouvé
+      // Pas de move.line dispo : on crée une nouvelle ligne SUR LE MOVE DU MÊME PRODUIT.
+      const move = moveByProduct[line.productId];
+      if (!move) {
+        // Aucun mouvement pour ce produit dans la réception → on NE fusionne PAS
+        // sur un autre produit. On collecte l'orphelin pour signaler une erreur claire.
+        orphans.push(line);
+        continue;
+      }
       const vals: any = {
         picking_id: pickingId,
         move_id: move.id,
@@ -2339,6 +2361,17 @@ export async function setReceptionLots(
       }
       await create(session, "stock.move.line", vals);
     }
+  }
+
+  if (orphans.length) {
+    // Cause typique : deux codes fournisseur différents matchés vers le MÊME produit
+    // Odoo, donc le bon de commande n'a pas de ligne distincte pour chacun.
+    const detail = orphans.map(o => `produit #${o.productId}${o.lotName ? ` (lot ${o.lotName}, ${o.qty})` : ` (${o.qty})`}`).join(", ");
+    throw new Error(
+      `Réception incomplète : ${orphans.length} ligne(s) sans mouvement dédié dans le bon de commande — ` +
+      `quantités NON affectées (risque de fusion sur un autre produit). ` +
+      `Vérifiez le matching fournisseur (un même produit Odoo reçoit plusieurs codes WALA). Détail : ${detail}`
+    );
   }
 }
 
