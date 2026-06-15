@@ -1247,6 +1247,33 @@ export default function Page() {
   const [multiScanList, setMultiScanList] = useState<any[]>([]); // Persisté entre navigations
   const [selectedPicking, setSelectedPicking] = useState<any>(null);
   const [pendingConfirmPicking, setPendingConfirmPicking] = useState<any>(null); // picking à confirmer avant ouverture
+  const [confirmCartonReco, setConfirmCartonReco] = useState<odoo.CartonReco | null>(null); // reco carton pour la modale de confirmation
+
+  // Calcule la reco carton quand la modale de confirmation du pick s'ouvre
+  useEffect(() => {
+    setConfirmCartonReco(null);
+    if (!pendingConfirmPicking || !session) return;
+    const petit = Number(localStorage.getItem("wms_carton_petit_cm3")) || 0;
+    const grand = Number(localStorage.getItem("wms_carton_grand_cm3")) || 0;
+    if (!petit || !grand) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const ids: number[] = pendingConfirmPicking._groupIds || [pendingConfirmPicking.id];
+        let mls: any[] = [];
+        for (const id of ids) mls = mls.concat(await odoo.getPickingMoveLines(session, id));
+        const lines = mls
+          .map((ml: any) => ({ productId: ml.product_id?.[0], quantity: ml.reserved_uom_qty || ml.qty || 1 }))
+          .filter((l: any) => l.productId);
+        if (!lines.length) return;
+        const { totalCm3, missing } = await odoo.getOrderVolumeCm3(session, lines);
+        if (!cancelled && totalCm3 > 0 && missing.length < lines.length) {
+          setConfirmCartonReco(odoo.recommendCarton(totalCm3, petit, grand, 0.8));
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [pendingConfirmPicking, session]);
   const [pickingMoves, setPickingMoves] = useState<any[]>([]);
   const [pickingMoveLines, setPickingMoveLines] = useState<any[]>([]);
   // Cache de progression par picking (mis à jour quand on quitte une prépa)
@@ -3401,6 +3428,14 @@ export default function Page() {
                 {pendingConfirmPicking.partner_id && (
                   <div style={{ fontSize: 18, fontWeight: 700, color: "#2563eb", marginBottom: siblings.length > 0 ? 12 : 20 }}>
                     {pendingConfirmPicking.partner_id[1]}
+                  </div>
+                )}
+
+                {/* Carton recommandé selon le volume de la commande */}
+                {confirmCartonReco && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: confirmCartonReco.count > 1 ? "#fff7ed" : "#eff6ff", border: `1.5px solid ${confirmCartonReco.count > 1 ? "#fed7aa" : "#bfdbfe"}`, borderRadius: 10, padding: "10px 14px", marginBottom: 20 }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={confirmCartonReco.count > 1 ? "#ea580c" : "#2563eb"} strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: confirmCartonReco.count > 1 ? "#9a3412" : "#1d4ed8" }}>{confirmCartonReco.label}</span>
                   </div>
                 )}
 
