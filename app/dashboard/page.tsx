@@ -465,8 +465,11 @@ export default function Dashboard() {
   interface RecepRow { odooRef: string; supplierRef: string; productName: string; qty: number; lot: string; pickingName: string; date: string; }
   const [recVendors, setRecVendors] = useState<{ id: number; name: string }[]>([]);
   const [recVendorId, setRecVendorId] = useState<number | null>(null);
+  const [recPickings, setRecPickings] = useState<{ id: number; name: string; date: string }[]>([]);
+  const [recPickingId, setRecPickingId] = useState<number | null>(null);
   const [recRows, setRecRows] = useState<RecepRow[]>([]);
   const [recLoading, setRecLoading] = useState(false);
+  const [recPickingsLoading, setRecPickingsLoading] = useState(false);
   const [recVendorsLoading, setRecVendorsLoading] = useState(false);
 
   // ─── Analyse transporteurs ───────────────────────────────────────────────
@@ -1976,10 +1979,10 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
     } catch (e: any) { setError(e.message); } finally { setRecVendorsLoading(false); }
   }, [session]);
 
-  // ── Réception : charge les lignes reçues pour le fournisseur sélectionné ──
-  const loadReceptions = useCallback(async () => {
+  // ── Réception : charge la liste des réceptions (pickings) du fournisseur ──
+  const loadRecPickings = useCallback(async () => {
     if (!session || !recVendorId) return;
-    setRecLoading(true); setError(""); setRecRows([]);
+    setRecPickingsLoading(true); setError(""); setRecPickings([]); setRecPickingId(null); setRecRows([]);
     try {
       const inTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "incoming"]], ["id"], 50);
       const inTypeIds = inTypes.map((t: any) => t.id);
@@ -1987,6 +1990,24 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         session, "stock.picking",
         [["picking_type_id", "in", inTypeIds], ["state", "=", "done"], ["partner_id", "=", recVendorId]],
         ["id", "name", "date_done", "scheduled_date"], 5000, "date_done desc"
+      );
+      // Tri : réception la plus récente en haut
+      const list = pickings
+        .map((p: any) => ({ id: p.id, name: p.name, date: (p.date_done || p.scheduled_date || "").substring(0, 10) }))
+        .sort((a: any, b: any) => (b.date || "").localeCompare(a.date || "") || b.id - a.id);
+      setRecPickings(list);
+    } catch (e: any) { setError(e.message); } finally { setRecPickingsLoading(false); }
+  }, [session, recVendorId]);
+
+  // ── Réception : charge les lignes reçues pour la réception sélectionnée ──
+  const loadReceptions = useCallback(async () => {
+    if (!session || !recPickingId) return;
+    setRecLoading(true); setError(""); setRecRows([]);
+    try {
+      const pickings = await odoo.searchRead(
+        session, "stock.picking",
+        [["id", "=", recPickingId]],
+        ["id", "name", "date_done", "scheduled_date"], 1
       );
       if (!pickings.length) { setRecRows([]); setRecLoading(false); return; }
       const pickById: Record<number, any> = {};
@@ -2009,13 +2030,17 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         for (const p of prods) { prodById[p.id] = p; if (Array.isArray(p.product_tmpl_id)) tmplIds.add(p.product_tmpl_id[0]); }
       }
 
-      // Réf fournisseur — source 1 : champ custom sur le template
+      // Réf Odoo (default_code sur le template) + réf fournisseur custom
       const supRefByTmpl: Record<number, string> = {};
+      const odooRefByTmpl: Record<number, string> = {};
       if (tmplIds.size) {
         try {
-          const tmpls = await odoo.searchRead(session, "product.template", [["id", "in", Array.from(tmplIds)]], ["id", "x_studio_code_produit_fournisseur"], 5000);
-          for (const t of tmpls) if (t.x_studio_code_produit_fournisseur) supRefByTmpl[t.id] = String(t.x_studio_code_produit_fournisseur);
-        } catch { /* champ custom absent sur cette base : on ignore */ }
+          const tmpls = await odoo.searchRead(session, "product.template", [["id", "in", Array.from(tmplIds)]], ["id", "default_code", "x_studio_code_produit_fournisseur"], 5000);
+          for (const t of tmpls) {
+            if (t.default_code) odooRefByTmpl[t.id] = String(t.default_code);
+            if (t.x_studio_code_produit_fournisseur) supRefByTmpl[t.id] = String(t.x_studio_code_produit_fournisseur);
+          }
+        } catch { /* champ custom absent : on retombe sur default_code variante */ }
       }
       // Réf fournisseur — source 2 : product.supplierinfo de CE fournisseur
       const supRefByTmpl2: Record<number, string> = {};
@@ -2043,8 +2068,10 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         const supplierRef = (pid && supRefByProd[pid]) || (tmplId && supRefByTmpl2[tmplId]) || (tmplId && supRefByTmpl[tmplId]) || "";
         const pick = Array.isArray(m.picking_id) ? pickById[m.picking_id[0]] : null;
         const lot = (Array.isArray(m.lot_id) ? m.lot_id[1] : "") || m.lot_name || "";
+        // Réf Odoo = Référence interne (default_code) : template d'abord, sinon variante
+        const odooRef = (tmplId && odooRefByTmpl[tmplId]) || prod?.default_code || "";
         return {
-          odooRef: prod?.default_code || "",
+          odooRef,
           supplierRef,
           productName: prod?.name || (Array.isArray(m.product_id) ? m.product_id[1] : ""),
           qty: m.qty_done || 0,
@@ -2056,7 +2083,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       rows.sort((a, b) => (a.productName || "").localeCompare(b.productName || ""));
       setRecRows(rows);
     } catch (e: any) { setError(e.message); } finally { setRecLoading(false); }
-  }, [session, recVendorId]);
+  }, [session, recPickingId, recVendorId]);
 
   const recExportExcel = async () => {
     if (!recRows.length) return;
@@ -4995,18 +5022,31 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                 <p style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>Réceptions terminées (Fait) par fournisseur — réf Odoo, réf fournisseur, qté reçue et lot.</p>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {/* Liste 1 : fournisseur → charge les réceptions */}
                 <select
                   value={recVendorId ?? ""}
-                  onChange={(e) => { const v = e.target.value ? Number(e.target.value) : null; setRecVendorId(v); setRecRows([]); }}
-                  className="wms-input"
-                  style={{ minWidth: 240, padding: "8px 12px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }}
+                  onChange={(e) => { const v = e.target.value ? Number(e.target.value) : null; setRecVendorId(v); setRecPickings([]); setRecPickingId(null); setRecRows([]); }}
+                  style={{ minWidth: 220, padding: "8px 12px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }}
                   disabled={recVendorsLoading}
                 >
-                  <option value="">{recVendorsLoading ? "Chargement des fournisseurs…" : "— Choisir un fournisseur —"}</option>
+                  <option value="">{recVendorsLoading ? "Chargement…" : "— Fournisseur —"}</option>
                   {recVendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
                 </select>
-                <button className="wms-btn wms-btn-primary" onClick={loadReceptions} disabled={!recVendorId || recLoading}>
-                  {recLoading ? <Spinner /> : I.refresh} Charger les réceptions
+                <button className="wms-btn" onClick={loadRecPickings} disabled={!recVendorId || recPickingsLoading}>
+                  {recPickingsLoading ? <Spinner /> : I.refresh} Charger
+                </button>
+                {/* Liste 2 : réception (la plus récente en haut) → affiche le détail */}
+                <select
+                  value={recPickingId ?? ""}
+                  onChange={(e) => { const v = e.target.value ? Number(e.target.value) : null; setRecPickingId(v); setRecRows([]); }}
+                  style={{ minWidth: 240, padding: "8px 12px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }}
+                  disabled={!recPickings.length}
+                >
+                  <option value="">{recPickings.length ? `— Réception (${recPickings.length}) —` : "— Réception —"}</option>
+                  {recPickings.map(p => <option key={p.id} value={p.id}>{p.name}{p.date ? ` · ${p.date}` : ""}</option>)}
+                </select>
+                <button className="wms-btn wms-btn-primary" onClick={loadReceptions} disabled={!recPickingId || recLoading}>
+                  {recLoading ? <Spinner /> : I.refresh} Afficher
                 </button>
                 <button className="wms-btn" onClick={recExportExcel} disabled={!recRows.length}>
                   Export Excel
@@ -5055,7 +5095,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
               </div>
             ) : (
               <div style={{ padding: "40px 0", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
-                {recLoading ? "Chargement des réceptions…" : recVendorId ? "Aucune réception trouvée pour ce fournisseur. Cliquez sur « Charger les réceptions »." : "Choisissez un fournisseur puis cliquez sur « Charger les réceptions »."}
+                {recLoading ? "Chargement…" : recPickingId ? "Aucune ligne pour cette réception." : recPickings.length ? "Choisissez une réception dans la liste puis cliquez sur « Afficher »." : "Choisissez un fournisseur, cliquez « Charger », puis sélectionnez une réception."}
               </div>
             )}
           </div>
