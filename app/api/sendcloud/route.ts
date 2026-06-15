@@ -80,10 +80,12 @@ async function createParcelV2Direct(
     })
     .map((item: any) => {
       const rawVal = item.unit_price?.value ?? item.product_value ?? item.price ?? item.value ?? "0";
+      // poids : V3 l'imbrique dans measurement.weight.value
+      const wRaw = item?.measurement?.weight?.value ?? item.weight ?? "0.1";
       return {
-        description: String(item.description || item.name || item.title || item.sku || "Article").substring(0, 100),
+        description: String(item.name || item.description || item.title || item.sku || "Article").substring(0, 100),
         quantity: Math.max(1, parseInt(String(item.quantity || 1))),
-        weight: String(Math.max(0.001, parseFloat(String(item.weight || "0.1"))).toFixed(3)),
+        weight: String(Math.max(0.001, parseFloat(String(wRaw)) || 0.1).toFixed(3)),
         value: String(Math.max(0, parseFloat(String(rawVal))).toFixed(2)),
         hs_code: item.harmonized_system_code || item.hs_code || "",
         origin_country: item.origin_country || "DE",
@@ -117,13 +119,17 @@ async function createParcelV2Direct(
   const houseNum   = addr.house_number || "";
   const street     = streetBase && houseNum ? `${streetBase} ${houseNum}` : streetBase || houseNum;
 
-  // Poids total (somme des poids articles, fallback 1kg)
+  // Poids total — la structure V3 imbrique le poids dans measurement.weight.value
+  const itemWeight = (i: any): number => {
+    const v = i?.measurement?.weight?.value ?? i?.weight ?? 0;
+    const n = parseFloat(String(v));
+    return isFinite(n) ? n : 0;
+  };
   const totalWeight = Math.max(
     0.1,
     rawItems.reduce((s: number, i: any) => {
-      const w = parseFloat(String(i.weight || "0"));
       const q = Math.max(1, parseInt(String(i.quantity || 1)));
-      return s + (isFinite(w) ? w : 0) * q;
+      return s + itemWeight(i) * q;
     }, 0)
   ).toFixed(3);
 
@@ -163,7 +169,7 @@ async function createParcelV2Direct(
       postal_code: addr.postal_code || "",
       country: addr.country || addr.country_code || addr.country_iso_2 || "FR",
       email: order.email || addr.email || "",
-      telephone: order.telephone || addr.phone || addr.telephone || "",
+      telephone: order.telephone || addr.phone || addr.telephone || addr.phone_number || "",
       weight: totalWeight,
       order_number: orderNumber,
       external_order_id: String(orderId),
@@ -800,13 +806,15 @@ export async function POST(req: NextRequest) {
             }
           } catch (v2Err: any) {
             console.error("[label POST] V2 direct échoué:", v2Err.message);
-            const isServicePoint = /service_point|service point|to_service_point/i.test(v2Err.message || "");
+            const msg = v2Err.message || "";
+            // On n'affiche le message "point relais" QUE si SendCloud parle vraiment
+            // d'un service point manquant. Sinon on montre la vraie erreur SendCloud.
+            const isServicePoint = /service.?point/i.test(msg) && /required|blank|not found|invalid|missing/i.test(msg);
             return NextResponse.json({
               error: isServicePoint
-                ? `Commande en point relais sans point relais associé dans SendCloud. Le client n'a pas (ou plus) de point relais sélectionné : à compléter manuellement dans SendCloud avant d'imprimer l'étiquette.`
-                : negativeDetected
-                ? `Impossible de créer l'étiquette malgré le bypass V2 : ${v2Err.message}`
-                : `V3 et V2 ont échoué : ${v2Err.message}`,
+                ? `Commande en point relais sans point relais sélectionné — à compléter dans SendCloud avant d'imprimer.`
+                : `Étiquette impossible (SendCloud) : ${msg}`,
+              hint: msg,
             }, { status: 422 });
           }
         }
