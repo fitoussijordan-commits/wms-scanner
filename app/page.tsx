@@ -5661,8 +5661,6 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [error, setError] = useState("");
   const [matchData, setMatchData] = useState<Record<string, any>>({});
   const [locationData, setLocationData] = useState<Record<number, any>>({});
-  // Reco emballage par commande (order_number → reco carton)
-  const [cartonReco, setCartonReco] = useState<Record<string, odoo.CartonReco | null>>({});
   const [preparedIds, setPreparedIds] = useState<Set<string>>(new Set());
   const [printing, setPrinting] = useState(false);
   const [chariotSkus, setChariotSkus] = useState<string[]>([]);
@@ -5804,26 +5802,6 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           const locs = await odoo.getProductLocations(session, productIds);
           setLocationData(locs);
         }
-        // ── Reco emballage par commande (volume vs 2 cartons configurés) ──
-        try {
-          const petit = Number(localStorage.getItem("wms_carton_petit_cm3")) || 0;
-          const grand = Number(localStorage.getItem("wms_carton_grand_cm3")) || 0;
-          if (petit > 0 && grand > 0) {
-            const recos: Record<string, odoo.CartonReco | null> = {};
-            for (const p of allowedParcels) {
-              const lines = (p.parcel_items || [])
-                .map((it: any) => ({ productId: matches[it.sku]?.product_id, quantity: it.quantity || 1 }))
-                .filter((l: any) => l.productId);
-              if (!lines.length) { recos[p.order_number] = null; continue; }
-              const { totalCm3, missing } = await odoo.getOrderVolumeCm3(session, lines);
-              // si dimensions manquantes sur tous les produits → pas de reco fiable
-              recos[p.order_number] = (totalCm3 > 0 && missing.length < lines.length)
-                ? odoo.recommendCarton(totalCm3, petit, grand, 0.8)
-                : null;
-            }
-            setCartonReco(recos);
-          }
-        } catch {}
       }
     } catch (e: any) { setError(e.message); }
     setLoading(false);
@@ -6493,15 +6471,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                   {isPrepared && <span style={{ fontSize: 10, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "1px 7px", borderRadius: 6, display: "inline-flex", alignItems: "center", gap: 4 }}><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>Préparé</span>}
                 </div>
                 <div style={{ fontSize: 12, color: C.textSec, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{p.name} — {p.city}</div>
-                <div style={{ fontSize: 11, color: C.textMuted, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
-                  <span>{items.length} article{items.length > 1 ? "s" : ""}</span>
-                  {cartonReco[p.order_number] && (
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 700, color: cartonReco[p.order_number]!.count > 1 ? C.orange : C.blue, background: cartonReco[p.order_number]!.count > 1 ? C.orangeSoft : C.blueSoft, padding: "1px 8px", borderRadius: 6 }}>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-                      {cartonReco[p.order_number]!.label}
-                    </span>
-                  )}
-                </div>
+                <div style={{ fontSize: 11, color: C.textMuted }}>{items.length} article{items.length > 1 ? "s" : ""}</div>
               </div>
               <button
                 onClick={() => doPrintOrderBarcode(p)}
