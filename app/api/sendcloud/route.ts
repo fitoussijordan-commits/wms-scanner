@@ -30,6 +30,24 @@ async function scJson(url: string, auth: string, options?: RequestInit) {
 // ─── Helpers partagés (négatifs / V2 direct) ─────────────────────────────────
 const INTEGRATION_ID = 527093;
 
+// Marque une commande V3 comme traitée ("fulfilled") pour qu'elle sorte de la
+// liste des commandes ouvertes. Utile après création d'un colis via le fallback
+// V2 (le V3 create-labels-async, lui, ferme l'order automatiquement).
+async function markOrderFulfilled(auth: string, orderId: string | number): Promise<void> {
+  try {
+    await scJson(`${V3}/orders/${orderId}`, auth, {
+      method: "PATCH",
+      body: JSON.stringify({
+        order_details: { status: { code: "fulfilled", message: "Fulfilled" } },
+      }),
+    });
+    console.log("[sendcloud] order", orderId, "→ marqué fulfilled");
+  } catch (e: any) {
+    // Non bloquant : l'étiquette est déjà créée, on log juste l'échec de fermeture.
+    console.warn("[sendcloud] markOrderFulfilled échoué pour", orderId, ":", e.message);
+  }
+}
+
 function hasNegativeItems(raw: any): boolean {
   if (!raw) return false;
   const items: any[] = raw.order_details?.order_items || raw.order_items || [];
@@ -707,6 +725,9 @@ export async function POST(req: NextRequest) {
       const body = await req.json();
       const { order_id: orderId, order_number: orderNumber, order_raw: raw, shipment_id: clientShipmentId } = body;
       if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
+      // Mémorise si le colis a été créé via le fallback V2 (→ il faut alors
+      // fermer manuellement l'order V3, que V2 ne ferme pas).
+      let createdViaV2 = false;
 
       // ── Helper: chercher un colis existant par order_number ──────────────
       const findParcel = async (): Promise<any | null> => {
@@ -820,6 +841,7 @@ export async function POST(req: NextRequest) {
             const v2Parcel = await createParcelV2Direct(auth, orderId, orderNumber, raw, clientShipmentId);
             if (v2Parcel) {
               console.log("[label POST] V2 direct parcel créé:", v2Parcel.id, "label?", !!hasLabel(v2Parcel));
+              createdViaV2 = true;
               // Si label déjà prêt dans la réponse → on prend
               if (hasLabel(v2Parcel)) {
                 parcel = v2Parcel;
@@ -827,7 +849,9 @@ export async function POST(req: NextRequest) {
                 // sinon on poll par id
                 parcel = await pollLabel(auth, v2Parcel.id, 15, 2500);
                 if (!parcel) {
-                  // étiquette pas encore prête → 202 avec parcelId pour retry client
+                  // colis V2 bien créé mais label pas encore prêt → on ferme déjà
+                  // l'order V3 (le colis existe), puis 202 pour retry client
+                  await markOrderFulfilled(auth, orderId);
                   return NextResponse.json({
                     parcelId: v2Parcel.id,
                     tracking: v2Parcel.tracking_number || "",
@@ -879,6 +903,10 @@ export async function POST(req: NextRequest) {
 
       const labelRes = await scFetch(labelUrl, auth);
       if (!labelRes.ok) return NextResponse.json({ error: `Erreur PDF: ${labelRes.status}` }, { status: labelRes.status });
+
+      // Si le colis a été créé via le fallback V2, l'order V3 reste "Ouvert" :
+      // on le marque fulfilled pour qu'il sorte des commandes ouvertes.
+      if (createdViaV2) await markOrderFulfilled(auth, orderId);
 
       const pdfBuffer = Buffer.from(await labelRes.arrayBuffer());
       return NextResponse.json({
