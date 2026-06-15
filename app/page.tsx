@@ -5751,7 +5751,14 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         allowedParcels.flatMap((p: any) => (p.parcel_items || []).map((item: any) => item.sku)).filter(Boolean)
       )) as string[];
       if (allRefs.length > 0 && session) {
-        const matches = await odoo.matchEshopSkus(session, allRefs);
+        // Libellés Shopware par SKU (pour garder le nom d'origine des articles LR / avantage fidélité)
+        const skuDesc: Record<string, string> = {};
+        for (const p of allowedParcels) {
+          for (const item of (p.parcel_items || [])) {
+            if (item.sku && item.description && !skuDesc[item.sku]) skuDesc[item.sku] = item.description;
+          }
+        }
+        const matches = await odoo.matchEshopSkus(session, allRefs, skuDesc);
         setMatchData(matches);
         const productIds = Array.from(new Set(
           Object.values(matches).map((m: any) => m.product_id).filter(Boolean)

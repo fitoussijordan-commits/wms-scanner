@@ -1439,7 +1439,10 @@ export interface EshopMatchResult {
 
 export async function matchEshopSkus(
   session: OdooSession,
-  skus: string[]
+  skus: string[],
+  // Libellés Shopware par SKU — utilisés pour conserver le nom d'origine
+  // (ex: "… (avantage fidélité)") sur les articles préfixés LR.
+  descriptions?: Record<string, string>
 ): Promise<Record<string, EshopMatchResult>> {
   if (!skus.length) return {};
 
@@ -1623,6 +1626,16 @@ export async function matchEshopSkus(
         );
       }
       if (found.length > 0) addMatch(sku, found[0], "supplier_ref");
+    }
+
+    // Conserver le libellé Shopware d'origine (ex: "… (avantage fidélité)")
+    // pour les articles LR qui ont matché — on garde la réf/barcode Odoo mais le nom Shopware.
+    if (descriptions) {
+      for (const sku of lrSkus) {
+        const m = result[sku];
+        const desc = descriptions[sku];
+        if (m && desc && desc.trim()) m.product_name = desc.trim();
+      }
     }
   }
 
