@@ -358,6 +358,30 @@ export async function saveCartonsConfig(petit: CartonDims, grand: CartonDims): P
 }
 
 // ══════════════════════════════════════════
+// MAPPING MANUEL Shopware → Odoo (corrections mémorisées, partagées)
+// { [refShopware]: { productId, odooRef, productName } }
+// ══════════════════════════════════════════
+export type EshopMappingOverrides = Record<string, { productId: number; odooRef: string; productName: string }>;
+
+export async function getEshopMappingOverrides(): Promise<EshopMappingOverrides> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_mapping").single();
+    if (data?.value) return JSON.parse(data.value);
+  } catch {}
+  return {};
+}
+
+export async function saveEshopMappingOverride(ref: string, productId: number, odooRef: string, productName: string): Promise<void> {
+  const current = await getEshopMappingOverrides();
+  current[ref] = { productId, odooRef, productName };
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "eshop_mapping", value: JSON.stringify(current), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // NOTIFICATIONS (cloche header — partagées entre postes)
 // ══════════════════════════════════════════
 

@@ -117,6 +117,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ date, total: r.json.total, count: orders.length, statusTally, orders });
     }
 
+    // ── orderStatuses: libellés des statuts de commande (pour comprendre 0/5/…) ──
+    if (action === "orderStatuses") {
+      const res = await swFetch("/orderStatuses?limit=100", creds);
+      const r = await safeJson(res);
+      if (!r.json) return NextResponse.json({ error: "Non-JSON", status: r.status, raw: r.raw });
+      return NextResponse.json({ statuses: (r.json.data || []).map((s: any) => ({ id: s.id, name: s.name, description: s.description })) });
+    }
+
     // ── dispatches: méthodes de livraison ──
     if (action === "dispatches") {
       const res = await swFetch("/dispatches?limit=50", creds);

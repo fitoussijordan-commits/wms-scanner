@@ -3425,3 +3425,49 @@ export async function getInventoryTheoretical(
     return { ...k, quantId: hit?.quantId ?? null, theoretical: hit?.qty ?? 0 };
   });
 }
+
+// ============================================
+// DEVIS E-SHOP (sale.order) — sorties du jour Shopware
+// ============================================
+
+export interface EshopQuoteLine { productId: number; qty: number; name?: string; }
+
+// Crée un DEVIS (sale.order, état brouillon — non confirmé) pour les ventes e-shop
+// du jour, sur le client e-shop donné. Retourne {id, name}.
+export async function createEshopQuotation(
+  session: OdooSession,
+  partnerId: number,
+  lines: EshopQuoteLine[],
+  origin?: string
+): Promise<{ id: number; name: string }> {
+  // Cumul des qtés par produit
+  const grouped: Record<number, EshopQuoteLine> = {};
+  for (const l of lines) {
+    if (grouped[l.productId]) grouped[l.productId].qty += l.qty;
+    else grouped[l.productId] = { ...l };
+  }
+  const vals: any = {
+    partner_id: partnerId,
+    order_line: Object.values(grouped).map(l => [0, 0, {
+      product_id: l.productId,
+      product_uom_qty: l.qty,
+      ...(l.name ? { name: l.name } : {}),
+    }]),
+  };
+  if (origin) vals.origin = origin;
+  const id = await create(session, "sale.order", vals) as number;
+  const recs = await searchRead(session, "sale.order", [["id", "=", id]], ["id", "name"], 1);
+  return { id, name: recs[0]?.name || String(id) };
+}
+
+// Vérifie qu'un client (res.partner) existe par id ou numéro/nom, retourne {id, name}.
+export async function findEshopPartner(session: OdooSession, idOrRef: string): Promise<{ id: number; name: string } | null> {
+  const num = parseInt(idOrRef.trim(), 10);
+  if (!isNaN(num)) {
+    const byId = await searchRead(session, "res.partner", [["id", "=", num]], ["id", "name"], 1);
+    if (byId.length) return { id: byId[0].id, name: byId[0].name };
+  }
+  const byRef = await searchRead(session, "res.partner", ["|", ["ref", "=", idOrRef.trim()], ["name", "ilike", idOrRef.trim()]], ["id", "name"], 1);
+  if (byRef.length) return { id: byRef[0].id, name: byRef[0].name };
+  return null;
+}
