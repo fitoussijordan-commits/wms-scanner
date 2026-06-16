@@ -171,7 +171,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   };
 
   return (
-    <div style={{ padding: "16px 24px 80px", width: "100%", margin: "0 auto", fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box" }}>
+    <div style={{ padding: "16px 16px 80px", width: "100%", maxWidth: "100%", margin: "0 auto", fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box", overflowX: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
         <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
@@ -238,12 +238,12 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
         <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow, marginBottom: 14 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: "13%" }} />
-              <col style={{ width: "11%" }} />
-              <col style={{ width: "30%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "26%" }} />
               <col style={{ width: "6%" }} />
-              <col style={{ width: "16%" }} />
-              <col style={{ width: "24%" }} />
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "32%" }} />
             </colgroup>
             <thead>
               <tr style={{ background: C.bg, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted, textAlign: "left" }}>
