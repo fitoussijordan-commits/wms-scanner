@@ -120,6 +120,8 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   const agg: Record<string, { ref: string; name: string; qty: number; productId: number; odooRef: string; matched: boolean; chariot: boolean; manual: boolean; cmds: { number: string; qty: number }[] }> = {};
   let totalLines = 0, mappedLines = 0, chariotLines = 0;
   const visibleOrders = orders
+    // Exclut TOUJOURS les commandes annulées (statut -1), sauf si on les sélectionne exprès
+    .filter(o => statusFilter === "-1" ? true : String(o.orderStatusId) !== "-1")
     .filter(o => statusFilter === "all" || String(o.orderStatusId) === statusFilter)
     .filter(o => payFilter === "all" || String(o.paymentStatusId) === payFilter);
   for (const o of visibleOrders) {
@@ -169,7 +171,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   };
 
   return (
-    <div style={{ padding: "16px 14px 80px", maxWidth: 920, margin: "0 auto", fontFamily: "'DM Sans', sans-serif" }}>
+    <div style={{ padding: "16px 24px 80px", width: "100%", margin: "0 auto", fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
         <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
@@ -234,12 +236,12 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       {/* Tableau */}
       {aggList.length > 0 && (
         <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow, marginBottom: 14 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr 40px 100px 1.4fr", gap: 8, padding: "8px 12px", background: C.bg, borderBottom: `1px solid ${C.border}`, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted }}>
+          <div style={{ display: "grid", gridTemplateColumns: "140px 110px 2fr 50px 110px 2.5fr", gap: 8, padding: "8px 12px", background: C.bg, borderBottom: `1px solid ${C.border}`, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted }}>
             <span>Réf Shopware</span><span>Réf Odoo</span><span>Produit</span><span>Qté</span><span>État</span><span>Commandes</span>
           </div>
           {aggList.map((a, i) => (
             <div key={i}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr 40px 100px 1.4fr", gap: 8, padding: "9px 12px", borderBottom: `1px solid ${C.border}`, fontSize: 12.5, alignItems: "flex-start", background: a.chariot ? C.orangeSoft : !a.matched ? C.redSoft : a.manual ? "#f5f3ff" : C.white }}>
+              <div style={{ display: "grid", gridTemplateColumns: "140px 110px 2fr 50px 110px 2.5fr", gap: 8, padding: "9px 12px", borderBottom: `1px solid ${C.border}`, fontSize: 12.5, alignItems: "flex-start", background: a.chariot ? C.orangeSoft : !a.matched ? C.redSoft : a.manual ? "#f5f3ff" : C.white }}>
                 <span style={{ fontFamily: "monospace", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>{a.ref}</span>
                 <span style={{ fontFamily: "monospace", color: a.matched ? C.green : C.textMuted }}>{a.odooRef || "—"}</span>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
