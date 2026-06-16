@@ -290,7 +290,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
           <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
             <input value={partnerInput} onChange={e => setPartnerInput(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter") resolvePartner(); }}
-              placeholder="N° ou nom du client e-shop"
+              placeholder="Nom du client e-shop (ex: eSHOP)"
               style={{ flex: 1, padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }} />
             <button onClick={resolvePartner} style={{ padding: "0 16px", background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Vérifier</button>
           </div>

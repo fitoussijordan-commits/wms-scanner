@@ -3463,16 +3463,25 @@ export async function createEshopQuotation(
 // Vérifie qu'un client (res.partner) existe par id ou numéro/nom, retourne {id, name}.
 export async function findEshopPartner(session: OdooSession, idOrRef: string): Promise<{ id: number; name: string } | null> {
   const q = idOrRef.trim();
-  // 1) Code client = champ ref (ex: "75-004421") — priorité absolue, recherche exacte
-  const byRef = await searchRead(session, "res.partner", [["ref", "=", q]], ["id", "name"], 1);
-  if (byRef.length) return { id: byRef[0].id, name: byRef[0].name };
-  // 2) Id interne UNIQUEMENT si la saisie est purement numérique (pas "75-004421")
+  // Plusieurs contacts peuvent partager la même réf (eSHOP + Aline CASSIBI + adresses de
+  // livraison). On veut LA SOCIÉTÉ. Priorité : nom exact société > ref société > nom exact > ref.
+  const fields = ["id", "name"];
+  // 1) Nom exact ET société (ex: "eSHOP")
+  let r = await searchRead(session, "res.partner", [["name", "=", q], ["is_company", "=", true]], fields, 1);
+  if (r.length) return { id: r[0].id, name: r[0].name };
+  // 2) Réf exacte ET société
+  r = await searchRead(session, "res.partner", [["ref", "=", q], ["is_company", "=", true]], fields, 1);
+  if (r.length) return { id: r[0].id, name: r[0].name };
+  // 3) Nom exact (toute fiche)
+  r = await searchRead(session, "res.partner", [["name", "=", q]], fields, 1);
+  if (r.length) return { id: r[0].id, name: r[0].name };
+  // 4) Id interne si purement numérique
   if (/^\d+$/.test(q)) {
-    const byId = await searchRead(session, "res.partner", [["id", "=", Number(q)]], ["id", "name"], 1);
-    if (byId.length) return { id: byId[0].id, name: byId[0].name };
+    r = await searchRead(session, "res.partner", [["id", "=", Number(q)]], fields, 1);
+    if (r.length) return { id: r[0].id, name: r[0].name };
   }
-  // 3) Dernier recours : nom exact (pas de ilike approximatif)
-  const byName = await searchRead(session, "res.partner", [["name", "=", q]], ["id", "name"], 1);
-  if (byName.length) return { id: byName[0].id, name: byName[0].name };
+  // 5) Réf exacte (dernier recours — peut être ambigu)
+  r = await searchRead(session, "res.partner", [["ref", "=", q]], fields, 1);
+  if (r.length) return { id: r[0].id, name: r[0].name };
   return null;
 }
