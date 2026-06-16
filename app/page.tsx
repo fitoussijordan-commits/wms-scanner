@@ -7906,7 +7906,7 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
           <div style={{ display: "flex", gap: 8 }}>
             <input value={scanInput} onChange={e => { setScanInput(e.target.value); setScanErr(""); }}
               onKeyDown={e => { if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); scanInPallet(scanInput); setScanInput(""); } }}
-              placeholder="Lot, code-barres ou réf…" autoFocus
+              placeholder="Lot, code-barres ou réf…"
               style={{ flex: 1, padding: "10px 12px", border: `1.5px solid ${scanErr ? C.red : C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", outline: "none" }} />
             <button onClick={() => { scanInPallet(scanInput); setScanInput(""); }}
               style={{ padding: "0 16px", background: "#059669", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>OK</button>
