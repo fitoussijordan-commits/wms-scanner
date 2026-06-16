@@ -23,7 +23,8 @@ const PARTNER_KEY = "wms_eshop_partner_id";
 
 export default function EshopSortiesScreen({ session, onBack, onToast }: Props) {
   const today = new Date().toISOString().slice(0, 10);
-  const [date, setDate] = useState(today);
+  const [dateFrom, setDateFrom] = useState(today);
+  const [dateTo, setDateTo] = useState(today);
   const [loading, setLoading] = useState(false);
   const [orders, setOrders] = useState<SaleOrder[]>([]);
   const [statusTally, setStatusTally] = useState<Record<string, number>>({});
@@ -66,7 +67,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const res = await fetch(`/api/shopware-explore?action=dailySales&date=${date}`);
+      const res = await fetch(`/api/shopware-explore?action=dailySales&from=${dateFrom}&to=${dateTo}`);
       const d = await res.json();
       if (d.error) { setError(d.error); setLoading(false); return; }
       setOrders(d.orders || []);
@@ -77,7 +78,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       if (refs.length) setMatchMap(await odoo.matchEshopSkus(session, refs));
     } catch (e: any) { setError(e.message); }
     setLoading(false);
-  }, [date, session]);
+  }, [dateFrom, dateTo, session]);
   useEffect(() => { load(); }, [load]);
 
   const isChariot = (ref: string) => chariot.some(c => c.trim().toLowerCase() === ref.trim().toLowerCase());
@@ -154,7 +155,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
     setCreatingQuote(true);
     try {
       const lines = toDeduct.map(a => ({ productId: a.productId, qty: a.qty, name: a.name }));
-      const q = await odoo.createEshopQuotation(session, partner.id, lines, `E-shop ${date}`);
+      const q = await odoo.createEshopQuotation(session, partner.id, lines, `E-shop ${dateFrom}${dateFrom !== dateTo ? "→" + dateTo : ""}`);
       onToast(`✓ Devis ${q.name} créé`, "success");
     } catch (e: any) { onToast("Erreur création devis : " + e.message, "error"); }
     setCreatingQuote(false);
@@ -173,7 +174,11 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-        <input type="date" value={date} onChange={e => setDate(e.target.value)}
+        <span style={{ fontSize: 13, color: C.textMuted, fontWeight: 600 }}>Du</span>
+        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+          style={{ padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }} />
+        <span style={{ fontSize: 13, color: C.textMuted, fontWeight: 600 }}>au</span>
+        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
           style={{ padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }} />
         <button onClick={load} disabled={loading}
           style={{ padding: "9px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: loading ? 0.6 : 1 }}>
@@ -227,7 +232,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
           </div>
           {aggList.map((a, i) => (
             <div key={i}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr 40px 100px 1.4fr", gap: 8, padding: "9px 12px", borderBottom: `1px solid ${C.border}`, fontSize: 12.5, alignItems: "center", background: a.chariot ? C.orangeSoft : !a.matched ? C.redSoft : a.manual ? "#f5f3ff" : C.white }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr 40px 100px 1.4fr", gap: 8, padding: "9px 12px", borderBottom: `1px solid ${C.border}`, fontSize: 12.5, alignItems: "flex-start", background: a.chariot ? C.orangeSoft : !a.matched ? C.redSoft : a.manual ? "#f5f3ff" : C.white }}>
                 <span style={{ fontFamily: "monospace", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>{a.ref}</span>
                 <span style={{ fontFamily: "monospace", color: a.matched ? C.green : C.textMuted }}>{a.odooRef || "—"}</span>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
@@ -244,7 +249,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
                     </button>
                   )}
                 </span>
-                <span style={{ fontSize: 10.5, color: C.textMuted, lineHeight: 1.4, overflow: "hidden" }}>
+                <span style={{ fontSize: 10.5, color: C.textMuted, lineHeight: 1.5, wordBreak: "break-word" as const }}>
                   {a.cmds.map((c, k) => <span key={k} style={{ whiteSpace: "nowrap" }}>{c.number}{c.qty > 1 ? `×${c.qty}` : ""}{k < a.cmds.length - 1 ? ", " : ""}</span>)}
                 </span>
               </div>
