@@ -69,6 +69,54 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ total: r.json.total, orders });
     }
 
+    // ── dailySales: ventes d'une journée (lecture seule, pour exploration) ──
+    // Renvoie les commandes du jour avec leurs lignes (articleNumber, ean, qty, statut).
+    if (action === "dailySales") {
+      // date = YYYY-MM-DD (défaut: aujourd'hui)
+      const date = searchParams.get("date") || new Date().toISOString().slice(0, 10);
+      const start = `${date} 00:00:00`;
+      const end = `${date} 23:59:59`;
+      // Filtre Shopware 5 sur orderTime (>= début ET <= fin)
+      const q = `/orders?limit=200`
+        + `&filter[0][property]=orderTime&filter[0][expression]=>=&filter[0][value]=${encodeURIComponent(start)}`
+        + `&filter[1][property]=orderTime&filter[1][expression]=<=&filter[1][value]=${encodeURIComponent(end)}`
+        + `&sort[0][property]=orderTime&sort[0][direction]=ASC`;
+      const res = await swFetch(q, creds);
+      const r = await safeJson(res);
+      if (!r.json) return NextResponse.json({ error: "Non-JSON response", status: r.status, raw: r.raw });
+      const list = r.json.data || [];
+
+      // La liste /orders ne contient pas toujours les details → on enrichit chaque commande
+      const orders: any[] = [];
+      const statusTally: Record<string, number> = {};
+      for (const o of list) {
+        let details = o.details;
+        if (!details) {
+          const dRes = await swFetch(`/orders/${o.id}`, creds);
+          const dr = await safeJson(dRes);
+          details = dr.json?.data?.details || [];
+        }
+        const st = String(o.orderStatusId);
+        statusTally[st] = (statusTally[st] || 0) + 1;
+        orders.push({
+          id: o.id,
+          number: o.number,
+          orderStatusId: o.orderStatusId,
+          paymentStatusId: o.paymentStatusId,
+          dispatchId: o.dispatchId,
+          orderTime: o.orderTime,
+          lines: (details || []).map((d: any) => ({
+            articleNumber: d.articleNumber,
+            ean: d.articleDetail?.ean || "",
+            name: d.articleName,
+            quantity: d.quantity,
+            mode: d.mode, // 0 = produit réel ; ≠0 = remise/frais (à ignorer)
+          })),
+        });
+      }
+      return NextResponse.json({ date, total: r.json.total, count: orders.length, statusTally, orders });
+    }
+
     // ── dispatches: méthodes de livraison ──
     if (action === "dispatches") {
       const res = await swFetch("/dispatches?limit=50", creds);
