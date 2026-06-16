@@ -269,8 +269,8 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
                         </button>
                       )}
                     </td>
-                    <td style={{ ...td, fontSize: 11, color: C.textMuted, wordBreak: "break-word" }}>
-                      {a.cmds.map((c, k) => <span key={k} style={{ whiteSpace: "nowrap" }}>{c.number}{c.qty > 1 ? `×${c.qty}` : ""}{k < a.cmds.length - 1 ? ", " : ""}</span>)}
+                    <td style={{ ...td, fontSize: 11, color: C.textMuted, whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.5 }}>
+                      {a.cmds.map((c, k) => <span key={k} style={{ display: "inline-block", marginRight: 6, whiteSpace: "nowrap" }}>{c.number}{c.qty > 1 ? `×${c.qty}` : ""}</span>)}
                     </td>
                   </tr>
                   {fixRef === a.ref && (
