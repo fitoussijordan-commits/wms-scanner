@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Fragment as Fragment2 } from "react";
 import * as odoo from "@/lib/odoo";
 import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, type EshopMappingOverrides } from "@/lib/supabase";
 
@@ -236,50 +236,62 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       {/* Tableau */}
       {aggList.length > 0 && (
         <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow, marginBottom: 14 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "140px 110px 2fr 50px 110px 2.5fr", gap: 8, padding: "8px 12px", background: C.bg, borderBottom: `1px solid ${C.border}`, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted }}>
-            <span>Réf Shopware</span><span>Réf Odoo</span><span>Produit</span><span>Qté</span><span>État</span><span>Commandes</span>
-          </div>
-          {aggList.map((a, i) => (
-            <div key={i}>
-              <div style={{ display: "grid", gridTemplateColumns: "140px 110px 2fr 50px 110px 2.5fr", gap: 8, padding: "9px 12px", borderBottom: `1px solid ${C.border}`, fontSize: 12.5, alignItems: "flex-start", background: a.chariot ? C.orangeSoft : !a.matched ? C.redSoft : a.manual ? "#f5f3ff" : C.white }}>
-                <span style={{ fontFamily: "monospace", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>{a.ref}</span>
-                <span style={{ fontFamily: "monospace", color: a.matched ? C.green : C.textMuted }}>{a.odooRef || "—"}</span>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
-                <span style={{ fontWeight: 800 }}>{a.qty}</span>
-                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: a.chariot ? C.orange : a.matched ? (a.manual ? C.purple : C.green) : C.red }}>
-                    {a.chariot ? "Chariot" : a.matched ? (a.manual ? "✓ manuel" : "✓ OK") : "non mappé"}
-                  </span>
-                  {!a.chariot && (
-                    <button onClick={() => { setFixRef(fixRef === a.ref ? null : a.ref); setFixQuery(""); setFixResults([]); }}
-                      title="Corriger le mapping"
-                      style={{ background: "none", border: "none", cursor: "pointer", color: C.blue, fontSize: 11, fontWeight: 700, padding: 0, fontFamily: "inherit" }}>
-                      {fixRef === a.ref ? "fermer" : "corriger"}
-                    </button>
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <colgroup>
+              <col style={{ width: "13%" }} />
+              <col style={{ width: "11%" }} />
+              <col style={{ width: "30%" }} />
+              <col style={{ width: "6%" }} />
+              <col style={{ width: "16%" }} />
+              <col style={{ width: "24%" }} />
+            </colgroup>
+            <thead>
+              <tr style={{ background: C.bg, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted, textAlign: "left" }}>
+                <th style={th}>Réf Shopware</th><th style={th}>Réf Odoo</th><th style={th}>Produit</th><th style={th}>Qté</th><th style={th}>État</th><th style={th}>Commandes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {aggList.map((a, i) => (
+                <Fragment2 key={i}>
+                  <tr style={{ borderTop: `1px solid ${C.border}`, fontSize: 12.5, verticalAlign: "top", background: a.chariot ? C.orangeSoft : !a.matched ? C.redSoft : a.manual ? "#f5f3ff" : C.white }}>
+                    <td style={{ ...td, fontFamily: "monospace", fontWeight: 700, wordBreak: "break-word" }}>{a.ref}</td>
+                    <td style={{ ...td, fontFamily: "monospace", color: a.matched ? C.green : C.textMuted }}>{a.odooRef || "—"}</td>
+                    <td style={td}>{a.name}</td>
+                    <td style={{ ...td, fontWeight: 800 }}>{a.qty}</td>
+                    <td style={td}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: a.chariot ? C.orange : a.matched ? (a.manual ? C.purple : C.green) : C.red }}>
+                        {a.chariot ? "Chariot" : a.matched ? (a.manual ? "✓ manuel" : "✓ OK") : "non mappé"}
+                      </span>
+                      {!a.chariot && (
+                        <button onClick={() => { setFixRef(fixRef === a.ref ? null : a.ref); setFixQuery(""); setFixResults([]); }}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: C.blue, fontSize: 11, fontWeight: 700, padding: "0 0 0 6px", fontFamily: "inherit" }}>
+                          {fixRef === a.ref ? "fermer" : "corriger"}
+                        </button>
+                      )}
+                    </td>
+                    <td style={{ ...td, fontSize: 11, color: C.textMuted, wordBreak: "break-word" }}>
+                      {a.cmds.map((c, k) => <span key={k} style={{ whiteSpace: "nowrap" }}>{c.number}{c.qty > 1 ? `×${c.qty}` : ""}{k < a.cmds.length - 1 ? ", " : ""}</span>)}
+                    </td>
+                  </tr>
+                  {fixRef === a.ref && (
+                    <tr style={{ background: "#f8fafc" }}>
+                      <td colSpan={6} style={{ padding: "10px 12px" }}>
+                        <input value={fixQuery} onChange={e => { setFixQuery(e.target.value); searchOdoo(e.target.value); }}
+                          placeholder="Chercher le produit Odoo (réf, nom, code-barres)…" autoFocus
+                          style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", marginBottom: 6 }} />
+                        {fixResults.map((r: any, k: number) => (
+                          <button key={k} onClick={() => applyFix(a.ref, r.data)} disabled={fixing}
+                            style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 4, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5 }}>
+                            <b style={{ fontFamily: "monospace" }}>{r.data.default_code || "—"}</b> · {r.data.name}
+                          </button>
+                        ))}
+                      </td>
+                    </tr>
                   )}
-                </span>
-                <span style={{ fontSize: 10.5, color: C.textMuted, lineHeight: 1.5, wordBreak: "break-word" as const }}>
-                  {a.cmds.map((c, k) => <span key={k} style={{ whiteSpace: "nowrap" }}>{c.number}{c.qty > 1 ? `×${c.qty}` : ""}{k < a.cmds.length - 1 ? ", " : ""}</span>)}
-                </span>
-              </div>
-              {/* Panneau correction */}
-              {fixRef === a.ref && (
-                <div style={{ padding: "10px 12px", background: "#f8fafc", borderBottom: `1px solid ${C.border}` }}>
-                  <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
-                    <input value={fixQuery} onChange={e => { setFixQuery(e.target.value); searchOdoo(e.target.value); }}
-                      placeholder="Chercher le produit Odoo (réf, nom, code-barres)…" autoFocus
-                      style={{ flex: 1, padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit" }} />
-                  </div>
-                  {fixResults.map((r: any, k: number) => (
-                    <button key={k} onClick={() => applyFix(a.ref, r.data)} disabled={fixing}
-                      style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 4, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5 }}>
-                      <b style={{ fontFamily: "monospace" }}>{r.data.default_code || "—"}</b> · {r.data.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+                </Fragment2>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -308,6 +320,9 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
     </div>
   );
 }
+
+const th: React.CSSProperties = { padding: "8px 10px", letterSpacing: "0.03em" };
+const td: React.CSSProperties = { padding: "9px 10px", wordBreak: "break-word" };
 
 function chip(active: boolean): React.CSSProperties {
   return { padding: "5px 12px", borderRadius: 8, border: `1.5px solid ${active ? "#2563eb" : "#e5e7eb"}`, background: active ? "#eff6ff" : "#fff", color: active ? "#2563eb" : "#374151", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" };
