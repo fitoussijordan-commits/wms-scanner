@@ -152,9 +152,33 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
     }
   }
   const aggList = Object.values(agg).sort((a, b) => Number(a.matched) - Number(b.matched) || a.ref.localeCompare(b.ref));
-  const toDeduct = aggList.filter(a => a.matched && !a.chariot && a.productId);
   const blocked = aggList.filter(a => !a.matched && !a.chariot);
   const statusList = Object.entries(statusTally).sort((a, b) => Number(b[1]) - Number(a[1]));
+
+  // ── DEVIS : agrégation STRICTE et indépendante de l'affichage ──
+  // Ne JAMAIS déduire : annulées (-1), non payées (≠12), déjà sorties, chariot, non mappées.
+  const deductAgg: Record<string, { productId: number; qty: number; ref: string; odooRef: string; name: string; cmds: { number: string; qty: number }[] }> = {};
+  for (const o of orders) {
+    if (processed.has(o.number)) continue;            // déjà sortie
+    if (String(o.orderStatusId) === "-1") continue;   // annulée
+    if (String(o.paymentStatusId) !== "12") continue; // non payée
+    for (const l of o.lines) {
+      if (l.mode === 4 || !l.articleNumber) continue;
+      const ref = l.articleNumber;
+      if (isChariot(ref)) continue;                   // chariot
+      const m: any = effMatch(ref);
+      const pid = m ? (m.product_id ?? m.productId ?? 0) : 0;
+      if (!pid) continue;                             // non mappé
+      if (!deductAgg[ref]) deductAgg[ref] = { productId: pid, qty: 0, ref, odooRef: m.default_code ?? m.odooRef ?? "", name: l.name, cmds: [] };
+      deductAgg[ref].qty += l.quantity;
+      deductAgg[ref].cmds.push({ number: o.number, qty: l.quantity });
+    }
+  }
+  const toDeduct = Object.values(deductAgg);
+  // Commandes réellement incluses dans le devis (pour le garde-fou)
+  const deductOrderNumbers = Array.from(new Set(
+    orders.filter(o => !processed.has(o.number) && String(o.orderStatusId) !== "-1" && String(o.paymentStatusId) === "12").map(o => o.number).filter(Boolean)
+  ));
 
   // ── Client e-shop ──
   const resolvePartner = async () => {
@@ -176,8 +200,8 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
     try {
       const lines = toDeduct.map(a => ({ productId: a.productId, qty: a.qty, name: a.name }));
       const q = await odoo.createEshopQuotation(session, partner.id, lines, `E-shop ${dateFrom}${dateFrom !== dateTo ? "→" + dateTo : ""}`);
-      // GARDE-FOU : marque les commandes incluses comme "sorties" → exclues au prochain calcul
-      const includedNumbers = visibleOrders.map(o => o.number).filter(Boolean);
+      // GARDE-FOU : marque UNIQUEMENT les commandes réellement incluses (payées, non annulées)
+      const includedNumbers = deductOrderNumbers;
       try { await markEshopOrdersProcessed(includedNumbers, q.name); setProcessed(prev => new Set([...Array.from(prev), ...includedNumbers])); } catch {}
       // Trace : export Excel du détail envoyé au devis (pour comparer avec Odoo)
       try {
