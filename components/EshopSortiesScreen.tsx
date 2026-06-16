@@ -179,7 +179,23 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       // GARDE-FOU : marque les commandes incluses comme "sorties" → exclues au prochain calcul
       const includedNumbers = visibleOrders.map(o => o.number).filter(Boolean);
       try { await markEshopOrdersProcessed(includedNumbers, q.name); setProcessed(prev => new Set([...Array.from(prev), ...includedNumbers])); } catch {}
-      onToast(`✓ Devis ${q.name} créé — ${includedNumbers.length} commande(s) marquée(s) sorties`, "success");
+      // Trace : export Excel du détail envoyé au devis (pour comparer avec Odoo)
+      try {
+        const XLSX = await import("xlsx");
+        const rows = toDeduct.map(a => ({
+          "Réf Shopware": a.ref,
+          "Réf Odoo": a.odooRef,
+          "Produit": a.name,
+          "Qté": a.qty,
+          "Commandes": a.cmds.map(c => `${c.number}${c.qty > 1 ? `×${c.qty}` : ""}`).join(", "),
+        }));
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws["!cols"] = [{ wch: 16 }, { wch: 14 }, { wch: 42 }, { wch: 8 }, { wch: 50 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Devis");
+        XLSX.writeFile(wb, `Devis_${q.name}_${dateFrom}.xlsx`);
+      } catch {}
+      onToast(`✓ Devis ${q.name} créé — ${includedNumbers.length} commande(s) marquée(s) sorties · Excel téléchargé`, "success");
     } catch (e: any) { onToast("Erreur création devis : " + e.message, "error"); }
     setCreatingQuote(false);
   };
