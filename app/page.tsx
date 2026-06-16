@@ -7656,6 +7656,11 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
   const [matchData, setMatchData] = useState<Record<string, any>>({});
   const [locationData, setLocationData] = useState<Record<number, any>>({});
   const [openPallets, setOpenPallets] = useState<Record<string, boolean>>({});
+  const [palletPage, setPalletPage] = useState<any | null>(null); // palette ouverte en plein écran
+  const [scanInput, setScanInput] = useState("");
+  const [flashKey, setFlashKey] = useState<string | null>(null); // rangeKey de la ligne à surligner
+  const [scanErr, setScanErr] = useState("");
+  const lineRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [savedList, setSavedList] = useState<any[]>([]);
   // Refs marquées comme "rangées" — persistées sur Odoo (partagé entre postes)
   const [rangedRefs, setRangedRefs] = useState<Set<string>>(new Set());
@@ -7833,9 +7838,131 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
     return null;
   };
 
+  // Liste agrégée des produits d'une palette (même logique que l'accordéon)
+  const palletProducts = (pallet: any) => {
+    const prodSummary: Record<string, any> = {};
+    for (const c of pallet.cartons) {
+      const arts: any[] = c.articles?.length > 0 ? c.articles : [{ supplierRef: c.supplierRef, productDesc: c.productDesc, lot: c.lot, expiry: c.expiry, qtyProduct: c.qtyProduct }];
+      arts.forEach((art: any, artIdx: number) => {
+        const key = `${art.supplierRef}_${art.lot}`;
+        const rangeKey = `${pallet.palletNo}_${art.supplierRef}_${art.lot || ""}`;
+        if (!prodSummary[key]) prodSummary[key] = { supplierRef: art.supplierRef, desc: art.productDesc, lot: art.lot, expiry: art.expiry, totalQty: 0, cartonCount: 0, hasVrac: false, rangeKey };
+        prodSummary[key].totalQty += art.qtyProduct;
+        if (!c.isVrac || artIdx === 0) prodSummary[key].cartonCount += 1;
+        if (c.isVrac) prodSummary[key].hasVrac = true;
+      });
+    }
+    return Object.values(prodSummary);
+  };
+
+  // Scan dans la page palette : trouve la ligne (lot OU réf produit/fournisseur), scroll + surligne
+  const scanInPallet = (raw: string) => {
+    const code = raw.trim();
+    if (!code || !palletPage) return;
+    const lc = code.toLowerCase();
+    const prods = palletProducts(palletPage) as any[];
+    const hit = prods.find((p: any) => {
+      const m = getMatch(p.supplierRef);
+      return (p.lot && String(p.lot).toLowerCase() === lc)
+        || String(p.supplierRef).toLowerCase() === lc
+        || (m?.default_code && String(m.default_code).toLowerCase() === lc)
+        || (m?.barcode && String(m.barcode).toLowerCase() === lc);
+    });
+    if (!hit) { setScanErr(`"${code}" introuvable dans cette palette`); setFlashKey(null); return; }
+    setScanErr("");
+    setFlashKey(hit.rangeKey);
+    setTimeout(() => {
+      lineRefs.current[hit.rangeKey]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+    setTimeout(() => setFlashKey(null), 2500);
+  };
+
+  // Scan PDA/caméra → routé vers la palette ouverte
+  useScannerListener((code) => scanInPallet(code), !!palletPage);
+
   const totalRefs = packingData ? Array.from(new Set(packingData.pallets.flatMap((p: any) => p.cartons.map((c: any) => c.supplierRef)))).length : 0;
   const matchedRefs = Object.keys(matchData).length;
   const unmatchedRefs = totalRefs - matchedRefs;
+
+  // ── PAGE PALETTE plein écran (scan rapide) ──
+  if (palletPage) {
+    const prods = palletProducts(palletPage) as any[];
+    const rangedOnPallet = prods.filter(p => rangedRefs.has(p.rangeKey)).length;
+    return (
+      <>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+          <button onClick={() => { setPalletPage(null); setScanErr(""); setFlashKey(null); }} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <div style={{ flex: 1 }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Palette {palletPage.palletNo}</h2>
+            <p style={{ fontSize: 12, color: C.textMuted }}>{palletPage.cartons.length} colis · {prods.length} réf(s) · {rangedOnPallet}/{prods.length} rangés</p>
+          </div>
+        </div>
+
+        {/* Barre de scan */}
+        <div style={{ ...cardStyle, padding: 12, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>Scanner un lot ou une référence</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={scanInput} onChange={e => { setScanInput(e.target.value); setScanErr(""); }}
+              onKeyDown={e => { if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); scanInPallet(scanInput); setScanInput(""); } }}
+              placeholder="Lot, code-barres ou réf…" autoFocus
+              style={{ flex: 1, padding: "10px 12px", border: `1.5px solid ${scanErr ? C.red : C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", outline: "none" }} />
+            <button onClick={() => { scanInPallet(scanInput); setScanInput(""); }}
+              style={{ padding: "0 16px", background: "#059669", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>OK</button>
+          </div>
+          {scanErr && <div style={{ fontSize: 12, color: C.red, marginTop: 6, fontWeight: 600 }}>⚠ {scanErr}</div>}
+        </div>
+
+        {/* Lignes produits */}
+        {prods.map((prod: any, j: number) => {
+          const match = getMatch(prod.supplierRef);
+          const loc = getLocation(prod.supplierRef);
+          const isMatched = !!match;
+          const isRanged = rangedRefs.has(prod.rangeKey);
+          const isFlash = flashKey === prod.rangeKey;
+          return (
+            <div key={j} ref={el => { lineRefs.current[prod.rangeKey] = el; }} style={{
+              ...cardStyle, marginBottom: 6,
+              borderLeft: `3px solid ${isRanged ? "#059669" : isMatched ? C.green : C.orange}`,
+              opacity: isRanged ? 0.55 : 1,
+              background: isFlash ? "#fef9c3" : isRanged ? "#f0fdf4" : C.white,
+              boxShadow: isFlash ? "0 0 0 3px #facc15" : C.shadow,
+              transition: "background .3s, box-shadow .3s, opacity .2s",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" as const }}>
+                    {isMatched
+                      ? <div style={{ fontSize: 13, fontWeight: 700, color: isRanged ? "#059669" : C.text }}>{match.product_name}</div>
+                      : <div style={{ fontSize: 13, fontWeight: 700, color: C.orange }}>{prod.desc} <span style={{ fontSize: 10, fontWeight: 400 }}>(non trouvé)</span></div>}
+                    {prod.hasVrac && <span style={{ fontSize: 9, fontWeight: 700, color: "#7c3aed", background: "#ede9fe", padding: "1px 6px", borderRadius: 5 }}>VRAC</span>}
+                    {isRanged && <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#dcfce7", padding: "1px 7px", borderRadius: 5 }}>✓ Rangé</span>}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, flexWrap: "wrap" as const }}>
+                    {match?.default_code && <span style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{match.default_code}</span>}
+                    {prod.lot && <span style={{ fontSize: 11, color: C.blue, background: C.blueSoft, borderRadius: 4, padding: "1px 6px" }}>Lot {prod.lot}</span>}
+                    <span style={{ fontSize: 11, color: C.textMuted }}>Réf fourn: {prod.supplierRef}</span>
+                  </div>
+                  {loc && <div style={{ fontSize: 12, fontWeight: 700, color: "#059669", marginTop: 4 }}>📍 {loc.location_name.split("/").pop()} ({loc.quantity} en stock)</div>}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{prod.cartonCount} <span style={{ fontSize: 11, fontWeight: 500 }}>crt</span></div>
+                    <div style={{ fontSize: 11, color: C.textMuted }}>{prod.totalQty} unités</div>
+                  </div>
+                  <button onClick={() => toggleRanged(prod.rangeKey)} title={isRanged ? "Non rangé" : "Rangé"}
+                    style={{ width: 34, height: 34, borderRadius: 8, flexShrink: 0, border: `2px solid ${isRanged ? "#059669" : "#d1d5db"}`, background: isRanged ? "#059669" : "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {isRanged ? <span style={{ color: "#fff", fontWeight: 900, fontSize: 18 }}>✓</span> : <span style={{ color: "#d1d5db", fontSize: 18 }}>□</span>}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </>
+    );
+  }
 
   return (
     <>
@@ -7983,9 +8110,9 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
             const palletDone = rangedOnPallet === products.length;
 
             return (
-              <div key={pi} style={{ marginBottom: 10 }}>
+              <div key={pi} style={{ marginBottom: 10, display: "flex", gap: 6, alignItems: "stretch" }}>
                 <button onClick={() => togglePallet(pallet.palletNo)} style={{
-                  width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                  flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between",
                   padding: "12px 14px", background: palletDone ? "#ecfdf5" : C.white, border: `1px solid ${palletDone ? "#059669" : C.border}`, borderRadius: 10,
                   cursor: "pointer", fontFamily: "inherit", boxShadow: C.shadow,
                 }}>
@@ -8003,6 +8130,11 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                     <span style={{ fontSize: 13, fontWeight: 800, color: "#059669", background: "#ecfdf5", padding: "2px 10px", borderRadius: 10 }}>{pallet.cartons.length}<span style={{ fontSize: 10, fontWeight: 500, marginLeft: 2 }}>colis</span></span>
                     <span style={{ fontSize: 12, color: C.textMuted, transition: "transform .2s", transform: isOpen ? "rotate(180deg)" : "rotate(0)" }}>▼</span>
                   </div>
+                </button>
+                <button onClick={() => { setPalletPage(pallet); setScanInput(""); setScanErr(""); setFlashKey(null); }}
+                  title="Ouvrir la palette (scan rapide)"
+                  style={{ flexShrink: 0, padding: "0 14px", background: "#059669", color: "#fff", border: "none", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
                 </button>
 
                 {isOpen && (
