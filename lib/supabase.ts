@@ -382,6 +382,23 @@ export async function saveEshopMappingOverride(ref: string, productId: number, o
 }
 
 // ══════════════════════════════════════════
+// GARDE-FOU : commandes e-shop déjà sorties (devis créé) — anti double déduction
+// Table wms_eshop_processed : { order_number, devis, processed_at }
+// ══════════════════════════════════════════
+export async function getProcessedEshopOrders(orderNumbers: string[]): Promise<Set<string>> {
+  if (!orderNumbers.length) return new Set();
+  const { data } = await sb.from("wms_eshop_processed").select("order_number").in("order_number", orderNumbers);
+  return new Set((data || []).map((r: any) => r.order_number));
+}
+
+export async function markEshopOrdersProcessed(orderNumbers: string[], devis: string): Promise<void> {
+  if (!orderNumbers.length) return;
+  const rows = orderNumbers.map(n => ({ order_number: n, devis, processed_at: new Date().toISOString() }));
+  const { error } = await sb.from("wms_eshop_processed").upsert(rows, { onConflict: "order_number" });
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // NOTIFICATIONS (cloche header — partagées entre postes)
 // ══════════════════════════════════════════
 

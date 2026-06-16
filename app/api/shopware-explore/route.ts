@@ -72,13 +72,16 @@ export async function GET(req: NextRequest) {
     // ── dailySales: ventes d'une journée (lecture seule, pour exploration) ──
     // Renvoie les commandes du jour avec leurs lignes (articleNumber, ean, qty, statut).
     if (action === "dailySales") {
-      // Plage de dates : from/to (YYYY-MM-DD). Rétrocompat : ?date= = un seul jour.
+      // Plage de dates + heures optionnelles.
+      // from/to peuvent être "YYYY-MM-DD" ou "YYYY-MM-DD HH:MM". Heures par défaut : 00:00 → 23:59.
       const single = searchParams.get("date");
-      const from = searchParams.get("from") || single || new Date().toISOString().slice(0, 10);
-      const to = searchParams.get("to") || single || from;
-      const date = from === to ? from : `${from} → ${to}`;
-      const start = `${from} 00:00:00`;
-      const end = `${to} 23:59:59`;
+      const fromRaw = searchParams.get("from") || single || new Date().toISOString().slice(0, 10);
+      const toRaw = searchParams.get("to") || single || fromRaw;
+      const fromTime = searchParams.get("fromTime") || ""; // "HH:MM" optionnel
+      const toTime = searchParams.get("toTime") || "";
+      const start = fromTime ? `${fromRaw} ${fromTime}:00` : (fromRaw.includes(" ") ? fromRaw : `${fromRaw} 00:00:00`);
+      const end = toTime ? `${toRaw} ${toTime}:59` : (toRaw.includes(" ") ? toRaw : `${toRaw} 23:59:59`);
+      const date = `${start} → ${end}`;
       // Filtre Shopware 5 sur orderTime (>= début ET <= fin)
       const q = `/orders?limit=200`
         + `&filter[0][property]=orderTime&filter[0][expression]=>=&filter[0][value]=${encodeURIComponent(start)}`

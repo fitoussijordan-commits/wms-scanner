@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, Fragment as Fragment2 } from "react";
 import * as odoo from "@/lib/odoo";
-import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, type EshopMappingOverrides } from "@/lib/supabase";
+import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, type EshopMappingOverrides } from "@/lib/supabase";
 
 const C = {
   bg: "#f8fafc", white: "#ffffff", text: "#1a1a2e", textSec: "#374151",
@@ -25,6 +25,8 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   const today = new Date().toISOString().slice(0, 10);
   const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
+  const [timeFrom, setTimeFrom] = useState(""); // HH:MM optionnel — vide = toute la journée
+  const [timeTo, setTimeTo] = useState("");
   const [loading, setLoading] = useState(false);
   const [orders, setOrders] = useState<SaleOrder[]>([]);
   const [statusTally, setStatusTally] = useState<Record<string, number>>({});
@@ -33,6 +35,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   const [matchMap, setMatchMap] = useState<Record<string, any>>({});
   const [overrides, setOverrides] = useState<EshopMappingOverrides>({});
   const [chariot, setChariot] = useState<string[]>([]);
+  const [processed, setProcessed] = useState<Set<string>>(new Set()); // commandes déjà sorties (devis créé)
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   // Par défaut : payées uniquement (statut paiement 12) → exclut les paniers oubliés
@@ -68,18 +71,21 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const res = await fetch(`/api/shopware-explore?action=dailySales&from=${dateFrom}&to=${dateTo}`);
+      const res = await fetch(`/api/shopware-explore?action=dailySales&from=${dateFrom}&to=${dateTo}${timeFrom ? `&fromTime=${timeFrom}` : ""}${timeTo ? `&toTime=${timeTo}` : ""}`);
       const d = await res.json();
       if (d.error) { setError(d.error); setLoading(false); return; }
       setOrders(d.orders || []);
       setStatusTally(d.statusTally || {});
+      // Garde-fou : commandes déjà sorties (devis déjà créé) → à exclure
+      const orderNums = (d.orders || []).map((o: SaleOrder) => o.number).filter(Boolean);
+      setProcessed(await getProcessedEshopOrders(orderNums));
       const refs = Array.from(new Set(
         (d.orders || []).flatMap((o: SaleOrder) => o.lines.filter(l => l.articleNumber && l.mode !== 4).map(l => l.articleNumber as string))
       )) as string[];
       if (refs.length) setMatchMap(await odoo.matchEshopSkus(session, refs));
     } catch (e: any) { setError(e.message); }
     setLoading(false);
-  }, [dateFrom, dateTo, session]);
+  }, [dateFrom, dateTo, timeFrom, timeTo, session]);
   useEffect(() => { load(); }, [load]);
 
   const isChariot = (ref: string) => chariot.some(c => c.trim().toLowerCase() === ref.trim().toLowerCase());
@@ -116,10 +122,15 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   for (const o of orders) { const p = String(o.paymentStatusId); payTally[p] = (payTally[p] || 0) + 1; }
   const payList = Object.entries(payTally).sort((a, b) => Number(b[1]) - Number(a[1]));
 
+  // Nb de commandes déjà sorties (devis déjà créé) dans la période
+  const processedCount = orders.filter(o => processed.has(o.number)).length;
+
   // ── Agrégation ──
   const agg: Record<string, { ref: string; name: string; qty: number; productId: number; odooRef: string; matched: boolean; chariot: boolean; manual: boolean; cmds: { number: string; qty: number }[] }> = {};
   let totalLines = 0, mappedLines = 0, chariotLines = 0;
   const visibleOrders = orders
+    // GARDE-FOU : exclut TOUJOURS les commandes déjà sorties (anti double déduction)
+    .filter(o => !processed.has(o.number))
     // Exclut TOUJOURS les commandes annulées (statut -1), sauf si on les sélectionne exprès
     .filter(o => statusFilter === "-1" ? true : String(o.orderStatusId) !== "-1")
     .filter(o => statusFilter === "all" || String(o.orderStatusId) === statusFilter)
@@ -165,7 +176,10 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
     try {
       const lines = toDeduct.map(a => ({ productId: a.productId, qty: a.qty, name: a.name }));
       const q = await odoo.createEshopQuotation(session, partner.id, lines, `E-shop ${dateFrom}${dateFrom !== dateTo ? "→" + dateTo : ""}`);
-      onToast(`✓ Devis ${q.name} créé`, "success");
+      // GARDE-FOU : marque les commandes incluses comme "sorties" → exclues au prochain calcul
+      const includedNumbers = visibleOrders.map(o => o.number).filter(Boolean);
+      try { await markEshopOrdersProcessed(includedNumbers, q.name); setProcessed(prev => new Set([...Array.from(prev), ...includedNumbers])); } catch {}
+      onToast(`✓ Devis ${q.name} créé — ${includedNumbers.length} commande(s) marquée(s) sorties`, "success");
     } catch (e: any) { onToast("Erreur création devis : " + e.message, "error"); }
     setCreatingQuote(false);
   };
@@ -186,9 +200,13 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
         <span style={{ fontSize: 13, color: C.textMuted, fontWeight: 600 }}>Du</span>
         <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
           style={{ padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }} />
+        <input type="time" value={timeFrom} onChange={e => setTimeFrom(e.target.value)} title="Heure début (vide = 00:00)"
+          style={{ padding: "9px 8px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }} />
         <span style={{ fontSize: 13, color: C.textMuted, fontWeight: 600 }}>au</span>
         <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
           style={{ padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }} />
+        <input type="time" value={timeTo} onChange={e => setTimeTo(e.target.value)} title="Heure fin (vide = 23:59)"
+          style={{ padding: "9px 8px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }} />
         <button onClick={load} disabled={loading}
           style={{ padding: "9px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: loading ? 0.6 : 1 }}>
           {loading ? "Chargement…" : "Charger"}
@@ -229,6 +247,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
           <span style={badge(C.greenSoft, C.green)}>{mappedLines} mappées</span>
           <span style={badge(C.redSoft, C.red)}>{blocked.length} à corriger</span>
           {chariotLines > 0 && <span style={badge(C.orangeSoft, C.orange)}>{chariotLines} chariot (exclues)</span>}
+          {processedCount > 0 && <span style={badge("#ede9fe", "#7c3aed")}>{processedCount} déjà sortie(s) (exclues)</span>}
           <span style={badge(C.bg, C.textSec)}>→ {toDeduct.length} réf au devis</span>
         </div>
       )}
