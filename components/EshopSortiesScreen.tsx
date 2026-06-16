@@ -28,11 +28,13 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   const [orders, setOrders] = useState<SaleOrder[]>([]);
   const [statusTally, setStatusTally] = useState<Record<string, number>>({});
   const [statusNames, setStatusNames] = useState<Record<string, string>>({});
+  const [payNames, setPayNames] = useState<Record<string, string>>({});
   const [matchMap, setMatchMap] = useState<Record<string, any>>({});
   const [overrides, setOverrides] = useState<EshopMappingOverrides>({});
   const [chariot, setChariot] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [payFilter, setPayFilter] = useState<string>("all");
   // Correction en cours : ref Shopware ciblée
   const [fixRef, setFixRef] = useState<string | null>(null);
   const [fixQuery, setFixQuery] = useState("");
@@ -48,6 +50,11 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       const m: Record<string, string> = {};
       for (const s of (d.statuses || [])) m[String(s.id)] = s.description || s.name;
       setStatusNames(m);
+    }).catch(() => {});
+    fetch("/api/shopware-explore?action=paymentStatuses").then(r => r.json()).then(d => {
+      const m: Record<string, string> = {};
+      for (const s of (d.statuses || [])) m[String(s.id)] = s.description || s.name;
+      setPayNames(m);
     }).catch(() => {});
     odoo.loadChariotSkus(session).then(setChariot).catch(() => {});
     getEshopMappingOverrides().then(setOverrides).catch(() => {});
@@ -96,10 +103,17 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
     setFixing(false);
   };
 
+  // Récap statuts de paiement (pour repérer les paniers oubliés)
+  const payTally: Record<string, number> = {};
+  for (const o of orders) { const p = String(o.paymentStatusId); payTally[p] = (payTally[p] || 0) + 1; }
+  const payList = Object.entries(payTally).sort((a, b) => Number(b[1]) - Number(a[1]));
+
   // ── Agrégation ──
-  const agg: Record<string, { ref: string; name: string; qty: number; productId: number; odooRef: string; matched: boolean; chariot: boolean; manual: boolean }> = {};
+  const agg: Record<string, { ref: string; name: string; qty: number; productId: number; odooRef: string; matched: boolean; chariot: boolean; manual: boolean; cmds: { number: string; qty: number }[] }> = {};
   let totalLines = 0, mappedLines = 0, chariotLines = 0;
-  const visibleOrders = statusFilter === "all" ? orders : orders.filter(o => String(o.orderStatusId) === statusFilter);
+  const visibleOrders = orders
+    .filter(o => statusFilter === "all" || String(o.orderStatusId) === statusFilter)
+    .filter(o => payFilter === "all" || String(o.paymentStatusId) === payFilter);
   for (const o of visibleOrders) {
     for (const l of o.lines) {
       if (l.mode === 4 || !l.articleNumber) continue;
@@ -111,8 +125,9 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       if (m) mappedLines++;
       const pid = m ? (m.product_id ?? m.productId ?? 0) : 0;
       const oref = m ? (m.default_code ?? m.odooRef ?? "") : "";
-      if (!agg[ref]) agg[ref] = { ref, name: l.name, qty: 0, productId: pid, odooRef: oref, matched: !!m, chariot: onChariot, manual: !!overrides[ref] };
+      if (!agg[ref]) agg[ref] = { ref, name: l.name, qty: 0, productId: pid, odooRef: oref, matched: !!m, chariot: onChariot, manual: !!overrides[ref], cmds: [] };
       agg[ref].qty += l.quantity;
+      agg[ref].cmds.push({ number: o.number, qty: l.quantity });
     }
   }
   const aggList = Object.values(agg).sort((a, b) => Number(a.matched) - Number(b.matched) || a.ref.localeCompare(b.ref));
@@ -181,6 +196,19 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
         </div>
       )}
 
+      {/* Statut de PAIEMENT (pour exclure les paniers oubliés / non payés) */}
+      {payList.length > 0 && (
+        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 12, boxShadow: C.shadow }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Filtrer par paiement <span style={{ color: C.orange, textTransform: "none" }}>· exclure les non payés !</span></div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => setPayFilter("all")} style={chip(payFilter === "all")}>Tous paiements</button>
+            {payList.map(([sid, n]) => (
+              <button key={sid} onClick={() => setPayFilter(sid)} style={chip(payFilter === sid)}>{payNames[sid] || `Paiement ${sid}`} ({n})</button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Récap */}
       {totalLines > 0 && (
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
@@ -194,12 +222,12 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       {/* Tableau */}
       {aggList.length > 0 && (
         <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow, marginBottom: 14 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2.2fr 50px 110px", gap: 8, padding: "8px 12px", background: C.bg, borderBottom: `1px solid ${C.border}`, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted }}>
-            <span>Réf Shopware</span><span>Réf Odoo</span><span>Produit</span><span>Qté</span><span>État</span>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr 40px 100px 1.4fr", gap: 8, padding: "8px 12px", background: C.bg, borderBottom: `1px solid ${C.border}`, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted }}>
+            <span>Réf Shopware</span><span>Réf Odoo</span><span>Produit</span><span>Qté</span><span>État</span><span>Commandes</span>
           </div>
           {aggList.map((a, i) => (
             <div key={i}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2.2fr 50px 110px", gap: 8, padding: "9px 12px", borderBottom: `1px solid ${C.border}`, fontSize: 12.5, alignItems: "center", background: a.chariot ? C.orangeSoft : !a.matched ? C.redSoft : a.manual ? "#f5f3ff" : C.white }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr 40px 100px 1.4fr", gap: 8, padding: "9px 12px", borderBottom: `1px solid ${C.border}`, fontSize: 12.5, alignItems: "center", background: a.chariot ? C.orangeSoft : !a.matched ? C.redSoft : a.manual ? "#f5f3ff" : C.white }}>
                 <span style={{ fontFamily: "monospace", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>{a.ref}</span>
                 <span style={{ fontFamily: "monospace", color: a.matched ? C.green : C.textMuted }}>{a.odooRef || "—"}</span>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
@@ -215,6 +243,9 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
                       {fixRef === a.ref ? "fermer" : "corriger"}
                     </button>
                   )}
+                </span>
+                <span style={{ fontSize: 10.5, color: C.textMuted, lineHeight: 1.4, overflow: "hidden" }}>
+                  {a.cmds.map((c, k) => <span key={k} style={{ whiteSpace: "nowrap" }}>{c.number}{c.qty > 1 ? `×${c.qty}` : ""}{k < a.cmds.length - 1 ? ", " : ""}</span>)}
                 </span>
               </div>
               {/* Panneau correction */}

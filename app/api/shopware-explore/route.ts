@@ -125,6 +125,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ statuses: (r.json.data || []).map((s: any) => ({ id: s.id, name: s.name, description: s.description })) });
     }
 
+    // ── paymentStatuses: libellés des statuts de paiement ──
+    if (action === "paymentStatuses") {
+      const res = await swFetch("/paymentStatuses?limit=100", creds);
+      const r = await safeJson(res);
+      if (!r.json) return NextResponse.json({ error: "Non-JSON", status: r.status, raw: r.raw });
+      return NextResponse.json({ statuses: (r.json.data || []).map((s: any) => ({ id: s.id, name: s.name, description: s.description })) });
+    }
+
     // ── dispatches: méthodes de livraison ──
     if (action === "dispatches") {
       const res = await swFetch("/dispatches?limit=50", creds);
