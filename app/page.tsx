@@ -8110,7 +8110,8 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
             const palletDone = rangedOnPallet === products.length;
 
             return (
-              <div key={pi} style={{ marginBottom: 10, display: "flex", gap: 6, alignItems: "stretch" }}>
+              <div key={pi} style={{ marginBottom: 10 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
                 <button onClick={() => togglePallet(pallet.palletNo)} style={{
                   flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between",
                   padding: "12px 14px", background: palletDone ? "#ecfdf5" : C.white, border: `1px solid ${palletDone ? "#059669" : C.border}`, borderRadius: 10,
@@ -8136,6 +8137,7 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                   style={{ flexShrink: 0, padding: "0 14px", background: "#059669", color: "#fff", border: "none", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
                 </button>
+                </div>
 
                 {isOpen && (
                   <div style={{ marginTop: 6 }}>
