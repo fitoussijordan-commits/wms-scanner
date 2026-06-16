@@ -443,11 +443,18 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
             style={{ background: bg, border: `1px solid ${bd}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8, transition: "background .3s, border-color .3s" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis" }}>{e.productName}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  {e.locationName && (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 800, color: "#1d4ed8", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 6, padding: "1px 7px" }}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                      {e.locationName}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{e.productName}</span>
+                </div>
                 <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>
                   {e.odooRef && <span>{e.odooRef}</span>}
                   {e.lotName && <span> · Lot {e.lotName}</span>}
-                  {e.locationName && <span> · {e.locationName}</span>}
                 </div>
               </div>
               <button onClick={() => removeLine(i)} title="Retirer"
