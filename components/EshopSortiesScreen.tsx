@@ -35,7 +35,8 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   const [chariot, setChariot] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [payFilter, setPayFilter] = useState<string>("all");
+  // Par défaut : payées uniquement (statut paiement 12) → exclut les paniers oubliés
+  const [payFilter, setPayFilter] = useState<string>("12");
   // Correction en cours : ref Shopware ciblée
   const [fixRef, setFixRef] = useState<string | null>(null);
   const [fixQuery, setFixQuery] = useState("");
@@ -84,6 +85,12 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   const isChariot = (ref: string) => chariot.some(c => c.trim().toLowerCase() === ref.trim().toLowerCase());
   // Match effectif = override manuel prioritaire, sinon match auto
   const effMatch = (ref: string) => overrides[ref] || matchMap[ref] || null;
+
+  // Libellés statuts (fallback connu si l'API ne les fournit pas)
+  const STATUS_FALLBACK: Record<string, string> = { "0": "Ouverte", "5": "Prête à livrer", "1": "En cours", "-1": "Annulée" };
+  const PAY_FALLBACK: Record<string, string> = { "12": "Payée", "0": "Non payée", "17": "Ouvert" };
+  const stLabel = (id: string) => statusNames[id] || STATUS_FALLBACK[id] || `Statut ${id}`;
+  const payLabel = (id: string) => payNames[id] || PAY_FALLBACK[id] || `Paiement ${id}`;
 
   // ── Correction mapping : recherche produit Odoo ──
   const searchOdoo = async (q: string) => {
@@ -195,7 +202,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={() => setStatusFilter("all")} style={chip(statusFilter === "all")}>Toutes ({orders.length})</button>
             {statusList.map(([sid, n]) => (
-              <button key={sid} onClick={() => setStatusFilter(sid)} style={chip(statusFilter === sid)}>{statusNames[sid] || `Statut ${sid}`} ({n})</button>
+              <button key={sid} onClick={() => setStatusFilter(sid)} style={chip(statusFilter === sid)}>{stLabel(sid)} ({n})</button>
             ))}
           </div>
         </div>
@@ -208,7 +215,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={() => setPayFilter("all")} style={chip(payFilter === "all")}>Tous paiements</button>
             {payList.map(([sid, n]) => (
-              <button key={sid} onClick={() => setPayFilter(sid)} style={chip(payFilter === sid)}>{payNames[sid] || `Paiement ${sid}`} ({n})</button>
+              <button key={sid} onClick={() => setPayFilter(sid)} style={chip(payFilter === sid)}>{payLabel(sid)} ({n})</button>
             ))}
           </div>
         </div>
