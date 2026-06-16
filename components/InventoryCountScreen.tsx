@@ -456,18 +456,16 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
               </button>
             </div>
 
-            {/* Saisie colis + vrac (tactile PDA) */}
-            <div style={{ display: "flex", gap: 6, marginTop: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "space-between" }}>
-              <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+            {/* Saisie colis + vrac (compact PDA) */}
+            <div style={{ marginTop: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 8, alignItems: "end", width: "100%" }}>
                 <Field label="Colis" value={e.colis} onChange={v => updateField(i, "colis", v)} />
-                <span style={{ color: C.textMuted, paddingBottom: 9, fontSize: 14 }}>×</span>
-                <Field label="U./colis" value={e.unitsPerColis} onChange={v => updateField(i, "unitsPerColis", v)} highlight={!e.unitsPerColis} />
-                <span style={{ color: C.textMuted, paddingBottom: 9, fontSize: 14 }}>+</span>
-                <Field label="Vrac" value={e.vrac} onChange={v => updateField(i, "vrac", v)} />
-              </div>
-              <div style={{ textAlign: "right", paddingBottom: 2, minWidth: 70 }}>
-                <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700 }}>TOTAL</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: C.text }}>{counted}</div>
+                <Field label="× U./colis" value={e.unitsPerColis} onChange={v => updateField(i, "unitsPerColis", v)} highlight={!e.unitsPerColis} />
+                <Field label="+ Vrac" value={e.vrac} onChange={v => updateField(i, "vrac", v)} />
+                <div style={{ textAlign: "right", paddingBottom: 4, minWidth: 48 }}>
+                  <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 700, letterSpacing: 0.3 }}>TOTAL</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: counted > 0 ? C.text : C.textMuted }}>{counted}</div>
+                </div>
               </div>
             </div>
 
@@ -598,22 +596,12 @@ function PlanSvg({ countByZone, onPick }: { countByZone: (z: string) => number; 
 }
 
 function Field({ label, value, onChange, highlight }: { label: string; value: number; onChange: (v: string) => void; highlight?: boolean }) {
-  const stepBtn: React.CSSProperties = {
-    width: 34, height: 38, border: `1.5px solid ${highlight ? "#fdba74" : "#e5e7eb"}`, background: highlight ? "#fff7ed" : "#f8fafc",
-    color: "#1a1a2e", fontSize: 20, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", userSelect: "none", fontFamily: "inherit",
-  };
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <span style={{ fontSize: 10, color: highlight ? "#ea580c" : "#6b7280", fontWeight: 700 }}>{label}</span>
-      <div style={{ display: "flex", alignItems: "stretch" }}>
-        <button type="button" onClick={() => onChange(String(Math.max(0, (Number(value) || 0) - 1)))}
-          style={{ ...stepBtn, borderRight: "none", borderRadius: "8px 0 0 8px" }}>−</button>
-        <input type="number" inputMode="numeric" value={value || ""} onChange={e => onChange(e.target.value)}
-          onFocus={e => e.target.select()}
-          style={{ width: 54, padding: "7px 4px", border: `1.5px solid ${highlight ? "#fdba74" : "#e5e7eb"}`, fontSize: 16, fontWeight: 700, textAlign: "center", fontFamily: "inherit", background: highlight ? "#fff7ed" : "#fff", color: "#1a1a2e", MozAppearance: "textfield" as any }} />
-        <button type="button" onClick={() => onChange(String((Number(value) || 0) + 1))}
-          style={{ ...stepBtn, borderLeft: "none", borderRadius: "0 8px 8px 0" }}>+</button>
-      </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+      <span style={{ fontSize: 10, color: highlight ? "#ea580c" : "#6b7280", fontWeight: 700, whiteSpace: "nowrap" }}>{label}</span>
+      <input type="number" inputMode="numeric" value={value || ""} placeholder="0" onChange={e => onChange(e.target.value)}
+        onFocus={e => e.target.select()}
+        style={{ width: "100%", boxSizing: "border-box", padding: "10px 6px", border: `1.5px solid ${highlight ? "#fdba74" : "#e5e7eb"}`, borderRadius: 9, fontSize: 17, fontWeight: 700, textAlign: "center", fontFamily: "inherit", background: highlight ? "#fff7ed" : "#fff", color: "#1a1a2e", MozAppearance: "textfield" as any }} />
     </div>
   );
 }
