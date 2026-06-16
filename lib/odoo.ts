@@ -3455,6 +3455,15 @@ export async function createEshopQuotation(
     }]),
   };
   if (origin) vals.origin = origin;
+
+  // Étiquette par défaut "import eShop" (crm.tag) — la trouve ou la crée
+  try {
+    let tags = await searchRead(session, "crm.tag", [["name", "=", "import eShop"]], ["id"], 1);
+    let tagId = tags.length ? tags[0].id : null;
+    if (!tagId) tagId = await create(session, "crm.tag", { name: "import eShop" }) as number;
+    if (tagId) vals.tag_ids = [[6, 0, [tagId]]];
+  } catch {}
+
   const id = await create(session, "sale.order", vals) as number;
   const recs = await searchRead(session, "sale.order", [["id", "=", id]], ["id", "name"], 1);
   return { id, name: recs[0]?.name || String(id) };
