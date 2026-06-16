@@ -9960,9 +9960,11 @@ function InventoryScreen({ session, onBack, onToast, initialProduct, desktop }: 
                               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                                 <button onClick={() => setBulkDelta(idx, q.id, delta - 1)}
                                   style={{ width: 26, height: 26, borderRadius: 6, border: "1px solid #e8ecf3", background: "#f4f6fb", cursor: "pointer", fontSize: 15, fontWeight: 700, color: C.red, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}>−</button>
-                                <span style={{ minWidth: 38, textAlign: "center" as const, fontSize: 13.5, fontWeight: 800, color: delta > 0 ? C.green : delta < 0 ? C.red : "#cbd5e1", fontFamily: "monospace" }}>
-                                  {delta > 0 ? `+${delta}` : delta === 0 ? "0" : delta}
-                                </span>
+                                <input type="number" value={delta === 0 ? "" : delta} placeholder="0"
+                                  onChange={e => setBulkDelta(idx, q.id, e.target.value === "" || e.target.value === "-" ? 0 : Math.trunc(Number(e.target.value)))}
+                                  onFocus={e => e.target.select()}
+                                  title="Tape le delta (ex: 45 ou -10)"
+                                  style={{ width: 50, textAlign: "center" as const, fontSize: 13.5, fontWeight: 800, color: delta > 0 ? C.green : delta < 0 ? C.red : "#64748b", fontFamily: "monospace", border: "1px solid #e8ecf3", borderRadius: 6, padding: "4px 2px", background: "#fff", MozAppearance: "textfield" as any }} />
                                 <button onClick={() => setBulkDelta(idx, q.id, delta + 1)}
                                   style={{ width: 26, height: 26, borderRadius: 6, border: "1px solid #e8ecf3", background: "#f4f6fb", cursor: "pointer", fontSize: 15, fontWeight: 700, color: C.green, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}>+</button>
                               </div>
@@ -9987,9 +9989,10 @@ function InventoryScreen({ session, onBack, onToast, initialProduct, desktop }: 
                               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                                 <button onClick={() => setBulkDelta(idx, q.id, delta - 1)}
                                   style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg, cursor: "pointer", fontSize: 16, fontWeight: 700, color: C.red, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}>−</button>
-                                <span style={{ minWidth: 40, textAlign: "center" as const, fontSize: 14, fontWeight: 800, color: delta > 0 ? C.green : delta < 0 ? C.red : C.textMuted, fontFamily: "monospace" }}>
-                                  {delta > 0 ? `+${delta}` : delta === 0 ? "0" : delta}
-                                </span>
+                                <input type="number" inputMode="numeric" value={delta === 0 ? "" : delta} placeholder="0"
+                                  onChange={e => setBulkDelta(idx, q.id, e.target.value === "" || e.target.value === "-" ? 0 : Math.trunc(Number(e.target.value)))}
+                                  onFocus={e => e.target.select()}
+                                  style={{ width: 52, textAlign: "center" as const, fontSize: 14, fontWeight: 800, color: delta > 0 ? C.green : delta < 0 ? C.red : C.textMuted, fontFamily: "monospace", border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 2px", background: C.white, MozAppearance: "textfield" as any }} />
                                 <button onClick={() => setBulkDelta(idx, q.id, delta + 1)}
                                   style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg, cursor: "pointer", fontSize: 16, fontWeight: 700, color: C.green, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}>+</button>
                               </div>
