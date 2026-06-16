@@ -3462,12 +3462,17 @@ export async function createEshopQuotation(
 
 // Vérifie qu'un client (res.partner) existe par id ou numéro/nom, retourne {id, name}.
 export async function findEshopPartner(session: OdooSession, idOrRef: string): Promise<{ id: number; name: string } | null> {
-  const num = parseInt(idOrRef.trim(), 10);
-  if (!isNaN(num)) {
-    const byId = await searchRead(session, "res.partner", [["id", "=", num]], ["id", "name"], 1);
+  const q = idOrRef.trim();
+  // 1) Code client = champ ref (ex: "75-004421") — priorité absolue, recherche exacte
+  const byRef = await searchRead(session, "res.partner", [["ref", "=", q]], ["id", "name"], 1);
+  if (byRef.length) return { id: byRef[0].id, name: byRef[0].name };
+  // 2) Id interne UNIQUEMENT si la saisie est purement numérique (pas "75-004421")
+  if (/^\d+$/.test(q)) {
+    const byId = await searchRead(session, "res.partner", [["id", "=", Number(q)]], ["id", "name"], 1);
     if (byId.length) return { id: byId[0].id, name: byId[0].name };
   }
-  const byRef = await searchRead(session, "res.partner", ["|", ["ref", "=", idOrRef.trim()], ["name", "ilike", idOrRef.trim()]], ["id", "name"], 1);
-  if (byRef.length) return { id: byRef[0].id, name: byRef[0].name };
+  // 3) Dernier recours : nom exact (pas de ilike approximatif)
+  const byName = await searchRead(session, "res.partner", [["name", "=", q]], ["id", "name"], 1);
+  if (byName.length) return { id: byName[0].id, name: byName[0].name };
   return null;
 }
