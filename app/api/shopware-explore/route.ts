@@ -12,9 +12,10 @@ function getCreds(req: NextRequest) {
 
 async function swFetch(path: string, creds: { url: string; user: string; key: string }, method = "GET", body?: any) {
   const base64 = Buffer.from(`${creds.user}:${creds.key}`).toString("base64");
-  // Retire le slash final pour éviter un double slash (ex: /backend//api/v1 → 401 nginx)
-  const baseUrl = creds.url.replace(/\/+$/, "");
-  const url = `${baseUrl}/api/v1${path}`;
+  // API REST Shopware 5 = <domaine>/api (PAS /backend/api/v1, qui tombe sur le login admin).
+  // On retire un éventuel /backend final et le slash, puis on ajoute /api.
+  const baseUrl = creds.url.replace(/\/+$/, "").replace(/\/backend$/i, "");
+  const url = `${baseUrl}/api${path}`;
   return fetch(url, {
     method,
     headers: {
