@@ -1253,12 +1253,12 @@ export default function Page() {
   useEffect(() => {
     setConfirmCartonReco(null);
     if (!pendingConfirmPicking || !session) return;
-    const petit = Number(localStorage.getItem("wms_carton_petit_cm3")) || 0;
-    const grand = Number(localStorage.getItem("wms_carton_grand_cm3")) || 0;
-    if (!petit || !grand) return;
     let cancelled = false;
     (async () => {
       try {
+        // Cartons partagés via Odoo (communs à tous les postes)
+        const cartons = await odoo.getCartonsConfig(session);
+        if (!cartons.petitCm3 || !cartons.grandCm3) return;
         const ids: number[] = pendingConfirmPicking._groupIds || [pendingConfirmPicking.id];
         let mls: any[] = [];
         for (const id of ids) mls = mls.concat(await odoo.getPickingMoveLines(session, id));
@@ -1268,7 +1268,7 @@ export default function Page() {
         if (!lines.length) return;
         const { totalCm3, missing } = await odoo.getOrderVolumeCm3(session, lines);
         if (!cancelled && totalCm3 > 0 && missing.length < lines.length) {
-          setConfirmCartonReco(odoo.recommendCarton(totalCm3, petit, grand, 0.8));
+          setConfirmCartonReco(odoo.recommendCarton(totalCm3, cartons.petitCm3, cartons.grandCm3, 0.8));
         }
       } catch {}
     })();
@@ -10857,24 +10857,30 @@ function setChariotSkusLocal(skus: string[]) {
 }
 
 // Réglage des 2 cartons (dimensions cm → stockées en cm³ dans localStorage)
-function CartonSettings() {
-  const load = (k: string) => { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } };
-  const init = (key: string) => {
-    const dims = load(`wms_${key}_dims`) || { l: "", w: "", h: "" };
-    return dims as { l: string; w: string; h: string };
-  };
-  const [petit, setPetit] = useState(init("carton_petit"));
-  const [grand, setGrand] = useState(init("carton_grand"));
+function CartonSettings({ session }: { session: any }) {
+  const empty = { l: "", w: "", h: "" };
+  const [petit, setPetit] = useState<{ l: string; w: string; h: string }>(empty);
+  const [grand, setGrand] = useState<{ l: string; w: string; h: string }>(empty);
   const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const save = () => {
-    const cm3 = (d: { l: string; w: string; h: string }) =>
-      (parseFloat(d.l) || 0) * (parseFloat(d.w) || 0) * (parseFloat(d.h) || 0);
-    localStorage.setItem("wms_carton_petit_dims", JSON.stringify(petit));
-    localStorage.setItem("wms_carton_grand_dims", JSON.stringify(grand));
-    localStorage.setItem("wms_carton_petit_cm3", String(cm3(petit)));
-    localStorage.setItem("wms_carton_grand_cm3", String(cm3(grand)));
-    setSaved(true); setTimeout(() => setSaved(false), 1500);
+  // Charge les cartons partagés depuis Odoo
+  useEffect(() => {
+    if (!session) return;
+    (async () => {
+      try {
+        const c = await odoo.getCartonsConfig(session);
+        setPetit(c.petit); setGrand(c.grand);
+      } catch {}
+      setLoading(false);
+    })();
+  }, [session]);
+
+  const save = async () => {
+    try {
+      await odoo.saveCartonsConfig(session, petit, grand);
+      setSaved(true); setTimeout(() => setSaved(false), 1500);
+    } catch (e: any) { alert("Erreur sauvegarde : " + e.message); }
   };
 
   const dimInput = (d: { l: string; w: string; h: string }, set: (v: any) => void, label: string) => (
@@ -10894,9 +10900,10 @@ function CartonSettings() {
     </div>
   );
 
+  if (loading) return <div style={{ fontSize: 12, color: C.textMuted, padding: 8 }}>Chargement…</div>;
   return (
     <div>
-      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>Dimensions intérieures (L × l × H). Sert à recommander le carton selon le volume de la commande.</div>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>Dimensions intérieures (L × l × H), partagées sur tous les postes. Sert à recommander le carton selon le volume de la commande.</div>
       {dimInput(petit, setPetit, "Petit carton")}
       {dimInput(grand, setGrand, "Grand carton")}
       <button onClick={save} style={{ marginTop: 4, padding: "10px 18px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>
@@ -11304,7 +11311,7 @@ function SettingsScreen({ onBack, session, isDark, onToggleDark }: { onBack: () 
         <>
         <Section>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 12 }}>Cartons d'emballage</div>
-          <CartonSettings />
+          <CartonSettings session={session} />
         </Section>
         <Section>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 12 }}>Configuration E-shop / Chariot</div>
