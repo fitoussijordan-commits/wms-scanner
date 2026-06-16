@@ -329,6 +329,35 @@ export async function deleteInventorySession(id: string): Promise<void> {
 }
 
 // ══════════════════════════════════════════
+// CARTONS D'EMBALLAGE (partagés via wms_sync_meta, communs à tous les postes)
+// ══════════════════════════════════════════
+export interface CartonDims { l: string; w: string; h: string; }
+export interface CartonsConfig { petit: CartonDims; grand: CartonDims; petitCm3: number; grandCm3: number; }
+const cartonCm3 = (d: CartonDims) => (parseFloat(d.l) || 0) * (parseFloat(d.w) || 0) * (parseFloat(d.h) || 0);
+
+export async function getCartonsConfig(): Promise<CartonsConfig> {
+  const empty = { l: "", w: "", h: "" };
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "cartons").single();
+    if (data?.value) {
+      const o = JSON.parse(data.value);
+      const petit = o.petit || empty;
+      const grand = o.grand || empty;
+      return { petit, grand, petitCm3: cartonCm3(petit), grandCm3: cartonCm3(grand) };
+    }
+  } catch {}
+  return { petit: empty, grand: empty, petitCm3: 0, grandCm3: 0 };
+}
+
+export async function saveCartonsConfig(petit: CartonDims, grand: CartonDims): Promise<void> {
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "cartons", value: JSON.stringify({ petit, grand }), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // NOTIFICATIONS (cloche header — partagées entre postes)
 // ══════════════════════════════════════════
 

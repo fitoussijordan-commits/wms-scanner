@@ -2034,28 +2034,6 @@ export async function setConfigParam(session: OdooSession, key: string, value: s
   }
 }
 
-// ── Cartons d'emballage (partagés via Odoo, communs à tous les postes) ──
-export interface CartonDims { l: string; w: string; h: string; }
-export interface CartonsConfig { petit: CartonDims; grand: CartonDims; petitCm3: number; grandCm3: number; }
-const cm3of = (d: CartonDims) => (parseFloat(d.l) || 0) * (parseFloat(d.w) || 0) * (parseFloat(d.h) || 0);
-
-export async function getCartonsConfig(session: OdooSession): Promise<CartonsConfig> {
-  const empty = { l: "", w: "", h: "" };
-  try {
-    const raw = await getConfigParam(session, "wms_cartons");
-    if (raw) {
-      const o = JSON.parse(raw);
-      const petit = o.petit || empty;
-      const grand = o.grand || empty;
-      return { petit, grand, petitCm3: cm3of(petit), grandCm3: cm3of(grand) };
-    }
-  } catch {}
-  return { petit: empty, grand: empty, petitCm3: 0, grandCm3: 0 };
-}
-
-export async function saveCartonsConfig(session: OdooSession, petit: CartonDims, grand: CartonDims): Promise<void> {
-  await setConfigParam(session, "wms_cartons", JSON.stringify({ petit, grand }));
-}
 
 // ============================================
 // COLIS / PUT IN PACK

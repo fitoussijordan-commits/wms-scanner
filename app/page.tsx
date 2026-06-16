@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "rea
 import * as odoo from "@/lib/odoo";
 import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByNumero as palFind, createPalette as palCreate, upsertLigne as palUpsert, updateLigneQty as palUpdateQty, updatePalette as palUpdate, searchProductInPalettes as palSearch, searchLotInPalettes as palSearchLot, searchByEmplacement as palSearchEmpl, generatePaletteZPL as palZPL, loadPickingSlots, upsertPickingSlot, deletePickingSlot } from "@/lib/supabase-palettes";
 import type { WmsPickingSlot } from "@/lib/supabase-palettes";
-import { createNotification, loadTodayNotifications, type WmsNotification } from "@/lib/supabase";
+import { createNotification, loadTodayNotifications, type WmsNotification, getCartonsConfig, saveCartonsConfig } from "@/lib/supabase";
 import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
@@ -1257,7 +1257,7 @@ export default function Page() {
     (async () => {
       try {
         // Cartons partagés via Odoo (communs à tous les postes)
-        const cartons = await odoo.getCartonsConfig(session);
+        const cartons = await getCartonsConfig();
         if (!cartons.petitCm3 || !cartons.grandCm3) return;
         const ids: number[] = pendingConfirmPicking._groupIds || [pendingConfirmPicking.id];
         let mls: any[] = [];
@@ -10869,7 +10869,7 @@ function CartonSettings({ session }: { session: any }) {
     if (!session) return;
     (async () => {
       try {
-        const c = await odoo.getCartonsConfig(session);
+        const c = await getCartonsConfig();
         setPetit(c.petit); setGrand(c.grand);
       } catch {}
       setLoading(false);
@@ -10878,7 +10878,7 @@ function CartonSettings({ session }: { session: any }) {
 
   const save = async () => {
     try {
-      await odoo.saveCartonsConfig(session, petit, grand);
+      await saveCartonsConfig(petit, grand);
       setSaved(true); setTimeout(() => setSaved(false), 1500);
     } catch (e: any) { alert("Erreur sauvegarde : " + e.message); }
   };
