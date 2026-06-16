@@ -185,7 +185,21 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
       const packMap = await odoo.getPackagingQtyForProducts(session, [productId]);
       const unitsPerColis = packMap[productId] || 0;
 
-      const locName = sess.mode === "location" ? activeAisle : "";
+      // En mode emplacement : zone choisie. En scan libre : emplacement Odoo réel du lot/produit.
+      let locName = sess.mode === "location" ? activeAisle : "";
+      if (sess.mode !== "location") {
+        try {
+          const quants = lotId
+            ? await odoo.getStockForLot(session, lotId, productId)
+            : await odoo.getAllStockForProduct(session, productId);
+          // emplacement avec le plus de stock
+          const best = (quants || []).filter((q: any) => q.location_id).sort((a: any, b: any) => (b.quantity || 0) - (a.quantity || 0))[0];
+          if (best?.location_id) {
+            const full = String(best.location_id[1] || "");
+            locName = full.split("/").pop()?.trim() || full;
+          }
+        } catch {}
+      }
 
       // ligne existante = même produit + même lot + même allée
       const idx = entries.findIndex(e =>
@@ -306,7 +320,8 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
     try {
       const XLSX = await import("xlsx");
       const matched = entries.some(e => e.matchedAt);
-      const rows = entries.map(e => {
+      const COLS = [{ wch: 22 }, { wch: 16 }, { wch: 40 }, { wch: 18 }, { wch: 8 }, { wch: 12 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 10 }];
+      const rowOf = (e: WmsInventoryEntry) => {
         const counted = calcCounted(e);
         const base: any = {
           "Emplacement": e.locationName || "(scan libre)",
@@ -323,13 +338,34 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
           base["Écart"] = e.matchedAt ? counted - (e.theoretical ?? 0) : "";
         }
         return base;
-      });
-      const ws = XLSX.utils.json_to_sheet(rows);
-      ws["!cols"] = [{ wch: 22 }, { wch: 16 }, { wch: 40 }, { wch: 18 }, { wch: 8 }, { wch: 12 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 10 }];
+      };
+      // Nettoie un nom d'onglet Excel (max 31 chars, pas de caractères interdits)
+      const sheetName = (s: string) => (s || "—").replace(/[:\\\/\?\*\[\]]/g, "-").substring(0, 31) || "—";
+
       const wb = XLSX.utils.book_new();
-      const safeSheet = sess.name.replace(/[:\\\/\?\*\[\]]/g, "-").substring(0, 31);
+      if (sess.mode === "location") {
+        // Un onglet par zone (ordre : zones du plan, puis le reste)
+        const zones = Array.from(new Set(entries.map(e => e.locationName || "(sans zone)")));
+        zones.sort((a, b) => a.localeCompare(b));
+        const used = new Set<string>();
+        for (const z of zones) {
+          const rows = entries.filter(e => (e.locationName || "(sans zone)") === z).map(rowOf);
+          if (!rows.length) continue;
+          const ws = XLSX.utils.json_to_sheet(rows);
+          ws["!cols"] = COLS;
+          // garantit l'unicité du nom d'onglet
+          let nm = sheetName(z); let n = 2;
+          while (used.has(nm)) { nm = sheetName(z).substring(0, 28) + "_" + n; n++; }
+          used.add(nm);
+          XLSX.utils.book_append_sheet(wb, ws, nm);
+        }
+      } else {
+        const ws = XLSX.utils.json_to_sheet(entries.map(rowOf));
+        ws["!cols"] = COLS;
+        XLSX.utils.book_append_sheet(wb, ws, sheetName(sess.name));
+      }
+      if (!wb.SheetNames.length) { onToast("Rien à exporter", "info"); return; }
       const safeFile = sess.name.replace(/[^a-zA-Z0-9À-ÿ\s\-_]/g, "_");
-      XLSX.utils.book_append_sheet(wb, ws, safeSheet);
       XLSX.writeFile(wb, `${safeFile}.xlsx`);
       onToast("Excel exporté ✓", "success");
     } catch (e: any) { onToast("Erreur export : " + e.message, "error"); }
