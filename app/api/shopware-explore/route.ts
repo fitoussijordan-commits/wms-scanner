@@ -340,33 +340,44 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: all.length, products: all });
     }
 
-    // ── binFindMapping: retrouve le(s) mapping(s) bin d'un detailId (LECTURE) ──
+    // ── binList: liste rapide des bin locations (id + code) ──
+    if (action === "binList") {
+      const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=2000", creds));
+      const bins = (blRes.json?.data || []).map((b: any) => ({ id: b.id, code: b.code, warehouseId: b.warehouseId }));
+      return NextResponse.json({ count: bins.length, bins });
+    }
+
+    // ── binFindMapping: retrouve le(s) mapping(s) bin d'un detailId (LECTURE, parallèle) ──
     if (action === "binFindMapping") {
       const detailId = parseInt(searchParams.get("detailId") || "0", 10);
       if (!detailId) return NextResponse.json({ error: "detailId requis" }, { status: 400 });
       // 1) lister les bin locations
-      const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=1000", creds));
+      const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=2000", creds));
       const bins = blRes.json?.data || [];
       const found: any[] = [];
-      // 2) pour chaque bin, charger le détail (contient les mappings) et chercher le detailId
-      for (const b of bins) {
-        const one = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${b.id}`, creds));
-        const maps = one.json?.data?.articleDetailBinLocationMappings || [];
-        for (const m of maps) {
-          if (m.articleDetailId === detailId) {
-            found.push({
-              binLocationId: b.id,
-              binCode: one.json?.data?.code,
-              warehouseId: one.json?.data?.warehouseId,
-              mappingId: m.id,
-              stock: m.stock,
-              reservedStock: m.reservedStock,
-              defaultMapping: m.defaultMapping,
-            });
+      // 2) charger les détails EN PARALLÈLE par lots de 8
+      const batchSize = 8;
+      for (let i = 0; i < bins.length; i += batchSize) {
+        const slice = bins.slice(i, i + batchSize);
+        const details = await Promise.all(
+          slice.map(async (b: any) => safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${b.id}`, creds)))
+        );
+        for (const one of details) {
+          const d = one.json?.data;
+          const maps = d?.articleDetailBinLocationMappings || [];
+          for (const m of maps) {
+            if (m.articleDetailId === detailId) {
+              found.push({
+                binLocationId: d.id, binCode: d.code, warehouseId: d.warehouseId,
+                mappingId: m.id, stock: m.stock, reservedStock: m.reservedStock,
+                defaultMapping: m.defaultMapping,
+              });
+            }
           }
         }
+        if (found.length) break; // on s'arrête dès qu'on a trouvé
       }
-      return NextResponse.json({ detailId, mappings: found });
+      return NextResponse.json({ detailId, binsScanned: bins.length, mappings: found });
     }
 
     // ── binSetStock: écrit le stock d'un detailId dans une bin (ÉCRITURE, confirm requis) ──
