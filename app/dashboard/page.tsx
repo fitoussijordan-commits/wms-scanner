@@ -499,13 +499,15 @@ export default function Dashboard() {
   const [carExpanded, setCarExpanded] = useState<Set<string>>(new Set());
 
   // ── BMV (autre transporteur — facture annexe) ──────────────────────────────
-  interface BmvExped { recep: string; date: string; date_iso: string; ref: string; dest: string; dpt: string; ville: string; transport: number; options: number; colis: number; coutReel: number; }
+  interface BmvExped { recep: string; date: string; date_iso: string; ref: string; dest: string; dpt: string; ville: string; transport: number; options: number; colis: number; coutReel: number; mois?: string; }
   interface BmvStats { num: string; date_facture: string; nb_expeditions: number; total_transport: number; surcharge_carburant: number; surcharge_taux: number; total_general_ht: number; avec_ref: number; sans_ref: number; }
+  interface BmvFacture { num: string; mois: string; nb_expeditions: number; total_transport: number; surcharge_carburant: number; total_general_ht: number; }
   interface BmvCrossed extends BmvExped { client: string; partnerRef?: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; approx: boolean; alert: boolean; matchedRef: string; groupe?: string[]; groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[]; }
   const [bmvLoading, setBmvLoading] = useState(false);
   const [bmvPdfName, setBmvPdfName] = useState("");
   const [bmvExped, setBmvExped] = useState<BmvExped[]>([]);
   const [bmvStats, setBmvStats] = useState<BmvStats | null>(null);
+  const [bmvFactures, setBmvFactures] = useState<BmvFacture[]>([]);
   const [bmvOdoo, setBmvOdoo] = useState<Map<string, odoo.CarrierSaleOrder>>(new Map());
   const [bmvNameMatch, setBmvNameMatch] = useState<Map<string, odoo.BmvNameMatch>>(new Map());
   const [bmvOdooLoaded, setBmvOdooLoaded] = useState(false);
@@ -515,28 +517,60 @@ export default function Dashboard() {
   const [bmvDrag, setBmvDrag] = useState(false);
   const bmvPdfInput = useRef<HTMLInputElement>(null);
 
-  async function bmvHandlePdf(file: File) {
-    setBmvLoading(true); setBmvError(""); setBmvPdfName(file.name);
+  const MOIS_FR = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
+  const bmvMoisLabel = (dateFacture: string) => {
+    const m = (dateFacture || "").match(/^(\d{4})-(\d{2})/);
+    return m ? `${MOIS_FR[parseInt(m[2], 10)]} ${m[1]}` : (dateFacture || "Facture");
+  };
+
+  // Gère 1..N PDF (un par mois) → fusionne les expéditions, vue annuelle.
+  async function bmvHandlePdfs(files: File[]) {
+    if (!files.length) return;
+    setBmvLoading(true); setBmvError("");
+    setBmvPdfName(files.length === 1 ? files[0].name : `${files.length} factures`);
     setBmvOdoo(new Map()); setBmvNameMatch(new Map()); setBmvOdooLoaded(false);
     try {
-      const buf = await file.arrayBuffer();
-      const res = await fetch("/api/bmv-extract", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: buf });
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.includes("application/json")) {
-        const txt = (await res.text()).slice(0, 200);
-        setBmvError(res.status === 404 ? "L'extraction PDF n'est disponible qu'en ligne (Vercel)." : `Réponse inattendue (HTTP ${res.status}) : ${txt}`);
-        return;
+      const allExps: BmvExped[] = [];
+      const factures: BmvFacture[] = [];
+      let totTransport = 0, totCarb = 0, totGeneral = 0, totAvec = 0, totSans = 0;
+      for (const file of files) {
+        const buf = await file.arrayBuffer();
+        const res = await fetch("/api/bmv-extract", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: buf });
+        const ct = res.headers.get("content-type") || "";
+        if (!ct.includes("application/json")) {
+          const txt = (await res.text()).slice(0, 200);
+          setBmvError(res.status === 404 ? "L'extraction PDF n'est disponible qu'en ligne (Vercel)." : `Réponse inattendue (HTTP ${res.status}) : ${txt}`);
+          return;
+        }
+        const data = await res.json();
+        if (data.error) { setBmvError(`Erreur extraction (${file.name}) : ` + data.error); return; }
+        const st: BmvStats = data.stats;
+        const mois = bmvMoisLabel(st?.date_facture || "");
+        const exps: BmvExped[] = (data.expeditions || []).map((e: BmvExped) => ({ ...e, mois }));
+        allExps.push(...exps);
+        factures.push({ num: st?.num || "", mois, nb_expeditions: st?.nb_expeditions || exps.length, total_transport: st?.total_transport || 0, surcharge_carburant: st?.surcharge_carburant || 0, total_general_ht: st?.total_general_ht || 0 });
+        totTransport += st?.total_transport || 0; totCarb += st?.surcharge_carburant || 0;
+        totGeneral += st?.total_general_ht || 0; totAvec += st?.avec_ref || 0; totSans += st?.sans_ref || 0;
       }
-      const data = await res.json();
-      if (data.error) { setBmvError("Erreur extraction : " + data.error); return; }
-      const exps: BmvExped[] = data.expeditions || [];
-      setBmvExped(exps); setBmvStats(data.stats || null);
-      if (session && exps.length) {
+      // tri des factures par mois chronologique
+      factures.sort((a, b) => a.mois.localeCompare(b.mois));
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      setBmvExped(allExps);
+      setBmvFactures(factures);
+      setBmvStats({
+        num: factures.length === 1 ? factures[0].num : `${factures.length} factures`,
+        date_facture: factures.length === 1 ? (factures[0].mois) : `${factures[0]?.mois} → ${factures[factures.length - 1]?.mois}`,
+        nb_expeditions: allExps.length, total_transport: r2(totTransport), surcharge_carburant: r2(totCarb),
+        surcharge_taux: 0, total_general_ht: r2(totGeneral), avec_ref: totAvec, sans_ref: totSans,
+      });
+      if (session && allExps.length) {
         setBmvSearching(true);
-        try { await bmvCross(exps); } finally { setBmvSearching(false); }
+        try { await bmvCross(allExps); } finally { setBmvSearching(false); }
       }
     } catch (e) { setBmvError("Erreur réseau : " + String(e)); } finally { setBmvLoading(false); }
   }
+  // compat : un seul fichier
+  const bmvHandlePdf = (file: File) => bmvHandlePdfs([file]);
 
   async function bmvCross(exps: BmvExped[]) {
     if (!session) return;
@@ -588,7 +622,7 @@ export default function Dashboard() {
   }, [bmvCroise, bmvSearch]);
 
   function bmvReset() {
-    setBmvExped([]); setBmvStats(null); setBmvOdoo(new Map()); setBmvNameMatch(new Map());
+    setBmvExped([]); setBmvStats(null); setBmvFactures([]); setBmvOdoo(new Map()); setBmvNameMatch(new Map());
     setBmvOdooLoaded(false); setBmvPdfName(""); setBmvError(""); setBmvSearch("");
   }
 
@@ -795,6 +829,36 @@ export default function Dashboard() {
     styleHeader(wd); zebra(wd);
     wd.getColumn("cout").numFmt = eurFmt; wd.getColumn("part").numFmt = pctNumFmt; wd.getColumn("pct").numFmt = pctNumFmt;
     if (wd.rowCount > 1) wd.addConditionalFormatting({ ref: `D2:D${wd.rowCount}`, rules: [{ type: "dataBar", cfvo: [{ type: "num", value: 0 }, { type: "max" }], color: { argb: "FF2563EB" } } as any] });
+
+    // ── Feuilles PAR MOIS (plusieurs factures) ──
+    if (bmvFactures.length > 1) {
+      // Synthèse annuelle en tête de la Synthèse
+      wsS.addRow([]);
+      const sepA = wsS.addRow(["── PAR MOIS ──", ""]); sepA.getCell(1).font = { bold: true, color: { argb: C.accent } };
+      for (const f of bmvFactures) kpi(`${f.mois} (${f.num || "—"})`, round2(f.total_general_ht)).getCell(2).numFmt = eurFmt;
+      // une feuille détaillée par mois
+      for (const f of bmvFactures) {
+        const rowsM = bmvCroise.filter(c => c.mois === f.mois);
+        if (!rowsM.length) continue;
+        const safe = f.mois.replace(/[\\/?*[\]:]/g, "").slice(0, 31);
+        const wm = wb.addWorksheet(safe, { properties: { tabColor: { argb: "FF7C3AED" } } });
+        wm.columns = [
+          { header: "Réf Odoo", key: "ref", width: 12 }, { header: "Client", key: "client", width: 28 },
+          { header: "Date", key: "date", width: 9 }, { header: "Colis", key: "colis", width: 7 },
+          { header: "Coût réel €", key: "cout", width: 13 }, { header: "Montant HT €", key: "ht", width: 14 },
+          { header: "% Transp.", key: "pct", width: 11 }, { header: "Match", key: "statut", width: 14 },
+        ];
+        for (const c of rowsM) wm.addRow({
+          ref: c.matchedRef || c.recep, client: c.client || "(absent Odoo)", date: c.date, colis: c.colis,
+          cout: round2(c.coutReel), ht: c.montantHT || null, pct: c.pct !== null ? round2(c.pct * 100) : null,
+          statut: !c.matched ? "ABSENT" : c.alert ? "À PERTE" : c.approx ? "≈ nom+date" : "OK réf",
+        });
+        styleHeader(wm); zebra(wm);
+        wm.getColumn("cout").numFmt = eurFmt; wm.getColumn("ht").numFmt = eurFmt; wm.getColumn("pct").numFmt = pctNumFmt;
+        const tot = wm.addRow({ ref: "TOTAL", client: f.mois, colis: rowsM.reduce((s, c) => s + c.colis, 0), cout: round2(f.total_general_ht || rowsM.reduce((s, c) => s + c.coutReel, 0)) });
+        tot.eachCell((cc: any) => { cc.font = { bold: true }; cc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEDE9FE" } }; });
+      }
+    }
 
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
@@ -5353,10 +5417,10 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                   onClick={() => bmvPdfInput.current?.click()}
                   onDragOver={e => { e.preventDefault(); setBmvDrag(true); }}
                   onDragLeave={() => setBmvDrag(false)}
-                  onDrop={e => { e.preventDefault(); setBmvDrag(false); const f = e.dataTransfer.files[0]; if (f) bmvHandlePdf(f); }}
+                  onDrop={e => { e.preventDefault(); setBmvDrag(false); const fs = Array.from(e.dataTransfer.files).filter(f => f.type === "application/pdf"); if (fs.length) bmvHandlePdfs(fs); }}
                   style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, padding: "70px 24px", border: `2px dashed ${bmvDrag ? "var(--accent)" : "var(--border)"}`, borderRadius: 16, background: bmvDrag ? "var(--accent-soft)" : "var(--bg-raised)", cursor: "pointer", transition: "all .2s" }}
                 >
-                  <input ref={bmvPdfInput} type="file" accept="application/pdf" hidden onChange={e => e.target.files?.[0] && bmvHandlePdf(e.target.files[0])} />
+                  <input ref={bmvPdfInput} type="file" accept="application/pdf" multiple hidden onChange={e => { const fs = Array.from(e.target.files || []); if (fs.length) bmvHandlePdfs(fs); }} />
                   {bmvLoading ? (
                     <>
                       <div style={{ width: 44, height: 44, border: "3px solid var(--border)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
@@ -5369,8 +5433,8 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                     <>
                       <div style={{ width: 60, height: 60, borderRadius: 16, background: "var(--accent-soft)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>{I.upload}</div>
                       <div style={{ textAlign: "center" }}>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Dépose ta facture BMV</div>
-                        <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 3 }}>Format PDF — ou clique pour parcourir</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Dépose tes factures BMV</div>
+                        <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 3 }}>1 ou plusieurs PDF (un par mois) — vision annuelle</div>
                       </div>
                       <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Croisement Odoo automatique (réf S… puis nom + date d'expédition)</div>
                     </>
@@ -5396,6 +5460,42 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                       </div>
                     ))}
                   </div>
+
+                  {/* Vue par mois (plusieurs factures) */}
+                  {bmvFactures.length > 1 && (
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+                      <div style={{ padding: "10px 14px", background: "var(--bg-raised)", fontSize: 12, fontWeight: 700, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 8 }}>
+                        📅 {bmvFactures.length} factures · vue annuelle — les cartes ci-dessus cumulent tous les mois
+                      </div>
+                      <table className="wms-table">
+                        <thead><tr><th><div className="th-inner">Mois</div></th><th><div className="th-inner">N° facture</div></th><th><div className="th-inner">Expéd.</div></th><th><div className="th-inner">Transport</div></th><th><div className="th-inner">Carburant</div></th><th><div className="th-inner">Total HT</div></th><th><div className="th-inner">Part</div></th></tr></thead>
+                        <tbody>
+                          {bmvFactures.map((f, i) => {
+                            const part = (f.total_general_ht || 0) / (bmvStats.total_general_ht || 1);
+                            return (
+                              <tr key={i}>
+                                <td style={{ fontWeight: 700, color: "var(--accent)" }}>{f.mois}</td>
+                                <td style={{ color: "var(--text-muted)" }}>{f.num || "—"}</td>
+                                <td style={{ textAlign: "right" }}>{f.nb_expeditions}</td>
+                                <td style={{ textAlign: "right" }}>{eur(f.total_transport)}</td>
+                                <td style={{ textAlign: "right", color: "var(--text-muted)" }}>{eur(f.surcharge_carburant)}</td>
+                                <td style={{ textAlign: "right", fontWeight: 700 }}>{eur(f.total_general_ht)}</td>
+                                <td style={{ textAlign: "right" }}>{(part * 100).toFixed(0)} %</td>
+                              </tr>
+                            );
+                          })}
+                          <tr style={{ background: "var(--bg-raised)", fontWeight: 800 }}>
+                            <td colSpan={2}>ANNÉE</td>
+                            <td style={{ textAlign: "right" }}>{bmvStats.nb_expeditions}</td>
+                            <td style={{ textAlign: "right" }}>{eur(bmvStats.total_transport)}</td>
+                            <td style={{ textAlign: "right" }}>{eur(bmvStats.surcharge_carburant)}</td>
+                            <td style={{ textAlign: "right" }}>{eur(bmvStats.total_general_ht)}</td>
+                            <td style={{ textAlign: "right" }}>100 %</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
 
                   {/* Barre actions */}
                   <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, padding: 14, borderRadius: 12, border: "1px solid var(--border)", background: "var(--bg-raised)" }}>
