@@ -697,9 +697,9 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
           </div>
           <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow }}>
             <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-              <colgroup><col style={{ width: "12%" }} /><col style={{ width: "34%" }} /><col style={{ width: "14%" }} /><col style={{ width: "14%" }} /><col style={{ width: "26%" }} /></colgroup>
+              <colgroup><col style={{ width: "11%" }} /><col style={{ width: "29%" }} /><col style={{ width: "11%" }} /><col style={{ width: "11%" }} /><col style={{ width: "12%" }} /><col style={{ width: "26%" }} /></colgroup>
               <thead><tr style={{ background: C.bg, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted, textAlign: "left" }}>
-                <th style={th}>Réf</th><th style={th}>Produit Shopware</th><th style={th}>Stock SW</th><th style={th}>Stock Odoo</th><th style={th}>État / Action</th>
+                <th style={th}>Réf</th><th style={th}>Produit Shopware</th><th style={th}>Stock SW</th><th style={th}>Stock Odoo</th><th style={th}>Emplac.</th><th style={th}>État / Action</th>
               </tr></thead>
               <tbody>
                 {visible.map((r, i) => {
@@ -712,6 +712,14 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
                         <td style={td}>{r.nameSW}</td>
                         <td style={{ ...td, fontWeight: 800 }}>{r.inStock ?? "—"}</td>
                         <td style={{ ...td, fontWeight: 800 }}>{r.mapped ? (r.odoo ?? 0) : "—"}</td>
+                        <td style={td}>
+                          {(() => {
+                            const loc = binMap[String(r.detailId)];
+                            return loc
+                              ? <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 12, color: C.text }}>{loc.code}</span>
+                              : <span style={{ fontSize: 10.5, color: C.orange, fontWeight: 700 }}>sans empl.</span>;
+                          })()}
+                        </td>
                         <td style={td}>
                           {c === "unmapped" ? <span style={{ color: C.red, fontWeight: 700, fontSize: 11 }}>non mappé</span>
                             : c === "noOdoo" ? <span style={{ color: C.orange, fontWeight: 700, fontSize: 11 }}>pas de stock Odoo</span>
@@ -738,7 +746,7 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
                       </tr>
                       {fixRef === r.number && (
                         <tr style={{ background: "#f8fafc" }}>
-                          <td colSpan={5} style={{ padding: "10px 12px" }}>
+                          <td colSpan={6} style={{ padding: "10px 12px" }}>
                             <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                               <button onClick={() => markChariot(r.number)} style={{ padding: "6px 12px", background: C.orangeSoft, color: C.orange, border: `1px solid ${C.orange}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>→ Chariot eShop</button>
                               <button onClick={() => markService(r.number)} style={{ padding: "6px 12px", background: "#ede9fe", color: C.purple, border: `1px solid ${C.purple}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>→ Service (carte cadeau…)</button>
