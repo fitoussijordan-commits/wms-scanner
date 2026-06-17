@@ -501,7 +501,7 @@ export default function Dashboard() {
   // ── BMV (autre transporteur — facture annexe) ──────────────────────────────
   interface BmvExped { recep: string; date: string; date_iso: string; ref: string; dest: string; dpt: string; ville: string; transport: number; options: number; colis: number; coutReel: number; }
   interface BmvStats { num: string; date_facture: string; nb_expeditions: number; total_transport: number; surcharge_carburant: number; surcharge_taux: number; total_general_ht: number; avec_ref: number; sans_ref: number; }
-  interface BmvCrossed extends BmvExped { client: string; partnerRef?: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; approx: boolean; alert: boolean; matchedRef: string; }
+  interface BmvCrossed extends BmvExped { client: string; partnerRef?: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; approx: boolean; alert: boolean; matchedRef: string; groupe?: string[]; groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[]; }
   const [bmvLoading, setBmvLoading] = useState(false);
   const [bmvPdfName, setBmvPdfName] = useState("");
   const [bmvExped, setBmvExped] = useState<BmvExped[]>([]);
@@ -564,16 +564,19 @@ export default function Dashboard() {
   const bmvCroise: BmvCrossed[] = useMemo(() => {
     return bmvExped.map(e => {
       let client = "", partnerRef: string | undefined, montantHT = 0, montantTTC = 0, matched = false, approx = false, matchedRef = e.ref;
+      let groupe: string[] | undefined, groupeDetail: { ref: string; montantHT: number; montantTTC: number }[] | undefined;
       if (e.ref && bmvOdoo.has(e.ref)) {
         const o = bmvOdoo.get(e.ref)!;
+        // montantHT/TTC sont DÉJÀ cumulés avec les commandes jointes par fetchCarrierSaleOrders
         client = o.client; partnerRef = o.partnerRef; montantHT = o.montantHT; montantTTC = o.montantTTC; matched = true;
+        groupe = o.groupe; groupeDetail = o.groupeDetail;
       } else if (!e.ref && bmvNameMatch.has(e.recep)) {
         const m = bmvNameMatch.get(e.recep)!;
         client = m.client; partnerRef = m.partnerRef; montantHT = m.montantHT; montantTTC = m.montantTTC; matched = true; approx = true;
         matchedRef = m.ref; // réf Odoo (S…) retrouvée par nom+date
       }
       const alert = e.coutReel > 0 && montantHT <= 0;
-      return { ...e, client, partnerRef, montantHT, montantTTC, matched, approx, alert, matchedRef, pct: montantHT > 0 ? e.coutReel / montantHT : null };
+      return { ...e, client, partnerRef, montantHT, montantTTC, matched, approx, alert, matchedRef, groupe, groupeDetail, pct: montantHT > 0 ? e.coutReel / montantHT : null };
     });
   }, [bmvExped, bmvOdoo, bmvNameMatch]);
 
@@ -720,6 +723,33 @@ export default function Dashboard() {
       styleHeader(wa); zebra(wa);
       wa.getColumn("transport").numFmt = eurFmt;
       for (let r = 2; r <= wa.rowCount; r++) wa.getRow(r).eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.red } }; c.font = { color: { argb: C.redT } }; c.border = allBorders; });
+    }
+
+    // ── Détail jointes (livraisons groupées) ──
+    const grouped = bmvCroise.filter(c => c.groupeDetail && c.groupeDetail.length > 1);
+    if (grouped.length) {
+      const wg = wb.addWorksheet("Détail jointes");
+      wg.columns = [
+        { header: "Réf facturée", key: "parent", width: 13 }, { header: "Client", key: "client", width: 30 },
+        { header: "Coût réel €", key: "cout", width: 13 }, { header: "Cde du groupe", key: "ref", width: 14 },
+        { header: "Type", key: "type", width: 12 }, { header: "Montant HT €", key: "ht", width: 14 },
+        { header: "Montant TTC €", key: "ttc", width: 14 },
+      ];
+      for (const c of grouped) {
+        c.groupeDetail!.forEach((d, idx) => {
+          wg.addRow({
+            parent: idx === 0 ? c.matchedRef : "", client: idx === 0 ? c.client : "", cout: idx === 0 ? round2(c.coutReel) : null,
+            ref: d.ref, type: d.ref === c.matchedRef ? "facturée" : "jointe", ht: d.montantHT, ttc: d.montantTTC,
+          });
+        });
+      }
+      styleHeader(wg); zebra(wg);
+      wg.getColumn("cout").numFmt = eurFmt; wg.getColumn("ht").numFmt = eurFmt; wg.getColumn("ttc").numFmt = eurFmt;
+      for (let r = 2; r <= wg.rowCount; r++) {
+        const typeCell = wg.getCell(r, 5);
+        if (typeCell.value === "facturée") wg.getRow(r).eachCell((cc: any) => { cc.font = { bold: true, color: { argb: "FF5B21B6" } }; });
+        else { const rc = wg.getCell(r, 4); rc.font = { color: { argb: "FF7C3AED" } }; }
+      }
     }
 
     // ── Par client ──
@@ -5412,6 +5442,9 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                                 {r.matchedRef
                                   ? <span title={r.approx ? `Réf retrouvée par nom+date · récep ${r.recep}` : `Récep ${r.recep}`}>{r.matchedRef}{r.approx && <span style={{ color: "#d97706", fontSize: 10, fontWeight: 700 }}> ≈</span>}</span>
                                   : <span style={{ color: "var(--text-muted)", fontWeight: 500 }}>{r.recep}</span>}
+                                {r.groupe && r.groupe.length > 1 && (
+                                  <span title={`Montant cumulé : ${r.groupe.join(" + ")}`} style={{ marginLeft: 5, fontSize: 10, fontWeight: 700, color: "#7c3aed", background: "rgba(124,58,237,0.12)", padding: "1px 6px", borderRadius: 10 }}>+{r.groupe.length - 1} jointe{r.groupe.length - 1 > 1 ? "s" : ""}</span>
+                                )}
                               </td>
                               <td>{r.date}</td>
                               <td title={r.ville}>{r.client || r.dest || <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
