@@ -340,6 +340,37 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: all.length, products: all });
     }
 
+    // ── binProbe2: autres noms d'endpoints possibles pour stock par emplacement ──
+    if (action === "binProbe2") {
+      const an = searchParams.get("articleNumber") || "429000040";
+      const results: any = {};
+      const paths = [
+        "/ViisonPickwareERPArticleStocks?limit=3",
+        "/ViisonPickwareERPWarehouses?limit=10",
+        "/ViisonPickwareERPBinLocations?limit=10",
+        "/ViisonPickwareERPStocks?limit=3",
+        "/articleStocks?limit=3",
+        "/binLocations?limit=10",
+        "/pickwareErpStocks?limit=3",
+        "/PickwareErpArticleStock?limit=3",
+        "/stocks?limit=3",
+        // détail article complet (peut contenir mainDetail.binLocationMappings)
+        `/articles?filter[0][property]=number&filter[0][value]=${encodeURIComponent(an)}`,
+      ];
+      for (const p of paths) {
+        try {
+          const r = await safeJson(await swFetch(p, creds));
+          results[p] = { status: r.status, ok: r.ok };
+          if (r.ok && r.json) {
+            // pour l'article complet, on cherche les clés liées au stock/bin
+            const d = r.json.data;
+            results[p].sample = Array.isArray(d) ? d.slice(0, 1) : d;
+          } else results[p].raw = r.raw?.substring(0, 150);
+        } catch (e: any) { results[p] = { error: e.message }; }
+      }
+      return NextResponse.json(results);
+    }
+
     // ── binStockProbe: explore l'API Pickware ERP stock/bin location (LECTURE) ──
     // ?articleNumber=429000040 — teste plusieurs endpoints et renvoie ce qui répond.
     if (action === "binStockProbe") {
