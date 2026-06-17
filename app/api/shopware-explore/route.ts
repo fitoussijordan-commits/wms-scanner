@@ -398,15 +398,16 @@ export async function GET(req: NextRequest) {
       if (!target) return NextResponse.json({ error: "mapping introuvable pour ce detailId dans cette bin" }, { status: 404 });
       const oldStock = target.stock;
       // 2) construire le payload : on ne touche QUE le stock du mapping ciblé
-      const newMaps = maps.map((m: any) =>
-        m.articleDetailId === detailId ? { id: m.id, stock: newStock } : { id: m.id, stock: m.stock }
-      );
-      // PUT = remplacement complet → on doit renvoyer les champs obligatoires de la bin (code, warehouseId)
-      const payload = {
-        code: data.code,
-        warehouseId: data.warehouseId,
-        articleDetailBinLocationMappings: newMaps,
-      };
+      // Chaque mapping doit garder id + binLocationId + articleDetailId pour être traité
+      // comme une MISE À JOUR (sinon Pickware tente de recréer la sous-ressource).
+      const newMaps = maps.map((m: any) => ({
+        id: m.id,
+        binLocationId: m.binLocationId,
+        articleDetailId: m.articleDetailId,
+        stock: m.articleDetailId === detailId ? newStock : m.stock,
+      }));
+      // On n'envoie QUE les mappings (pas code/warehouseId, sinon "A12 existe déjà").
+      const payload = { articleDetailBinLocationMappings: newMaps };
       if (!confirm) {
         // DRY-RUN : on montre exactement ce qui serait envoyé, sans écrire
         return NextResponse.json({
