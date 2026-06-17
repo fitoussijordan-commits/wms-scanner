@@ -434,8 +434,20 @@ export async function GET(req: NextRequest) {
         articleDetailId: m.articleDetailId,
         stock: m.articleDetailId === detailId ? newStock : m.stock,
       }));
-      // On n'envoie QUE les mappings (pas code/warehouseId, sinon "A12 existe déjà").
-      const payload = { articleDetailBinLocationMappings: newMaps };
+      // Essai : renvoyer id + code + warehouseId pour que Pickware traite un UPDATE de la bin 250
+      // (et non une création) tout en ayant le champ obligatoire "code".
+      const variant = searchParams.get("variant") || "1";
+      let payload: any;
+      if (variant === "1") {
+        payload = { id: data.id, code: data.code, warehouseId: data.warehouseId, articleDetailBinLocationMappings: newMaps };
+      } else if (variant === "2") {
+        // mappings seuls (rappel : donnait "code missing")
+        payload = { articleDetailBinLocationMappings: newMaps };
+      } else {
+        // que le mapping ciblé
+        const only = newMaps.find((m: any) => m.articleDetailId === detailId);
+        payload = { id: data.id, code: data.code, warehouseId: data.warehouseId, articleDetailBinLocationMappings: [only] };
+      }
       if (!confirm) {
         // DRY-RUN : on montre exactement ce qui serait envoyé, sans écrire
         return NextResponse.json({
