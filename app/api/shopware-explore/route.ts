@@ -340,6 +340,34 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: all.length, products: all });
     }
 
+    // ── stockChangeProbe: chercher l'API de mouvement/correction de stock (LECTURE) ──
+    if (action === "stockChangeProbe") {
+      const results: any = {};
+      const paths = [
+        "/ViisonPickwareERPStockChange?limit=2",
+        "/ViisonPickwareERPStockCorrection?limit=2",
+        "/ViisonPickwareERPStockCorrections?limit=2",
+        "/ViisonPickwareERPManualStockChange?limit=2",
+        "/ViisonPickwareERPManualStockChanges?limit=2",
+        "/ViisonPickwareERPInventory?limit=2",
+        "/ViisonPickwareERPInventories?limit=2",
+        "/ViisonPickwareERPStocktake?limit=2",
+        "/ViisonPickwareERPStocktakes?limit=2",
+        "/ViisonPickwareERPRelocation?limit=2",
+        "/ViisonPickwareERPRelocations?limit=2",
+        "/ViisonPickwareERPArticleDetailBinLocationMappings/1249",
+      ];
+      for (const p of paths) {
+        try {
+          const r = await safeJson(await swFetch(p, creds));
+          results[p] = { status: r.status, ok: r.ok };
+          if (r.ok && r.json) results[p].sample = r.json.data ?? r.json;
+          else results[p].raw = r.raw?.substring(0, 120);
+        } catch (e: any) { results[p] = { error: e.message }; }
+      }
+      return NextResponse.json(results);
+    }
+
     // ── binList: liste rapide des bin locations (id + code) ──
     if (action === "binList") {
       const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=2000", creds));
