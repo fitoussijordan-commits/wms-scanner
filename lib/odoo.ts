@@ -3430,7 +3430,7 @@ export async function getInventoryTheoretical(
 // DEVIS E-SHOP (sale.order) — sorties du jour Shopware
 // ============================================
 
-export interface EshopQuoteLine { productId: number; qty: number; name?: string; }
+export interface EshopQuoteLine { productId: number; qty: number; name?: string; orders?: string; }
 
 // Crée un DEVIS (sale.order, état brouillon — non confirmé) pour les ventes e-shop
 // du jour, sur le client e-shop donné. Retourne {id, name}.
@@ -3448,11 +3448,15 @@ export async function createEshopQuotation(
   }
   const vals: any = {
     partner_id: partnerId,
-    order_line: Object.values(grouped).map(l => [0, 0, {
-      product_id: l.productId,
-      product_uom_qty: l.qty,
-      ...(l.name ? { name: l.name } : {}),
-    }]),
+    order_line: Object.values(grouped).map(l => {
+      // Description = nom produit + liste des commandes Shopware concernées (traçabilité)
+      const desc = l.orders ? `${l.name || ""}\nCommandes : ${l.orders}`.trim() : l.name;
+      return [0, 0, {
+        product_id: l.productId,
+        product_uom_qty: l.qty,
+        ...(desc ? { name: desc } : {}),
+      }];
+    }),
   };
   if (origin) vals.origin = origin;
 

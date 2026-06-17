@@ -198,7 +198,10 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
     if (!confirm(`Créer un devis Odoo pour ${partner.name} avec ${toDeduct.length} ligne(s) ?`)) return;
     setCreatingQuote(true);
     try {
-      const lines = toDeduct.map(a => ({ productId: a.productId, qty: a.qty, name: a.name }));
+      const lines = toDeduct.map(a => ({
+        productId: a.productId, qty: a.qty, name: a.name,
+        orders: a.cmds.map(c => `${c.number}${c.qty > 1 ? ` ×${c.qty}` : ""}`).join(", "),
+      }));
       const q = await odoo.createEshopQuotation(session, partner.id, lines, `E-shop ${dateFrom}${dateFrom !== dateTo ? "→" + dateTo : ""}`);
       // GARDE-FOU : marque UNIQUEMENT les commandes réellement incluses (payées, non annulées)
       const includedNumbers = deductOrderNumbers;
