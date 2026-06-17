@@ -3240,6 +3240,93 @@ export async function fetchCarrierSaleOrders(
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// BMV — matching des expéditions SANS réf Odoo, par nom client + date (±N jours)
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface BmvNameMatch {
+  recep: string;       // n° de réception BMV (identifiant côté facture)
+  ref: string;         // name de la commande Odoo trouvée
+  client: string;
+  partnerRef?: string;
+  montantHT: number;
+  montantTTC: number;
+  dateOrder: string;
+  cp?: string;
+  ville?: string;
+  dept?: string;
+  approx: boolean;     // true = match par nom+date (à vérifier), pas par réf exacte
+}
+
+// Normalise un nom client pour comparaison tolérante (accents, casse, ponctuation).
+function normName(s: string): string {
+  return (s || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9 ]/g, " ")
+    .replace(/\b(SA|SAS|SARL|EURL|CD2|PLATEFORME)\b/g, " ")
+    .replace(/\s+/g, " ").trim();
+}
+
+// Pour chaque expédition {recep, dest, date_iso}, cherche dans Odoo une sale.order
+// dont le partenaire ressemble au destinataire ET date_order proche (±toleranceDays).
+export async function fetchBmvByNameDate(
+  session: OdooSession,
+  shipments: { recep: string; dest: string; date_iso: string }[],
+  toleranceDays = 3
+): Promise<BmvNameMatch[]> {
+  const out: BmvNameMatch[] = [];
+  const targets = shipments.filter(s => s.dest && s.date_iso);
+  if (!targets.length) return out;
+
+  // Bornes globales de dates (pour ne charger qu'une fenêtre de commandes).
+  const dates = targets.map(t => t.date_iso).sort();
+  const minD = new Date(dates[0]); minD.setDate(minD.getDate() - toleranceDays);
+  const maxD = new Date(dates[dates.length - 1]); maxD.setDate(maxD.getDate() + toleranceDays);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+
+  // Charge les commandes confirmées de la fenêtre, avec partenaire + date.
+  const rows = await searchRead(session, "sale.order",
+    [["state", "in", ["sale", "done"]],
+     ["date_order", ">=", `${fmt(minD)} 00:00:00`],
+     ["date_order", "<=", `${fmt(maxD)} 23:59:59`]],
+    ["name", "partner_id", "partner_shipping_id", "amount_untaxed", "amount_total", "date_order"], 0, "date_order desc"
+  );
+  interface Cand { ref: string; client: string; norm: string; montantHT: number; montantTTC: number; dateOrder: string; }
+  const candidates: Cand[] = rows.map((r: any) => ({
+    ref: r.name,
+    client: Array.isArray(r.partner_id) ? r.partner_id[1] : "",
+    norm: normName(Array.isArray(r.partner_id) ? r.partner_id[1] : ""),
+    montantHT: r.amount_untaxed || 0,
+    montantTTC: r.amount_total || 0,
+    dateOrder: r.date_order ? String(r.date_order).split(" ")[0] : "",
+  }));
+
+  const dayDiff = (a: string, b: string) =>
+    Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000);
+
+  for (const s of targets) {
+    const nd = normName(s.dest);
+    if (!nd) continue;
+    // candidats dont le nom contient/est contenu dans le destinataire BMV
+    const pool = candidates.filter(c =>
+      c.norm && (c.norm.includes(nd) || nd.includes(c.norm) ||
+        nd.split(" ")[0] === c.norm.split(" ")[0]) &&
+      dayDiff(c.dateOrder, s.date_iso) <= toleranceDays
+    );
+    if (!pool.length) continue;
+    // meilleur = date la plus proche
+    pool.sort((a, b) => dayDiff(a.dateOrder, s.date_iso) - dayDiff(b.dateOrder, s.date_iso));
+    const best = pool[0];
+    out.push({
+      recep: s.recep, ref: best.ref, client: best.client,
+      montantHT: best.montantHT, montantTTC: best.montantTTC,
+      dateOrder: best.dateOrder, approx: true,
+    });
+  }
+  return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // ÉDITION RAPIDE FICHE PRODUIT (desktop admin) — alternative légère à Odoo
 // ════════════════════════════════════════════════════════════════════════════
 

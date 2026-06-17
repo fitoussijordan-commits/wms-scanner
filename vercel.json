@@ -10,6 +10,10 @@
       "maxDuration": 60,
       "memory": 1024
     },
+    "api/extract-bmv.py": {
+      "maxDuration": 60,
+      "memory": 1024
+    },
     "api/analyse_export.py": {
       "maxDuration": 30,
       "memory": 512

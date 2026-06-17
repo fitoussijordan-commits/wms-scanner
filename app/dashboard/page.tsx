@@ -289,6 +289,7 @@ const TABS = [
   { key: "libre", label: "Mode Libre", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> },
   { key: "dlv", label: "Suivi DLV", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><circle cx="12" cy="16" r="2" fill="currentColor"/></svg> },
   { key: "transporteurs", label: "Analyse transporteurs", icon: I.truck },
+  { key: "bmv", label: "Analyse BMV", icon: I.truck },
   { key: "reception", label: "Réception", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg> },
 ] as const;
 
@@ -496,6 +497,111 @@ export default function Dashboard() {
   const [carError, setCarError] = useState("");
   const [carDrag, setCarDrag] = useState(false);
   const [carExpanded, setCarExpanded] = useState<Set<string>>(new Set());
+
+  // ── BMV (autre transporteur — facture annexe) ──────────────────────────────
+  interface BmvExped { recep: string; date: string; date_iso: string; ref: string; dest: string; dpt: string; ville: string; transport: number; options: number; colis: number; coutReel: number; }
+  interface BmvStats { num: string; date_facture: string; nb_expeditions: number; total_transport: number; surcharge_carburant: number; surcharge_taux: number; total_general_ht: number; avec_ref: number; sans_ref: number; }
+  interface BmvCrossed extends BmvExped { client: string; partnerRef?: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; approx: boolean; alert: boolean; }
+  const [bmvLoading, setBmvLoading] = useState(false);
+  const [bmvPdfName, setBmvPdfName] = useState("");
+  const [bmvExped, setBmvExped] = useState<BmvExped[]>([]);
+  const [bmvStats, setBmvStats] = useState<BmvStats | null>(null);
+  const [bmvOdoo, setBmvOdoo] = useState<Map<string, odoo.CarrierSaleOrder>>(new Map());
+  const [bmvNameMatch, setBmvNameMatch] = useState<Map<string, odoo.BmvNameMatch>>(new Map());
+  const [bmvOdooLoaded, setBmvOdooLoaded] = useState(false);
+  const [bmvSearching, setBmvSearching] = useState(false);
+  const [bmvSearch, setBmvSearch] = useState("");
+  const [bmvError, setBmvError] = useState("");
+  const [bmvDrag, setBmvDrag] = useState(false);
+  const bmvPdfInput = useRef<HTMLInputElement>(null);
+
+  async function bmvHandlePdf(file: File) {
+    setBmvLoading(true); setBmvError(""); setBmvPdfName(file.name);
+    setBmvOdoo(new Map()); setBmvNameMatch(new Map()); setBmvOdooLoaded(false);
+    try {
+      const buf = await file.arrayBuffer();
+      const res = await fetch("/api/bmv-extract", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: buf });
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const txt = (await res.text()).slice(0, 200);
+        setBmvError(res.status === 404 ? "L'extraction PDF n'est disponible qu'en ligne (Vercel)." : `Réponse inattendue (HTTP ${res.status}) : ${txt}`);
+        return;
+      }
+      const data = await res.json();
+      if (data.error) { setBmvError("Erreur extraction : " + data.error); return; }
+      const exps: BmvExped[] = data.expeditions || [];
+      setBmvExped(exps); setBmvStats(data.stats || null);
+      if (session && exps.length) {
+        setBmvSearching(true);
+        try { await bmvCross(exps); } finally { setBmvSearching(false); }
+      }
+    } catch (e) { setBmvError("Erreur réseau : " + String(e)); } finally { setBmvLoading(false); }
+  }
+
+  async function bmvCross(exps: BmvExped[]) {
+    if (!session) return;
+    // 1) match par réf Odoo (S…) pour les expéds qui en ont une
+    const withRef = exps.filter(e => e.ref);
+    const refMap = new Map<string, odoo.CarrierSaleOrder>();
+    if (withRef.length) {
+      const rows = await odoo.fetchCarrierSaleOrders(session, withRef.map(e => e.ref));
+      for (const r of rows) refMap.set(r.ref, r);
+    }
+    setBmvOdoo(refMap);
+    // 2) match par nom + date pour les expéds SANS réf
+    const without = exps.filter(e => !e.ref).map(e => ({ recep: e.recep, dest: e.dest, date_iso: e.date_iso }));
+    const nameMap = new Map<string, odoo.BmvNameMatch>();
+    if (without.length) {
+      const matches = await odoo.fetchBmvByNameDate(session, without, 3);
+      for (const m of matches) nameMap.set(m.recep, m);
+    }
+    setBmvNameMatch(nameMap);
+    setBmvOdooLoaded(true);
+  }
+
+  const bmvCroise: BmvCrossed[] = useMemo(() => {
+    return bmvExped.map(e => {
+      let client = "", partnerRef: string | undefined, montantHT = 0, montantTTC = 0, matched = false, approx = false;
+      if (e.ref && bmvOdoo.has(e.ref)) {
+        const o = bmvOdoo.get(e.ref)!;
+        client = o.client; partnerRef = o.partnerRef; montantHT = o.montantHT; montantTTC = o.montantTTC; matched = true;
+      } else if (!e.ref && bmvNameMatch.has(e.recep)) {
+        const m = bmvNameMatch.get(e.recep)!;
+        client = m.client; partnerRef = m.partnerRef; montantHT = m.montantHT; montantTTC = m.montantTTC; matched = true; approx = true;
+      }
+      const alert = e.coutReel > 0 && montantHT <= 0;
+      return { ...e, client, partnerRef, montantHT, montantTTC, matched, approx, alert, pct: montantHT > 0 ? e.coutReel / montantHT : null };
+    });
+  }, [bmvExped, bmvOdoo, bmvNameMatch]);
+
+  const bmvFiltered = useMemo(() => {
+    const q = bmvSearch.trim().toLowerCase();
+    if (!q) return bmvCroise;
+    return bmvCroise.filter(r => r.ref.toLowerCase().includes(q) || r.dest.toLowerCase().includes(q) || (r.client || "").toLowerCase().includes(q));
+  }, [bmvCroise, bmvSearch]);
+
+  function bmvReset() {
+    setBmvExped([]); setBmvStats(null); setBmvOdoo(new Map()); setBmvNameMatch(new Map());
+    setBmvOdooLoaded(false); setBmvPdfName(""); setBmvError(""); setBmvSearch("");
+  }
+
+  function bmvExportXlsx() {
+    const eur = (n: number) => (n || 0).toFixed(2).replace(".", ",");
+    const head = ["Réf Odoo", "N° Récep", "Date", "Destinataire", "Dpt", "Ville", "Colis", "Transport", "Coût réel", "Montant HT", "Montant TTC", "% Transp.", "Match"];
+    const rows = bmvCroise.map(r => [
+      r.ref || "", r.recep, r.date, r.dest, r.dpt, r.ville, String(r.colis),
+      eur(r.transport), eur(r.coutReel), eur(r.montantHT), eur(r.montantTTC),
+      r.pct === null ? "" : (r.pct * 100).toFixed(1) + "%",
+      r.matched ? (r.approx ? "approx (nom+date)" : "réf") : "absent",
+    ]);
+    const esc = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
+    const csv = [head, ...rows].map(r => r.map(esc).join(";")).join("\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `bmv_${bmvStats?.num || "facture"}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
   const carPdfInput = useRef<HTMLInputElement>(null);
 
   // Convertit une date FedEx "jj/mm" (année courante) en "YYYY-MM-DD"
@@ -5002,6 +5108,155 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                             </Fragment>
                             );
                           })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* ══════════════════ ANALYSE BMV ══════════════════ */}
+        {tab === "bmv" && (() => {
+          const eur = (n: number) => (n || 0).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+          const pctFmt = (n: number | null) => (n === null ? "—" : (n * 100).toFixed(1) + " %");
+          const pctColor = (p: number) => (p > 0.15 ? "#dc2626" : p > 0.08 ? "#d97706" : "#16a34a");
+          const hasData = bmvExped.length > 0;
+          const nbMatched = bmvCroise.filter(c => c.matched).length;
+          const nbApprox = bmvCroise.filter(c => c.matched && c.approx).length;
+          const anomalies = bmvCroise.filter(c => c.alert);
+          return (
+            <div style={{ maxWidth: 1200, margin: "0 auto" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 0 16px" }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 17, color: "var(--text-primary)" }}>Analyse BMV</div>
+                  <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Facture BMV croisée avec Odoo — par réf (S…) ou, à défaut, par nom client + date</div>
+                </div>
+                {hasData && (
+                  <button onClick={bmvReset} style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 14px", border: "1.5px solid var(--border)", borderRadius: 8, background: "var(--bg-raised)", color: "var(--text-secondary)", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                    {I.rotate} Nouvelle facture
+                  </button>
+                )}
+              </div>
+
+              {bmvError && (
+                <div style={{ marginBottom: 14, padding: "10px 14px", borderRadius: 10, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.25)", color: "#dc2626", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+                  {I.alertTri} {bmvError}
+                </div>
+              )}
+
+              {!hasData && (
+                <div
+                  onClick={() => bmvPdfInput.current?.click()}
+                  onDragOver={e => { e.preventDefault(); setBmvDrag(true); }}
+                  onDragLeave={() => setBmvDrag(false)}
+                  onDrop={e => { e.preventDefault(); setBmvDrag(false); const f = e.dataTransfer.files[0]; if (f) bmvHandlePdf(f); }}
+                  style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, padding: "70px 24px", border: `2px dashed ${bmvDrag ? "var(--accent)" : "var(--border)"}`, borderRadius: 16, background: bmvDrag ? "var(--accent-soft)" : "var(--bg-raised)", cursor: "pointer", transition: "all .2s" }}
+                >
+                  <input ref={bmvPdfInput} type="file" accept="application/pdf" hidden onChange={e => e.target.files?.[0] && bmvHandlePdf(e.target.files[0])} />
+                  {bmvLoading ? (
+                    <>
+                      <div style={{ width: 44, height: 44, border: "3px solid var(--border)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)" }}>Extraction en cours…</div>
+                        <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 3 }}>Analyse de la facture BMV</div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ width: 60, height: 60, borderRadius: 16, background: "var(--accent-soft)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>{I.upload}</div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Dépose ta facture BMV</div>
+                        <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 3 }}>Format PDF — ou clique pour parcourir</div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Croisement Odoo automatique (réf S… puis nom + date ±3j)</div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {hasData && bmvStats && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                  {/* Cartes stats */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+                    {[
+                      { label: "Expéditions", value: String(bmvStats.nb_expeditions), sub: `facture ${bmvStats.num || "—"}`, danger: false },
+                      { label: "Transport total", value: eur(bmvStats.total_transport), sub: "hors carburant", danger: false },
+                      { label: "Total facturé HT", value: eur(bmvStats.total_general_ht), sub: `dont ${eur(bmvStats.surcharge_carburant)} carburant (${bmvStats.surcharge_taux}%)`, danger: false },
+                      { label: "Croisé Odoo", value: bmvOdooLoaded ? `${nbMatched}/${bmvStats.nb_expeditions}` : "—", sub: bmvOdooLoaded ? `${nbApprox} par nom+date` : "lance la recherche", danger: false },
+                      { label: "Sans montant", value: String(anomalies.length), sub: "transport à perte", danger: anomalies.length > 0 },
+                    ].map((s, i) => (
+                      <div key={i} style={{ padding: 16, borderRadius: 14, border: `1px solid ${s.danger ? "#dc2626" : "var(--border)"}`, background: s.danger ? "rgba(220,38,38,0.06)" : "var(--bg-raised)" }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8 }}>{s.label}</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: s.danger ? "#dc2626" : "var(--text-primary)" }}>{s.value}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>{s.sub}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Barre actions */}
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, padding: 14, borderRadius: 12, border: "1px solid var(--border)", background: "var(--bg-raised)" }}>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                      {bmvOdooLoaded ? <>Croisement effectué — <b style={{ color: "var(--text-primary)" }}>{nbMatched}/{bmvStats.nb_expeditions}</b> trouvées ({nbApprox} approx.)</> : "Le croisement se lance après le dépôt."}
+                    </div>
+                    <button onClick={() => bmvCross(bmvExped)} disabled={bmvSearching || !session} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: bmvSearching ? "wait" : "pointer", opacity: bmvSearching || !session ? 0.6 : 1, fontFamily: "inherit" }}>
+                      {bmvSearching ? "Recherche…" : <>{I.search} {bmvOdooLoaded ? "Relancer" : "Rechercher dans Odoo"}</>}
+                    </button>
+                    <div style={{ flex: 1 }} />
+                    <button onClick={bmvExportXlsx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 16px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+                      {I.download} Export
+                    </button>
+                  </div>
+
+                  {/* Recherche */}
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <input value={bmvSearch} onChange={e => setBmvSearch(e.target.value)} placeholder="Rechercher (réf, destinataire, client)…" style={{ width: "100%", padding: "8px 12px", border: "1.5px solid var(--border)", borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)", boxSizing: "border-box" }} />
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{bmvFiltered.length} expédition{bmvFiltered.length > 1 ? "s" : ""}{bmvPdfName ? ` · ${bmvPdfName}` : ""}</div>
+                  </div>
+
+                  {/* Tableau croisé */}
+                  <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+                    <div style={{ maxHeight: "58vh", overflow: "auto" }}>
+                      <table className="wms-table">
+                        <thead>
+                          <tr>
+                            <th><div className="th-inner">Réf / Récep</div></th>
+                            <th><div className="th-inner">Date</div></th>
+                            <th><div className="th-inner">Destinataire</div></th>
+                            <th><div className="th-inner">Dpt</div></th>
+                            <th><div className="th-inner">Colis</div></th>
+                            <th><div className="th-inner" title="Transport + quote-part surcharge carburant">Coût réel</div></th>
+                            <th><div className="th-inner">Montant HT</div></th>
+                            <th><div className="th-inner">% Transp.</div></th>
+                            <th><div className="th-inner">Match</div></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {bmvFiltered.map((r, i) => (
+                            <tr key={i} style={r.alert ? { background: "rgba(220,38,38,0.07)" } : undefined}>
+                              <td style={{ fontWeight: 600, color: "var(--accent)" }}>
+                                {r.ref || <span style={{ color: "var(--text-muted)", fontWeight: 500 }}>{r.recep}</span>}
+                              </td>
+                              <td>{r.date}</td>
+                              <td title={r.ville}>{r.client || r.dest || <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
+                              <td>{r.dpt}</td>
+                              <td style={{ textAlign: "right" }}>{r.colis}</td>
+                              <td style={{ textAlign: "right" }} title={`Transport ${eur(r.transport)} + carburant`}>{eur(r.coutReel)}</td>
+                              <td style={{ textAlign: "right" }}>{r.montantHT ? eur(r.montantHT) : <span style={{ color: "#dc2626", fontWeight: 700 }}>0,00 €</span>}</td>
+                              <td style={{ textAlign: "right" }}>
+                                {r.alert ? <span style={{ color: "#dc2626", fontWeight: 800 }}>⚠ à perte</span> : r.pct === null ? <span style={{ color: "var(--text-muted)" }}>—</span> : <span style={{ fontWeight: 700, color: pctColor(r.pct) }}>{pctFmt(r.pct)}</span>}
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                {!r.matched ? <span style={{ color: "#dc2626", fontSize: 11, fontWeight: 600 }}>absent</span>
+                                  : r.approx ? <span title="Trouvé par nom + date — à vérifier" style={{ color: "#d97706", fontSize: 11, fontWeight: 700 }}>≈ nom+date</span>
+                                  : <span style={{ color: "#16a34a", fontWeight: 700 }}>✓ réf</span>}
+                              </td>
+                            </tr>
+                          ))}
                         </tbody>
                       </table>
                     </div>
