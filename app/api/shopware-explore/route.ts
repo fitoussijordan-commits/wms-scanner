@@ -340,6 +340,77 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: all.length, products: all });
     }
 
+    // ── binFindMapping: retrouve le(s) mapping(s) bin d'un detailId (LECTURE) ──
+    if (action === "binFindMapping") {
+      const detailId = parseInt(searchParams.get("detailId") || "0", 10);
+      if (!detailId) return NextResponse.json({ error: "detailId requis" }, { status: 400 });
+      // 1) lister les bin locations
+      const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=1000", creds));
+      const bins = blRes.json?.data || [];
+      const found: any[] = [];
+      // 2) pour chaque bin, charger le détail (contient les mappings) et chercher le detailId
+      for (const b of bins) {
+        const one = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${b.id}`, creds));
+        const maps = one.json?.data?.articleDetailBinLocationMappings || [];
+        for (const m of maps) {
+          if (m.articleDetailId === detailId) {
+            found.push({
+              binLocationId: b.id,
+              binCode: one.json?.data?.code,
+              warehouseId: one.json?.data?.warehouseId,
+              mappingId: m.id,
+              stock: m.stock,
+              reservedStock: m.reservedStock,
+              defaultMapping: m.defaultMapping,
+            });
+          }
+        }
+      }
+      return NextResponse.json({ detailId, mappings: found });
+    }
+
+    // ── binSetStock: écrit le stock d'un detailId dans une bin (ÉCRITURE, confirm requis) ──
+    if (action === "binSetStock") {
+      const binLocationId = parseInt(searchParams.get("binLocationId") || "0", 10);
+      const detailId = parseInt(searchParams.get("detailId") || "0", 10);
+      const newStock = parseInt(searchParams.get("stock") || "NaN", 10);
+      const confirm = searchParams.get("confirm") === "1";
+      if (!binLocationId || !detailId || Number.isNaN(newStock)) {
+        return NextResponse.json({ error: "binLocationId, detailId et stock requis" }, { status: 400 });
+      }
+      // 1) charger la bin location complète
+      const one = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${binLocationId}`, creds));
+      if (!one.json?.data) return NextResponse.json({ error: "bin introuvable", raw: one.raw }, { status: 404 });
+      const data = one.json.data;
+      const maps = data.articleDetailBinLocationMappings || [];
+      const target = maps.find((m: any) => m.articleDetailId === detailId);
+      if (!target) return NextResponse.json({ error: "mapping introuvable pour ce detailId dans cette bin" }, { status: 404 });
+      const oldStock = target.stock;
+      // 2) construire le payload : on ne touche QUE le stock du mapping ciblé
+      const newMaps = maps.map((m: any) =>
+        m.articleDetailId === detailId ? { id: m.id, stock: newStock } : { id: m.id, stock: m.stock }
+      );
+      const payload = { articleDetailBinLocationMappings: newMaps };
+      if (!confirm) {
+        // DRY-RUN : on montre exactement ce qui serait envoyé, sans écrire
+        return NextResponse.json({
+          dryRun: true, binLocationId, detailId, mappingId: target.id,
+          oldStock, requested: newStock, payloadPreview: payload,
+          note: "Ajoute &confirm=1 pour écrire réellement.",
+        });
+      }
+      // 3) ÉCRITURE
+      const put = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${binLocationId}`, creds, "PUT", payload));
+      // 4) relire pour vérifier
+      const after = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${binLocationId}`, creds));
+      const afterMap = (after.json?.data?.articleDetailBinLocationMappings || []).find((m: any) => m.articleDetailId === detailId);
+      return NextResponse.json({
+        ok: put.ok, status: put.status, binLocationId, detailId, mappingId: target.id,
+        oldStock, requested: newStock, newStock: afterMap?.stock ?? null,
+        putRaw: put.raw, putResp: put.json,
+      });
+    }
+
     // ── binProbe5: confirmer l'endpoint du MAPPING (lecture par id) ──
     if (action === "binProbe5") {
       const results: any = {};
