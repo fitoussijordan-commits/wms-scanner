@@ -314,6 +314,7 @@ export async function GET(req: NextRequest) {
           const md = a.mainDetail || {};
           all.push({
             articleId: a.id,
+            detailId: md.id || a.mainDetailId, // detailId de la variante (lien vers les emplacements)
             number: md.number || a.mainDetailId,
             name: a.name,
             active: a.active,
@@ -364,6 +365,30 @@ export async function GET(req: NextRequest) {
         hasLocation: locations.length > 0,
         locations, // emplacements physiques (code + stock)
       });
+    }
+
+    // ── binAll: TOUS les emplacements en une fois → map detailId → {code, stock} (LECTURE) ──
+    // Permet de précharger les emplacements au lancement de l'audit (1 seul scan).
+    if (action === "binAll") {
+      const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=2000", creds));
+      const bins = (blRes.json?.data || []).filter((b: any) => b.code !== "pickware_null_bin_location");
+      const byDetail: Record<string, { code: string; stock: number }> = {};
+      const batchSize = 10;
+      for (let i = 0; i < bins.length; i += batchSize) {
+        const slice = bins.slice(i, i + batchSize);
+        const details = await Promise.all(
+          slice.map(async (b: any) => safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${b.id}`, creds)))
+        );
+        for (const one of details) {
+          const d = one.json?.data;
+          const maps = d?.articleDetailBinLocationMappings || [];
+          for (const m of maps) {
+            // on garde le 1er emplacement non-nul rencontré pour chaque detailId
+            if (!byDetail[m.articleDetailId]) byDetail[m.articleDetailId] = { code: d.code, stock: m.stock };
+          }
+        }
+      }
+      return NextResponse.json({ count: Object.keys(byDetail).length, byDetail });
     }
 
     // ── setStock: ÉCRIT le stock (inStock) d'un article Shopware. ⚠ ÉCRITURE ──

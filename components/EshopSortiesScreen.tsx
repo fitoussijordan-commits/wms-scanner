@@ -529,7 +529,7 @@ function StockSyncTab({ session, onToast }: { session: odoo.OdooSession; onToast
 // ════════════════════════════════════════════════════════════════
 //  Onglet Audit catalogue — tous les produits actifs SW vs stock Odoo
 // ════════════════════════════════════════════════════════════════
-interface AuditRow { number: string; nameSW: string; inStock: number | null; odoo: number | null; productId: number; odooRef: string; mapped: boolean; }
+interface AuditRow { number: string; nameSW: string; inStock: number | null; odoo: number | null; productId: number; odooRef: string; mapped: boolean; detailId: number; }
 function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Props["onToast"] }) {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<AuditRow[]>([]);
@@ -543,6 +543,8 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
   const [pushing, setPushing] = useState<string | null>(null);
   // résultat de la MAJ par réf : { newStock, hasLocation, locCode }
   const [pushed, setPushed] = useState<Record<string, { newStock: number; hasLocation: boolean; locCode?: string }>>({});
+  // emplacements préchargés : detailId → { code, stock }
+  const [binMap, setBinMap] = useState<Record<string, { code: string; stock: number }>>({});
 
   const runAudit = async () => {
     setLoading(true); setError("");
@@ -554,9 +556,13 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
         sb.getServiceRefs().catch(() => [] as string[]),
       ]);
       setChariot(chariotList); setService(serviceList);
-      // 1) Catalogue actif Shopware
-      const catRes = await fetch("/api/shopware-explore?action=activeProducts").then(r => r.json());
+      // 1) Catalogue actif Shopware + emplacements préchargés (1 seul scan)
+      const [catRes, binRes] = await Promise.all([
+        fetch("/api/shopware-explore?action=activeProducts").then(r => r.json()),
+        fetch("/api/shopware-explore?action=binAll").then(r => r.json()).catch(() => ({ byDetail: {} })),
+      ]);
       const products: any[] = catRes.products || [];
+      setBinMap(binRes.byDetail || {});
       // 2) Mapping : cache + overrides d'abord, matchEshopSkus seulement pour les manquants
       const [cache, overrides] = await Promise.all([
         (await import("@/lib/supabase")).getEshopMappingCache(),
@@ -591,7 +597,7 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
         return {
           number: p.number, nameSW: p.name, inStock: p.inStock ?? null,
           productId: m?.product_id || 0, odooRef: m?.default_code || "",
-          mapped: !!m?.product_id,
+          mapped: !!m?.product_id, detailId: p.detailId || 0,
           odoo: m?.product_id ? (stockMap[m.product_id] ?? 0) : null,
         };
       });
@@ -630,16 +636,13 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
     const qty = r.odoo ?? 0;
     setPushing(r.number);
     try {
-      // 1) écrire le stock global
+      // 1) écrire le stock global (instantané)
       const res = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(r.number)}&qty=${qty}`).then(x => x.json());
       if (!res.ok) throw new Error(res.error || "échec écriture stock");
-      // 2) vérifier l'emplacement (lecture)
-      let hasLocation = false, locCode: string | undefined;
-      try {
-        const info = await fetch(`/api/shopware-explore?action=binInfo&articleNumber=${encodeURIComponent(r.number)}`).then(x => x.json());
-        hasLocation = !!info.hasLocation;
-        locCode = info.locations?.[0]?.code;
-      } catch {}
+      // 2) emplacement : lu depuis la map préchargée (pas d'appel réseau → rapide)
+      const loc = binMap[String(r.detailId)];
+      const hasLocation = !!loc;
+      const locCode = loc?.code;
       setPushed(prev => ({ ...prev, [r.number]: { newStock: res.newStock, hasLocation, locCode } }));
       setRows(prev => prev.map(x => x.number === r.number ? { ...x, inStock: res.newStock } : x));
       if (hasLocation) onToast(`Stock mis à jour : ${res.newStock} (emplacement ${locCode}) ✓`, "success");
