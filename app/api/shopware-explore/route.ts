@@ -340,6 +340,34 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: all.length, products: all });
     }
 
+    // ── binProbe4: derniers essais (singulier, import, stocking) ──
+    if (action === "binProbe4") {
+      const results: any = {};
+      const paths = [
+        "/ViisonPickwareERPWarehouse?limit=2",
+        "/ViisonPickwareERPBinLocation?limit=2",
+        "/ViisonPickwareERPStockings?limit=2",
+        "/ViisonPickwareERPStocking?limit=2",
+        "/ViisonPickwareERPGoodsIncoming?limit=2",
+        "/ViisonPickwareERPGoodsIncomings?limit=2",
+        "/ViisonPickwareERPStockTaking?limit=2",
+        "/ViisonPickwareERPStockTakings?limit=2",
+        "/ViisonPickwareERPSupplierOrders?limit=2",
+        "/ViisonPickwareERPArticleConfigurations?limit=2",
+        // bin location précise (id 1 vu précédemment) — voit-on le stock dedans ?
+        "/ViisonPickwareERPBinLocations/1",
+        "/ViisonPickwareERPWarehouses/1",
+      ];
+      for (const p of paths) {
+        try {
+          const r = await safeJson(await swFetch(p, creds));
+          results[p] = { status: r.status, ok: r.ok };
+          if (r.ok && r.json) results[p].sample = r.json.data ?? r.json;
+        } catch (e: any) { results[p] = { error: e.message }; }
+      }
+      return NextResponse.json(results);
+    }
+
     // ── binProbe3: trouver l'endpoint du STOCK par article/bin (Viison) ──
     if (action === "binProbe3") {
       const results: any = {};
