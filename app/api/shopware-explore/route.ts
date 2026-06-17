@@ -340,6 +340,33 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: all.length, products: all });
     }
 
+    // ── binProbe3: trouver l'endpoint du STOCK par article/bin (Viison) ──
+    if (action === "binProbe3") {
+      const results: any = {};
+      const paths = [
+        "/ViisonPickwareERPStock?limit=3",
+        "/ViisonPickwareERPArticleStock?limit=3",
+        "/ViisonPickwareERPWarehouseStocks?limit=3",
+        "/ViisonPickwareERPStockLedgerEntries?limit=3",
+        "/ViisonPickwareERPStockLedgerEntry?limit=3",
+        "/ViisonPickwareERPBinLocationStocks?limit=3",
+        "/ViisonPickwareERPBinLocationStock?limit=3",
+        "/ViisonPickwareERPArticleDetailStocks?limit=3",
+        "/ViisonPickwareERPStockChanges?limit=3",
+        "/ViisonPickwareERPStockingProcesses?limit=3",
+        "/ViisonPickwareERPArticleDetailWarehouseConfigurations?limit=3",
+        "/ViisonPickwareERPArticleBinLocationMappings?limit=3",
+      ];
+      for (const p of paths) {
+        try {
+          const r = await safeJson(await swFetch(p, creds));
+          results[p] = { status: r.status, ok: r.ok };
+          if (r.ok && r.json) results[p].sample = (r.json.data || []).slice(0, 1);
+        } catch (e: any) { results[p] = { error: e.message }; }
+      }
+      return NextResponse.json(results);
+    }
+
     // ── binProbe2: autres noms d'endpoints possibles pour stock par emplacement ──
     if (action === "binProbe2") {
       const an = searchParams.get("articleNumber") || "429000040";
