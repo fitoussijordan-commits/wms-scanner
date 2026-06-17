@@ -1771,6 +1771,12 @@ export async function loadChariotSkus(session: OdooSession): Promise<string[]> {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
+// Ajoute une réf à la liste chariot eShop (lit, ajoute si absente, sauve).
+export async function addChariotSku(session: OdooSession, sku: string): Promise<void> {
+  const list = await loadChariotSkus(session);
+  if (!list.includes(sku)) { list.push(sku); await saveChariotSkus(session, list); }
+}
+
 // PACKING LIST STORAGE — Save/load parsed packing lists via Odoo ir.attachment
 // ============================================
 

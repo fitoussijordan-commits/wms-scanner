@@ -39,9 +39,10 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
           </button>
         ))}
       </div>
-      {tab === "sorties" ? <SortiesTab session={session} onToast={onToast} />
-        : tab === "stock" ? <StockSyncTab session={session} onToast={onToast} />
-        : <AuditTab session={session} onToast={onToast} />}
+      {/* Onglets gardés montés (display:none) pour ne pas perdre l'état (audit, etc.) */}
+      <div style={{ display: tab === "sorties" ? "block" : "none" }}><SortiesTab session={session} onToast={onToast} /></div>
+      <div style={{ display: tab === "stock" ? "block" : "none" }}><StockSyncTab session={session} onToast={onToast} /></div>
+      <div style={{ display: tab === "audit" ? "block" : "none" }}><AuditTab session={session} onToast={onToast} /></div>
     </div>
   );
 }
@@ -532,8 +533,10 @@ interface AuditRow { number: string; nameSW: string; inStock: number | null; odo
 function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Props["onToast"] }) {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<AuditRow[]>([]);
-  const [filter, setFilter] = useState<"all" | "noOdoo" | "swZeroOdooStock" | "ok" | "unmapped">("noOdoo");
+  const [filter, setFilter] = useState<"all" | "noOdoo" | "swZeroOdooStock" | "ok" | "unmapped" | "service">("noOdoo");
   const [error, setError] = useState("");
+  const [chariot, setChariot] = useState<string[]>([]);
+  const [service, setService] = useState<string[]>([]);
   const [fixRef, setFixRef] = useState<string | null>(null);
   const [fixQuery, setFixQuery] = useState("");
   const [fixResults, setFixResults] = useState<any[]>([]);
@@ -541,9 +544,16 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
   const runAudit = async () => {
     setLoading(true); setError("");
     try {
+      // 0) Listes chariot + service (exclusions)
+      const sb = await import("@/lib/supabase");
+      const [chariotList, serviceList] = await Promise.all([
+        odoo.loadChariotSkus(session).catch(() => [] as string[]),
+        sb.getServiceRefs().catch(() => [] as string[]),
+      ]);
+      setChariot(chariotList); setService(serviceList);
       // 1) Catalogue actif Shopware
-      const cat = await fetch("/api/shopware-explore?action=activeProducts").then(r => r.json());
-      const products: any[] = cat.products || [];
+      const catRes = await fetch("/api/shopware-explore?action=activeProducts").then(r => r.json());
+      const products: any[] = catRes.products || [];
       // 2) Mapping : cache + overrides d'abord, matchEshopSkus seulement pour les manquants
       const [cache, overrides] = await Promise.all([
         (await import("@/lib/supabase")).getEshopMappingCache(),
@@ -600,15 +610,26 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
       onToast("Mapping enregistré ✓", "success");
     } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
   };
+  const markChariot = async (ref: string) => {
+    try { await odoo.addChariotSku(session, ref); setChariot(prev => prev.includes(ref) ? prev : [...prev, ref]); setFixRef(null); onToast("Ajouté au chariot eShop ✓", "success"); }
+    catch (e: any) { onToast("Erreur : " + e.message, "error"); }
+  };
+  const markService = async (ref: string) => {
+    try { await (await import("@/lib/supabase")).addServiceRef(ref); setService(prev => prev.includes(ref) ? prev : [...prev, ref]); setFixRef(null); onToast("Marqué comme service ✓", "success"); }
+    catch (e: any) { onToast("Erreur : " + e.message, "error"); }
+  };
 
   // Catégorisation
-  const cat = (r: AuditRow): "noOdoo" | "swZeroOdooStock" | "ok" | "unmapped" => {
+  const inList = (ref: string, list: string[]) => list.some(x => x.trim().toLowerCase() === ref.trim().toLowerCase());
+  const cat = (r: AuditRow): "service" | "chariot" | "noOdoo" | "swZeroOdooStock" | "ok" | "unmapped" => {
+    if (inList(r.number, service)) return "service";        // carte cadeau, etc. → hors champ principal
+    if (inList(r.number, chariot)) return "chariot";        // déjà sorti, exclu
     if (!r.mapped) return "unmapped";
     if ((r.odoo ?? 0) <= 0) return "noOdoo";                 // actif SW mais pas de stock Odoo
     if ((r.inStock ?? 0) <= 0 && (r.odoo ?? 0) > 0) return "swZeroOdooStock"; // 0 sur SW mais stock Odoo
     return "ok";
   };
-  const counts = { all: rows.length, noOdoo: 0, swZeroOdooStock: 0, ok: 0, unmapped: 0 };
+  const counts: Record<string, number> = { all: rows.length, noOdoo: 0, swZeroOdooStock: 0, ok: 0, unmapped: 0, service: 0, chariot: 0 };
   for (const r of rows) counts[cat(r)]++;
   const visible = filter === "all" ? rows : rows.filter(r => cat(r) === filter);
 
@@ -617,6 +638,7 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
     { k: "swZeroOdooStock", label: "0 sur SW mais stock Odoo" },
     { k: "unmapped", label: "Non mappés" },
     { k: "ok", label: "Cohérents" },
+    { k: "service", label: "Service" },
     { k: "all", label: "Tout" },
   ];
 
@@ -670,8 +692,12 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
                       {fixRef === r.number && (
                         <tr style={{ background: "#f8fafc" }}>
                           <td colSpan={5} style={{ padding: "10px 12px" }}>
+                            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                              <button onClick={() => markChariot(r.number)} style={{ padding: "6px 12px", background: C.orangeSoft, color: C.orange, border: `1px solid ${C.orange}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>→ Chariot eShop</button>
+                              <button onClick={() => markService(r.number)} style={{ padding: "6px 12px", background: "#ede9fe", color: C.purple, border: `1px solid ${C.purple}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>→ Service (carte cadeau…)</button>
+                            </div>
                             <input value={fixQuery} onChange={e => { setFixQuery(e.target.value); searchOdoo(e.target.value); }}
-                              placeholder="Chercher le produit Odoo…" autoFocus
+                              placeholder="OU chercher le produit Odoo à associer…" autoFocus
                               style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", marginBottom: 6 }} />
                             {fixResults.map((x: any, k: number) => (
                               <button key={k} onClick={() => applyFix(r.number, x.data)}

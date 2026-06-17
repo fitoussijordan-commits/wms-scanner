@@ -382,6 +382,26 @@ export async function saveEshopMappingOverride(ref: string, productId: number, o
 }
 
 // ══════════════════════════════════════════
+// RÉFS "SERVICE" (carte cadeau, etc.) — vues à part, hors champ principal
+// ══════════════════════════════════════════
+export async function getServiceRefs(): Promise<string[]> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_service_refs").single();
+    if (data?.value) return JSON.parse(data.value);
+  } catch {}
+  return [];
+}
+export async function addServiceRef(ref: string): Promise<void> {
+  const list = await getServiceRefs();
+  if (!list.includes(ref)) list.push(ref);
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "eshop_service_refs", value: JSON.stringify(list), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // CACHE MAPPING AUTO (réf Shopware → produit Odoo) — évite de relancer le matching
 // ══════════════════════════════════════════
 export type EshopMappingCache = Record<string, { product_id: number; default_code: string; product_name: string }>;
