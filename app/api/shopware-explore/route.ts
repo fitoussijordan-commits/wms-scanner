@@ -303,6 +303,34 @@ export async function GET(req: NextRequest) {
     }
 
     // ── generate: tenter de générer une étiquette TNT pour une commande ──
+    // ── activeProducts: liste TOUS les produits actifs avec leur stock (audit catalogue) ──
+    if (action === "activeProducts") {
+      // Liste des articles actifs (paginée). On récupère les variants pour avoir number + inStock.
+      const all: any[] = [];
+      const pageSize = 500;
+      let start = 0;
+      for (let page = 0; page < 20; page++) { // garde-fou 10000 max
+        const url = `/articles?filter[0][property]=active&filter[0][value]=1&limit=${pageSize}&start=${start}`;
+        const r = await safeJson(await swFetch(url, creds));
+        const data = r.json?.data || [];
+        if (!data.length) break;
+        for (const a of data) {
+          // mainDetail contient number + inStock
+          const md = a.mainDetail || {};
+          all.push({
+            articleId: a.id,
+            number: md.number || a.mainDetailId,
+            name: a.name,
+            active: a.active,
+            inStock: md.inStock ?? null,
+          });
+        }
+        if (data.length < pageSize) break;
+        start += pageSize;
+      }
+      return NextResponse.json({ count: all.length, products: all });
+    }
+
     // ── setStock: ÉCRIT le stock (inStock) d'un article Shopware. ⚠ ÉCRITURE ──
     // ?articleNumber=XXX&qty=N — écrit via la variante (useNumberAsId).
     if (action === "setStock") {
