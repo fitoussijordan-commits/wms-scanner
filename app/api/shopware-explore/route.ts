@@ -224,23 +224,32 @@ export async function GET(req: NextRequest) {
       let detail: any = null, article: any = null;
       const data = adr.json?.data;
       if (Array.isArray(data) && data.length) { article = data[0]; detail = data[0]?.mainDetail; }
-      // Fallback : endpoint variants
+      // Détail complet de la variante (contient binLocationMappings)
       if (!detail) {
         const vRes = await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds);
         const vr = await safeJson(vRes);
         if (vr.json?.data) { detail = vr.json.data; }
+      } else if (detail?.number) {
+        // on a l'article mais on veut le détail complet de la variante (bin locations)
+        const vRes = await swFetch(`/variants/${encodeURIComponent(detail.number)}?useNumberAsId=true`, creds);
+        const vr = await safeJson(vRes);
+        if (vr.json?.data) detail = vr.json.data;
       }
+      // Extraire les bin locations (binLocationMappings) avec leur nom
+      const binMaps = detail?.binLocationMappings || [];
+      const bins = (Array.isArray(binMaps) ? binMaps : []).map((b: any) => ({
+        id: b.binLocationId ?? b.id,
+        code: b.binLocation?.code ?? b.code ?? null,
+        stock: b.stock ?? null,
+      }));
       return NextResponse.json({
         articleNumber: an,
         found: !!detail,
-        // Champs stock potentiels (on regarde lesquels existent réellement)
         native_inStock: detail?.inStock,
-        native_stockMin: detail?.stockMin,
-        lastStock: detail?.lastStock,
         detailId: detail?.id,
         articleId: detail?.articleId || article?.id,
-        pickwareStockItems: detail?.attribute?.pickwareStockItems ?? detail?.pickwareStockItems ?? null,
-        // dump partiel pour comprendre la structure
+        bins,                              // emplacements + stock
+        binLocationMappings: binMaps,      // brut, pour comprendre la structure
         detailKeys: detail ? Object.keys(detail) : [],
       });
     }
