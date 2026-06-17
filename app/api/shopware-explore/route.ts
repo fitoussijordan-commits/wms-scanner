@@ -401,7 +401,12 @@ export async function GET(req: NextRequest) {
       const newMaps = maps.map((m: any) =>
         m.articleDetailId === detailId ? { id: m.id, stock: newStock } : { id: m.id, stock: m.stock }
       );
-      const payload = { articleDetailBinLocationMappings: newMaps };
+      // PUT = remplacement complet → on doit renvoyer les champs obligatoires de la bin (code, warehouseId)
+      const payload = {
+        code: data.code,
+        warehouseId: data.warehouseId,
+        articleDetailBinLocationMappings: newMaps,
+      };
       if (!confirm) {
         // DRY-RUN : on montre exactement ce qui serait envoyé, sans écrire
         return NextResponse.json({
