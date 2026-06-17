@@ -382,6 +382,27 @@ export async function saveEshopMappingOverride(ref: string, productId: number, o
 }
 
 // ══════════════════════════════════════════
+// CACHE MAPPING AUTO (réf Shopware → produit Odoo) — évite de relancer le matching
+// ══════════════════════════════════════════
+export type EshopMappingCache = Record<string, { product_id: number; default_code: string; product_name: string }>;
+
+export async function getEshopMappingCache(): Promise<EshopMappingCache> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_mapping_cache").single();
+    if (data?.value) return JSON.parse(data.value);
+  } catch {}
+  return {};
+}
+
+export async function saveEshopMappingCache(cache: EshopMappingCache): Promise<void> {
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "eshop_mapping_cache", value: JSON.stringify(cache), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // GARDE-FOU : commandes e-shop déjà sorties (devis créé) — anti double déduction
 // Table wms_eshop_processed : { order_number, devis, processed_at }
 // ══════════════════════════════════════════

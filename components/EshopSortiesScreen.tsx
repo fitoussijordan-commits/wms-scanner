@@ -22,7 +22,7 @@ interface SaleOrder { id: number; number: string; orderStatusId: number; payment
 const PARTNER_KEY = "wms_eshop_partner_id";
 
 export default function EshopSortiesScreen({ session, onBack, onToast }: Props) {
-  const [tab, setTab] = useState<"sorties" | "stock">("sorties");
+  const [tab, setTab] = useState<"sorties" | "stock" | "audit">("sorties");
   return (
     <div style={{ padding: "16px 16px 0", width: "100%", maxWidth: "100%", boxSizing: "border-box", fontFamily: "'DM Sans', sans-serif" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
@@ -32,14 +32,16 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
         <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>E-shop</div>
       </div>
       <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-        {([["sorties", "Sorties du jour"], ["stock", "Synchro stock"]] as const).map(([k, lbl]) => (
+        {([["sorties", "Sorties du jour"], ["stock", "Synchro stock"], ["audit", "Audit catalogue"]] as const).map(([k, lbl]) => (
           <button key={k} onClick={() => setTab(k)}
             style={{ padding: "9px 16px", borderRadius: 10, border: `1.5px solid ${tab === k ? C.blue : C.border}`, background: tab === k ? C.blueSoft : C.white, color: tab === k ? C.blue : C.textSec, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
             {lbl}
           </button>
         ))}
       </div>
-      {tab === "sorties" ? <SortiesTab session={session} onToast={onToast} /> : <StockSyncTab session={session} onToast={onToast} />}
+      {tab === "sorties" ? <SortiesTab session={session} onToast={onToast} />
+        : tab === "stock" ? <StockSyncTab session={session} onToast={onToast} />
+        : <AuditTab session={session} onToast={onToast} />}
     </div>
   );
 }
@@ -518,6 +520,175 @@ function StockSyncTab({ session, onToast }: { session: odoo.OdooSession; onToast
             </tbody>
           </table>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Onglet Audit catalogue — tous les produits actifs SW vs stock Odoo
+// ════════════════════════════════════════════════════════════════
+interface AuditRow { number: string; nameSW: string; inStock: number | null; odoo: number | null; productId: number; odooRef: string; mapped: boolean; }
+function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Props["onToast"] }) {
+  const [loading, setLoading] = useState(false);
+  const [rows, setRows] = useState<AuditRow[]>([]);
+  const [filter, setFilter] = useState<"all" | "noOdoo" | "swZeroOdooStock" | "ok" | "unmapped">("noOdoo");
+  const [error, setError] = useState("");
+  const [fixRef, setFixRef] = useState<string | null>(null);
+  const [fixQuery, setFixQuery] = useState("");
+  const [fixResults, setFixResults] = useState<any[]>([]);
+
+  const runAudit = async () => {
+    setLoading(true); setError("");
+    try {
+      // 1) Catalogue actif Shopware
+      const cat = await fetch("/api/shopware-explore?action=activeProducts").then(r => r.json());
+      const products: any[] = cat.products || [];
+      // 2) Mapping : cache + overrides d'abord, matchEshopSkus seulement pour les manquants
+      const [cache, overrides] = await Promise.all([
+        (await import("@/lib/supabase")).getEshopMappingCache(),
+        (await import("@/lib/supabase")).getEshopMappingOverrides(),
+      ]);
+      const map: Record<string, any> = {};
+      const missing: string[] = [];
+      for (const p of products) {
+        const ref = p.number;
+        if (overrides[ref]) map[ref] = { product_id: overrides[ref].productId, default_code: overrides[ref].odooRef, product_name: overrides[ref].productName };
+        else if (cache[ref]) map[ref] = cache[ref];
+        else missing.push(ref);
+      }
+      // Matching auto pour les non-cachés, puis on enrichit le cache
+      if (missing.length) {
+        const fresh = await odoo.matchEshopSkus(session, missing);
+        for (const ref of missing) {
+          const m: any = fresh[ref];
+          if (m?.product_id) map[ref] = { product_id: m.product_id, default_code: m.default_code, product_name: m.product_name };
+        }
+        // Sauvegarde du cache (fusion)
+        const newCache = { ...cache };
+        for (const ref of missing) if (map[ref]) newCache[ref] = map[ref];
+        try { await (await import("@/lib/supabase")).saveEshopMappingCache(newCache); } catch {}
+      }
+      // 3) Stock Odoo en batch
+      const productIds = Array.from(new Set(Object.values(map).map((m: any) => m.product_id).filter(Boolean))) as number[];
+      const stockMap = await odoo.getAvailableStockBatch(session, productIds);
+      // 4) Construire les lignes
+      const out: AuditRow[] = products.map(p => {
+        const m: any = map[p.number];
+        return {
+          number: p.number, nameSW: p.name, inStock: p.inStock ?? null,
+          productId: m?.product_id || 0, odooRef: m?.default_code || "",
+          mapped: !!m?.product_id,
+          odoo: m?.product_id ? (stockMap[m.product_id] ?? 0) : null,
+        };
+      });
+      setRows(out);
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const searchOdoo = async (q: string) => {
+    if (q.trim().length < 2) { setFixResults([]); return; }
+    try { const r = await odoo.globalSearch(session, q.trim()); setFixResults(r.filter((x: any) => x.type === "product").slice(0, 8)); } catch { setFixResults([]); }
+  };
+  const applyFix = async (ref: string, prod: any) => {
+    try {
+      await (await import("@/lib/supabase")).saveEshopMappingOverride(ref, prod.id, prod.default_code || "", prod.name);
+      const stockMap = await odoo.getAvailableStockBatch(session, [prod.id]);
+      setRows(prev => prev.map(r => r.number === ref ? { ...r, mapped: true, productId: prod.id, odooRef: prod.default_code || "", odoo: stockMap[prod.id] ?? 0 } : r));
+      setFixRef(null); setFixQuery(""); setFixResults([]);
+      onToast("Mapping enregistré ✓", "success");
+    } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
+  };
+
+  // Catégorisation
+  const cat = (r: AuditRow): "noOdoo" | "swZeroOdooStock" | "ok" | "unmapped" => {
+    if (!r.mapped) return "unmapped";
+    if ((r.odoo ?? 0) <= 0) return "noOdoo";                 // actif SW mais pas de stock Odoo
+    if ((r.inStock ?? 0) <= 0 && (r.odoo ?? 0) > 0) return "swZeroOdooStock"; // 0 sur SW mais stock Odoo
+    return "ok";
+  };
+  const counts = { all: rows.length, noOdoo: 0, swZeroOdooStock: 0, ok: 0, unmapped: 0 };
+  for (const r of rows) counts[cat(r)]++;
+  const visible = filter === "all" ? rows : rows.filter(r => cat(r) === filter);
+
+  const FILTERS: { k: typeof filter; label: string }[] = [
+    { k: "noOdoo", label: "Actif SW sans stock Odoo" },
+    { k: "swZeroOdooStock", label: "0 sur SW mais stock Odoo" },
+    { k: "unmapped", label: "Non mappés" },
+    { k: "ok", label: "Cohérents" },
+    { k: "all", label: "Tout" },
+  ];
+
+  return (
+    <div style={{ paddingBottom: 80 }}>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>Compare tout le catalogue actif Shopware avec ton stock Odoo. Repère les anomalies à corriger.</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <button onClick={runAudit} disabled={loading} style={{ padding: "10px 18px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: loading ? 0.6 : 1 }}>
+          {loading ? "Audit en cours…" : "Lancer l'audit"}
+        </button>
+      </div>
+      {error && <div style={{ background: C.redSoft, border: "1px solid #fecaca", borderRadius: 10, padding: "10px 14px", color: C.red, fontSize: 13, marginBottom: 12 }}>{error}</div>}
+
+      {rows.length > 0 && (
+        <>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            {FILTERS.map(f => (
+              <button key={f.k} onClick={() => setFilter(f.k)} style={chip(filter === f.k)}>
+                {f.label} ({counts[f.k]})
+              </button>
+            ))}
+          </div>
+          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+              <colgroup><col style={{ width: "12%" }} /><col style={{ width: "34%" }} /><col style={{ width: "14%" }} /><col style={{ width: "14%" }} /><col style={{ width: "26%" }} /></colgroup>
+              <thead><tr style={{ background: C.bg, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted, textAlign: "left" }}>
+                <th style={th}>Réf</th><th style={th}>Produit Shopware</th><th style={th}>Stock SW</th><th style={th}>Stock Odoo</th><th style={th}>État / Action</th>
+              </tr></thead>
+              <tbody>
+                {visible.map((r, i) => {
+                  const c = cat(r);
+                  const bg = c === "unmapped" ? C.redSoft : c === "noOdoo" ? "#fff7ed" : c === "swZeroOdooStock" ? C.blueSoft : C.white;
+                  return (
+                    <Fragment2 key={i}>
+                      <tr style={{ borderTop: `1px solid ${C.border}`, fontSize: 13, verticalAlign: "top", background: bg }}>
+                        <td style={{ ...td, fontFamily: "monospace", fontWeight: 700 }}>{r.number}</td>
+                        <td style={td}>{r.nameSW}</td>
+                        <td style={{ ...td, fontWeight: 800 }}>{r.inStock ?? "—"}</td>
+                        <td style={{ ...td, fontWeight: 800 }}>{r.mapped ? (r.odoo ?? 0) : "—"}</td>
+                        <td style={td}>
+                          {c === "unmapped" ? <span style={{ color: C.red, fontWeight: 700, fontSize: 11 }}>non mappé</span>
+                            : c === "noOdoo" ? <span style={{ color: C.orange, fontWeight: 700, fontSize: 11 }}>pas de stock Odoo</span>
+                            : c === "swZeroOdooStock" ? <span style={{ color: C.blue, fontWeight: 700, fontSize: 11 }}>0 sur SW, stock Odoo</span>
+                            : <span style={{ color: C.green, fontWeight: 700, fontSize: 11 }}>✓ ok</span>}
+                          <button onClick={() => { setFixRef(fixRef === r.number ? null : r.number); setFixQuery(""); setFixResults([]); }}
+                            style={{ background: "none", border: "none", cursor: "pointer", color: C.blue, fontSize: 11, fontWeight: 700, padding: "0 0 0 8px", fontFamily: "inherit" }}>
+                            {fixRef === r.number ? "fermer" : "mapper"}
+                          </button>
+                        </td>
+                      </tr>
+                      {fixRef === r.number && (
+                        <tr style={{ background: "#f8fafc" }}>
+                          <td colSpan={5} style={{ padding: "10px 12px" }}>
+                            <input value={fixQuery} onChange={e => { setFixQuery(e.target.value); searchOdoo(e.target.value); }}
+                              placeholder="Chercher le produit Odoo…" autoFocus
+                              style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", marginBottom: 6 }} />
+                            {fixResults.map((x: any, k: number) => (
+                              <button key={k} onClick={() => applyFix(r.number, x.data)}
+                                style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 4, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5 }}>
+                                <b style={{ fontFamily: "monospace" }}>{x.data.default_code || "—"}</b> · {x.data.name}
+                              </button>
+                            ))}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment2>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );

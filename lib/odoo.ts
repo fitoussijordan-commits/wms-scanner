@@ -3488,6 +3488,23 @@ export async function getStockByRef(session: OdooSession, ref: string): Promise<
   return { productId: p.id, name: p.name, available: Math.round(available) };
 }
 
+// Stock dispo (quantity - reserved) pour PLUSIEURS produits d'un coup → map productId → dispo.
+export async function getAvailableStockBatch(session: OdooSession, productIds: number[]): Promise<Record<number, number>> {
+  const out: Record<number, number> = {};
+  if (!productIds.length) return out;
+  for (const id of productIds) out[id] = 0;
+  // Une seule requête quants pour tous les produits internes
+  const quants = await searchRead(session, "stock.quant",
+    [["product_id", "in", productIds], ["location_id.usage", "=", "internal"]],
+    ["product_id", "quantity", "reserved_quantity"], 5000);
+  for (const q of quants) {
+    const pid = Array.isArray(q.product_id) ? q.product_id[0] : q.product_id;
+    out[pid] = (out[pid] || 0) + ((q.quantity || 0) - (q.reserved_quantity || 0));
+  }
+  for (const id of productIds) out[id] = Math.round(out[id]);
+  return out;
+}
+
 // Vérifie qu'un client (res.partner) existe par id ou numéro/nom, retourne {id, name}.
 export async function findEshopPartner(session: OdooSession, idOrRef: string): Promise<{ id: number; name: string } | null> {
   const q = idOrRef.trim();
