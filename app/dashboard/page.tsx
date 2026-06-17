@@ -554,7 +554,8 @@ export default function Dashboard() {
     if (without.length) {
       // réfs déjà attribuées par le match direct (S…) → à ne pas réutiliser
       const usedRefs = Array.from(refMap.keys());
-      const matches = await odoo.fetchBmvByNameDate(session, without, 3, usedRefs);
+      // fenêtre asymétrique : commande jusqu'à 21j avant l'expédition, 3j après
+      const matches = await odoo.fetchBmvByNameDate(session, without, 21, 3, usedRefs);
       for (const m of matches) nameMap.set(m.recep, m);
     }
     setBmvNameMatch(nameMap);
@@ -5371,7 +5372,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                         <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Dépose ta facture BMV</div>
                         <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 3 }}>Format PDF — ou clique pour parcourir</div>
                       </div>
-                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Croisement Odoo automatique (réf S… puis nom + date ±3j)</div>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Croisement Odoo automatique (réf S… puis nom + date d'expédition)</div>
                     </>
                   )}
                 </div>

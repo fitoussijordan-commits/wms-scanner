@@ -3272,7 +3272,11 @@ function normName(s: string): string {
 export async function fetchBmvByNameDate(
   session: OdooSession,
   shipments: { recep: string; dest: string; date_iso: string }[],
-  toleranceDays = 3,
+  // Fenêtre ASYMÉTRIQUE : la date BMV est la date d'EXPÉDITION ; la commande Odoo
+  // (date_order) la PRÉCÈDE, parfois de plusieurs jours → on autorise un large
+  // décalage "avant", et un petit décalage "après".
+  daysBefore = 21,
+  daysAfter = 3,
   // réfs déjà attribuées (ex: par le match direct S…) — à ne pas réutiliser
   alreadyUsed: string[] = []
 ): Promise<BmvNameMatch[]> {
@@ -3284,8 +3288,8 @@ export async function fetchBmvByNameDate(
 
   // Bornes globales de dates (pour ne charger qu'une fenêtre de commandes).
   const dates = targets.map(t => t.date_iso).sort();
-  const minD = new Date(dates[0]); minD.setDate(minD.getDate() - toleranceDays);
-  const maxD = new Date(dates[dates.length - 1]); maxD.setDate(maxD.getDate() + toleranceDays);
+  const minD = new Date(dates[0]); minD.setDate(minD.getDate() - daysBefore);
+  const maxD = new Date(dates[dates.length - 1]); maxD.setDate(maxD.getDate() + daysAfter);
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
 
   // Charge les commandes confirmées de la fenêtre, avec partenaire + date.
@@ -3305,24 +3309,27 @@ export async function fetchBmvByNameDate(
     dateOrder: r.date_order ? String(r.date_order).split(" ")[0] : "",
   }));
 
-  const dayDiff = (a: string, b: string) =>
-    Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000);
+  // signedDiff = (date_order - date_expedition) en jours :
+  //   négatif = commande AVANT l'expédition (cas normal), positif = après.
+  const signedDiff = (orderDate: string, shipDate: string) =>
+    (new Date(orderDate).getTime() - new Date(shipDate).getTime()) / 86400000;
 
   // On traite les expéditions par date croissante → attribution déterministe.
   const ordered = [...targets].sort((a, b) => a.date_iso.localeCompare(b.date_iso));
   for (const s of ordered) {
     const nd = normName(s.dest);
     if (!nd) continue;
-    // candidats dont le nom correspond ET non déjà attribués
-    const pool = candidates.filter(c =>
-      !used.has(c.ref) &&
-      c.norm && (c.norm.includes(nd) || nd.includes(c.norm) ||
-        nd.split(" ")[0] === c.norm.split(" ")[0]) &&
-      dayDiff(c.dateOrder, s.date_iso) <= toleranceDays
-    );
+    // candidats dont le nom correspond ET non déjà attribués, dans la fenêtre asymétrique
+    const pool = candidates.filter(c => {
+      if (used.has(c.ref) || !c.norm) return false;
+      const nameOk = c.norm.includes(nd) || nd.includes(c.norm) || nd.split(" ")[0] === c.norm.split(" ")[0];
+      if (!nameOk) return false;
+      const diff = signedDiff(c.dateOrder, s.date_iso); // <0 = avant l'expé
+      return diff >= -daysBefore && diff <= daysAfter;
+    });
     if (!pool.length) continue;
-    // meilleur = date la plus proche
-    pool.sort((a, b) => dayDiff(a.dateOrder, s.date_iso) - dayDiff(b.dateOrder, s.date_iso));
+    // meilleur = écart absolu le plus faible à la date d'expédition
+    pool.sort((a, b) => Math.abs(signedDiff(a.dateOrder, s.date_iso)) - Math.abs(signedDiff(b.dateOrder, s.date_iso)));
     const best = pool[0];
     used.add(best.ref); // consommé → indisponible pour les autres expéditions
     out.push({
