@@ -212,6 +212,39 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // ── stockInfo: structure stock d'un article (LECTURE SEULE, diagnostic avant écriture) ──
+    // ?articleNumber=429000040  → montre inStock natif + données Pickware
+    if (action === "stockInfo") {
+      const an = searchParams.get("articleNumber");
+      if (!an) return NextResponse.json({ error: "articleNumber requis" }, { status: 400 });
+      // 1) Trouver l'article variant par numéro (article.detail)
+      const adRes = await swFetch(`/articles?filter[0][property]=mainDetail.number&filter[0][value]=${encodeURIComponent(an)}&limit=1`, creds);
+      const adr = await safeJson(adRes);
+      // Recherche directe via variants si besoin
+      let detail: any = null, article: any = null;
+      const data = adr.json?.data;
+      if (Array.isArray(data) && data.length) { article = data[0]; detail = data[0]?.mainDetail; }
+      // Fallback : endpoint variants
+      if (!detail) {
+        const vRes = await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds);
+        const vr = await safeJson(vRes);
+        if (vr.json?.data) { detail = vr.json.data; }
+      }
+      return NextResponse.json({
+        articleNumber: an,
+        found: !!detail,
+        // Champs stock potentiels (on regarde lesquels existent réellement)
+        native_inStock: detail?.inStock,
+        native_stockMin: detail?.stockMin,
+        lastStock: detail?.lastStock,
+        detailId: detail?.id,
+        articleId: detail?.articleId || article?.id,
+        pickwareStockItems: detail?.attribute?.pickwareStockItems ?? detail?.pickwareStockItems ?? null,
+        // dump partiel pour comprendre la structure
+        detailKeys: detail ? Object.keys(detail) : [],
+      });
+    }
+
     // ── pickware: explore les endpoints Pickware WMS / ERP ──
     if (action === "pickware") {
       const results: any = {};

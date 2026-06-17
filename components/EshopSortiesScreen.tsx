@@ -22,6 +22,29 @@ interface SaleOrder { id: number; number: string; orderStatusId: number; payment
 const PARTNER_KEY = "wms_eshop_partner_id";
 
 export default function EshopSortiesScreen({ session, onBack, onToast }: Props) {
+  const [tab, setTab] = useState<"sorties" | "stock">("sorties");
+  return (
+    <div style={{ padding: "16px 16px 0", width: "100%", maxWidth: "100%", boxSizing: "border-box", fontFamily: "'DM Sans', sans-serif" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+        <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+        </button>
+        <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>E-shop</div>
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        {([["sorties", "Sorties du jour"], ["stock", "Synchro stock"]] as const).map(([k, lbl]) => (
+          <button key={k} onClick={() => setTab(k)}
+            style={{ padding: "9px 16px", borderRadius: 10, border: `1.5px solid ${tab === k ? C.blue : C.border}`, background: tab === k ? C.blueSoft : C.white, color: tab === k ? C.blue : C.textSec, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+      {tab === "sorties" ? <SortiesTab session={session} onToast={onToast} /> : <StockSyncTab session={session} onToast={onToast} />}
+    </div>
+  );
+}
+
+function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: Props["onToast"] }) {
   const today = new Date().toISOString().slice(0, 10);
   const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
@@ -228,16 +251,8 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
   };
 
   return (
-    <div style={{ padding: "16px 16px 80px", width: "100%", maxWidth: "100%", margin: "0 auto", fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box", overflowX: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-        <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
-        </button>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>Sorties e-shop du jour</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>Vérifie le mapping, corrige, puis crée le devis Odoo</div>
-        </div>
-      </div>
+    <div style={{ paddingBottom: 80, width: "100%", maxWidth: "100%", boxSizing: "border-box", overflowX: "hidden" }}>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>Vérifie le mapping, corrige, puis crée le devis Odoo</div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, color: C.textMuted, fontWeight: 600 }}>Du</span>
@@ -385,6 +400,90 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
 
 const th: React.CSSProperties = { padding: "8px 10px", letterSpacing: "0.03em" };
 const td: React.CSSProperties = { padding: "9px 10px", wordBreak: "break-word" };
+
+// ════════════════════════════════════════════════════════════════
+//  Onglet Synchro stock — comparaison Odoo vs Shopware par produit
+// ════════════════════════════════════════════════════════════════
+interface StockRow { ref: string; name: string; odoo: number | null; shopware: number | null; loading: boolean; error?: string; }
+function StockSyncTab({ session, onToast }: { session: odoo.OdooSession; onToast: Props["onToast"] }) {
+  const [input, setInput] = useState("");
+  const [rows, setRows] = useState<StockRow[]>(() => {
+    try { return JSON.parse(localStorage.getItem("wms_stocksync_refs") || "[]").map((ref: string) => ({ ref, name: "", odoo: null, shopware: null, loading: false })); } catch { return []; }
+  });
+
+  const persistRefs = (rs: StockRow[]) => { try { localStorage.setItem("wms_stocksync_refs", JSON.stringify(rs.map(r => r.ref))); } catch {} };
+
+  const fetchRow = async (ref: string): Promise<Partial<StockRow>> => {
+    let odoo_q: number | null = null, shopware_q: number | null = null, name = "", error = "";
+    try { const o = await odoo.getStockByRef(session, ref); if (o) { odoo_q = o.available; name = o.name; } else error = "Odoo: introuvable"; } catch (e: any) { error = "Odoo: " + e.message; }
+    try {
+      const r = await fetch(`/api/shopware-explore?action=stockInfo&articleNumber=${encodeURIComponent(ref)}`).then(x => x.json());
+      if (r.found) shopware_q = r.native_inStock ?? null; else error = (error ? error + " · " : "") + "Shopware: introuvable";
+    } catch (e: any) { error = (error ? error + " · " : "") + "Shopware: " + e.message; }
+    return { name, odoo: odoo_q, shopware: shopware_q, error: error || undefined };
+  };
+
+  const addRef = async () => {
+    const ref = input.trim();
+    if (!ref || rows.some(r => r.ref === ref)) { setInput(""); return; }
+    const newRow: StockRow = { ref, name: "", odoo: null, shopware: null, loading: true };
+    const next = [...rows, newRow];
+    setRows(next); persistRefs(next); setInput("");
+    const data = await fetchRow(ref);
+    setRows(prev => prev.map(r => r.ref === ref ? { ...r, ...data, loading: false } : r));
+  };
+
+  const refreshAll = async () => {
+    for (const r of rows) {
+      setRows(prev => prev.map(x => x.ref === r.ref ? { ...x, loading: true } : x));
+      const data = await fetchRow(r.ref);
+      setRows(prev => prev.map(x => x.ref === r.ref ? { ...x, ...data, loading: false } : x));
+    }
+  };
+
+  const removeRef = (ref: string) => { const next = rows.filter(r => r.ref !== ref); setRows(next); persistRefs(next); };
+
+  return (
+    <div style={{ paddingBottom: 80 }}>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>Compare le stock Odoo et Shopware pour les produits suivis. (Lecture seule pour l'instant — la mise à jour Shopware sera activée après validation.)</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addRef(); }}
+          placeholder="Réf produit (ex: 429000040)"
+          style={{ flex: 1, maxWidth: 320, padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }} />
+        <button onClick={addRef} style={{ padding: "9px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>+ Ajouter</button>
+        {rows.length > 0 && <button onClick={refreshAll} style={{ padding: "9px 16px", background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>↻ Tout rafraîchir</button>}
+      </div>
+
+      {rows.length === 0 ? (
+        <div style={{ textAlign: "center", color: C.textMuted, padding: 40, fontSize: 14 }}>Ajoute des références produit à suivre</div>
+      ) : (
+        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <colgroup><col style={{ width: "14%" }} /><col style={{ width: "38%" }} /><col style={{ width: "14%" }} /><col style={{ width: "14%" }} /><col style={{ width: "12%" }} /><col style={{ width: "8%" }} /></colgroup>
+            <thead><tr style={{ background: C.bg, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted, textAlign: "left" }}>
+              <th style={th}>Réf</th><th style={th}>Produit</th><th style={th}>Stock Odoo</th><th style={th}>Stock Shopware</th><th style={th}>Écart</th><th style={th}></th>
+            </tr></thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const ecart = (r.odoo != null && r.shopware != null) ? r.odoo - r.shopware : null;
+                return (
+                  <tr key={i} style={{ borderTop: `1px solid ${C.border}`, fontSize: 13, verticalAlign: "top", background: ecart !== null && ecart !== 0 ? "#fff7ed" : C.white }}>
+                    <td style={{ ...td, fontFamily: "monospace", fontWeight: 700 }}>{r.ref}</td>
+                    <td style={td}>{r.loading ? "…" : (r.name || (r.error ? <span style={{ color: C.red, fontSize: 11 }}>{r.error}</span> : "—"))}</td>
+                    <td style={{ ...td, fontWeight: 800 }}>{r.odoo ?? "—"}</td>
+                    <td style={{ ...td, fontWeight: 800 }}>{r.shopware ?? "—"}</td>
+                    <td style={{ ...td, fontWeight: 800, color: ecart == null ? C.textMuted : ecart === 0 ? C.green : C.orange }}>{ecart == null ? "—" : ecart === 0 ? "✓" : (ecart > 0 ? `+${ecart}` : ecart)}</td>
+                    <td style={td}><button onClick={() => removeRef(r.ref)} style={{ background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 16 }}>×</button></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function chip(active: boolean): React.CSSProperties {
   return { padding: "5px 12px", borderRadius: 8, border: `1.5px solid ${active ? "#2563eb" : "#e5e7eb"}`, background: active ? "#eff6ff" : "#fff", color: active ? "#2563eb" : "#374151", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" };

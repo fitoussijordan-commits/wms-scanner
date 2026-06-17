@@ -3473,6 +3473,21 @@ export async function createEshopQuotation(
   return { id, name: recs[0]?.name || String(id) };
 }
 
+// Stock disponible (quantity - reserved) par référence interne Odoo. Pour la synchro Shopware.
+export async function getStockByRef(session: OdooSession, ref: string): Promise<{ productId: number; name: string; available: number } | null> {
+  const prods = await searchRead(session, "product.product",
+    ["|", ["default_code", "=", ref], ["barcode", "=", ref]],
+    ["id", "name", "default_code", "qty_available"], 1);
+  if (!prods.length) return null;
+  const p = prods[0];
+  // qty_available = stock physique ; on retire le réservé via les quants internes
+  const quants = await searchRead(session, "stock.quant",
+    [["product_id", "=", p.id], ["location_id.usage", "=", "internal"]],
+    ["quantity", "reserved_quantity"], 200);
+  const available = quants.reduce((s: number, q: any) => s + ((q.quantity || 0) - (q.reserved_quantity || 0)), 0);
+  return { productId: p.id, name: p.name, available: Math.round(available) };
+}
+
 // Vérifie qu'un client (res.partner) existe par id ou numéro/nom, retourne {id, name}.
 export async function findEshopPartner(session: OdooSession, idOrRef: string): Promise<{ id: number; name: string } | null> {
   const q = idOrRef.trim();
