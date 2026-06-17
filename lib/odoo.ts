@@ -3272,11 +3272,15 @@ function normName(s: string): string {
 export async function fetchBmvByNameDate(
   session: OdooSession,
   shipments: { recep: string; dest: string; date_iso: string }[],
-  toleranceDays = 3
+  toleranceDays = 3,
+  // réfs déjà attribuées (ex: par le match direct S…) — à ne pas réutiliser
+  alreadyUsed: string[] = []
 ): Promise<BmvNameMatch[]> {
   const out: BmvNameMatch[] = [];
   const targets = shipments.filter(s => s.dest && s.date_iso);
   if (!targets.length) return out;
+  // Une commande Odoo ne peut être attribuée qu'à UNE seule expédition.
+  const used = new Set<string>(alreadyUsed);
 
   // Bornes globales de dates (pour ne charger qu'une fenêtre de commandes).
   const dates = targets.map(t => t.date_iso).sort();
@@ -3304,11 +3308,14 @@ export async function fetchBmvByNameDate(
   const dayDiff = (a: string, b: string) =>
     Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000);
 
-  for (const s of targets) {
+  // On traite les expéditions par date croissante → attribution déterministe.
+  const ordered = [...targets].sort((a, b) => a.date_iso.localeCompare(b.date_iso));
+  for (const s of ordered) {
     const nd = normName(s.dest);
     if (!nd) continue;
-    // candidats dont le nom contient/est contenu dans le destinataire BMV
+    // candidats dont le nom correspond ET non déjà attribués
     const pool = candidates.filter(c =>
+      !used.has(c.ref) &&
       c.norm && (c.norm.includes(nd) || nd.includes(c.norm) ||
         nd.split(" ")[0] === c.norm.split(" ")[0]) &&
       dayDiff(c.dateOrder, s.date_iso) <= toleranceDays
@@ -3317,6 +3324,7 @@ export async function fetchBmvByNameDate(
     // meilleur = date la plus proche
     pool.sort((a, b) => dayDiff(a.dateOrder, s.date_iso) - dayDiff(b.dateOrder, s.date_iso));
     const best = pool[0];
+    used.add(best.ref); // consommé → indisponible pour les autres expéditions
     out.push({
       recep: s.recep, ref: best.ref, client: best.client,
       montantHT: best.montantHT, montantTTC: best.montantTTC,

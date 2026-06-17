@@ -552,7 +552,9 @@ export default function Dashboard() {
     const without = exps.filter(e => !e.ref).map(e => ({ recep: e.recep, dest: e.dest, date_iso: e.date_iso }));
     const nameMap = new Map<string, odoo.BmvNameMatch>();
     if (without.length) {
-      const matches = await odoo.fetchBmvByNameDate(session, without, 3);
+      // réfs déjà attribuées par le match direct (S…) → à ne pas réutiliser
+      const usedRefs = Array.from(refMap.keys());
+      const matches = await odoo.fetchBmvByNameDate(session, without, 3, usedRefs);
       for (const m of matches) nameMap.set(m.recep, m);
     }
     setBmvNameMatch(nameMap);
