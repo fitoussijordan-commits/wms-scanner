@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(grep -n \"^export default function\\\\|^function Page\\\\|^}\\\\s*$\" /Users/jordanfitoussi/Downloads/wms-scanner/app/page.tsx)",
+      "Bash(awk -F: '{print $1, $2}')",
+      "Bash(awk '{if\\($1>4000 && $1<13200\\) print $0}')",
+      "Bash(grep -n \"^}\\\\s*$\" /Users/jordanfitoussi/Downloads/wms-scanner/app/page.tsx)",
+      "Bash(awk -F: '$1 > 13000 {print}')",
+      "Bash(awk -F: '$1 > 12900 && $1 < 13100 {print}')",
+      "Bash(awk -F: '$1 > 12700 && $1 < 13050 {print}')",
+      "Bash(awk -F: '$1 > 12500 && $1 < 13050 {print}')",
+      "Bash(awk -F: '$1 > 2647 && $1 < 4082 {print}')"
+    ]
+  }
+}

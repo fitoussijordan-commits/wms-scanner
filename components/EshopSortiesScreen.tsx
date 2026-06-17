@@ -540,6 +540,9 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
   const [fixRef, setFixRef] = useState<string | null>(null);
   const [fixQuery, setFixQuery] = useState("");
   const [fixResults, setFixResults] = useState<any[]>([]);
+  const [pushing, setPushing] = useState<string | null>(null);
+  // résultat de la MAJ par réf : { newStock, hasLocation, locCode }
+  const [pushed, setPushed] = useState<Record<string, { newStock: number; hasLocation: boolean; locCode?: string }>>({});
 
   const runAudit = async () => {
     setLoading(true); setError("");
@@ -619,6 +622,34 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
     catch (e: any) { onToast("Erreur : " + e.message, "error"); }
   };
 
+  // MAJ stock : écrit le stock Odoo dans Shopware (inStock) + vérifie l'emplacement.
+  // L'écriture par emplacement n'est pas possible via l'API Pickware : on écrit le
+  // stock global, et on ALERTE si l'article n'a pas d'emplacement (à ranger à la main).
+  const pushStock = async (r: AuditRow) => {
+    if (!r.mapped) { onToast("Produit non mappé", "error"); return; }
+    const qty = r.odoo ?? 0;
+    setPushing(r.number);
+    try {
+      // 1) écrire le stock global
+      const res = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(r.number)}&qty=${qty}`).then(x => x.json());
+      if (!res.ok) throw new Error(res.error || "échec écriture stock");
+      // 2) vérifier l'emplacement (lecture)
+      let hasLocation = false, locCode: string | undefined;
+      try {
+        const info = await fetch(`/api/shopware-explore?action=binInfo&articleNumber=${encodeURIComponent(r.number)}`).then(x => x.json());
+        hasLocation = !!info.hasLocation;
+        locCode = info.locations?.[0]?.code;
+      } catch {}
+      setPushed(prev => ({ ...prev, [r.number]: { newStock: res.newStock, hasLocation, locCode } }));
+      setRows(prev => prev.map(x => x.number === r.number ? { ...x, inStock: res.newStock } : x));
+      if (hasLocation) onToast(`Stock mis à jour : ${res.newStock} (emplacement ${locCode}) ✓`, "success");
+      else onToast(`Stock mis à jour : ${res.newStock} ⚠ SANS emplacement — à ranger dans Pickware`, "success");
+    } catch (e: any) {
+      onToast("Erreur : " + e.message, "error");
+    }
+    setPushing(null);
+  };
+
   // Catégorisation
   const inList = (ref: string, list: string[]) => list.some(x => x.trim().toLowerCase() === ref.trim().toLowerCase());
   const cat = (r: AuditRow): "service" | "chariot" | "noOdoo" | "swZeroOdooStock" | "ok" | "unmapped" => {
@@ -687,6 +718,19 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
                             style={{ background: "none", border: "none", cursor: "pointer", color: C.blue, fontSize: 11, fontWeight: 700, padding: "0 0 0 8px", fontFamily: "inherit" }}>
                             {fixRef === r.number ? "fermer" : "mapper"}
                           </button>
+                          {r.mapped && (
+                            <div style={{ marginTop: 6 }}>
+                              <button onClick={() => pushStock(r)} disabled={pushing === r.number}
+                                style={{ padding: "4px 10px", background: C.green, color: "#fff", border: "none", borderRadius: 7, fontSize: 11, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", opacity: pushing === r.number ? 0.6 : 1 }}>
+                                {pushing === r.number ? "…" : `MAJ stock → ${r.odoo ?? 0}`}
+                              </button>
+                              {pushed[r.number] && (
+                                pushed[r.number].hasLocation
+                                  ? <div style={{ marginTop: 4, fontSize: 10.5, color: C.green, fontWeight: 700 }}>✓ {pushed[r.number].newStock} · empl. {pushed[r.number].locCode}</div>
+                                  : <div style={{ marginTop: 4, fontSize: 10.5, color: C.orange, fontWeight: 800 }}>⚠ {pushed[r.number].newStock} · SANS emplacement — ranger dans Pickware</div>
+                              )}
+                            </div>
+                          )}
                         </td>
                       </tr>
                       {fixRef === r.number && (

@@ -224,33 +224,19 @@ export async function GET(req: NextRequest) {
       let detail: any = null, article: any = null;
       const data = adr.json?.data;
       if (Array.isArray(data) && data.length) { article = data[0]; detail = data[0]?.mainDetail; }
-      // Détail complet de la variante (contient binLocationMappings)
+      // Détail complet de la variante
       if (!detail) {
         const vRes = await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds);
         const vr = await safeJson(vRes);
         if (vr.json?.data) { detail = vr.json.data; }
-      } else if (detail?.number) {
-        // on a l'article mais on veut le détail complet de la variante (bin locations)
-        const vRes = await swFetch(`/variants/${encodeURIComponent(detail.number)}?useNumberAsId=true`, creds);
-        const vr = await safeJson(vRes);
-        if (vr.json?.data) detail = vr.json.data;
       }
-      // Extraire les bin locations (binLocationMappings) avec leur nom
-      const binMaps = detail?.binLocationMappings || [];
-      const bins = (Array.isArray(binMaps) ? binMaps : []).map((b: any) => ({
-        id: b.binLocationId ?? b.id,
-        code: b.binLocation?.code ?? b.code ?? null,
-        stock: b.stock ?? null,
-      }));
+      // NB : l'emplacement (bin location) n'est PAS exposé ici — utiliser action=binInfo.
       return NextResponse.json({
         articleNumber: an,
         found: !!detail,
         native_inStock: detail?.inStock,
         detailId: detail?.id,
         articleId: detail?.articleId || article?.id,
-        bins,                              // emplacements + stock
-        binLocationMappings: binMaps,      // brut, pour comprendre la structure
-        detailKeys: detail ? Object.keys(detail) : [],
       });
     }
 
@@ -340,50 +326,22 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: all.length, products: all });
     }
 
-    // ── stockChangeProbe: chercher l'API de mouvement/correction de stock (LECTURE) ──
-    if (action === "stockChangeProbe") {
-      const results: any = {};
-      const paths = [
-        "/ViisonPickwareERPStockChange?limit=2",
-        "/ViisonPickwareERPStockCorrection?limit=2",
-        "/ViisonPickwareERPStockCorrections?limit=2",
-        "/ViisonPickwareERPManualStockChange?limit=2",
-        "/ViisonPickwareERPManualStockChanges?limit=2",
-        "/ViisonPickwareERPInventory?limit=2",
-        "/ViisonPickwareERPInventories?limit=2",
-        "/ViisonPickwareERPStocktake?limit=2",
-        "/ViisonPickwareERPStocktakes?limit=2",
-        "/ViisonPickwareERPRelocation?limit=2",
-        "/ViisonPickwareERPRelocations?limit=2",
-        "/ViisonPickwareERPArticleDetailBinLocationMappings/1249",
-      ];
-      for (const p of paths) {
-        try {
-          const r = await safeJson(await swFetch(p, creds));
-          results[p] = { status: r.status, ok: r.ok };
-          if (r.ok && r.json) results[p].sample = r.json.data ?? r.json;
-          else results[p].raw = r.raw?.substring(0, 120);
-        } catch (e: any) { results[p] = { error: e.message }; }
-      }
-      return NextResponse.json(results);
-    }
-
-    // ── binList: liste rapide des bin locations (id + code) ──
-    if (action === "binList") {
+    // ── binInfo: emplacement(s) Pickware d'un article (LECTURE) ──
+    // ?articleNumber=XXX → { inStock, hasLocation, locations:[{code, stock}] }
+    // On retrouve le detailId via /variants, puis on scanne les bin locations
+    // (le stock par emplacement est imbriqué dans /ViisonPickwareERPBinLocations/{id}).
+    if (action === "binInfo") {
+      const an = searchParams.get("articleNumber");
+      if (!an) return NextResponse.json({ error: "articleNumber requis" }, { status: 400 });
+      // 1) detailId + inStock de la variante
+      const vr = await safeJson(await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds));
+      const detail = vr.json?.data;
+      if (!detail) return NextResponse.json({ articleNumber: an, found: false }, { status: 404 });
+      const detailId = detail.id;
+      // 2) scanner les bin locations (sauf la bin nulle id 1) en parallèle
       const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=2000", creds));
-      const bins = (blRes.json?.data || []).map((b: any) => ({ id: b.id, code: b.code, warehouseId: b.warehouseId }));
-      return NextResponse.json({ count: bins.length, bins });
-    }
-
-    // ── binFindMapping: retrouve le(s) mapping(s) bin d'un detailId (LECTURE, parallèle) ──
-    if (action === "binFindMapping") {
-      const detailId = parseInt(searchParams.get("detailId") || "0", 10);
-      if (!detailId) return NextResponse.json({ error: "detailId requis" }, { status: 400 });
-      // 1) lister les bin locations
-      const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=2000", creds));
-      const bins = blRes.json?.data || [];
-      const found: any[] = [];
-      // 2) charger les détails EN PARALLÈLE par lots de 8
+      const bins = (blRes.json?.data || []).filter((b: any) => b.code !== "pickware_null_bin_location");
+      const locations: any[] = [];
       const batchSize = 8;
       for (let i = 0; i < bins.length; i += batchSize) {
         const slice = bins.slice(i, i + batchSize);
@@ -395,210 +353,17 @@ export async function GET(req: NextRequest) {
           const maps = d?.articleDetailBinLocationMappings || [];
           for (const m of maps) {
             if (m.articleDetailId === detailId) {
-              found.push({
-                binLocationId: d.id, binCode: d.code, warehouseId: d.warehouseId,
-                mappingId: m.id, stock: m.stock, reservedStock: m.reservedStock,
-                defaultMapping: m.defaultMapping,
-              });
+              locations.push({ binLocationId: d.id, code: d.code, stock: m.stock, mappingId: m.id });
             }
           }
         }
-        if (found.length) break; // on s'arrête dès qu'on a trouvé
       }
-      return NextResponse.json({ detailId, binsScanned: bins.length, mappings: found });
-    }
-
-    // ── binSetStock: écrit le stock d'un detailId dans une bin (ÉCRITURE, confirm requis) ──
-    if (action === "binSetStock") {
-      const binLocationId = parseInt(searchParams.get("binLocationId") || "0", 10);
-      const detailId = parseInt(searchParams.get("detailId") || "0", 10);
-      const newStock = parseInt(searchParams.get("stock") || "NaN", 10);
-      const confirm = searchParams.get("confirm") === "1";
-      if (!binLocationId || !detailId || Number.isNaN(newStock)) {
-        return NextResponse.json({ error: "binLocationId, detailId et stock requis" }, { status: 400 });
-      }
-      // 1) charger la bin location complète
-      const one = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${binLocationId}`, creds));
-      if (!one.json?.data) return NextResponse.json({ error: "bin introuvable", raw: one.raw }, { status: 404 });
-      const data = one.json.data;
-      const maps = data.articleDetailBinLocationMappings || [];
-      const target = maps.find((m: any) => m.articleDetailId === detailId);
-      if (!target) return NextResponse.json({ error: "mapping introuvable pour ce detailId dans cette bin" }, { status: 404 });
-      const oldStock = target.stock;
-      // 2) construire le payload : on ne touche QUE le stock du mapping ciblé
-      // Chaque mapping doit garder id + binLocationId + articleDetailId pour être traité
-      // comme une MISE À JOUR (sinon Pickware tente de recréer la sous-ressource).
-      const newMaps = maps.map((m: any) => ({
-        id: m.id,
-        binLocationId: m.binLocationId,
-        articleDetailId: m.articleDetailId,
-        stock: m.articleDetailId === detailId ? newStock : m.stock,
-      }));
-      // Essai : renvoyer id + code + warehouseId pour que Pickware traite un UPDATE de la bin 250
-      // (et non une création) tout en ayant le champ obligatoire "code".
-      const variant = searchParams.get("variant") || "1";
-      let payload: any;
-      if (variant === "1") {
-        payload = { id: data.id, code: data.code, warehouseId: data.warehouseId, articleDetailBinLocationMappings: newMaps };
-      } else if (variant === "2") {
-        // mappings seuls (rappel : donnait "code missing")
-        payload = { articleDetailBinLocationMappings: newMaps };
-      } else {
-        // que le mapping ciblé
-        const only = newMaps.find((m: any) => m.articleDetailId === detailId);
-        payload = { id: data.id, code: data.code, warehouseId: data.warehouseId, articleDetailBinLocationMappings: [only] };
-      }
-      if (!confirm) {
-        // DRY-RUN : on montre exactement ce qui serait envoyé, sans écrire
-        return NextResponse.json({
-          dryRun: true, binLocationId, detailId, mappingId: target.id,
-          oldStock, requested: newStock, payloadPreview: payload,
-          note: "Ajoute &confirm=1 pour écrire réellement.",
-        });
-      }
-      // 3) ÉCRITURE
-      const put = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${binLocationId}`, creds, "PUT", payload));
-      // 4) relire pour vérifier
-      const after = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${binLocationId}`, creds));
-      const afterMap = (after.json?.data?.articleDetailBinLocationMappings || []).find((m: any) => m.articleDetailId === detailId);
       return NextResponse.json({
-        ok: put.ok, status: put.status, binLocationId, detailId, mappingId: target.id,
-        oldStock, requested: newStock, newStock: afterMap?.stock ?? null,
-        putRaw: put.raw, putResp: put.json,
+        articleNumber: an, found: true, detailId,
+        inStock: detail.inStock,
+        hasLocation: locations.length > 0,
+        locations, // emplacements physiques (code + stock)
       });
-    }
-
-    // ── binProbe5: confirmer l'endpoint du MAPPING (lecture par id) ──
-    if (action === "binProbe5") {
-      const results: any = {};
-      const mappingId = searchParams.get("mappingId") || "64";
-      const paths = [
-        `/ViisonPickwareERPArticleDetailBinLocationMappings/${mappingId}`,
-        `/ViisonPickwareERPArticleDetailBinLocationMappings?limit=2`,
-        `/ViisonPickwareERPArticleDetailBinLocationMapping/${mappingId}`,
-      ];
-      for (const p of paths) {
-        try {
-          const r = await safeJson(await swFetch(p, creds));
-          results[p] = { status: r.status, ok: r.ok };
-          if (r.ok && r.json) results[p].sample = r.json.data ?? r.json;
-          else results[p].raw = r.raw?.substring(0, 120);
-        } catch (e: any) { results[p] = { error: e.message }; }
-      }
-      return NextResponse.json(results);
-    }
-
-    // ── binProbe4: derniers essais (singulier, import, stocking) ──
-    if (action === "binProbe4") {
-      const results: any = {};
-      const paths = [
-        "/ViisonPickwareERPWarehouse?limit=2",
-        "/ViisonPickwareERPBinLocation?limit=2",
-        "/ViisonPickwareERPStockings?limit=2",
-        "/ViisonPickwareERPStocking?limit=2",
-        "/ViisonPickwareERPGoodsIncoming?limit=2",
-        "/ViisonPickwareERPGoodsIncomings?limit=2",
-        "/ViisonPickwareERPStockTaking?limit=2",
-        "/ViisonPickwareERPStockTakings?limit=2",
-        "/ViisonPickwareERPSupplierOrders?limit=2",
-        "/ViisonPickwareERPArticleConfigurations?limit=2",
-        // bin location précise (id 1 vu précédemment) — voit-on le stock dedans ?
-        "/ViisonPickwareERPBinLocations/1",
-        "/ViisonPickwareERPWarehouses/1",
-      ];
-      for (const p of paths) {
-        try {
-          const r = await safeJson(await swFetch(p, creds));
-          results[p] = { status: r.status, ok: r.ok };
-          if (r.ok && r.json) results[p].sample = r.json.data ?? r.json;
-        } catch (e: any) { results[p] = { error: e.message }; }
-      }
-      return NextResponse.json(results);
-    }
-
-    // ── binProbe3: trouver l'endpoint du STOCK par article/bin (Viison) ──
-    if (action === "binProbe3") {
-      const results: any = {};
-      const paths = [
-        "/ViisonPickwareERPStock?limit=3",
-        "/ViisonPickwareERPArticleStock?limit=3",
-        "/ViisonPickwareERPWarehouseStocks?limit=3",
-        "/ViisonPickwareERPStockLedgerEntries?limit=3",
-        "/ViisonPickwareERPStockLedgerEntry?limit=3",
-        "/ViisonPickwareERPBinLocationStocks?limit=3",
-        "/ViisonPickwareERPBinLocationStock?limit=3",
-        "/ViisonPickwareERPArticleDetailStocks?limit=3",
-        "/ViisonPickwareERPStockChanges?limit=3",
-        "/ViisonPickwareERPStockingProcesses?limit=3",
-        "/ViisonPickwareERPArticleDetailWarehouseConfigurations?limit=3",
-        "/ViisonPickwareERPArticleBinLocationMappings?limit=3",
-      ];
-      for (const p of paths) {
-        try {
-          const r = await safeJson(await swFetch(p, creds));
-          results[p] = { status: r.status, ok: r.ok };
-          if (r.ok && r.json) results[p].sample = (r.json.data || []).slice(0, 1);
-        } catch (e: any) { results[p] = { error: e.message }; }
-      }
-      return NextResponse.json(results);
-    }
-
-    // ── binProbe2: autres noms d'endpoints possibles pour stock par emplacement ──
-    if (action === "binProbe2") {
-      const an = searchParams.get("articleNumber") || "429000040";
-      const results: any = {};
-      const paths = [
-        "/ViisonPickwareERPArticleStocks?limit=3",
-        "/ViisonPickwareERPWarehouses?limit=10",
-        "/ViisonPickwareERPBinLocations?limit=10",
-        "/ViisonPickwareERPStocks?limit=3",
-        "/articleStocks?limit=3",
-        "/binLocations?limit=10",
-        "/pickwareErpStocks?limit=3",
-        "/PickwareErpArticleStock?limit=3",
-        "/stocks?limit=3",
-        // détail article complet (peut contenir mainDetail.binLocationMappings)
-        `/articles?filter[0][property]=number&filter[0][value]=${encodeURIComponent(an)}`,
-      ];
-      for (const p of paths) {
-        try {
-          const r = await safeJson(await swFetch(p, creds));
-          results[p] = { status: r.status, ok: r.ok };
-          if (r.ok && r.json) {
-            // pour l'article complet, on cherche les clés liées au stock/bin
-            const d = r.json.data;
-            results[p].sample = Array.isArray(d) ? d.slice(0, 1) : d;
-          } else results[p].raw = r.raw?.substring(0, 150);
-        } catch (e: any) { results[p] = { error: e.message }; }
-      }
-      return NextResponse.json(results);
-    }
-
-    // ── binStockProbe: explore l'API Pickware ERP stock/bin location (LECTURE) ──
-    // ?articleNumber=429000040 — teste plusieurs endpoints et renvoie ce qui répond.
-    if (action === "binStockProbe") {
-      const an = searchParams.get("articleNumber") || "";
-      const results: any = {};
-      const paths = [
-        "/PickwareErpWarehouses?limit=50",
-        "/pickware-erp/warehouses?limit=50",
-        "/PickwareErpBinLocations?limit=20",
-        "/pickware-erp/binLocations?limit=20",
-        "/PickwareErpStocks?limit=5",
-        "/pickware-erp/stocks?limit=5",
-        "/PickwareErpWarehouseStocks?limit=5",
-        "/pickware-erp/stockLedgerEntries?limit=5",
-        "/PickwareErpStockLedgerEntries?limit=5",
-        an ? `/PickwareErpStocks?filter[0][property]=article.number&filter[0][value]=${encodeURIComponent(an)}&limit=10` : "",
-      ].filter(Boolean);
-      for (const p of paths) {
-        try {
-          const r = await safeJson(await swFetch(p, creds));
-          results[p] = { status: r.status, ok: r.ok };
-          if (r.json) results[p].sample = r.json; else results[p].raw = r.raw?.substring(0, 200);
-        } catch (e: any) { results[p] = { error: e.message }; }
-      }
-      return NextResponse.json(results);
     }
 
     // ── setStock: ÉCRIT le stock (inStock) d'un article Shopware. ⚠ ÉCRITURE ──
