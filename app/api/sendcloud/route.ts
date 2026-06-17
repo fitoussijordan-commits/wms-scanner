@@ -149,7 +149,22 @@ async function createParcelV2Direct(
     details.shipping_details?.delivery_indicator ||
     order.delivery_indicator || ""
   );
-  const wantsServicePoint = /point\s*relais|relay|pickup|service\s*point/i.test(deliveryIndicator);
+  // Un point relais est réellement présent sur la commande ?
+  const resolvedSpId =
+    order.shipping_details?.service_point_details?.id ??
+    order.shipping_details?.service_point_details?.carrier_service_point_id ??
+    details.shipping_details?.service_point_details?.id ??
+    order.service_point_details?.id ??
+    order.service_point_details?.carrier_service_point_id ??
+    details.service_point_details?.id ??
+    order.to_service_point ?? order.service_point_id ??
+    order.service_point?.id ?? details.to_service_point ?? null;
+  const hasServicePoint = resolvedSpId != null;
+  // Le libellé Shopware peut dire "Point Relais" même quand le client est livré à
+  // domicile (point relais non sélectionné). On ne traite en point relais QUE si un
+  // point relais est réellement rattaché ; sinon → livraison à domicile (Colissimo Home).
+  const indicatorSaysSp = /point\s*relais|relay|pickup|service\s*point/i.test(deliveryIndicator);
+  const wantsServicePoint = indicatorSaysSp && hasServicePoint;
 
   const name =
     [addr.first_name, addr.last_name].filter(Boolean).join(" ") ||
