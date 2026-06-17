@@ -331,6 +331,33 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: all.length, products: all });
     }
 
+    // ── binStockProbe: explore l'API Pickware ERP stock/bin location (LECTURE) ──
+    // ?articleNumber=429000040 — teste plusieurs endpoints et renvoie ce qui répond.
+    if (action === "binStockProbe") {
+      const an = searchParams.get("articleNumber") || "";
+      const results: any = {};
+      const paths = [
+        "/PickwareErpWarehouses?limit=50",
+        "/pickware-erp/warehouses?limit=50",
+        "/PickwareErpBinLocations?limit=20",
+        "/pickware-erp/binLocations?limit=20",
+        "/PickwareErpStocks?limit=5",
+        "/pickware-erp/stocks?limit=5",
+        "/PickwareErpWarehouseStocks?limit=5",
+        "/pickware-erp/stockLedgerEntries?limit=5",
+        "/PickwareErpStockLedgerEntries?limit=5",
+        an ? `/PickwareErpStocks?filter[0][property]=article.number&filter[0][value]=${encodeURIComponent(an)}&limit=10` : "",
+      ].filter(Boolean);
+      for (const p of paths) {
+        try {
+          const r = await safeJson(await swFetch(p, creds));
+          results[p] = { status: r.status, ok: r.ok };
+          if (r.json) results[p].sample = r.json; else results[p].raw = r.raw?.substring(0, 200);
+        } catch (e: any) { results[p] = { error: e.message }; }
+      }
+      return NextResponse.json(results);
+    }
+
     // ── setStock: ÉCRIT le stock (inStock) d'un article Shopware. ⚠ ÉCRITURE ──
     // ?articleNumber=XXX&qty=N — écrit via la variante (useNumberAsId).
     if (action === "setStock") {
