@@ -303,6 +303,29 @@ export async function GET(req: NextRequest) {
     }
 
     // ── generate: tenter de générer une étiquette TNT pour une commande ──
+    // ── setStock: ÉCRIT le stock (inStock) d'un article Shopware. ⚠ ÉCRITURE ──
+    // ?articleNumber=XXX&qty=N — écrit via la variante (useNumberAsId).
+    if (action === "setStock") {
+      const an = searchParams.get("articleNumber");
+      const qty = searchParams.get("qty");
+      if (!an || qty == null) return NextResponse.json({ error: "articleNumber et qty requis" }, { status: 400 });
+      const n = parseInt(qty, 10);
+      if (isNaN(n) || n < 0) return NextResponse.json({ error: "qty invalide" }, { status: 400 });
+      // Lecture avant (pour confirmer le changement)
+      const beforeRes = await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds);
+      const before = (await safeJson(beforeRes)).json?.data;
+      if (!before) return NextResponse.json({ error: `Article ${an} introuvable` }, { status: 404 });
+      const oldStock = before.inStock;
+      // Écriture
+      const putRes = await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds, "PUT", { inStock: n });
+      const putR = await safeJson(putRes);
+      if (!putR.ok) return NextResponse.json({ error: `Échec écriture (${putR.status})`, raw: putR.raw }, { status: putR.status });
+      // Relecture
+      const afterRes = await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds);
+      const after = (await safeJson(afterRes)).json?.data;
+      return NextResponse.json({ ok: true, articleNumber: an, oldStock, requested: n, newStock: after?.inStock });
+    }
+
     if (action === "generate") {
       const orderId = searchParams.get("id");
       if (!orderId) return NextResponse.json({ error: "id requis" }, { status: 400 });

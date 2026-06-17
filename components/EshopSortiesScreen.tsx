@@ -415,7 +415,21 @@ function StockSyncTab({ session, onToast }: { session: odoo.OdooSession; onToast
 
   const fetchRow = async (ref: string): Promise<Partial<StockRow>> => {
     let odoo_q: number | null = null, shopware_q: number | null = null, name = "", error = "";
-    try { const o = await odoo.getStockByRef(session, ref); if (o) { odoo_q = o.available; name = o.name; } else error = "Odoo: introuvable"; } catch (e: any) { error = "Odoo: " + e.message; }
+    // Stock Odoo via le MÊME mapping que les sorties (réf fournisseur, EAN, LR…)
+    try {
+      const matches = await odoo.matchEshopSkus(session, [ref]);
+      const m: any = matches[ref];
+      if (m?.product_id) {
+        name = m.product_name || "";
+        const detail = await odoo.getProductStockDetail(session, m.product_id);
+        // detail = tableau par emplacement/lot → on somme le dispo (qty - réservé)
+        odoo_q = Math.round((detail || []).reduce((s: number, d: any) => s + ((d.qty || 0) - (d.reservedQty || 0)), 0));
+      } else {
+        // fallback recherche directe
+        const o = await odoo.getStockByRef(session, ref);
+        if (o) { odoo_q = o.available; name = o.name; } else error = "Odoo: introuvable";
+      }
+    } catch (e: any) { error = "Odoo: " + e.message; }
     try {
       const r = await fetch(`/api/shopware-explore?action=stockInfo&articleNumber=${encodeURIComponent(ref)}`).then(x => x.json());
       if (r.found) shopware_q = r.native_inStock ?? null; else error = (error ? error + " · " : "") + "Shopware: introuvable";
@@ -443,9 +457,25 @@ function StockSyncTab({ session, onToast }: { session: odoo.OdooSession; onToast
 
   const removeRef = (ref: string) => { const next = rows.filter(r => r.ref !== ref); setRows(next); persistRefs(next); };
 
+  // Pousse le stock Odoo vers Shopware (ÉCRITURE) avec confirmation
+  const [pushing, setPushing] = useState<string | null>(null);
+  const pushStock = async (r: StockRow) => {
+    if (r.odoo == null) { onToast("Stock Odoo inconnu", "error"); return; }
+    if (!confirm(`Écrire le stock Shopware de ${r.ref} :\n${r.shopware ?? "?"} → ${r.odoo} ?\n\n⚠ Cette action modifie le stock affiché sur le site.`)) return;
+    setPushing(r.ref);
+    try {
+      const res = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(r.ref)}&qty=${r.odoo}`).then(x => x.json());
+      if (res.ok) {
+        setRows(prev => prev.map(x => x.ref === r.ref ? { ...x, shopware: res.newStock ?? r.odoo } : x));
+        onToast(`✓ ${r.ref} : Shopware ${res.oldStock} → ${res.newStock}`, "success");
+      } else onToast("Erreur : " + (res.error || "échec"), "error");
+    } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
+    setPushing(null);
+  };
+
   return (
     <div style={{ paddingBottom: 80 }}>
-      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>Compare le stock Odoo et Shopware pour les produits suivis. (Lecture seule pour l'instant — la mise à jour Shopware sera activée après validation.)</div>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>Compare le stock Odoo et Shopware. Le bouton "Pousser" écrit le vrai stock Odoo sur Shopware (test prudent sur 1 produit d'abord).</div>
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addRef(); }}
           placeholder="Réf produit (ex: 429000040)"
@@ -459,9 +489,9 @@ function StockSyncTab({ session, onToast }: { session: odoo.OdooSession; onToast
       ) : (
         <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow }}>
           <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-            <colgroup><col style={{ width: "14%" }} /><col style={{ width: "38%" }} /><col style={{ width: "14%" }} /><col style={{ width: "14%" }} /><col style={{ width: "12%" }} /><col style={{ width: "8%" }} /></colgroup>
+            <colgroup><col style={{ width: "12%" }} /><col style={{ width: "30%" }} /><col style={{ width: "12%" }} /><col style={{ width: "13%" }} /><col style={{ width: "10%" }} /><col style={{ width: "17%" }} /><col style={{ width: "6%" }} /></colgroup>
             <thead><tr style={{ background: C.bg, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted, textAlign: "left" }}>
-              <th style={th}>Réf</th><th style={th}>Produit</th><th style={th}>Stock Odoo</th><th style={th}>Stock Shopware</th><th style={th}>Écart</th><th style={th}></th>
+              <th style={th}>Réf</th><th style={th}>Produit</th><th style={th}>Stock Odoo</th><th style={th}>Stock Shopware</th><th style={th}>Écart</th><th style={th}>Action</th><th style={th}></th>
             </tr></thead>
             <tbody>
               {rows.map((r, i) => {
@@ -473,6 +503,14 @@ function StockSyncTab({ session, onToast }: { session: odoo.OdooSession; onToast
                     <td style={{ ...td, fontWeight: 800 }}>{r.odoo ?? "—"}</td>
                     <td style={{ ...td, fontWeight: 800 }}>{r.shopware ?? "—"}</td>
                     <td style={{ ...td, fontWeight: 800, color: ecart == null ? C.textMuted : ecart === 0 ? C.green : C.orange }}>{ecart == null ? "—" : ecart === 0 ? "✓" : (ecart > 0 ? `+${ecart}` : ecart)}</td>
+                    <td style={td}>
+                      {r.odoo != null && ecart !== 0 && (
+                        <button onClick={() => pushStock(r)} disabled={pushing === r.ref}
+                          style={{ padding: "5px 10px", background: C.blue, color: "#fff", border: "none", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: pushing === r.ref ? 0.6 : 1 }}>
+                          {pushing === r.ref ? "…" : "Pousser →"}
+                        </button>
+                      )}
+                    </td>
                     <td style={td}><button onClick={() => removeRef(r.ref)} style={{ background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 16 }}>×</button></td>
                   </tr>
                 );
