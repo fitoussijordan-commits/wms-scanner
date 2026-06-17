@@ -501,7 +501,7 @@ export default function Dashboard() {
   // ── BMV (autre transporteur — facture annexe) ──────────────────────────────
   interface BmvExped { recep: string; date: string; date_iso: string; ref: string; dest: string; dpt: string; ville: string; transport: number; options: number; colis: number; coutReel: number; }
   interface BmvStats { num: string; date_facture: string; nb_expeditions: number; total_transport: number; surcharge_carburant: number; surcharge_taux: number; total_general_ht: number; avec_ref: number; sans_ref: number; }
-  interface BmvCrossed extends BmvExped { client: string; partnerRef?: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; approx: boolean; alert: boolean; }
+  interface BmvCrossed extends BmvExped { client: string; partnerRef?: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; approx: boolean; alert: boolean; matchedRef: string; }
   const [bmvLoading, setBmvLoading] = useState(false);
   const [bmvPdfName, setBmvPdfName] = useState("");
   const [bmvExped, setBmvExped] = useState<BmvExped[]>([]);
@@ -561,16 +561,17 @@ export default function Dashboard() {
 
   const bmvCroise: BmvCrossed[] = useMemo(() => {
     return bmvExped.map(e => {
-      let client = "", partnerRef: string | undefined, montantHT = 0, montantTTC = 0, matched = false, approx = false;
+      let client = "", partnerRef: string | undefined, montantHT = 0, montantTTC = 0, matched = false, approx = false, matchedRef = e.ref;
       if (e.ref && bmvOdoo.has(e.ref)) {
         const o = bmvOdoo.get(e.ref)!;
         client = o.client; partnerRef = o.partnerRef; montantHT = o.montantHT; montantTTC = o.montantTTC; matched = true;
       } else if (!e.ref && bmvNameMatch.has(e.recep)) {
         const m = bmvNameMatch.get(e.recep)!;
         client = m.client; partnerRef = m.partnerRef; montantHT = m.montantHT; montantTTC = m.montantTTC; matched = true; approx = true;
+        matchedRef = m.ref; // réf Odoo (S…) retrouvée par nom+date
       }
       const alert = e.coutReel > 0 && montantHT <= 0;
-      return { ...e, client, partnerRef, montantHT, montantTTC, matched, approx, alert, pct: montantHT > 0 ? e.coutReel / montantHT : null };
+      return { ...e, client, partnerRef, montantHT, montantTTC, matched, approx, alert, matchedRef, pct: montantHT > 0 ? e.coutReel / montantHT : null };
     });
   }, [bmvExped, bmvOdoo, bmvNameMatch]);
 
@@ -589,7 +590,7 @@ export default function Dashboard() {
     const eur = (n: number) => (n || 0).toFixed(2).replace(".", ",");
     const head = ["Réf Odoo", "N° Récep", "Date", "Destinataire", "Dpt", "Ville", "Colis", "Transport", "Coût réel", "Montant HT", "Montant TTC", "% Transp.", "Match"];
     const rows = bmvCroise.map(r => [
-      r.ref || "", r.recep, r.date, r.dest, r.dpt, r.ville, String(r.colis),
+      r.matchedRef || "", r.recep, r.date, r.dest, r.dpt, r.ville, String(r.colis),
       eur(r.transport), eur(r.coutReel), eur(r.montantHT), eur(r.montantTTC),
       r.pct === null ? "" : (r.pct * 100).toFixed(1) + "%",
       r.matched ? (r.approx ? "approx (nom+date)" : "réf") : "absent",
@@ -5239,7 +5240,9 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                           {bmvFiltered.map((r, i) => (
                             <tr key={i} style={r.alert ? { background: "rgba(220,38,38,0.07)" } : undefined}>
                               <td style={{ fontWeight: 600, color: "var(--accent)" }}>
-                                {r.ref || <span style={{ color: "var(--text-muted)", fontWeight: 500 }}>{r.recep}</span>}
+                                {r.matchedRef
+                                  ? <span title={r.approx ? `Réf retrouvée par nom+date · récep ${r.recep}` : `Récep ${r.recep}`}>{r.matchedRef}{r.approx && <span style={{ color: "#d97706", fontSize: 10, fontWeight: 700 }}> ≈</span>}</span>
+                                  : <span style={{ color: "var(--text-muted)", fontWeight: 500 }}>{r.recep}</span>}
                               </td>
                               <td>{r.date}</td>
                               <td title={r.ville}>{r.client || r.dest || <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
