@@ -588,22 +588,189 @@ export default function Dashboard() {
     setBmvOdooLoaded(false); setBmvPdfName(""); setBmvError(""); setBmvSearch("");
   }
 
-  function bmvExportXlsx() {
-    const eur = (n: number) => (n || 0).toFixed(2).replace(".", ",");
-    const head = ["Réf Odoo", "N° Récep", "Date", "Destinataire", "Dpt", "Ville", "Colis", "Transport", "Coût réel", "Montant HT", "Montant TTC", "% Transp.", "Match"];
-    const rows = bmvCroise.map(r => [
-      r.matchedRef || "", r.recep, r.date, r.dest, r.dpt, r.ville, String(r.colis),
-      eur(r.transport), eur(r.coutReel), eur(r.montantHT), eur(r.montantTTC),
-      r.pct === null ? "" : (r.pct * 100).toFixed(1) + "%",
-      r.matched ? (r.approx ? "approx (nom+date)" : "réf") : "absent",
-    ]);
-    const esc = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
-    const csv = [head, ...rows].map(r => r.map(esc).join(";")).join("\n");
-    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+  async function bmvExportXlsx() {
+    const ExcelJS = (await import("exceljs")).default;
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "WMS Scanner"; wb.created = new Date();
+
+    const C = {
+      dark: "FF1E293B", accent: "FF2563EB", white: "FFFFFFFF", zebra: "FFF1F5F9",
+      green: "FFDCFCE7", greenT: "FF166534", amber: "FFFEF3C7", amberT: "FF92400E",
+      red: "FFFEE2E2", redT: "FFB91C1C", kpiBg: "FFEFF6FF", border: "FFE2E8F0",
+    };
+    const thin = { style: "thin" as const, color: { argb: C.border } };
+    const allBorders = { top: thin, left: thin, bottom: thin, right: thin };
+    const eurFmt = '#,##0.00 €';
+    const pctNumFmt = '0.0 "%"';
+    const styleHeader = (ws: any) => {
+      const h = ws.getRow(1); h.height = 22;
+      h.eachCell((cell: any) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.dark } };
+        cell.font = { bold: true, color: { argb: C.white }, size: 11 };
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+        cell.border = allBorders;
+      });
+      ws.views = [{ state: "frozen", ySplit: 1 }];
+    };
+    const zebra = (ws: any) => {
+      for (let r = 2; r <= ws.rowCount; r++) {
+        const row = ws.getRow(r);
+        if (r % 2 === 0) row.eachCell((c: any) => { if (!c.fill || c.fill.type !== "pattern") c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.zebra } }; });
+        row.eachCell((c: any) => { c.border = allBorders; });
+      }
+    };
+
+    const matched = bmvCroise.filter(c => c.matched && c.montantHT > 0);
+    const anomalies = bmvCroise.filter(c => c.alert);
+    const totalHT = matched.reduce((s, c) => s + c.montantHT, 0);
+    const coutReelMatched = matched.reduce((s, c) => s + c.coutReel, 0);
+    const coutAnomalies = anomalies.reduce((s, c) => s + c.coutReel, 0);
+    const pctMoyen = totalHT > 0 ? coutReelMatched / totalHT : 0;
+    const nbApprox = bmvCroise.filter(c => c.matched && c.approx).length;
+
+    // ── Synthèse ──
+    const wsS = wb.addWorksheet("Synthèse");
+    wsS.columns = [{ width: 40 }, { width: 26 }];
+    wsS.mergeCells("A1:B1");
+    const title = wsS.getCell("A1");
+    title.value = "ANALYSE BMV"; title.font = { bold: true, size: 16, color: { argb: C.white } };
+    title.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.accent } };
+    title.alignment = { vertical: "middle", horizontal: "center" };
+    wsS.getRow(1).height = 30;
+    wsS.mergeCells("A2:B2");
+    const sub = wsS.getCell("A2");
+    sub.value = `Facture ${bmvStats?.num || "—"} · ${bmvStats?.date_facture || "—"}`;
+    sub.font = { italic: true, color: { argb: "FF64748B" } }; sub.alignment = { horizontal: "center" };
+    const kpi = (label: string, value: string | number, danger = false, good = false) => {
+      const row = wsS.addRow([label, value]);
+      const lc = row.getCell(1), vc = row.getCell(2);
+      lc.font = { bold: true, color: { argb: "FF334155" } };
+      lc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.kpiBg } };
+      vc.font = { bold: true, size: 12, color: { argb: danger ? C.redT : good ? C.greenT : "FF0F172A" } };
+      if (danger) vc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.red } };
+      vc.alignment = { horizontal: "right" };
+      lc.border = allBorders; vc.border = allBorders;
+      return row;
+    };
+    wsS.addRow([]);
+    kpi("Nombre d'expéditions", bmvStats?.nb_expeditions ?? 0);
+    kpi("Transport pur", round2(bmvStats?.total_transport ?? 0)).getCell(2).numFmt = eurFmt;
+    if (bmvStats?.surcharge_carburant) kpi(`Surcharge carburant (${bmvStats?.surcharge_taux}%)`, round2(bmvStats.surcharge_carburant)).getCell(2).numFmt = eurFmt;
+    kpi("TOTAL FACTURÉ HT", round2(bmvStats?.total_general_ht ?? 0), false, true).getCell(2).numFmt = eurFmt;
+    wsS.addRow([]);
+    const sep = wsS.addRow(["── CROISEMENT ODOO ──", ""]); sep.getCell(1).font = { bold: true, color: { argb: C.accent } };
+    const found = bmvCroise.filter(c => c.matched).length;
+    kpi("Expéditions trouvées dans Odoo", `${found} / ${bmvCroise.length}`, false, found === bmvCroise.length);
+    kpi("dont par réf (S…)", found - nbApprox);
+    kpi("dont par nom + date (approx.)", nbApprox);
+    kpi("Expéditions absentes d'Odoo", bmvCroise.length - found, bmvCroise.length - found > 0);
+    kpi("Expéditions SANS montant (à perte)", anomalies.length, anomalies.length > 0);
+    kpi("Transport payé à perte", round2(coutAnomalies), coutAnomalies > 0).getCell(2).numFmt = eurFmt;
+    kpi("Montant commandes HT total", round2(totalHT), false, true).getCell(2).numFmt = eurFmt;
+    kpi("% transport / CA moyen (pondéré)", round2(pctMoyen * 100)).getCell(2).numFmt = pctNumFmt;
+
+    // ── Croisé Odoo ──
+    const ws = wb.addWorksheet("Croisé Odoo");
+    ws.columns = [
+      { header: "Réf Odoo", key: "ref", width: 12 }, { header: "N° Récep", key: "recep", width: 11 },
+      { header: "Client", key: "client", width: 30 }, { header: "Date", key: "date", width: 9 },
+      { header: "Dpt", key: "dpt", width: 6 }, { header: "Ville", key: "ville", width: 20 },
+      { header: "Colis", key: "colis", width: 7 }, { header: "Transport €", key: "transport", width: 13 },
+      { header: "Coût réel €", key: "coutreel", width: 13 }, { header: "Montant HT €", key: "ht", width: 14 },
+      { header: "Montant TTC €", key: "ttc", width: 14 }, { header: "% Transp.", key: "pct", width: 11 },
+      { header: "Match", key: "statut", width: 16 },
+    ];
+    for (const c of bmvCroise) {
+      ws.addRow({
+        ref: c.matchedRef || "", recep: c.recep, client: c.client || "(absent Odoo)", date: c.date,
+        dpt: c.dpt, ville: c.ville, colis: c.colis, transport: round2(c.transport), coutreel: round2(c.coutReel),
+        ht: c.montantHT || null, ttc: c.montantTTC || null, pct: c.pct !== null ? round2(c.pct * 100) : null,
+        statut: !c.matched ? "ABSENT" : c.alert ? "À PERTE (0 €)" : c.approx ? "≈ nom+date" : c.pct! > 0.15 ? "⚠ ÉLEVÉ" : "OK réf",
+      });
+    }
+    styleHeader(ws); zebra(ws);
+    for (const k of ["transport", "coutreel", "ht", "ttc"]) ws.getColumn(k).numFmt = eurFmt;
+    ws.getColumn("pct").numFmt = pctNumFmt;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const c = bmvCroise[r - 2];
+      const pctCell = ws.getCell(r, 12); const statCell = ws.getCell(r, 13);
+      let bg = "", fg = "";
+      if (!c.matched || c.alert) { bg = C.red; fg = C.redT; }
+      else if (c.approx) { bg = C.amber; fg = C.amberT; }
+      else if (c.pct! > 0.15) { bg = C.red; fg = C.redT; }
+      else if (c.pct! > 0.08) { bg = C.amber; fg = C.amberT; }
+      else { bg = C.green; fg = C.greenT; }
+      for (const cell of [pctCell, statCell]) {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+        cell.font = { bold: true, color: { argb: fg } };
+        cell.alignment = { horizontal: "center" }; cell.border = allBorders;
+      }
+    }
+
+    // ── À perte ──
+    if (anomalies.length) {
+      const wa = wb.addWorksheet("⚠ À perte");
+      wa.columns = [
+        { header: "Réf / Récep", key: "ref", width: 13 }, { header: "Destinataire", key: "dest", width: 30 },
+        { header: "Date", key: "date", width: 9 }, { header: "Colis", key: "colis", width: 7 },
+        { header: "Transport payé €", key: "transport", width: 16 }, { header: "Statut", key: "statut", width: 18 },
+      ];
+      for (const c of anomalies) wa.addRow({ ref: c.matchedRef || c.recep, dest: c.dest, date: c.date, colis: c.colis, transport: round2(c.coutReel), statut: c.matched ? "Trouvée, montant 0" : "Absente d'Odoo" });
+      styleHeader(wa); zebra(wa);
+      wa.getColumn("transport").numFmt = eurFmt;
+      for (let r = 2; r <= wa.rowCount; r++) wa.getRow(r).eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.red } }; c.font = { color: { argb: C.redT } }; c.border = allBorders; });
+    }
+
+    // ── Par client ──
+    const byClient = new Map<string, { client: string; partnerRef: string; cdes: number; colis: number; cout: number; ht: number }>();
+    for (const c of bmvCroise) {
+      const key = c.client || "(absent Odoo)";
+      if (!byClient.has(key)) byClient.set(key, { client: key, partnerRef: c.partnerRef || "", cdes: 0, colis: 0, cout: 0, ht: 0 });
+      const g = byClient.get(key)!;
+      if (!g.partnerRef && c.partnerRef) g.partnerRef = c.partnerRef;
+      g.cdes += 1; g.colis += c.colis; g.cout = round2(g.cout + c.coutReel); g.ht = round2(g.ht + c.montantHT);
+    }
+    const wc = wb.addWorksheet("Par client");
+    wc.columns = [
+      { header: "N° Client", key: "partnerRef", width: 14 }, { header: "Client", key: "client", width: 32 },
+      { header: "Expéd.", key: "cdes", width: 8 }, { header: "Colis", key: "colis", width: 8 },
+      { header: "Coût réel €", key: "cout", width: 14 }, { header: "Montant HT €", key: "ht", width: 15 },
+      { header: "% Transp.", key: "pct", width: 11 },
+    ];
+    for (const g of Array.from(byClient.values()).sort((a, b) => b.cout - a.cout)) {
+      wc.addRow({ partnerRef: g.partnerRef || null, client: g.client, cdes: g.cdes, colis: g.colis, cout: g.cout, ht: g.ht || null, pct: g.ht > 0 ? round2((g.cout / g.ht) * 100) : null });
+    }
+    styleHeader(wc); zebra(wc);
+    wc.getColumn("cout").numFmt = eurFmt; wc.getColumn("ht").numFmt = eurFmt; wc.getColumn("pct").numFmt = pctNumFmt;
+
+    // ── Top départements ──
+    const byDept = new Map<string, { dept: string; cdes: number; colis: number; cout: number; ht: number }>();
+    for (const c of bmvCroise) {
+      const key = c.dpt || "??";
+      if (!byDept.has(key)) byDept.set(key, { dept: key, cdes: 0, colis: 0, cout: 0, ht: 0 });
+      const g = byDept.get(key)!; g.cdes += 1; g.colis += c.colis; g.cout = round2(g.cout + c.coutReel); g.ht = round2(g.ht + c.montantHT);
+    }
+    const totCout = Array.from(byDept.values()).reduce((s, g) => s + g.cout, 0) || 1;
+    const wd = wb.addWorksheet("Top départements");
+    wd.columns = [
+      { header: "Dépt", key: "dept", width: 7 }, { header: "Expéd.", key: "cdes", width: 9 },
+      { header: "Colis", key: "colis", width: 8 }, { header: "Coût réel €", key: "cout", width: 14 },
+      { header: "% du coût", key: "part", width: 11 }, { header: "% transp/CA", key: "pct", width: 12 },
+    ];
+    for (const g of Array.from(byDept.values()).sort((a, b) => b.cout - a.cout)) {
+      wd.addRow({ dept: g.dept, cdes: g.cdes, colis: g.colis, cout: g.cout, part: round2((g.cout / totCout) * 100), pct: g.ht > 0 ? round2((g.cout / g.ht) * 100) : null });
+    }
+    styleHeader(wd); zebra(wd);
+    wd.getColumn("cout").numFmt = eurFmt; wd.getColumn("part").numFmt = pctNumFmt; wd.getColumn("pct").numFmt = pctNumFmt;
+    if (wd.rowCount > 1) wd.addConditionalFormatting({ ref: `D2:D${wd.rowCount}`, rules: [{ type: "dataBar", cfvo: [{ type: "num", value: 0 }, { type: "max" }], color: { argb: "FF2563EB" } } as any] });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `bmv_${bmvStats?.num || "facture"}.csv`; a.click();
-    URL.revokeObjectURL(url);
+    a.href = url; a.download = `analyse_bmv_${bmvStats?.num || new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }
   const carPdfInput = useRef<HTMLInputElement>(null);
 
