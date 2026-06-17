@@ -340,6 +340,26 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ count: all.length, products: all });
     }
 
+    // ── binProbe5: confirmer l'endpoint du MAPPING (lecture par id) ──
+    if (action === "binProbe5") {
+      const results: any = {};
+      const mappingId = searchParams.get("mappingId") || "64";
+      const paths = [
+        `/ViisonPickwareERPArticleDetailBinLocationMappings/${mappingId}`,
+        `/ViisonPickwareERPArticleDetailBinLocationMappings?limit=2`,
+        `/ViisonPickwareERPArticleDetailBinLocationMapping/${mappingId}`,
+      ];
+      for (const p of paths) {
+        try {
+          const r = await safeJson(await swFetch(p, creds));
+          results[p] = { status: r.status, ok: r.ok };
+          if (r.ok && r.json) results[p].sample = r.json.data ?? r.json;
+          else results[p].raw = r.raw?.substring(0, 120);
+        } catch (e: any) { results[p] = { error: e.message }; }
+      }
+      return NextResponse.json(results);
+    }
+
     // ── binProbe4: derniers essais (singulier, import, stocking) ──
     if (action === "binProbe4") {
       const results: any = {};
