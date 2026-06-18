@@ -10965,14 +10965,23 @@ function EshopChariotSkus({ session }: { session: any }) {
   const [search, setSearch] = useState("");
 
   // Charge noms + stock Shopware (catalogue actif) — 1 appel pour tous les SKU.
-  const loadSwData = async () => {
+  // Puis, pour les SKU absents du catalogue actif, on interroge stockInfo par SKU.
+  const loadSwData = async (skuList: string[]) => {
+    let smap: Record<string, number | null> = {};
     try {
       const r = await fetch("/api/shopware-explore?action=activeProducts").then(x => x.json());
       const nmap: Record<string, string> = {};
-      const smap: Record<string, number | null> = {};
       for (const p of (r.products || [])) if (p.number) { nmap[String(p.number)] = p.name || ""; smap[String(p.number)] = p.inStock ?? null; }
-      setSwNames(nmap); setSwStock(smap);
+      setSwNames(nmap); setSwStock({ ...smap });
     } catch {}
+    // Fallback par SKU pour ceux non couverts (réf ≠ numéro d'article actif, produit inactif…)
+    const missing = skuList.filter(s => smap[s] === undefined);
+    await Promise.all(missing.map(async sku => {
+      try {
+        const r = await fetch(`/api/shopware-explore?action=stockInfo&articleNumber=${encodeURIComponent(sku)}`).then(x => x.json());
+        setSwStock(prev => ({ ...prev, [sku]: r.found ? (r.native_inStock ?? null) : null }));
+      } catch { setSwStock(prev => ({ ...prev, [sku]: null })); }
+    }));
   };
 
   // Pousse le stock chariot d'un SKU vers Shopware (inStock).
@@ -10988,9 +10997,8 @@ function EshopChariotSkus({ session }: { session: any }) {
 
   useEffect(() => {
     if (!session) return;
-    odoo.loadChariotSkus(session).then(p => { setSkus(p); skusRef.current = p; setChariotSkusLocal(p); resolveNames(p); }).catch(() => {});
+    odoo.loadChariotSkus(session).then(p => { setSkus(p); skusRef.current = p; setChariotSkusLocal(p); resolveNames(p); loadSwData(p); }).catch(() => {});
     import("@/lib/supabase").then(sb => sb.getChariotStock().then(setStock).catch(() => {}));
-    loadSwData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
