@@ -10934,11 +10934,35 @@ function EshopChariotSkus({ session }: { session: any }) {
   // Stock chariot par SKU (géré dans l'app, partagé via Supabase)
   const [stock, setStock] = useState<Record<string, number>>({});
   const [stockDraft, setStockDraft] = useState<Record<string, string>>({});
+  // Désignation Odoo par SKU (rapprochement via réf / réf fournisseur / EAN / nom)
+  const [names, setNames] = useState<Record<string, { name: string; ref: string }>>({});
+  const [resolving, setResolving] = useState(false);
+
+  // Résout les désignations Odoo pour une liste de SKU (incrémental — ne refait pas les déjà connus).
+  const resolveNames = async (list: string[]) => {
+    if (!session) return;
+    const todo = list.filter(s => !names[s]);
+    if (!todo.length) return;
+    setResolving(true);
+    try {
+      const matches = await odoo.matchEshopSkus(session, todo);
+      setNames(prev => {
+        const next = { ...prev };
+        for (const s of todo) {
+          const m: any = matches[s];
+          next[s] = { name: m?.product_name || "", ref: m?.default_code || "" };
+        }
+        return next;
+      });
+    } catch {}
+    setResolving(false);
+  };
 
   useEffect(() => {
     if (!session) return;
-    odoo.loadChariotSkus(session).then(p => { setSkus(p); skusRef.current = p; setChariotSkusLocal(p); }).catch(() => {});
+    odoo.loadChariotSkus(session).then(p => { setSkus(p); skusRef.current = p; setChariotSkusLocal(p); resolveNames(p); }).catch(() => {});
     import("@/lib/supabase").then(sb => sb.getChariotStock().then(setStock).catch(() => {}));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
   const saveStock = async (sku: string) => {
@@ -10968,7 +10992,7 @@ function EshopChariotSkus({ session }: { session: any }) {
 
   const add = () => {
     const s = newSku.trim();
-    if (s && !skusRef.current.includes(s)) { save([...skusRef.current, s]); setNewSku(""); }
+    if (s && !skusRef.current.includes(s)) { save([...skusRef.current, s]); setNewSku(""); resolveNames([s]); }
   };
 
   return (
@@ -10987,16 +11011,22 @@ function EshopChariotSkus({ session }: { session: any }) {
       {skus.length === 0 && <div style={{ fontSize: 11, color: C.textMuted }}>Aucun SKU configuré</div>}
       {skus.length > 0 && (
         <div style={{ display: "flex", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, padding: "4px 0", borderBottom: `1px solid ${C.border}`, gap: 8 }}>
-          <span style={{ flex: 1 }}>SKU</span><span style={{ width: 130, textAlign: "center" }}>Stock chariot</span><span style={{ width: 20 }} />
+          <span style={{ flex: 1 }}>SKU / Désignation {resolving && <span style={{ fontWeight: 400, textTransform: "none" as const }}>· résolution…</span>}</span><span style={{ width: 130, textAlign: "center" }}>Stock chariot</span><span style={{ width: 20 }} />
         </div>
       )}
       {skus.map(sku => {
         const cur = stock[sku] ?? 0;
         const draft = stockDraft[sku];
         const dirty = draft != null && draft !== String(cur);
+        const info = names[sku];
         return (
           <div key={sku} style={{ display: "flex", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${C.border}`, gap: 8 }}>
-            <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: C.text, fontFamily: "monospace" }}>{sku}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: C.text, fontFamily: "monospace" }}>{sku}</span>
+              {info && (info.name
+                ? <div style={{ fontSize: 11, color: C.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{info.name}{info.ref && info.ref !== sku ? <span style={{ color: C.textMuted }}> · {info.ref}</span> : ""}</div>
+                : <div style={{ fontSize: 10.5, color: C.orange }}>non trouvé dans Odoo</div>)}
+            </div>
             <div style={{ width: 130, display: "flex", alignItems: "center", gap: 4, justifyContent: "center" }}>
               <input type="number" min={0}
                 value={draft ?? String(cur)}
