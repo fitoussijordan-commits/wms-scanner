@@ -10958,26 +10958,47 @@ function EshopChariotSkus({ session }: { session: any }) {
     setResolving(false);
   };
 
-  // Désignation Shopware par SKU (pour les réfs non trouvées dans Odoo).
+  // Désignation + stock Shopware par SKU (catalogue actif).
   const [swNames, setSwNames] = useState<Record<string, string>>({});
+  const [swStock, setSwStock] = useState<Record<string, number | null>>({});
+  const [pushing, setPushing] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
-  // Charge les noms Shopware (catalogue actif) — 1 appel pour tous les SKU.
-  const loadSwNames = async () => {
+  // Charge noms + stock Shopware (catalogue actif) — 1 appel pour tous les SKU.
+  const loadSwData = async () => {
     try {
       const r = await fetch("/api/shopware-explore?action=activeProducts").then(x => x.json());
-      const map: Record<string, string> = {};
-      for (const p of (r.products || [])) if (p.number) map[String(p.number)] = p.name || "";
-      setSwNames(map);
+      const nmap: Record<string, string> = {};
+      const smap: Record<string, number | null> = {};
+      for (const p of (r.products || [])) if (p.number) { nmap[String(p.number)] = p.name || ""; smap[String(p.number)] = p.inStock ?? null; }
+      setSwNames(nmap); setSwStock(smap);
     } catch {}
+  };
+
+  // Pousse le stock chariot d'un SKU vers Shopware (inStock).
+  const pushToShopware = async (sku: string) => {
+    const qty = stock[sku] ?? 0;
+    setPushing(sku);
+    try {
+      const r = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(sku)}&qty=${qty}`).then(x => x.json());
+      if (r.ok) setSwStock(prev => ({ ...prev, [sku]: r.newStock }));
+    } catch {}
+    setPushing(null);
   };
 
   useEffect(() => {
     if (!session) return;
     odoo.loadChariotSkus(session).then(p => { setSkus(p); skusRef.current = p; setChariotSkusLocal(p); resolveNames(p); }).catch(() => {});
     import("@/lib/supabase").then(sb => sb.getChariotStock().then(setStock).catch(() => {}));
-    loadSwNames();
+    loadSwData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
+
+  // Liste filtrée par recherche (réf ou désignation).
+  const q = search.trim().toLowerCase();
+  const visibleSkus = q
+    ? skus.filter(s => s.toLowerCase().includes(q) || (names[s]?.name || "").toLowerCase().includes(q) || (swNames[s] || "").toLowerCase().includes(q))
+    : skus;
 
   const saveStock = async (sku: string) => {
     const raw = stockDraft[sku];
@@ -11022,17 +11043,29 @@ function EshopChariotSkus({ session }: { session: any }) {
           style={{ flex: 1, padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontFamily: "inherit", outline: "none" }} />
         <button onClick={add} style={{ padding: "8px 14px", background: saving ? C.textMuted : C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>{saving ? "⏳" : saved ? "✓" : "+"}</button>
       </div>
+      {/* Recherche */}
+      {skus.length > 0 && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="🔍 Rechercher (réf ou désignation)…"
+            style={{ flex: 1, minWidth: 0, padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} />
+          {search && <button onClick={() => setSearch("")} style={{ padding: "8px 10px", background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 11, cursor: "pointer", color: C.textMuted }}>✕</button>}
+          <span style={{ fontSize: 11, color: C.textMuted, whiteSpace: "nowrap" }}>{visibleSkus.length}</span>
+        </div>
+      )}
       {skus.length === 0 && <div style={{ fontSize: 11, color: C.textMuted }}>Aucun SKU configuré</div>}
       {skus.length > 0 && (
         <div style={{ display: "flex", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, padding: "4px 0", borderBottom: `1px solid ${C.border}`, gap: 8 }}>
-          <span style={{ flex: 1 }}>SKU / Désignation {resolving && <span style={{ fontWeight: 400, textTransform: "none" as const }}>· résolution…</span>}</span><span style={{ width: 130, textAlign: "center" }}>Stock chariot</span><span style={{ width: 20 }} />
+          <span style={{ flex: 1 }}>SKU / Désignation {resolving && <span style={{ fontWeight: 400, textTransform: "none" as const }}>· résolution…</span>}</span><span style={{ width: 70, textAlign: "center" }}>Stock SW</span><span style={{ width: 150, textAlign: "center" }}>Stock chariot</span><span style={{ width: 20 }} />
         </div>
       )}
-      {skus.map(sku => {
+      {visibleSkus.map(sku => {
         const cur = stock[sku] ?? 0;
         const draft = stockDraft[sku];
         const dirty = draft != null && draft !== String(cur);
         const info = names[sku];
+        const sw = swStock[sku];
+        const diff = sw != null && sw !== cur;
         return (
           <div key={sku} style={{ display: "flex", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${C.border}`, gap: 8 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -11043,19 +11076,27 @@ function EshopChariotSkus({ session }: { session: any }) {
                     ? <div style={{ fontSize: 11, color: C.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{swNames[sku]} <span style={{ color: C.orange, fontWeight: 700 }}>· Shopware</span></div>
                     : <div style={{ fontSize: 10.5, color: C.orange }}>non trouvé</div>))}
             </div>
-            <div style={{ width: 130, display: "flex", alignItems: "center", gap: 4, justifyContent: "center" }}>
+            {/* Stock Shopware actuel (lecture) */}
+            <div style={{ width: 70, textAlign: "center", fontSize: 13, fontWeight: 800, color: diff ? C.orange : C.text }}>
+              {sw === undefined ? "…" : sw === null ? "—" : sw}
+            </div>
+            {/* Stock chariot + bouton pousser vers Shopware */}
+            <div style={{ width: 150, display: "flex", alignItems: "center", gap: 4, justifyContent: "center" }}>
               <input type="number" min={0}
                 value={draft ?? String(cur)}
                 onChange={e => setStockDraft(prev => ({ ...prev, [sku]: e.target.value }))}
                 onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") saveStock(sku); }}
-                style={{ width: 60, padding: "5px 6px", border: `1.5px solid ${cur <= 0 ? C.red : C.border}`, borderRadius: 7, fontSize: 12, fontFamily: "inherit", textAlign: "center", boxSizing: "border-box", color: cur <= 0 ? C.red : C.text, fontWeight: 700 }} />
-              {dirty && <button onClick={() => saveStock(sku)} style={{ padding: "5px 8px", background: C.green, color: "#fff", border: "none", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>OK</button>}
+                style={{ width: 52, padding: "5px 6px", border: `1.5px solid ${cur <= 0 ? C.red : C.border}`, borderRadius: 7, fontSize: 12, fontFamily: "inherit", textAlign: "center", boxSizing: "border-box", color: cur <= 0 ? C.red : C.text, fontWeight: 700 }} />
+              {dirty
+                ? <button onClick={() => saveStock(sku)} style={{ padding: "5px 8px", background: C.green, color: "#fff", border: "none", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>OK</button>
+                : <button onClick={() => pushToShopware(sku)} disabled={pushing === sku} title="Écrire ce stock dans Shopware"
+                    style={{ padding: "5px 8px", background: C.blue, color: "#fff", border: "none", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: pushing === sku ? 0.6 : 1 }}>{pushing === sku ? "…" : "→ SW"}</button>}
             </div>
             <button onClick={() => save(skusRef.current.filter(s => s !== sku))} style={{ width: 20, background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✕</button>
           </div>
         );
       })}
-      <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 8 }}>Le stock chariot est décrémenté automatiquement à chaque sortie e-shop validée.</div>
+      <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 8 }}>« → SW » écrit le stock chariot dans Shopware. Le stock chariot est aussi décrémenté automatiquement à chaque sortie e-shop validée.</div>
     </Section>
   );
 }
