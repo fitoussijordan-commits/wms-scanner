@@ -279,17 +279,7 @@ export function generateLocationZPL(locationName: string, locationBarcode: strin
   if (!sz) { try { sz = getLabelTypeConfig("location").labelSize; } catch { sz = getLabelSize(); } }
   const W = mm(sz.widthMM);
   const H = mm(sz.heightMM);
-  const cW = W - 20;
-  const barW = sz.widthMM >= 60 ? 3 : 2;
-  const bcH = Math.min(Math.round(H * 0.42), 130);
-
-  const nameBlock = 48;
-  const bcBlock = bcH + 22;
-  const total = nameBlock + bcBlock;
-  const startY = Math.max(8, Math.round((H - total) / 2));
-
-  let y = startY;
-  const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
+  const cW = W - 16;
 
   // Nom affiché: dernier segment du chemin, premier mot avant "-"
   // "WH/Stock/.../A12-RKC1" → "A12" | "B-A12" → "A12"
@@ -297,8 +287,27 @@ export function generateLocationZPL(locationName: string, locationBarcode: strin
   const shortName = lastSegment.replace(/^B-/i, "").split("-")[0];
   // Code-barres: valeur complète Odoo (ex: "B-A12") — ne pas stripper
   const locBarcode = locationBarcode || shortName;
-  lines.push(`^FO10,${y}^A0N,40,40^FB${cW},1,0,C^FD${shortName}^FS`);
-  y += nameBlock;
+
+  // ── Design VISUEL pour préparateurs : gros nom + grand code-barres ──
+  // Tailles proportionnelles à la hauteur de l'étiquette (70×45 ≈ 559×360 px @203dpi).
+  // Le nom occupe ~40% de la hauteur, le code-barres ~40%, marges comprises.
+  let nameFont = Math.round(H * 0.34);          // ex: 360 → ~122px (gros, lisible de loin)
+  nameFont = Math.max(60, Math.min(nameFont, 170));
+  // largeur de barre : large mais bornée pour que le code tienne dans la largeur
+  const modules = 11 * locBarcode.length + 35;
+  const maxBarW = Math.max(2, Math.floor((W - 50) / modules));
+  const barW = Math.min(6, maxBarW);            // jusqu'à 6 dots de large (épais, scannable vite)
+  const bcH = Math.round(H * 0.38);             // code-barres haut
+
+  // Centrage vertical du bloc (nom + espace + code-barres + texte lisible).
+  const gap = Math.round(H * 0.05);
+  const readable = 34;                          // hauteur approx. du texte sous le code-barres
+  const total = nameFont + gap + bcH + readable;
+  let y = Math.max(8, Math.round((H - total) / 2));
+
+  const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
+  lines.push(`^FO8,${y}^A0N,${nameFont},${nameFont}^FB${cW},1,0,C^FD${shortName}^FS`);
+  y += nameFont + gap;
   lines.push(barcodeZPL(locBarcode, W, y, bcH, barW));
   lines.push("^XZ");
 
