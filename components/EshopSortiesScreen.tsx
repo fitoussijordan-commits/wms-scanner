@@ -543,6 +543,9 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
   const [pushing, setPushing] = useState<string | null>(null);
   // résultat de la MAJ par réf : { newStock, hasLocation, locCode }
   const [pushed, setPushed] = useState<Record<string, { newStock: number; hasLocation: boolean; locCode?: string }>>({});
+  const [search, setSearch] = useState("");
+  // valeur libre saisie par réf (pour MAJ manuelle)
+  const [freeVal, setFreeVal] = useState<Record<string, string>>({});
   // emplacements préchargés : detailId → { code, stock }
   const [binMap, setBinMap] = useState<Record<string, { code: string; stock: number }>>({});
 
@@ -631,9 +634,11 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
   // MAJ stock : écrit le stock Odoo dans Shopware (inStock) + vérifie l'emplacement.
   // L'écriture par emplacement n'est pas possible via l'API Pickware : on écrit le
   // stock global, et on ALERTE si l'article n'a pas d'emplacement (à ranger à la main).
-  const pushStock = async (r: AuditRow) => {
-    if (!r.mapped) { onToast("Produit non mappé", "error"); return; }
-    const qty = r.odoo ?? 0;
+  // override = valeur libre saisie ; sinon stock Odoo
+  const pushStock = async (r: AuditRow, override?: number) => {
+    const qty = override != null ? override : (r.odoo ?? 0);
+    if (override == null && !r.mapped) { onToast("Produit non mappé", "error"); return; }
+    if (qty < 0 || Number.isNaN(qty)) { onToast("Valeur invalide", "error"); return; }
     setPushing(r.number);
     try {
       // 1) écrire le stock global (instantané)
@@ -665,7 +670,9 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
   };
   const counts: Record<string, number> = { all: rows.length, noOdoo: 0, swZeroOdooStock: 0, ok: 0, unmapped: 0, service: 0, chariot: 0 };
   for (const r of rows) counts[cat(r)]++;
-  const visible = filter === "all" ? rows : rows.filter(r => cat(r) === filter);
+  const q = search.trim().toLowerCase();
+  let visible = filter === "all" ? rows : rows.filter(r => cat(r) === filter);
+  if (q) visible = visible.filter(r => r.number.toLowerCase().includes(q) || (r.odooRef || "").toLowerCase().includes(q) || (r.nameSW || "").toLowerCase().includes(q));
 
   const FILTERS: { k: typeof filter; label: string }[] = [
     { k: "noOdoo", label: "Actif SW sans stock Odoo" },
@@ -688,12 +695,18 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
 
       {rows.length > 0 && (
         <>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
             {FILTERS.map(f => (
               <button key={f.k} onClick={() => setFilter(f.k)} style={chip(filter === f.k)}>
                 {f.label} ({counts[f.k]})
               </button>
             ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Rechercher une réf, code Odoo ou nom…"
+              style={{ flex: 1, minWidth: 0, padding: "8px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: C.white, color: C.text, outline: "none", boxSizing: "border-box" }} />
+            {search && <button onClick={() => setSearch("")} style={{ padding: "8px 12px", background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 12, cursor: "pointer", color: C.textMuted, fontFamily: "inherit" }}>✕</button>}
+            <span style={{ fontSize: 12, color: C.textMuted, whiteSpace: "nowrap" }}>{visible.length} ligne{visible.length > 1 ? "s" : ""}</span>
           </div>
           <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow }}>
             <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
@@ -729,19 +742,32 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
                             style={{ background: "none", border: "none", cursor: "pointer", color: C.blue, fontSize: 11, fontWeight: 700, padding: "0 0 0 8px", fontFamily: "inherit" }}>
                             {fixRef === r.number ? "fermer" : "mapper"}
                           </button>
-                          {r.mapped && (
-                            <div style={{ marginTop: 6 }}>
+                          <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 5 }}>
+                            {r.mapped && (
                               <button onClick={() => pushStock(r)} disabled={pushing === r.number}
-                                style={{ padding: "4px 10px", background: C.green, color: "#fff", border: "none", borderRadius: 7, fontSize: 11, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", opacity: pushing === r.number ? 0.6 : 1 }}>
-                                {pushing === r.number ? "…" : `MAJ stock → ${r.odoo ?? 0}`}
+                                style={{ padding: "4px 10px", background: C.green, color: "#fff", border: "none", borderRadius: 7, fontSize: 11, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", opacity: pushing === r.number ? 0.6 : 1, alignSelf: "flex-start" }}>
+                                {pushing === r.number ? "…" : `MAJ stock Odoo → ${r.odoo ?? 0}`}
                               </button>
-                              {pushed[r.number] && (
-                                pushed[r.number].hasLocation
-                                  ? <div style={{ marginTop: 4, fontSize: 10.5, color: C.green, fontWeight: 700 }}>✓ {pushed[r.number].newStock} · empl. {pushed[r.number].locCode}</div>
-                                  : <div style={{ marginTop: 4, fontSize: 10.5, color: C.orange, fontWeight: 800 }}>⚠ {pushed[r.number].newStock} · SANS emplacement — ranger dans Pickware</div>
-                              )}
+                            )}
+                            {/* MAJ valeur libre — dispo même pour les non mappés */}
+                            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                              <input type="number" min={0} value={freeVal[r.number] ?? ""}
+                                onChange={e => setFreeVal(prev => ({ ...prev, [r.number]: e.target.value }))}
+                                placeholder="valeur"
+                                style={{ width: 64, padding: "4px 6px", border: `1.5px solid ${C.border}`, borderRadius: 6, fontSize: 11, fontFamily: "inherit", boxSizing: "border-box" }} />
+                              <button
+                                onClick={() => { const v = parseInt(freeVal[r.number] ?? "", 10); if (Number.isNaN(v)) { onToast("Saisis une valeur", "error"); return; } pushStock(r, v); }}
+                                disabled={pushing === r.number || (freeVal[r.number] ?? "") === ""}
+                                style={{ padding: "4px 10px", background: C.blue, color: "#fff", border: "none", borderRadius: 7, fontSize: 11, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", opacity: pushing === r.number || (freeVal[r.number] ?? "") === "" ? 0.5 : 1 }}>
+                                MAJ libre →
+                              </button>
                             </div>
-                          )}
+                            {pushed[r.number] && (
+                              pushed[r.number].hasLocation
+                                ? <div style={{ fontSize: 10.5, color: C.green, fontWeight: 700 }}>✓ {pushed[r.number].newStock} · empl. {pushed[r.number].locCode}</div>
+                                : <div style={{ fontSize: 10.5, color: C.orange, fontWeight: 800 }}>⚠ {pushed[r.number].newStock} · SANS emplacement — ranger dans Pickware</div>
+                            )}
+                          </div>
                         </td>
                       </tr>
                       {fixRef === r.number && (
