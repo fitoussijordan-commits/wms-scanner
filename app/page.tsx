@@ -10958,10 +10958,24 @@ function EshopChariotSkus({ session }: { session: any }) {
     setResolving(false);
   };
 
+  // Désignation Shopware par SKU (pour les réfs non trouvées dans Odoo).
+  const [swNames, setSwNames] = useState<Record<string, string>>({});
+
+  // Charge les noms Shopware (catalogue actif) — 1 appel pour tous les SKU.
+  const loadSwNames = async () => {
+    try {
+      const r = await fetch("/api/shopware-explore?action=activeProducts").then(x => x.json());
+      const map: Record<string, string> = {};
+      for (const p of (r.products || [])) if (p.number) map[String(p.number)] = p.name || "";
+      setSwNames(map);
+    } catch {}
+  };
+
   useEffect(() => {
     if (!session) return;
     odoo.loadChariotSkus(session).then(p => { setSkus(p); skusRef.current = p; setChariotSkusLocal(p); resolveNames(p); }).catch(() => {});
     import("@/lib/supabase").then(sb => sb.getChariotStock().then(setStock).catch(() => {}));
+    loadSwNames();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
@@ -11025,7 +11039,9 @@ function EshopChariotSkus({ session }: { session: any }) {
               <span style={{ fontSize: 12, fontWeight: 600, color: C.text, fontFamily: "monospace" }}>{sku}</span>
               {info && (info.name
                 ? <div style={{ fontSize: 11, color: C.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{info.name}{info.ref && info.ref !== sku ? <span style={{ color: C.textMuted }}> · {info.ref}</span> : ""}</div>
-                : <div style={{ fontSize: 10.5, color: C.orange }}>non trouvé dans Odoo</div>)}
+                : (swNames[sku]
+                    ? <div style={{ fontSize: 11, color: C.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{swNames[sku]} <span style={{ color: C.orange, fontWeight: 700 }}>· Shopware</span></div>
+                    : <div style={{ fontSize: 10.5, color: C.orange }}>non trouvé</div>))}
             </div>
             <div style={{ width: 130, display: "flex", alignItems: "center", gap: 4, justifyContent: "center" }}>
               <input type="number" min={0}
