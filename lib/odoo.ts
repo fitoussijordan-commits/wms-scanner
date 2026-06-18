@@ -1462,7 +1462,7 @@ export interface EshopMatchResult {
   product_name: string;
   default_code: string;
   barcode: string;
-  match_method: "supplier_ref" | "barcode" | "name";
+  match_method: "supplier_ref" | "ref" | "barcode" | "name";
 }
 
 export async function matchEshopSkus(
@@ -1539,6 +1539,22 @@ export async function matchEshopSkus(
       const p = pMap[val.product_id];
       if (p) { result[sku].default_code = p.default_code || ""; result[sku].barcode = p.barcode || ""; result[sku].product_name = p.name; }
     }
+  }
+
+  if (remaining.size === 0) return result;
+
+  // ── Stratégie 1bis : référence Odoo (default_code) ───────────────────────
+  // Si la réf fournisseur n'a rien donné, on tente la réf interne Odoo.
+  const remainingForRef = Array.from(remaining);
+  const byDefaultCode = await searchRead(
+    session, "product.product",
+    [["default_code", "in", remainingForRef]],
+    ["id", "name", "default_code", "barcode"],
+    remainingForRef.length
+  );
+  for (const p of byDefaultCode) {
+    const sku = remainingForRef.find(s => s === p.default_code);
+    if (sku && remaining.has(sku)) addMatch(sku, p, "ref");
   }
 
   if (remaining.size === 0) return result;
