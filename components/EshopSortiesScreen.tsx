@@ -201,6 +201,22 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
     }
   }
   const toDeduct = Object.values(deductAgg);
+
+  // ── CHARIOT : quantités vendues des réfs chariot (mêmes filtres que le devis,
+  // mais SEULEMENT les réfs chariot) → pour décrémenter le stock chariot dans l'app.
+  const chariotAgg: Record<string, number> = {};
+  for (const o of orders) {
+    if (processed.has(o.number)) continue;
+    if (String(o.orderStatusId) === "-1") continue;
+    if (String(o.paymentStatusId) !== "12") continue;
+    for (const l of o.lines) {
+      if (l.mode === 4 || !l.articleNumber) continue;
+      if (!isChariot(l.articleNumber)) continue;
+      chariotAgg[l.articleNumber] = (chariotAgg[l.articleNumber] || 0) + l.quantity;
+    }
+  }
+  const chariotDeductions = Object.entries(chariotAgg).map(([sku, qty]) => ({ sku, qty }));
+
   // Commandes réellement incluses dans le devis (pour le garde-fou)
   const deductOrderNumbers = Array.from(new Set(
     orders.filter(o => !processed.has(o.number) && String(o.orderStatusId) !== "-1" && String(o.paymentStatusId) === "12").map(o => o.number).filter(Boolean)
@@ -219,21 +235,24 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   // ── Création devis Odoo ──
   const createQuote = async () => {
     if (!partner) { onToast("Renseigne d'abord le client e-shop", "error"); return; }
-    if (!toDeduct.length) { onToast("Aucune ligne mappée à déduire", "info"); return; }
+    if (!toDeduct.length && !chariotDeductions.length) { onToast("Aucune ligne mappée à déduire", "info"); return; }
     if (blocked.length && !confirm(`${blocked.length} référence(s) NON mappée(s) seront ignorées. Continuer quand même ?`)) return;
     if (!confirm(`Créer un devis Odoo pour ${partner.name} avec ${toDeduct.length} ligne(s) ?`)) return;
     setCreatingQuote(true);
     try {
-      const lines = toDeduct.map(a => ({
-        productId: a.productId, qty: a.qty, name: a.name,
-        orders: a.cmds.map(c => `${c.number}${c.qty > 1 ? ` ×${c.qty}` : ""}`).join(", "),
-      }));
-      const q = await odoo.createEshopQuotation(session, partner.id, lines, `E-shop ${dateFrom}${dateFrom !== dateTo ? "→" + dateTo : ""}`);
+      let q: any = null;
+      if (toDeduct.length) {
+        const lines = toDeduct.map(a => ({
+          productId: a.productId, qty: a.qty, name: a.name,
+          orders: a.cmds.map(c => `${c.number}${c.qty > 1 ? ` ×${c.qty}` : ""}`).join(", "),
+        }));
+        q = await odoo.createEshopQuotation(session, partner.id, lines, `E-shop ${dateFrom}${dateFrom !== dateTo ? "→" + dateTo : ""}`);
+      }
       // GARDE-FOU : marque UNIQUEMENT les commandes réellement incluses (payées, non annulées)
       const includedNumbers = deductOrderNumbers;
-      try { await markEshopOrdersProcessed(includedNumbers, q.name); setProcessed(prev => new Set([...Array.from(prev), ...includedNumbers])); } catch {}
+      try { await markEshopOrdersProcessed(includedNumbers, q ? q.name : "chariot"); setProcessed(prev => new Set([...Array.from(prev), ...includedNumbers])); } catch {}
       // Trace : export Excel du détail envoyé au devis (pour comparer avec Odoo)
-      try {
+      if (q) try {
         const XLSX = await import("xlsx");
         const rows = toDeduct.map(a => ({
           "Réf Shopware": a.ref,
@@ -248,7 +267,20 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
         XLSX.utils.book_append_sheet(wb, ws, "Devis");
         XLSX.writeFile(wb, `Devis_${q.name}_${dateFrom}.xlsx`);
       } catch {}
-      onToast(`✓ Devis ${q.name} créé — ${includedNumbers.length} commande(s) marquée(s) sorties · Excel téléchargé`, "success");
+      if (q) onToast(`✓ Devis ${q.name} créé — ${includedNumbers.length} commande(s) marquée(s) sorties · Excel téléchargé`, "success");
+      // ── CHARIOT : décrémente le stock chariot des réfs chariot vendues ──
+      if (chariotDeductions.length) {
+        try {
+          const sb = await import("@/lib/supabase");
+          const { shortages } = await sb.decrementChariotStock(chariotDeductions);
+          if (shortages.length) {
+            const msg = shortages.map(s => `${s.sku} (demandé ${s.demande}, dispo ${s.dispo})`).join(" · ");
+            onToast(`⚠ Chariot insuffisant : ${msg}`, "error");
+          } else {
+            onToast(`Chariot mis à jour (${chariotDeductions.length} réf décrémentée${chariotDeductions.length > 1 ? "s" : ""}) ✓`, "success");
+          }
+        } catch (e: any) { onToast("Chariot : erreur MAJ stock — " + e.message, "error"); }
+      }
     } catch (e: any) { onToast("Erreur création devis : " + e.message, "error"); }
     setCreatingQuote(false);
   };

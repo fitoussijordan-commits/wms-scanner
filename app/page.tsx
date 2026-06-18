@@ -10931,11 +10931,28 @@ function EshopChariotSkus({ session }: { session: any }) {
   const [saved, setSaved] = useState(false);
   // Use ref to always have latest skus for Odoo save even if component unmounts
   const skusRef = useRef<string[]>([]);
+  // Stock chariot par SKU (géré dans l'app, partagé via Supabase)
+  const [stock, setStock] = useState<Record<string, number>>({});
+  const [stockDraft, setStockDraft] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!session) return;
     odoo.loadChariotSkus(session).then(p => { setSkus(p); skusRef.current = p; setChariotSkusLocal(p); }).catch(() => {});
+    import("@/lib/supabase").then(sb => sb.getChariotStock().then(setStock).catch(() => {}));
   }, [session]);
+
+  const saveStock = async (sku: string) => {
+    const raw = stockDraft[sku];
+    if (raw == null || raw === "") return;
+    const v = parseInt(raw, 10);
+    if (Number.isNaN(v) || v < 0) return;
+    try {
+      const sb = await import("@/lib/supabase");
+      const next = await sb.setChariotStock(sku, v);
+      setStock(next);
+      setStockDraft(prev => { const c = { ...prev }; delete c[sku]; return c; });
+    } catch {}
+  };
 
   const save = (updated: string[]) => {
     skusRef.current = updated;
@@ -10968,12 +10985,31 @@ function EshopChariotSkus({ session }: { session: any }) {
         <button onClick={add} style={{ padding: "8px 14px", background: saving ? C.textMuted : C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>{saving ? "⏳" : saved ? "✓" : "+"}</button>
       </div>
       {skus.length === 0 && <div style={{ fontSize: 11, color: C.textMuted }}>Aucun SKU configuré</div>}
-      {skus.map(sku => (
-        <div key={sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.border}` }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: C.text, fontFamily: "monospace" }}>{sku}</span>
-          <button onClick={() => save(skusRef.current.filter(s => s !== sku))} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✕</button>
+      {skus.length > 0 && (
+        <div style={{ display: "flex", fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, padding: "4px 0", borderBottom: `1px solid ${C.border}`, gap: 8 }}>
+          <span style={{ flex: 1 }}>SKU</span><span style={{ width: 130, textAlign: "center" }}>Stock chariot</span><span style={{ width: 20 }} />
         </div>
-      ))}
+      )}
+      {skus.map(sku => {
+        const cur = stock[sku] ?? 0;
+        const draft = stockDraft[sku];
+        const dirty = draft != null && draft !== String(cur);
+        return (
+          <div key={sku} style={{ display: "flex", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${C.border}`, gap: 8 }}>
+            <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: C.text, fontFamily: "monospace" }}>{sku}</span>
+            <div style={{ width: 130, display: "flex", alignItems: "center", gap: 4, justifyContent: "center" }}>
+              <input type="number" min={0}
+                value={draft ?? String(cur)}
+                onChange={e => setStockDraft(prev => ({ ...prev, [sku]: e.target.value }))}
+                onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") saveStock(sku); }}
+                style={{ width: 60, padding: "5px 6px", border: `1.5px solid ${cur <= 0 ? C.red : C.border}`, borderRadius: 7, fontSize: 12, fontFamily: "inherit", textAlign: "center", boxSizing: "border-box", color: cur <= 0 ? C.red : C.text, fontWeight: 700 }} />
+              {dirty && <button onClick={() => saveStock(sku)} style={{ padding: "5px 8px", background: C.green, color: "#fff", border: "none", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>OK</button>}
+            </div>
+            <button onClick={() => save(skusRef.current.filter(s => s !== sku))} style={{ width: 20, background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✕</button>
+          </div>
+        );
+      })}
+      <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 8 }}>Le stock chariot est décrémenté automatiquement à chaque sortie e-shop validée.</div>
     </Section>
   );
 }

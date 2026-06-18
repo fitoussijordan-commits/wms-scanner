@@ -402,6 +402,51 @@ export async function addServiceRef(ref: string): Promise<void> {
 }
 
 // ══════════════════════════════════════════
+// STOCK CHARIOT eShop (compteur géré dans l'app, par SKU) — partagé via wms_sync_meta
+// ══════════════════════════════════════════
+export type ChariotStock = Record<string, number>; // sku → quantité restante
+
+export async function getChariotStock(): Promise<ChariotStock> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_chariot_stock").single();
+    if (data?.value) return JSON.parse(data.value);
+  } catch {}
+  return {};
+}
+
+export async function saveChariotStock(stock: ChariotStock): Promise<void> {
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "eshop_chariot_stock", value: JSON.stringify(stock), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}
+
+// Définit le stock d'un SKU (valeur absolue).
+export async function setChariotStock(sku: string, qty: number): Promise<ChariotStock> {
+  const stock = await getChariotStock();
+  stock[sku] = Math.max(0, Math.round(qty));
+  await saveChariotStock(stock);
+  return stock;
+}
+
+// Décrémente plusieurs SKU d'un coup (lors d'une sortie e-shop).
+// Renvoie { stock, shortages } — shortages = SKU dont le stock était insuffisant.
+export async function decrementChariotStock(
+  deductions: { sku: string; qty: number }[]
+): Promise<{ stock: ChariotStock; shortages: { sku: string; demande: number; dispo: number }[] }> {
+  const stock = await getChariotStock();
+  const shortages: { sku: string; demande: number; dispo: number }[] = [];
+  for (const d of deductions) {
+    const dispo = stock[d.sku] ?? 0;
+    if (d.qty > dispo) shortages.push({ sku: d.sku, demande: d.qty, dispo });
+    stock[d.sku] = Math.max(0, dispo - d.qty); // ne descend jamais sous 0
+  }
+  await saveChariotStock(stock);
+  return { stock, shortages };
+}
+
+// ══════════════════════════════════════════
 // CACHE MAPPING AUTO (réf Shopware → produit Odoo) — évite de relancer le matching
 // ══════════════════════════════════════════
 export type EshopMappingCache = Record<string, { product_id: number; default_code: string; product_name: string }>;
