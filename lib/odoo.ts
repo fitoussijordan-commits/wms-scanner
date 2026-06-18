@@ -366,7 +366,35 @@ export async function getProductsAtLocation(session: OdooSession, locationId: nu
 }
 
 export async function getLocations(session: OdooSession) {
-  return searchRead(session, "stock.location", [["usage", "in", ["internal", "transit"]]], ["id", "name", "complete_name", "barcode", "usage"], 2000, "complete_name");
+  return searchRead(session, "stock.location", [["usage", "in", ["internal", "transit"]]], ["id", "name", "complete_name", "barcode", "usage", "location_id"], 2000, "complete_name");
+}
+
+// ============================================
+// CREATE LOCATION (gestion emplacements depuis le scan)
+// ============================================
+export interface NewLocation {
+  name: string;
+  barcode?: string;
+  parentId: number;        // location_id (emplacement parent, requis par Odoo)
+  usage?: string;          // "internal" par défaut
+}
+export async function createLocation(session: OdooSession, loc: NewLocation): Promise<number> {
+  const vals: any = {
+    name: loc.name.trim(),
+    location_id: loc.parentId,
+    usage: loc.usage || "internal",
+  };
+  if (loc.barcode && loc.barcode.trim()) vals.barcode = loc.barcode.trim();
+  const id = await create(session, "stock.location", vals);
+  return id as number;
+}
+
+// Vérifie si un code-barres d'emplacement existe déjà (évite les doublons de scan).
+export async function locationBarcodeExists(session: OdooSession, barcode: string): Promise<boolean> {
+  const b = barcode.trim();
+  if (!b) return false;
+  const found = await searchRead(session, "stock.location", [["barcode", "=", b]], ["id"], 1);
+  return found.length > 0;
 }
 
 // ============================================
