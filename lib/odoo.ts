@@ -1574,6 +1574,36 @@ export async function matchEshopSkus(
 
   if (remaining.size === 0) return result;
 
+  // ── Stratégie 2bis : réf fournisseur / réf Odoo insensible casse-format ───
+  // Repli quand "=" exact a raté (casse, espaces parasites, zéro initial…).
+  for (const sku of Array.from(remaining)) {
+    const s = sku.trim();
+    if (!s) continue;
+    // a) réf fournisseur (product.supplierinfo.product_code) en =ilike
+    const si = await searchRead(
+      session, "product.supplierinfo",
+      [["product_code", "=ilike", s]],
+      ["product_id", "product_tmpl_id"], 1
+    );
+    let prod: any = null;
+    if (si.length && si[0].product_id) {
+      const pid = si[0].product_id[0];
+      const ps = await searchRead(session, "product.product", [["id", "=", pid]], ["id", "name", "default_code", "barcode"], 1);
+      if (ps.length) prod = ps[0];
+    } else if (si.length && si[0].product_tmpl_id) {
+      const ps = await searchRead(session, "product.product", [["product_tmpl_id", "=", si[0].product_tmpl_id[0]]], ["id", "name", "default_code", "barcode"], 1);
+      if (ps.length) prod = ps[0];
+    }
+    // b) sinon réf Odoo (default_code) en =ilike, actifs ou archivés
+    if (!prod) {
+      const ps = await searchRead(session, "product.product", [["default_code", "=ilike", s], ["active", "in", [true, false]]], ["id", "name", "default_code", "barcode"], 1);
+      if (ps.length) prod = ps[0];
+    }
+    if (prod) addMatch(sku, prod, "ref");
+  }
+
+  if (remaining.size === 0) return result;
+
   // ── Stratégie 3 : nom similaire (ilike) ──────────────────────────────────
   // On cherche chaque SKU restant comme fragment de nom — on prend le meilleur match
   for (const sku of Array.from(remaining)) {
