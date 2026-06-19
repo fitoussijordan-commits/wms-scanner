@@ -3725,15 +3725,18 @@ export async function createMarketplaceClient(session: OdooSession, c: Marketpla
   if (c.street2) vals.street2 = c.street2;
   if (c.zip) vals.zip = c.zip;
   if (c.city) vals.city = c.city;
-  // Type de compte (x_type_de_compte_id, many2one vers x_type_de_compte) → résoudre par nom (tolérant)
+  // Type de compte (x_type_de_compte_id, many2one vers x_type_de_compte) → résoudre par nom.
+  // On lit TOUS les enregistrements et on matche en JS (insensible casse/accents),
+  // car le champ "nom" du modèle custom peut varier (x_name, name, display_name…).
   if (c.typeCompteName) {
     try {
-      const tryFind = async (domain: any[]) => searchRead(session, "x_type_de_compte", domain, ["id"], 1).catch(() => [] as any[]);
-      let rec = await tryFind([["x_name", "=", c.typeCompteName]]);
-      if (!rec.length) rec = await tryFind([["x_name", "ilike", c.typeCompteName]]);
-      if (!rec.length) rec = await tryFind([["display_name", "ilike", c.typeCompteName]]);
-      if (!rec.length) rec = await tryFind([["name", "ilike", c.typeCompteName]]);
-      if (rec.length) vals.x_type_de_compte_id = rec[0].id;
+      const norm = (s: any) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+      const target = norm(c.typeCompteName);
+      const recs = await searchRead(session, "x_type_de_compte", [], ["id", "display_name"], 200).catch(() => [] as any[]);
+      // match exact normalisé, sinon "contient"
+      let hit = recs.find((r: any) => norm(r.display_name) === target);
+      if (!hit) hit = recs.find((r: any) => norm(r.display_name).includes(target));
+      if (hit) vals.x_type_de_compte_id = hit.id;
     } catch {}
   }
   // Pays via code ISO2
@@ -3793,18 +3796,19 @@ export async function createMarketplaceOrder(
 
   const id = await create(session, "sale.order", vals) as number;
 
+  // La pricelist est READONLY une fois la commande confirmée (state=sale).
+  // On la (ré)impose donc TANT QU'ON EST EN BROUILLON, puis on recalcule les prix.
+  if (pricelistId) {
+    try {
+      await write(session, "sale.order", [id], { pricelist_id: pricelistId });
+      try { await callMethod(session, "sale.order", "action_update_prices", [[id]]); }
+      catch { try { await callMethod(session, "sale.order", "update_prices", [[id]]); } catch {} }
+    } catch {}
+  }
+
   if (opts.confirm) {
     try {
       await callMethod(session, "sale.order", "action_confirm", [[id]]);
-      // La confirmation peut réinitialiser la pricelist au tarif du client → on la réimpose
-      if (pricelistId) {
-        try {
-          await write(session, "sale.order", [id], { pricelist_id: pricelistId });
-          // recalcul des prix selon la nouvelle pricelist
-          try { await callMethod(session, "sale.order", "action_update_prices", [[id]]); }
-          catch { try { await callMethod(session, "sale.order", "update_prices", [[id]]); } catch {} }
-        } catch {}
-      }
       // réservation du stock sur le(s) picking(s) générés
       if (opts.assign) {
         try {
