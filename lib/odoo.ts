@@ -3755,15 +3755,6 @@ export async function createMarketplaceClient(session: OdooSession, c: Marketpla
   return await create(session, "res.partner", vals) as number;
 }
 
-// DIAGNOSTIC Imparfaite : renvoie les pricelists et types de compte existants,
-// pour comprendre pourquoi le matching par nom échoue.
-export async function debugImparfaite(session: OdooSession): Promise<{ pricelists: any[]; typesCompte: any[] }> {
-  const pricelists = await searchRead(session, "product.pricelist", [], ["id", "name"], 100).catch(() => [] as any[]);
-  let typesCompte: any[] = [];
-  try { typesCompte = await searchRead(session, "x_type_de_compte", [], ["id", "display_name"], 200); } catch (e: any) { typesCompte = [{ error: e?.message || String(e) }]; }
-  return { pricelists, typesCompte };
-}
-
 // Crée une commande de vente marketplace pour un client donné.
 // confirm → confirme (génère le BL) ; assign → réserve le stock sur le BL.
 // Lignes à 0 € si price non fourni (mode "suivi/destockage").

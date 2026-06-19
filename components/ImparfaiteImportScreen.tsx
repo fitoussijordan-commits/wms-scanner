@@ -219,14 +219,6 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
             <span style={chip(C.greenSoft, C.green)}>{importable.length} à importer</span>
             {groups.some(g => g.alreadyImported) && <span style={chip(C.orangeSoft, C.orange)}>{groups.filter(g => g.alreadyImported).length} déjà importée(s)</span>}
             <div style={{ flex: 1 }} />
-            <button onClick={async () => {
-              try {
-                const d = await odoo.debugImparfaite(session);
-                const pls = d.pricelists.map((p: any) => p.name).join(" | ");
-                const tcs = d.typesCompte.map((t: any) => t.display_name || JSON.stringify(t)).join(" | ");
-                alert("PRICELISTS:\n" + pls + "\n\nTYPES DE COMPTE:\n" + tcs);
-              } catch (e: any) { alert("Erreur diag : " + (e?.message || e)); }
-            }} style={btn(C.white, C.purple, C.purple)}>🔍 Diag</button>
             <button onClick={reset} style={btn(C.white, C.textSec, C.border)}>Changer de fichier</button>
             <button onClick={runImport} disabled={!importable.length} style={btn(importable.length ? C.green : C.border, "#fff")}>Importer ({importable.length})</button>
           </div>
