@@ -266,6 +266,36 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(results);
     }
 
+    // ── tntProbe2: chercher l'expédition côté Pickware ERP (autres noms) ──
+    if (action === "tntProbe2") {
+      const guid = searchParams.get("guid") || "";
+      const results: any = {};
+      const paths = [
+        "/ViisonPickwareERPShipments?limit=2",
+        "/ViisonPickwareERPShipment?limit=2",
+        "/ViisonPickwareERPParcels?limit=2",
+        "/ViisonPickwareERPOrderShipments?limit=2",
+        "/ViisonPickwareERPShippingShipments?limit=2",
+        "/ViisonPickwareShippingParcels?limit=2",
+        "/ViisonPickwareShippingLabels?limit=2",
+        "/PickwareShippingLabels?limit=2",
+        "/ViisonPickwareERPGoodsOutgoingEntries?limit=2",
+        "/ViisonPickwareERPPickingRoutes?limit=2",
+        "/ViisonPickwareERPPickLists?limit=2",
+        // recherche d'une commande par GUID d'expédition (champ custom)
+        guid ? `/orders?filter[0][property]=pickwareShipmentGuid&filter[0][value]=${encodeURIComponent(guid)}&limit=1` : "",
+      ].filter(Boolean);
+      for (const p of paths) {
+        try {
+          const r = await safeJson(await swFetch(p, creds));
+          results[p] = { status: r.status, ok: r.ok };
+          if (r.ok && r.json) results[p].sample = (r.json.data ?? r.json);
+          else results[p].raw = r.raw?.substring(0, 100);
+        } catch (e: any) { results[p] = { error: e.message }; }
+      }
+      return NextResponse.json(results);
+    }
+
     // ── pickware: explore les endpoints Pickware WMS / ERP ──
     if (action === "pickware") {
       const results: any = {};
