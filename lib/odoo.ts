@@ -2047,6 +2047,20 @@ export async function applyInventoryAdjustment(
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 }
 
+// Applique un DELTA (écart) sur un quant : nouvelle qty = qty propre du quant + delta.
+// Indispensable en SCAN LIBRE où le théorique = somme de tous les emplacements mais
+// la correction ne porte que sur UN quant : il faut ajuster du net, pas réécrire l'absolu.
+export async function applyInventoryDelta(
+  session: OdooSession,
+  quantId: number,
+  quantOwnQty: number,
+  delta: number,
+  reason?: string
+): Promise<void> {
+  const target = Math.max(0, quantOwnQty + delta); // jamais négatif sur ce quant
+  await applyInventoryAdjustment(session, quantId, target, reason);
+}
+
 // Create a new quant (for products with 0 stock not yet in a location)
 export async function createInventoryAdjustment(
   session: OdooSession,
@@ -3565,7 +3579,7 @@ export async function findLocationsByName(session: OdooSession, query: string): 
 
 // Théorique pour une liste de combinaisons (produit/lot/emplacement).
 // Retourne pour chaque clé: { quantId, theoretical } d'après stock.quant temps réel.
-export interface TheoreticalRow { productId: number; lotId: number | null; locationId: number | null; quantId: number | null; theoretical: number; }
+export interface TheoreticalRow { productId: number; lotId: number | null; locationId: number | null; quantId: number | null; theoretical: number; quantQty?: number; }
 
 export async function getInventoryTheoretical(
   session: OdooSession,
@@ -3584,7 +3598,8 @@ export async function getInventoryTheoretical(
   // Map scommande exacte produit+lot+emplacement
   const exact: Record<string, { quantId: number; qty: number }> = {};
   // Agrégat produit+lot (tous emplacements) pour le mode scan libre (locationId null)
-  const byProdLot: Record<string, { quantId: number; qty: number }> = {};
+  // bestQty = qty du quant choisi comme cible (le plus rempli) → sert à appliquer un DELTA.
+  const byProdLot: Record<string, { quantId: number; qty: number; bestQty: number }> = {};
   for (const q of quants) {
     const pid = Array.isArray(q.product_id) ? q.product_id[0] : q.product_id;
     const lot = q.lot_id ? (Array.isArray(q.lot_id) ? q.lot_id[0] : q.lot_id) : null;
@@ -3592,19 +3607,19 @@ export async function getInventoryTheoretical(
     const qty = Number(q.quantity) || 0;
     exact[qKey(pid, lot, loc)] = { quantId: q.id, qty };
     const plKey = `${pid}|${lot ?? 0}`;
-    if (!byProdLot[plKey]) byProdLot[plKey] = { quantId: q.id, qty: 0 };
+    if (!byProdLot[plKey]) byProdLot[plKey] = { quantId: q.id, qty: 0, bestQty: qty };
     byProdLot[plKey].qty += qty;
     // garde le quant avec le plus de stock comme cible de correction par défaut
-    if (qty > exact[qKey(pid, lot, loc)].qty - 1) byProdLot[plKey].quantId = q.id;
+    if (qty >= byProdLot[plKey].bestQty) { byProdLot[plKey].quantId = q.id; byProdLot[plKey].bestQty = qty; }
   }
   return keys.map(k => {
     if (k.locationId != null) {
       const hit = exact[qKey(k.productId, k.lotId, k.locationId)];
-      return { ...k, quantId: hit?.quantId ?? null, theoretical: hit?.qty ?? 0 };
+      return { ...k, quantId: hit?.quantId ?? null, theoretical: hit?.qty ?? 0, quantQty: hit?.qty ?? 0 };
     }
     // mode scan libre : somme sur tous les emplacements pour ce produit+lot
     const hit = byProdLot[`${k.productId}|${k.lotId ?? 0}`];
-    return { ...k, quantId: hit?.quantId ?? null, theoretical: hit?.qty ?? 0 };
+    return { ...k, quantId: hit?.quantId ?? null, theoretical: hit?.qty ?? 0, quantQty: hit?.bestQty ?? 0 };
   });
 }
 

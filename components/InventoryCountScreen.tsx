@@ -255,6 +255,7 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
         counted: calcCounted(e),
         theoretical: theo[i]?.theoretical ?? 0,
         quantId: theo[i]?.quantId ?? null,
+        quantQty: theo[i]?.quantQty ?? 0,
         matchedAt: new Date().toISOString(),
       }));
       persist(next);
@@ -275,7 +276,13 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
     try {
       const reason = `Inventaire tournant ${sess.name} (${new Date().toLocaleDateString("fr-FR")})`;
       if (e.quantId) {
-        await odoo.applyInventoryAdjustment(session, e.quantId, counted, reason);
+        if (e.locationId == null) {
+          // SCAN LIBRE : théorique = somme de tous les emplacements → on applique le DELTA
+          // (écart) sur le quant cible, pas la valeur absolue (sinon sortie erronée).
+          await odoo.applyInventoryDelta(session, e.quantId, e.quantQty ?? 0, counted - (e.theoretical ?? 0), reason);
+        } else {
+          await odoo.applyInventoryAdjustment(session, e.quantId, counted, reason);
+        }
       } else {
         // pas de quant existant → en crée un (produit absent du théorique)
         const locId = e.locationId;
@@ -303,7 +310,10 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
     for (const { e, i } of idxs) {
       const counted = calcCounted(e);
       try {
-        if (e.quantId) await odoo.applyInventoryAdjustment(session, e.quantId, counted, reason);
+        if (e.quantId) {
+          if (e.locationId == null) await odoo.applyInventoryDelta(session, e.quantId, e.quantQty ?? 0, counted - (e.theoretical ?? 0), reason);
+          else await odoo.applyInventoryAdjustment(session, e.quantId, counted, reason);
+        }
         else if (e.locationId) await odoo.createInventoryAdjustment(session, e.productId, e.locationId, counted, e.lotId || undefined, reason);
         else { fail++; continue; }
         next[i] = { ...next[i], theoretical: counted };

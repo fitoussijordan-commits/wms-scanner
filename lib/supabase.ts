@@ -272,6 +272,7 @@ export interface WmsInventoryEntry {
   counted: number;          // colis * unitsPerColis + vrac
   theoretical?: number;     // stock Odoo au moment du matching
   quantId?: number | null;  // id du stock.quant correspondant (pour appliquer la correction)
+  quantQty?: number;        // qty propre du quant cible (scan libre → appliquer un DELTA, pas l'absolu)
   matchedAt?: string;       // ISO date du dernier matching
 }
 
