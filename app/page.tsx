@@ -14,6 +14,7 @@ import FreeScanScreen from "@/components/FreeScanScreen";
 import InventoryCountScreen from "@/components/InventoryCountScreen";
 import EshopSortiesScreen from "@/components/EshopSortiesScreen";
 import LocationManagerScreen from "@/components/LocationManagerScreen";
+import ImparfaiteImportScreen from "@/components/ImparfaiteImportScreen";
 import ReturnsScreen from "@/components/ReturnsScreen";
 import PackingScreen from "@/components/PackingScreen";
 import OrderScreen from "@/components/OrderScreen";
@@ -1084,7 +1085,7 @@ export default function Page() {
     setIsDark(val);
   };
 
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager" | "imparfaite">("login");
 
   // ── UI desktop (refonte) : ≥1024px ET non tactile — le PDA garde l'UI actuelle ──
   const [isDesktopUI, setIsDesktopUI] = useState(false);
@@ -2699,6 +2700,7 @@ export default function Page() {
     { key: "reprintLabel", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: false, badge: null, badgeColor: "" },
     { key: "labels", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels"), admin: false, badge: null, badgeColor: "" },
     { key: "locationManager", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>, label: "Gestion emplacements", onClick: () => setScreen("locationManager"), admin: false, badge: null, badgeColor: "" },
+    { key: "imparfaite", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>, label: "Import Imparfaite", onClick: () => setScreen("imparfaite"), admin: true, badge: null, badgeColor: "" },
     { key: "dashboard", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; }, admin: true, badge: null, badgeColor: "" },
     { key: "order", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>, label: "Commande", onClick: () => { try { localStorage.setItem("wms_order_session", JSON.stringify(session)); } catch {} window.open("/order", "_blank"); }, admin: false, badge: null, badgeColor: "" },
   ];
@@ -3610,6 +3612,9 @@ export default function Page() {
         {screen === "locationManager" && session && (
           <LocationManagerScreen session={session} onBack={goHome} onToast={showToast}
             onPrintLocation={(name, barcode) => requestPrint({ type: "location", title: name, barcode, locationName: name })} />
+        )}
+        {screen === "imparfaite" && session && odoo.isAdmin(session) && (
+          <ImparfaiteImportScreen session={session} onBack={goHome} onToast={showToast} />
         )}
         {screen === "negativeStock" && session && odoo.isAdmin(session) && (
           <NegativeStockScreen session={session} onBack={goHome} onToast={showToast} onGoToInventory={(p) => { setInventoryInitProduct(p); setScreen("inventory"); }} />

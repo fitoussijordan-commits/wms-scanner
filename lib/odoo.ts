@@ -3692,6 +3692,99 @@ export async function createEshopQuotation(
   return { id, name: recs[0]?.name || String(id) };
 }
 
+// ============================================
+// IMPORT MARKETPLACE (Imparfaite) — 1 commande = 1 nouveau client + 1 sale.order
+// ============================================
+export interface MarketplaceClient {
+  name: string;
+  email?: string;
+  phone?: string;
+  company?: string;
+  street?: string;
+  street2?: string;
+  zip?: string;
+  city?: string;
+  countryCode?: string; // ISO2 (ex: "FR")
+}
+export interface MarketplaceLine { productId: number; qty: number; name?: string; price?: number; }
+
+// Crée un nouveau client (res.partner). Toujours nouveau (1 commande = 1 client).
+export async function createMarketplaceClient(session: OdooSession, c: MarketplaceClient): Promise<number> {
+  const vals: any = {
+    name: c.name || "Client marketplace",
+    company_type: "person",
+    customer_rank: 1,
+  };
+  if (c.email) vals.email = c.email;
+  if (c.phone) vals.phone = c.phone;
+  if (c.street) vals.street = c.street;
+  if (c.street2) vals.street2 = c.street2;
+  if (c.zip) vals.zip = c.zip;
+  if (c.city) vals.city = c.city;
+  // Pays via code ISO2
+  if (c.countryCode) {
+    try {
+      const co = await searchRead(session, "res.country", [["code", "=", c.countryCode.toUpperCase()]], ["id"], 1);
+      if (co.length) vals.country_id = co[0].id;
+    } catch {}
+  }
+  return await create(session, "res.partner", vals) as number;
+}
+
+// Crée une commande de vente marketplace pour un client donné.
+// confirm → confirme (génère le BL) ; assign → réserve le stock sur le BL.
+// Lignes à 0 € si price non fourni (mode "suivi/destockage").
+export async function createMarketplaceOrder(
+  session: OdooSession,
+  partnerId: number,
+  lines: MarketplaceLine[],
+  opts: { origin?: string; confirm?: boolean; assign?: boolean; tag?: string; price0?: boolean } = {}
+): Promise<{ id: number; name: string }> {
+  const vals: any = {
+    partner_id: partnerId,
+    order_line: lines.map(l => {
+      const line: any = { product_id: l.productId, product_uom_qty: l.qty };
+      if (l.name) line.name = l.name;
+      if (opts.price0) line.price_unit = 0;
+      else if (l.price != null) line.price_unit = l.price;
+      return [0, 0, line];
+    }),
+  };
+  if (opts.origin) vals.origin = opts.origin;
+  // Date de livraison = aujourd'hui
+  try {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    vals.commitment_date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  } catch {}
+  // Étiquette (crm.tag)
+  if (opts.tag) {
+    try {
+      const t = await searchRead(session, "crm.tag", [["name", "=", opts.tag]], ["id"], 1);
+      const tagId = t.length ? t[0].id : await create(session, "crm.tag", { name: opts.tag }) as number;
+      if (tagId) vals.tag_ids = [[6, 0, [tagId]]];
+    } catch {}
+  }
+
+  const id = await create(session, "sale.order", vals) as number;
+
+  if (opts.confirm) {
+    try {
+      await callMethod(session, "sale.order", "action_confirm", [[id]]);
+      // réservation du stock sur le(s) picking(s) générés
+      if (opts.assign) {
+        try {
+          const picks = await searchRead(session, "stock.picking", [["sale_id", "=", id], ["state", "not in", ["done", "cancel"]]], ["id"], 10);
+          for (const p of picks) { try { await callMethod(session, "stock.picking", "action_assign", [[p.id]]); } catch {} }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  const recs = await searchRead(session, "sale.order", [["id", "=", id]], ["id", "name"], 1);
+  return { id, name: recs[0]?.name || String(id) };
+}
+
 // Stock disponible (quantity - reserved) par référence interne Odoo. Pour la synchro Shopware.
 export async function getStockByRef(session: OdooSession, ref: string): Promise<{ productId: number; name: string; available: number } | null> {
   const prods = await searchRead(session, "product.product",

@@ -486,6 +486,25 @@ export async function markEshopOrdersProcessed(orderNumbers: string[], devis: st
 }
 
 // ══════════════════════════════════════════
+// IMPORT MARKETPLACE IMPARFAITE — garde-fou anti-doublon (réfs de commande déjà importées)
+// Réutilise la table wms_eshop_processed avec un préfixe "IMP:" pour ne pas mélanger.
+// ══════════════════════════════════════════
+const IMP_PREFIX = "IMP:";
+export async function getProcessedImparfaiteOrders(orderRefs: string[]): Promise<Set<string>> {
+  if (!orderRefs.length) return new Set();
+  const keys = orderRefs.map(r => IMP_PREFIX + r);
+  const { data } = await sb.from("wms_eshop_processed").select("order_number").in("order_number", keys);
+  // on renvoie les réfs SANS préfixe
+  return new Set((data || []).map((r: any) => String(r.order_number).slice(IMP_PREFIX.length)));
+}
+export async function markImparfaiteProcessed(orderRefs: string[], odooOrder: string): Promise<void> {
+  if (!orderRefs.length) return;
+  const rows = orderRefs.map(r => ({ order_number: IMP_PREFIX + r, devis: odooOrder, processed_at: new Date().toISOString() }));
+  const { error } = await sb.from("wms_eshop_processed").upsert(rows, { onConflict: "order_number" });
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // NOTIFICATIONS (cloche header — partagées entre postes)
 // ══════════════════════════════════════════
 
