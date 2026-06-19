@@ -3725,11 +3725,14 @@ export async function createMarketplaceClient(session: OdooSession, c: Marketpla
   if (c.street2) vals.street2 = c.street2;
   if (c.zip) vals.zip = c.zip;
   if (c.city) vals.city = c.city;
-  // Type de compte (x_type_de_compte_id, many2one vers x_type_de_compte) → résoudre par nom
+  // Type de compte (x_type_de_compte_id, many2one vers x_type_de_compte) → résoudre par nom (tolérant)
   if (c.typeCompteName) {
     try {
-      let rec = await searchRead(session, "x_type_de_compte", [["x_name", "=", c.typeCompteName]], ["id"], 1).catch(() => [] as any[]);
-      if (!rec.length) rec = await searchRead(session, "x_type_de_compte", [["display_name", "=", c.typeCompteName]], ["id"], 1).catch(() => [] as any[]);
+      const tryFind = async (domain: any[]) => searchRead(session, "x_type_de_compte", domain, ["id"], 1).catch(() => [] as any[]);
+      let rec = await tryFind([["x_name", "=", c.typeCompteName]]);
+      if (!rec.length) rec = await tryFind([["x_name", "ilike", c.typeCompteName]]);
+      if (!rec.length) rec = await tryFind([["display_name", "ilike", c.typeCompteName]]);
+      if (!rec.length) rec = await tryFind([["name", "ilike", c.typeCompteName]]);
       if (rec.length) vals.x_type_de_compte_id = rec[0].id;
     } catch {}
   }
@@ -3764,11 +3767,13 @@ export async function createMarketplaceOrder(
     }),
   };
   if (opts.origin) vals.origin = opts.origin;
-  // Liste de prix (ex: "walafranceoffert2026" → met les prix à 0)
+  // Liste de prix (ex: "WALAOFFERT_2026" → met les prix à 0). Recherche tolérante.
+  let pricelistId: number | null = null;
   if (opts.pricelistName) {
     try {
-      const pl = await searchRead(session, "product.pricelist", [["name", "=", opts.pricelistName]], ["id"], 1);
-      if (pl.length) vals.pricelist_id = pl[0].id;
+      let pl = await searchRead(session, "product.pricelist", [["name", "=", opts.pricelistName]], ["id"], 1);
+      if (!pl.length) pl = await searchRead(session, "product.pricelist", [["name", "ilike", opts.pricelistName]], ["id"], 1);
+      if (pl.length) { pricelistId = pl[0].id; vals.pricelist_id = pricelistId; }
     } catch {}
   }
   // Date de livraison = aujourd'hui
@@ -3791,6 +3796,15 @@ export async function createMarketplaceOrder(
   if (opts.confirm) {
     try {
       await callMethod(session, "sale.order", "action_confirm", [[id]]);
+      // La confirmation peut réinitialiser la pricelist au tarif du client → on la réimpose
+      if (pricelistId) {
+        try {
+          await write(session, "sale.order", [id], { pricelist_id: pricelistId });
+          // recalcul des prix selon la nouvelle pricelist
+          try { await callMethod(session, "sale.order", "action_update_prices", [[id]]); }
+          catch { try { await callMethod(session, "sale.order", "update_prices", [[id]]); } catch {} }
+        } catch {}
+      }
       // réservation du stock sur le(s) picking(s) générés
       if (opts.assign) {
         try {
