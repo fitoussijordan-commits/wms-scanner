@@ -3732,11 +3732,17 @@ export async function createMarketplaceClient(session: OdooSession, c: Marketpla
     try {
       const norm = (s: any) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
       const target = norm(c.typeCompteName);
-      const recs = await searchRead(session, "x_type_de_compte", [], ["id", "display_name"], 200).catch(() => [] as any[]);
+      const recs = await searchRead(session, "x_type_de_compte", [], ["id", "display_name"], 300).catch(() => [] as any[]);
       // match exact normalisé, sinon "contient"
       let hit = recs.find((r: any) => norm(r.display_name) === target);
       if (!hit) hit = recs.find((r: any) => norm(r.display_name).includes(target));
-      if (hit) vals.x_type_de_compte_id = hit.id;
+      let typeId: number | undefined = hit?.id;
+      // s'il n'existe pas, on crée l'option
+      if (!typeId) {
+        try { typeId = await create(session, "x_type_de_compte", { x_name: c.typeCompteName }) as number; }
+        catch { try { typeId = await create(session, "x_type_de_compte", { name: c.typeCompteName }) as number; } catch {} }
+      }
+      if (typeId) vals.x_type_de_compte_id = typeId;
     } catch {}
   }
   // Pays via code ISO2
