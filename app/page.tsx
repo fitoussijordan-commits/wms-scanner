@@ -1518,15 +1518,29 @@ export default function Page() {
         const picks = await odoo.getPackablePickings(session);
         return picks.length;
       })(),
-      // 6. Sale_ok désynchronisé — cat 1/4/5/6 dont sale_ok ne correspond pas au stock dispo
+      // 6. Sale_ok désynchronisé — cat 1/4/6/L dont sale_ok ne correspond pas au stock dispo (hors exclusions cron)
       (async () => {
         const TARGET_PREFIXES = ["1", "4", "6", "L"];
-        const prods = await odoo.searchRead(session, "product.product",
-          [["active", "=", true], ["default_code", "!=", false]],
-          ["id", "default_code", "sale_ok", "qty_available"], 0);
+        const SB_URL  = process.env.NEXT_PUBLIC_SUPABASE_URL  || "";
+        const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+
+        // Charge les exclusions cron en parallèle avec les produits
+        const [prods, exclusionsRaw] = await Promise.all([
+          odoo.searchRead(session, "product.product",
+            [["active", "=", true], ["default_code", "!=", false]],
+            ["id", "default_code", "sale_ok", "qty_available"], 0),
+          SB_URL
+            ? fetch(`${SB_URL}/rest/v1/wms_cron_exclusions?select=odoo_ref`, {
+                headers: { apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}` },
+              }).then(r => r.ok ? r.json() : []).catch(() => [])
+            : Promise.resolve([]),
+        ]);
+
+        const exclusions = new Set<string>((exclusionsRaw as { odoo_ref: string }[]).map(d => d.odoo_ref));
+
         const targeted = prods.filter((p: any) => {
           const ref = (p.default_code || "").trim().toUpperCase();
-          return TARGET_PREFIXES.some((pfx: string) => ref.startsWith(pfx));
+          return TARGET_PREFIXES.some((pfx: string) => ref.startsWith(pfx)) && !exclusions.has(ref);
         });
         const productIds = targeted.map((p: any) => p.id);
         const quants = productIds.length ? await odoo.searchRead(session, "stock.quant",
