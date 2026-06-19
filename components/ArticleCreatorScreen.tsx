@@ -728,6 +728,7 @@ const CAT_FILTERS = [
   { code: "AV", label: "Art. suivi offres" },
   { code: "90", label: "Mat. Animatrice" },
   { code: "91", label: "Formation" },
+  { code: "__other__", label: "Autres" },
 ];
 
 function getCatCode(ref: string): string {
@@ -735,7 +736,9 @@ function getCatCode(ref: string): string {
   // Codes à 2 chars alphanumériques en priorité
   const two = r.slice(0, 2);
   if (CAT_FILTERS.find(c => c.code === two)) return two;
-  return r.charAt(0);
+  const one = r.charAt(0);
+  if (CAT_FILTERS.find(c => c.code === one)) return one;
+  return "__other__";
 }
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
