@@ -1,26 +1,43 @@
 // app/api/cron/dlv-sale-ok/route.ts
 //
-// Cron Vercel — toutes les 10 min
-// Pour les catégories 1 (Vente), 4 (Miniature), 5 (Echantillon), 6 (PLV) :
-//   - stock dispo (qty_available - reserved) = 0  → sale_ok = false
-//   - stock dispo >= 1 et sale_ok = false          → sale_ok = true
+// Cron Vercel — 1x/jour à 2h
+// Pour les catégories 1 (Vente), 4 (Miniature), 6 (PLV), L (Lot échantillons) :
+//   - stock dispo (qty - reserved) = 0  → sale_ok = false
+//   - stock dispo >= 1 et sale_ok = false → sale_ok = true
+// Les articles exclus via l'interface (table Supabase wms_cron_exclusions) sont ignorés.
 //
-// Env vars requises (à ajouter dans Vercel > Settings > Environment Variables) :
-//   ODOO_URL      ex: https://monentreprise.odoo.com
-//   ODOO_DB       ex: ma-base
-//   ODOO_LOGIN    ex: prenom.nom@entreprise.fr
-//   ODOO_PASSWORD
+// Env vars requises :
+//   ODOO_URL, ODOO_DB, ODOO_LOGIN, ODOO_PASSWORD
+//   NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY (déjà dans Vercel)
 
 import { NextRequest, NextResponse } from "next/server";
 
-const CRON_SECRET = process.env.CRON_SECRET; // optionnel, sécurise l'endpoint
-const ODOO_URL    = (process.env.ODOO_URL || "").replace(/\/$/, "");
-const ODOO_DB     = process.env.ODOO_DB     || "";
-const ODOO_LOGIN  = process.env.ODOO_LOGIN  || "";
-const ODOO_PASS   = process.env.ODOO_PASSWORD || "";
+const CRON_SECRET  = process.env.CRON_SECRET;
+const ODOO_URL     = (process.env.ODOO_URL || "").replace(/\/$/, "");
+const ODOO_DB      = process.env.ODOO_DB     || "";
+const ODOO_LOGIN   = process.env.ODOO_LOGIN  || "";
+const ODOO_PASS    = process.env.ODOO_PASSWORD || "";
+const SB_URL       = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
+const SB_ANON      = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 
 // Préfixes de référence ciblés : 1=Vente, 4=Miniature, 6=PLV, L=Lot échantillons
 const TARGET_PREFIXES = ["1", "4", "6", "L"];
+
+// ── Supabase : lecture des exclusions ────────────────────────────────────────
+
+async function fetchCronExclusions(): Promise<Set<string>> {
+  if (!SB_URL || !SB_ANON) return new Set();
+  try {
+    const res = await fetch(`${SB_URL}/rest/v1/wms_cron_exclusions?select=odoo_ref`, {
+      headers: { apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}` },
+    });
+    if (!res.ok) return new Set();
+    const data: { odoo_ref: string }[] = await res.json();
+    return new Set(data.map(d => d.odoo_ref));
+  } catch {
+    return new Set();
+  }
+}
 
 // ── Helpers RPC Odoo (appel direct serveur → pas de proxy browser) ────────────
 
@@ -90,8 +107,9 @@ export async function GET(req: NextRequest) {
   const ts = new Date().toISOString();
 
   try {
-    const sid = await authenticate();
+    const [sid, exclusions] = await Promise.all([authenticate(), fetchCronExclusions()]);
     log.push(`[${ts}] Auth OK`);
+    log.push(`Exclusions : ${exclusions.size} article(s) ignoré(s)`);
 
     // 1. Récupère tous les produits actifs des catégories cibles (filtre sur default_code)
     const allProducts: any[] = await searchRead(
@@ -104,10 +122,10 @@ export async function GET(req: NextRequest) {
       0
     );
 
-    // Filtre côté JS sur le préfixe (plus fiable qu'un domain Odoo avec like)
+    // Filtre côté JS sur le préfixe + exclusions Supabase
     const targeted = allProducts.filter(p => {
       const ref = (p.default_code || "").trim().toUpperCase();
-      return TARGET_PREFIXES.some(pfx => ref.startsWith(pfx));
+      return TARGET_PREFIXES.some(pfx => ref.startsWith(pfx)) && !exclusions.has(ref);
     });
 
     log.push(`Produits ciblés : ${targeted.length} (catégories ${TARGET_PREFIXES.join("/")})`);

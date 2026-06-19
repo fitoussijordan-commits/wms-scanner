@@ -711,6 +711,7 @@ interface NonVendableRow {
   qty_available: number;
   product_tmpl_id: number;
   enabling: boolean;
+  excluded: boolean; // exclure du cron sale_ok
 }
 
 // Catégories connues (code = premier(s) caractère(s) de la référence)
@@ -737,25 +738,85 @@ function getCatCode(ref: string): string {
   return r.charAt(0);
 }
 
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+
+async function fetchExclusions(): Promise<Set<string>> {
+  if (!SUPABASE_URL) return new Set();
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/wms_cron_exclusions?select=odoo_ref`, {
+    headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}` },
+  });
+  if (!res.ok) return new Set();
+  const data: { odoo_ref: string }[] = await res.json();
+  return new Set(data.map(d => d.odoo_ref));
+}
+
+async function setExclusion(ref: string, excluded: boolean): Promise<void> {
+  if (!SUPABASE_URL) return;
+  if (excluded) {
+    await fetch(`${SUPABASE_URL}/rest/v1/wms_cron_exclusions`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}`,
+        "Content-Type": "application/json", Prefer: "resolution=merge-duplicates",
+      },
+      body: JSON.stringify({ odoo_ref: ref }),
+    });
+  } else {
+    await fetch(`${SUPABASE_URL}/rest/v1/wms_cron_exclusions?odoo_ref=eq.${encodeURIComponent(ref)}`, {
+      method: "DELETE",
+      headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}` },
+    });
+  }
+}
+
 export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession; onToast: (msg: string, type?: "success"|"error"|"info") => void }) {
   const [rows, setRows]       = useState<NonVendableRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [search, setSearch]   = useState("");
   const [activeCats, setActiveCats] = useState<Set<string>>(new Set());
+  const [exclusions, setExclusions] = useState<Set<string>>(new Set());
+  const [togglingRef, setTogglingRef] = useState<string | null>(null);
 
   const TARGET_PREFIXES = ["1", "4", "6", "L"];
+
+  // Charge les exclusions Supabase au montage
+  useEffect(() => {
+    fetchExclusions().then(setExclusions);
+  }, []);
+
+  const toggleExclusion = async (ref: string) => {
+    setTogglingRef(ref);
+    const nowExcluded = !exclusions.has(ref);
+    try {
+      await setExclusion(ref, nowExcluded);
+      setExclusions(prev => {
+        const next = new Set(prev);
+        nowExcluded ? next.add(ref) : next.delete(ref);
+        return next;
+      });
+      setRows(prev => prev.map(r => r.default_code === ref ? { ...r, excluded: nowExcluded } : r));
+    } catch (e: any) {
+      onToast("Erreur exclusion : " + (e?.message ?? e), "error");
+    } finally {
+      setTogglingRef(null);
+    }
+  };
 
   const syncSaleOk = async () => {
     setSyncing(true);
     try {
+      // Recharge les exclusions au moment de la sync
+      const currentExclusions = await fetchExclusions();
+
       // 1. Récupère tous les produits ciblés
       const prods = await odoo.searchRead(session, "product.product",
         [["active", "=", true], ["default_code", "!=", false]],
         ["id", "default_code", "sale_ok", "product_tmpl_id"], 0);
       const targeted = prods.filter((p: any) => {
         const ref = (p.default_code || "").trim().toUpperCase();
-        return TARGET_PREFIXES.some(pfx => ref.startsWith(pfx));
+        return TARGET_PREFIXES.some(pfx => ref.startsWith(pfx)) && !currentExclusions.has(ref);
       });
       // 2. Stock dispo par produit
       const productIds = targeted.map((p: any) => p.id);
@@ -794,24 +855,30 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // product.product : sale_ok est sur product.template, on passe par product.product
-      // qty_available est calculé — disponible directement via fields_get / search_read
-      const data = await odoo.searchRead(
-        session,
-        "product.product",
-        [["sale_ok", "=", false], ["virtual_available", ">", 0], ["active", "=", true]],
-        ["id", "name", "default_code", "virtual_available", "product_tmpl_id"],
-        0,
-        "virtual_available desc"
-      );
-      setRows(data.map((r: any) => ({
-        id: r.id,
-        default_code: r.default_code || "",
-        name: r.name || "",
-        qty_available: r.virtual_available ?? 0,
-        product_tmpl_id: Array.isArray(r.product_tmpl_id) ? r.product_tmpl_id[0] : r.product_tmpl_id,
-        enabling: false,
-      })));
+      const [data, currentExclusions] = await Promise.all([
+        odoo.searchRead(
+          session,
+          "product.product",
+          [["sale_ok", "=", false], ["virtual_available", ">", 0], ["active", "=", true]],
+          ["id", "name", "default_code", "virtual_available", "product_tmpl_id"],
+          0,
+          "virtual_available desc"
+        ),
+        fetchExclusions(),
+      ]);
+      setExclusions(currentExclusions);
+      setRows(data.map((r: any) => {
+        const ref = (r.default_code || "").trim().toUpperCase();
+        return {
+          id: r.id,
+          default_code: r.default_code || "",
+          name: r.name || "",
+          qty_available: r.virtual_available ?? 0,
+          product_tmpl_id: Array.isArray(r.product_tmpl_id) ? r.product_tmpl_id[0] : r.product_tmpl_id,
+          enabling: false,
+          excluded: currentExclusions.has(ref),
+        };
+      }));
     } catch (e: any) {
       onToast("Erreur chargement : " + (e?.message ?? e), "error");
     } finally {
@@ -969,13 +1036,14 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
         <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
           {/* Header */}
           <div style={{
-            display: "grid", gridTemplateColumns: "120px 1fr 90px 44px",
+            display: "grid", gridTemplateColumns: "120px 1fr 90px 70px 44px",
             padding: "8px 14px", background: "#f1f5f9", borderBottom: "1px solid #e5e7eb",
             fontSize: 10, fontWeight: 700, color: "#6b7280", letterSpacing: "0.06em", textTransform: "uppercase" as const,
           }}>
             <span>Référence</span>
             <span>Désignation</span>
             <span style={{ textAlign: "right" }}>Qté prévue</span>
+            <span style={{ textAlign: "center" }} title="Exclure du cron sale_ok automatique">Excl. cron</span>
             <span/>
           </div>
           {(() => {
@@ -998,7 +1066,7 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
                     </div>
                   )}
                   <div style={{
-                    display: "grid", gridTemplateColumns: "120px 1fr 90px 44px",
+                    display: "grid", gridTemplateColumns: "120px 1fr 90px 70px 44px",
                     padding: "9px 14px", alignItems: "center",
                     background: i % 2 === 0 ? "#fff" : "#fafafa",
                     borderBottom: i < filtered.length - 1 ? "1px solid #f3f4f6" : "none",
@@ -1015,6 +1083,26 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
                     }}>
                       {row.qty_available % 1 === 0 ? row.qty_available : row.qty_available.toFixed(2)}
                     </span>
+                    {/* Toggle exclusion cron */}
+                    <div style={{ display: "flex", justifyContent: "center" }}>
+                      <button
+                        onClick={() => toggleExclusion(row.default_code.trim().toUpperCase())}
+                        disabled={togglingRef === row.default_code.trim().toUpperCase()}
+                        title={row.excluded ? "Inclure dans le cron" : "Exclure du cron"}
+                        style={{
+                          background: row.excluded ? "#fee2e2" : "#f3f4f6",
+                          border: `1.5px solid ${row.excluded ? "#fca5a5" : "#d1d5db"}`,
+                          borderRadius: 6, cursor: "pointer",
+                          padding: "4px 7px", fontSize: 10, fontWeight: 700,
+                          color: row.excluded ? "#b91c1c" : "#6b7280",
+                          fontFamily: "inherit", whiteSpace: "nowrap" as const,
+                          opacity: togglingRef === row.default_code.trim().toUpperCase() ? 0.5 : 1,
+                          transition: "all 0.12s",
+                        }}
+                      >
+                        {row.excluded ? "Exclu" : "—"}
+                      </button>
+                    </div>
                     <button
                       onClick={() => enableSaleOk(row)}
                       disabled={row.enabling}
