@@ -3637,7 +3637,9 @@ export async function createEshopQuotation(
   session: OdooSession,
   partnerId: number,
   lines: EshopQuoteLine[],
-  origin?: string
+  origin?: string,
+  // confirm = true → confirme la commande (génère le bon de préparation / pick)
+  confirm: boolean = false
 ): Promise<{ id: number; name: string }> {
   // Cumul des qtés par produit
   const grouped: Record<number, EshopQuoteLine> = {};
@@ -3659,15 +3661,26 @@ export async function createEshopQuotation(
   };
   if (origin) vals.origin = origin;
 
-  // Étiquette par défaut "import eShop" (crm.tag) — la trouve ou la crée
+  // Étiquettes (crm.tag) : "import eShop" + "Transmise" — trouvées ou créées
   try {
-    let tags = await searchRead(session, "crm.tag", [["name", "=", "import eShop"]], ["id"], 1);
-    let tagId = tags.length ? tags[0].id : null;
-    if (!tagId) tagId = await create(session, "crm.tag", { name: "import eShop" }) as number;
-    if (tagId) vals.tag_ids = [[6, 0, [tagId]]];
+    const findOrCreateTag = async (name: string): Promise<number | null> => {
+      const t = await searchRead(session, "crm.tag", [["name", "=", name]], ["id"], 1);
+      if (t.length) return t[0].id;
+      return await create(session, "crm.tag", { name }) as number;
+    };
+    const tagIds = (await Promise.all([findOrCreateTag("import eShop"), findOrCreateTag("Transmise")]))
+      .filter((x): x is number => typeof x === "number");
+    if (tagIds.length) vals.tag_ids = [[6, 0, tagIds]];
   } catch {}
 
   const id = await create(session, "sale.order", vals) as number;
+
+  // Confirme la commande → génère le bon de préparation (stock.picking)
+  if (confirm) {
+    try { await callMethod(session, "sale.order", "action_confirm", [[id]]); }
+    catch (e) { /* en cas d'échec, la commande reste en devis (non bloquant) */ }
+  }
+
   const recs = await searchRead(session, "sale.order", [["id", "=", id]], ["id", "name"], 1);
   return { id, name: recs[0]?.name || String(id) };
 }

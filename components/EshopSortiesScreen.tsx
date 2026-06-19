@@ -237,7 +237,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
     if (!partner) { onToast("Renseigne d'abord le client e-shop", "error"); return; }
     if (!toDeduct.length && !chariotDeductions.length) { onToast("Aucune ligne mappée à déduire", "info"); return; }
     if (blocked.length && !confirm(`${blocked.length} référence(s) NON mappée(s) seront ignorées. Continuer quand même ?`)) return;
-    if (!confirm(`Créer un devis Odoo pour ${partner.name} avec ${toDeduct.length} ligne(s) ?`)) return;
+    if (!confirm(`Créer et CONFIRMER la commande Odoo pour ${partner.name} avec ${toDeduct.length} ligne(s) ?\n(génère le bon de préparation)`)) return;
     setCreatingQuote(true);
     try {
       let q: any = null;
@@ -246,7 +246,8 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
           productId: a.productId, qty: a.qty, name: a.name,
           orders: a.cmds.map(c => `${c.number}${c.qty > 1 ? ` ×${c.qty}` : ""}`).join(", "),
         }));
-        q = await odoo.createEshopQuotation(session, partner.id, lines, `E-shop ${dateFrom}${dateFrom !== dateTo ? "→" + dateTo : ""}`);
+        // confirm=true → commande confirmée + pick généré + tags import eShop / Transmise
+        q = await odoo.createEshopQuotation(session, partner.id, lines, `E-shop ${dateFrom}${dateFrom !== dateTo ? "→" + dateTo : ""}`, true);
       }
       // GARDE-FOU : marque UNIQUEMENT les commandes réellement incluses (payées, non annulées)
       const includedNumbers = deductOrderNumbers;
@@ -267,7 +268,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
         XLSX.utils.book_append_sheet(wb, ws, "Devis");
         XLSX.writeFile(wb, `Devis_${q.name}_${dateFrom}.xlsx`);
       } catch {}
-      if (q) onToast(`✓ Devis ${q.name} créé — ${includedNumbers.length} commande(s) marquée(s) sorties · Excel téléchargé`, "success");
+      if (q) onToast(`✓ Commande ${q.name} confirmée (pick généré) — ${includedNumbers.length} commande(s) sorties · Excel téléchargé`, "success");
       // ── CHARIOT : décrémente le stock chariot des réfs chariot vendues ──
       if (chariotDeductions.length) {
         try {
@@ -421,7 +422,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
           {partner && <div style={{ fontSize: 13, color: C.green, fontWeight: 700, marginBottom: 10 }}>✓ {partner.name} (id {partner.id})</div>}
           <button onClick={createQuote} disabled={creatingQuote || !partner || !toDeduct.length}
             style={{ width: "100%", padding: "13px", background: (!partner || !toDeduct.length) ? "#cbd5e1" : C.green, color: "#fff", border: "none", borderRadius: 11, fontWeight: 800, fontSize: 15, cursor: (!partner || !toDeduct.length) ? "default" : "pointer", opacity: creatingQuote ? 0.6 : 1 }}>
-            {creatingQuote ? "Création…" : `Créer le devis Odoo (${toDeduct.length} ligne${toDeduct.length > 1 ? "s" : ""})`}
+            {creatingQuote ? "Création…" : `Créer + confirmer la commande (${toDeduct.length} ligne${toDeduct.length > 1 ? "s" : ""})`}
           </button>
         </div>
       )}
