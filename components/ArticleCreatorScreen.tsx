@@ -744,7 +744,7 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
   const [search, setSearch]   = useState("");
   const [activeCats, setActiveCats] = useState<Set<string>>(new Set());
 
-  const TARGET_PREFIXES = ["1", "4", "5", "6"];
+  const TARGET_PREFIXES = ["1", "4", "6", "L"];
 
   const syncSaleOk = async () => {
     setSyncing(true);

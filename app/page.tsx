@@ -1520,7 +1520,7 @@ export default function Page() {
       })(),
       // 6. Sale_ok désynchronisé — cat 1/4/5/6 dont sale_ok ne correspond pas au stock dispo
       (async () => {
-        const TARGET_PREFIXES = ["1", "4", "5", "6"];
+        const TARGET_PREFIXES = ["1", "4", "6", "L"];
         const prods = await odoo.searchRead(session, "product.product",
           [["active", "=", true], ["default_code", "!=", false]],
           ["id", "default_code", "sale_ok", "qty_available"], 0);

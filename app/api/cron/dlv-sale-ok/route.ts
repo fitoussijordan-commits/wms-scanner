@@ -19,8 +19,8 @@ const ODOO_DB     = process.env.ODOO_DB     || "";
 const ODOO_LOGIN  = process.env.ODOO_LOGIN  || "";
 const ODOO_PASS   = process.env.ODOO_PASSWORD || "";
 
-// Préfixes de référence ciblés : 1=Vente, 4=Miniature, 5=Echantillon, 6=PLV
-const TARGET_PREFIXES = ["1", "4", "5", "6"];
+// Préfixes de référence ciblés : 1=Vente, 4=Miniature, 6=PLV, L=Lot échantillons
+const TARGET_PREFIXES = ["1", "4", "6", "L"];
 
 // ── Helpers RPC Odoo (appel direct serveur → pas de proxy browser) ────────────
 
