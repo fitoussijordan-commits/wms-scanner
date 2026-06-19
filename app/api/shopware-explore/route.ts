@@ -240,62 +240,6 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // ── tntProbe: cherche l'API Pickware Shipping (création/lecture d'expéditions TNT) ──
-    if (action === "tntProbe") {
-      const guid = searchParams.get("guid") || "";
-      const results: any = {};
-      const paths = [
-        "/ViisonPickwareShippingShipments?limit=2",
-        "/ViisonPickwareShippingShipment?limit=2",
-        "/PickwareShippingShipments?limit=2",
-        "/ViisonPickwareShippingShipmentOrderMappings?limit=2",
-        "/ViisonPickwareShippingShippingMethods?limit=2",
-        "/ViisonPickwareShippingCarriers?limit=2",
-        "/ViisonShopwarePluginsystemPlugins?limit=2",
-        "/shippingShipments?limit=2",
-        guid ? `/ViisonPickwareShippingShipments/${encodeURIComponent(guid)}` : "",
-      ].filter(Boolean);
-      for (const p of paths) {
-        try {
-          const r = await safeJson(await swFetch(p, creds));
-          results[p] = { status: r.status, ok: r.ok };
-          if (r.ok && r.json) results[p].sample = (r.json.data ?? r.json);
-          else results[p].raw = r.raw?.substring(0, 120);
-        } catch (e: any) { results[p] = { error: e.message }; }
-      }
-      return NextResponse.json(results);
-    }
-
-    // ── tntProbe2: chercher l'expédition côté Pickware ERP (autres noms) ──
-    if (action === "tntProbe2") {
-      const guid = searchParams.get("guid") || "";
-      const results: any = {};
-      const paths = [
-        "/ViisonPickwareERPShipments?limit=2",
-        "/ViisonPickwareERPShipment?limit=2",
-        "/ViisonPickwareERPParcels?limit=2",
-        "/ViisonPickwareERPOrderShipments?limit=2",
-        "/ViisonPickwareERPShippingShipments?limit=2",
-        "/ViisonPickwareShippingParcels?limit=2",
-        "/ViisonPickwareShippingLabels?limit=2",
-        "/PickwareShippingLabels?limit=2",
-        "/ViisonPickwareERPGoodsOutgoingEntries?limit=2",
-        "/ViisonPickwareERPPickingRoutes?limit=2",
-        "/ViisonPickwareERPPickLists?limit=2",
-        // recherche d'une commande par GUID d'expédition (champ custom)
-        guid ? `/orders?filter[0][property]=pickwareShipmentGuid&filter[0][value]=${encodeURIComponent(guid)}&limit=1` : "",
-      ].filter(Boolean);
-      for (const p of paths) {
-        try {
-          const r = await safeJson(await swFetch(p, creds));
-          results[p] = { status: r.status, ok: r.ok };
-          if (r.ok && r.json) results[p].sample = (r.json.data ?? r.json);
-          else results[p].raw = r.raw?.substring(0, 100);
-        } catch (e: any) { results[p] = { error: e.message }; }
-      }
-      return NextResponse.json(results);
-    }
-
     // ── pickware: explore les endpoints Pickware WMS / ERP ──
     if (action === "pickware") {
       const results: any = {};
@@ -325,33 +269,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(results);
     }
 
-    // ── eshatnt: explore endpoints spécifiques EshaTNT ──
-    if (action === "eshatnt") {
-      const results: any = {};
-      const paths = [
-        "/EshaTNT/shipments",
-        "/EshaTNT/labels",
-        "/EshaTNT/orders",
-        "/eshatnt/shipments",
-        "/eshatnt/labels",
-        "/eshaTNT/shipments",
-        // Shopware backend plugin routes (via REST)
-        "/labels",
-        "/trackingCodes",
-      ];
-      for (const p of paths) {
-        try {
-          const res = await swFetch(`${p}?limit=1`, creds);
-          const r = await safeJson(res);
-          results[p] = { status: r.status, ok: r.ok };
-          if (r.json) results[p].sample = r.json;
-          else results[p].raw = r.raw?.substring(0, 200);
-        } catch (e: any) {
-          results[p] = { error: e.message };
-        }
-      }
-      return NextResponse.json(results);
-    }
 
     // ── generate: tenter de générer une étiquette TNT pour une commande ──
     // ── activeProducts: liste TOUS les produits actifs avec leur stock (audit catalogue) ──
@@ -470,36 +387,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, articleNumber: an, oldStock, requested: n, newStock: after?.inStock });
     }
 
-    if (action === "generate") {
-      const orderId = searchParams.get("id");
-      if (!orderId) return NextResponse.json({ error: "id requis" }, { status: 400 });
-
-      // D'abord récupérer la commande
-      const orderRes = await swFetch(`/orders/${orderId}`, creds);
-      const orderR = await safeJson(orderRes);
-      if (!orderR.json?.data) return NextResponse.json({ error: "Commande introuvable", raw: orderR.raw });
-      const order = orderR.json.data;
-
-      // Tentative 1: PUT sur l'ordre pour déclencher génération (Pickware)
-      const putRes = await swFetch(`/orders/${orderId}`, creds, "PUT", {
-        "shippingDocuments": [{ "type": "label" }]
-      });
-      const putR = await safeJson(putRes);
-
-      return NextResponse.json({
-        order: {
-          id: order.id,
-          number: order.number,
-          dispatchMethod: order.dispatchMethod,
-          shippingProvider: order.shippingProduct?.provider,
-          shippingDocuments: order.shippingDocuments,
-          pickwareShipmentGuid: order.attribute?.pickwareWmsShipmentGuid,
-        },
-        putAttempt: { status: putR.status, json: putR.json, raw: putR.raw },
-      });
-    }
-
-    return NextResponse.json({ error: "actions: ping, orders, dispatches, order, pickware, eshatnt, generate" }, { status: 400 });
+    return NextResponse.json({ error: "actions: ping, orders, dispatches, order, pickware" }, { status: 400 });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

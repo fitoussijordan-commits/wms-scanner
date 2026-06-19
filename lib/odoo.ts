@@ -3661,6 +3661,13 @@ export async function createEshopQuotation(
   };
   if (origin) vals.origin = origin;
 
+  // Date d'expédition = aujourd'hui (commitment_date, "Date de livraison" Odoo)
+  try {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    vals.commitment_date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  } catch {}
+
   // Étiquettes (crm.tag) : "import eShop" + "Transmise" — trouvées ou créées
   try {
     const findOrCreateTag = async (name: string): Promise<number | null> => {
