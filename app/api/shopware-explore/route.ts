@@ -240,6 +240,32 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // ── tntProbe: cherche l'API Pickware Shipping (création/lecture d'expéditions TNT) ──
+    if (action === "tntProbe") {
+      const guid = searchParams.get("guid") || "";
+      const results: any = {};
+      const paths = [
+        "/ViisonPickwareShippingShipments?limit=2",
+        "/ViisonPickwareShippingShipment?limit=2",
+        "/PickwareShippingShipments?limit=2",
+        "/ViisonPickwareShippingShipmentOrderMappings?limit=2",
+        "/ViisonPickwareShippingShippingMethods?limit=2",
+        "/ViisonPickwareShippingCarriers?limit=2",
+        "/ViisonShopwarePluginsystemPlugins?limit=2",
+        "/shippingShipments?limit=2",
+        guid ? `/ViisonPickwareShippingShipments/${encodeURIComponent(guid)}` : "",
+      ].filter(Boolean);
+      for (const p of paths) {
+        try {
+          const r = await safeJson(await swFetch(p, creds));
+          results[p] = { status: r.status, ok: r.ok };
+          if (r.ok && r.json) results[p].sample = (r.json.data ?? r.json);
+          else results[p].raw = r.raw?.substring(0, 120);
+        } catch (e: any) { results[p] = { error: e.message }; }
+      }
+      return NextResponse.json(results);
+    }
+
     // ── pickware: explore les endpoints Pickware WMS / ERP ──
     if (action === "pickware") {
       const results: any = {};
