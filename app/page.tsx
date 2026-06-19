@@ -1243,6 +1243,7 @@ export default function Page() {
   const [badgeReturns,  setBadgeReturns]  = useState<number | null>(null);
   const [badgeNegStock, setBadgeNegStock] = useState<number | null>(null);
   const [badgePacking,  setBadgePacking]  = useState<number | null>(null);
+  const [badgeSaleOk,   setBadgeSaleOk]   = useState<number | null>(null);
 
   // Preparation state
   const [pickings, setPickings] = useState<any[]>([]);
@@ -1465,7 +1466,7 @@ export default function Page() {
     if (!session) return;
     const todayStr = new Date().toISOString().slice(0, 10);
 
-    const [waiting, eshop, returns, negStock, packing] = await Promise.allSettled([
+    const [waiting, eshop, returns, negStock, packing, saleOk] = await Promise.allSettled([
       // 1. En attente — commandes du jour
       (async () => {
         const all = await odoo.getWaitingPickings(session);
@@ -1517,6 +1518,30 @@ export default function Page() {
         const picks = await odoo.getPackablePickings(session);
         return picks.length;
       })(),
+      // 6. Sale_ok désynchronisé — cat 1/4/5/6 dont sale_ok ne correspond pas au stock dispo
+      (async () => {
+        const TARGET_PREFIXES = ["1", "4", "5", "6"];
+        const prods = await odoo.searchRead(session, "product.product",
+          [["active", "=", true], ["default_code", "!=", false]],
+          ["id", "default_code", "sale_ok", "qty_available"], 0);
+        const targeted = prods.filter((p: any) => {
+          const ref = (p.default_code || "").trim().toUpperCase();
+          return TARGET_PREFIXES.some((pfx: string) => ref.startsWith(pfx));
+        });
+        const productIds = targeted.map((p: any) => p.id);
+        const quants = productIds.length ? await odoo.searchRead(session, "stock.quant",
+          [["product_id", "in", productIds], ["location_id.usage", "=", "internal"]],
+          ["product_id", "quantity", "reserved_quantity"], 0) : [];
+        const dispoByPid: Record<number, number> = {};
+        for (const q of quants) {
+          const pid = q.product_id[0];
+          dispoByPid[pid] = (dispoByPid[pid] || 0) + Math.max(0, (q.quantity || 0) - (q.reserved_quantity || 0));
+        }
+        return targeted.filter((p: any) => {
+          const dispo = dispoByPid[p.id] || 0;
+          return (dispo <= 0 && p.sale_ok === true) || (dispo >= 1 && p.sale_ok === false);
+        }).length;
+      })(),
     ]);
 
     if (waiting.status  === "fulfilled") setBadgeWaiting(waiting.value   > 0 ? waiting.value   : null);
@@ -1524,6 +1549,7 @@ export default function Page() {
     if (returns.status  === "fulfilled") setBadgeReturns(returns.value   > 0 ? returns.value   : null);
     if (negStock.status === "fulfilled") setBadgeNegStock(negStock.value > 0 ? negStock.value : null);
     if (packing.status  === "fulfilled") setBadgePacking(packing.value   > 0 ? packing.value   : null);
+    if (saleOk.status   === "fulfilled") setBadgeSaleOk(saleOk.value     > 0 ? saleOk.value     : null);
   }, [session]);
 
   useEffect(() => {
@@ -2693,7 +2719,7 @@ export default function Page() {
     { key: "inventoryCount", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 2h6a1 1 0 011 1v1a1 1 0 01-1 1H9a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><path d="M9 13l2 2 4-4"/></svg>, label: "Inventaire", onClick: () => setScreen("inventoryCount"), admin: false, badge: null, badgeColor: "" },
     { key: "eshopSorties", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>, label: "Sorties e-shop", onClick: () => setScreen("eshopSorties"), admin: true, badge: null, badgeColor: "" },
     { key: "returns", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>, label: "Retours", onClick: () => setScreen("returns"), admin: false, badge: badgeReturns, badgeColor: "#ea580c" },
-    { key: "productImport", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Gestion articles", onClick: () => setScreen("productImport"), admin: false, badge: null, badgeColor: "" },
+    { key: "productImport", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Gestion articles", onClick: () => setScreen("productImport"), admin: false, badge: badgeSaleOk, badgeColor: "#f59e0b" },
     { key: "supplierImport", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>, label: "Import WALA", onClick: () => setScreen("supplierImport"), admin: true, badge: null, badgeColor: "" },
     { key: "negativeStock", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true, badge: badgeNegStock, badgeColor: "#ef4444" },
     { key: "reprintLabel", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: false, badge: null, badgeColor: "" },

@@ -740,8 +740,56 @@ function getCatCode(ref: string): string {
 export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession; onToast: (msg: string, type?: "success"|"error"|"info") => void }) {
   const [rows, setRows]       = useState<NonVendableRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [search, setSearch]   = useState("");
   const [activeCats, setActiveCats] = useState<Set<string>>(new Set());
+
+  const TARGET_PREFIXES = ["1", "4", "5", "6"];
+
+  const syncSaleOk = async () => {
+    setSyncing(true);
+    try {
+      // 1. Récupère tous les produits ciblés
+      const prods = await odoo.searchRead(session, "product.product",
+        [["active", "=", true], ["default_code", "!=", false]],
+        ["id", "default_code", "sale_ok", "product_tmpl_id"], 0);
+      const targeted = prods.filter((p: any) => {
+        const ref = (p.default_code || "").trim().toUpperCase();
+        return TARGET_PREFIXES.some(pfx => ref.startsWith(pfx));
+      });
+      // 2. Stock dispo par produit
+      const productIds = targeted.map((p: any) => p.id);
+      const quants = productIds.length ? await odoo.searchRead(session, "stock.quant",
+        [["product_id", "in", productIds], ["location_id.usage", "=", "internal"]],
+        ["product_id", "quantity", "reserved_quantity"], 0) : [];
+      const dispoByPid: Record<number, number> = {};
+      for (const q of quants) {
+        const pid = q.product_id[0];
+        dispoByPid[pid] = (dispoByPid[pid] || 0) + Math.max(0, (q.quantity || 0) - (q.reserved_quantity || 0));
+      }
+      // 3. Calcule les changements
+      const toDisable: number[] = [];
+      const toEnable: number[] = [];
+      for (const p of targeted) {
+        const dispo = dispoByPid[p.id] || 0;
+        const tmplId = Array.isArray(p.product_tmpl_id) ? p.product_tmpl_id[0] : p.product_tmpl_id;
+        if (dispo <= 0 && p.sale_ok === true) toDisable.push(tmplId);
+        else if (dispo >= 1 && p.sale_ok === false) toEnable.push(tmplId);
+      }
+      // 4. Applique
+      const BATCH = 50;
+      for (let i = 0; i < toDisable.length; i += BATCH)
+        await odoo.callMethod(session, "product.template", "write", [toDisable.slice(i, i + BATCH), { sale_ok: false }]);
+      for (let i = 0; i < toEnable.length; i += BATCH)
+        await odoo.callMethod(session, "product.template", "write", [toEnable.slice(i, i + BATCH), { sale_ok: true }]);
+      onToast(`✓ Mise à jour : ${toDisable.length} désactivé(s), ${toEnable.length} réactivé(s)`, "success");
+      load(); // Refresh la liste
+    } catch (e: any) {
+      onToast("Erreur sync : " + (e?.message ?? e), "error");
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -829,7 +877,7 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
 
   return (
     <div style={{ ...S.body, maxWidth: 760 }}>
-      {/* Barre de recherche + refresh */}
+      {/* Barre de recherche + refresh + sync */}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input
           style={{ ...S.input, flex: 1 }}
@@ -846,6 +894,18 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
             style={loading ? { animation: "spin 1s linear infinite" } : {}}>
             <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
           </svg>
+        </button>
+        <button
+          onClick={syncSaleOk}
+          disabled={syncing || loading}
+          title="Synchronise sale_ok selon stock dispo (cat. Vente / Miniature / Échantillon / PLV)"
+          style={{ ...S.btn, width: "auto", padding: "9px 16px", background: syncing ? "#e0e7ff" : "#4f46e5", color: "#fff", display: "flex", alignItems: "center", gap: 7, fontWeight: 600, fontSize: 13, borderRadius: 9 }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+            style={syncing ? { animation: "spin 1s linear infinite" } : {}}>
+            <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+          {syncing ? "Mise à jour…" : "Mettre à jour"}
         </button>
       </div>
 
