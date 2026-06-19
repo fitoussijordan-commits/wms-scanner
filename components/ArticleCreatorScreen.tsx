@@ -858,19 +858,59 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [data, currentExclusions] = await Promise.all([
+      // Charge en parallèle : articles non-vendables avec stock + exclusions + tous les articles ciblés pour détecter sale_ok=true dispo=0
+      const [nonVendable, allTargeted, quants, currentExclusions] = await Promise.all([
+        // 1. Articles sale_ok=false avec stock prévu > 0 (liste principale)
         odoo.searchRead(
           session,
           "product.product",
           [["sale_ok", "=", false], ["virtual_available", ">", 0], ["active", "=", true]],
-          ["id", "name", "default_code", "virtual_available", "product_tmpl_id"],
+          ["id", "name", "default_code", "virtual_available", "product_tmpl_id", "sale_ok"],
           0,
           "virtual_available desc"
         ),
+        // 2. Articles ciblés sale_ok=true (pour trouver ceux avec dispo=0 à désactiver)
+        odoo.searchRead(
+          session,
+          "product.product",
+          [["sale_ok", "=", true], ["active", "=", true], ["default_code", "!=", false]],
+          ["id", "name", "default_code", "virtual_available", "product_tmpl_id", "sale_ok"],
+          0
+        ),
+        // 3. Stock quant pour calculer dispo réel
+        odoo.searchRead(
+          session,
+          "stock.quant",
+          [["location_id.usage", "=", "internal"]],
+          ["product_id", "quantity", "reserved_quantity"],
+          0
+        ),
         fetchExclusions(),
       ]);
+
       setExclusions(currentExclusions);
-      setRows(data.map((r: any) => {
+
+      // Calcule dispo par product_id
+      const dispoByPid: Record<number, number> = {};
+      for (const q of quants) {
+        const pid = q.product_id[0];
+        dispoByPid[pid] = (dispoByPid[pid] || 0) + Math.max(0, (q.quantity || 0) - (q.reserved_quantity || 0));
+      }
+
+      // Articles sale_ok=true des catégories cibles avec dispo=0 (manquent dans la liste principale)
+      const toAdd = allTargeted.filter((p: any) => {
+        const ref = (p.default_code || "").trim().toUpperCase();
+        if (!TARGET_PREFIXES.some(pfx => ref.startsWith(pfx))) return false;
+        const dispo = dispoByPid[p.id] || 0;
+        return dispo <= 0; // sale_ok=true mais plus de stock → incohérence
+      });
+
+      const allRows = [...nonVendable, ...toAdd];
+      // Déduplique par id
+      const seen = new Set<number>();
+      const deduped = allRows.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; });
+
+      setRows(deduped.map((r: any) => {
         const ref = (r.default_code || "").trim().toUpperCase();
         return {
           id: r.id,
@@ -998,7 +1038,7 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
                   transition: "all 0.12s",
                 }}
               >
-                {cf.code} · {cf.label} <span style={{ opacity: 0.7, fontSize: 11 }}>({count})</span>
+                {cf.code === "__other__" ? cf.label : `${cf.code} · ${cf.label}`} <span style={{ opacity: 0.7, fontSize: 11 }}>({count})</span>
               </button>
             );
           })}
