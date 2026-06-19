@@ -3,10 +3,6 @@
     {
       "path": "/api/stock-exit-cron",
       "schedule": "0 20 * * *"
-    },
-    {
-      "path": "/api/cron/dlv-sale-ok",
-      "schedule": "0 2 * * *"
     }
   ],
   "functions": {
