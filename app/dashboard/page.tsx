@@ -4837,6 +4837,29 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                     title={dlvAvgSyncedAt ? `Sync conso 12 mois (maj ${dlvAvgSyncedAt.toLocaleDateString("fr-FR")})` : "Sync conso 12 mois depuis Odoo"}>
                     {dlvConsoImporting ? <Spinner /> : I.rotate} Sync conso{dlvAvgSyncedAt && <span style={{ fontSize: 10, opacity: .6, marginLeft: 4, fontWeight: 500 }}>{dlvAvgSyncedAt.toLocaleDateString("fr-FR")}</span>}
                   </button>
+                  <button className="wms-btn" title="Teste si ton user Odoo a les droits pour modifier sale_ok" onClick={async () => {
+                    if (!session) return;
+                    // Prend le 1er produit DLV dispo pour tester
+                    const testRow = dlvRows[0];
+                    if (!testRow) { showToast("Charge d'abord les lots DLV", "error"); return; }
+                    showToast(`Test droits write sale_ok sur "${testRow.ref}"…`, "info");
+                    try {
+                      // 1. Lire la valeur actuelle
+                      const prods = await odoo.searchRead(session, "product.product", [["id", "=", testRow.productId]], ["product_tmpl_id", "sale_ok"], 1);
+                      if (!prods?.length) { showToast("Produit introuvable", "error"); return; }
+                      const tmplId = prods[0].product_tmpl_id[0];
+                      const currentVal: boolean = prods[0].sale_ok;
+                      // 2. Tenter write avec la valeur inverse
+                      await odoo.callMethod(session, "product.template", "write", [[tmplId], { sale_ok: !currentVal }]);
+                      // 3. Remettre la valeur d'origine
+                      await odoo.callMethod(session, "product.template", "write", [[tmplId], { sale_ok: currentVal }]);
+                      showToast(`✅ Droits OK — write sale_ok autorisé (testé sur ${testRow.ref}, valeur restaurée)`, "success");
+                    } catch (e: any) {
+                      showToast(`❌ Droits insuffisants : ${e.message || "Accès refusé"}`, "error");
+                    }
+                  }}>
+                    🔑 Tester droits write
+                  </button>
                   <button className="wms-btn wms-btn-primary" onClick={loadDlv} disabled={dlvLoading}>
                     {dlvLoading ? <Spinner /> : I.refresh} Charger les lots
                   </button>
