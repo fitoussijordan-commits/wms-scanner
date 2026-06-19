@@ -161,7 +161,7 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
         // 2) commande confirmée + réservée, vendeur vide, pricelist offert, tag Imparfaite
         const order = await odoo.createMarketplaceOrder(session, partnerId, lines, {
           origin: `Imparfaite ${g.ref}`, confirm: true, assign: true, price0: true,
-          pricelistName: "walafranceoffert2026", tag: "Imparfaite",
+          pricelistName: "WALAOFFERT_2026", tag: "Imparfaite",
         });
         await markImparfaiteProcessed([g.ref], order.name).catch(() => {});
         res.push({ ref: g.ref, ok: true, msg: order.name });
