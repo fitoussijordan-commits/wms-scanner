@@ -3697,6 +3697,7 @@ export async function createEshopQuotation(
 // ============================================
 export interface MarketplaceClient {
   name: string;
+  ref?: string;          // numéro client = réf de commande
   email?: string;
   phone?: string;
   company?: string;
@@ -3704,7 +3705,9 @@ export interface MarketplaceClient {
   street2?: string;
   zip?: string;
   city?: string;
-  countryCode?: string; // ISO2 (ex: "FR")
+  countryCode?: string;  // ISO2 (ex: "FR")
+  // Type de compte (champ custom many2one x_type_de_compte_id) → résolu par nom, ex: "Imparfaite"
+  typeCompteName?: string;
 }
 export interface MarketplaceLine { productId: number; qty: number; name?: string; price?: number; }
 
@@ -3715,12 +3718,21 @@ export async function createMarketplaceClient(session: OdooSession, c: Marketpla
     company_type: "person",
     customer_rank: 1,
   };
+  if (c.ref) vals.ref = c.ref;                       // numéro client = réf commande
   if (c.email) vals.email = c.email;
   if (c.phone) vals.phone = c.phone;
   if (c.street) vals.street = c.street;
   if (c.street2) vals.street2 = c.street2;
   if (c.zip) vals.zip = c.zip;
   if (c.city) vals.city = c.city;
+  // Type de compte (x_type_de_compte_id, many2one vers x_type_de_compte) → résoudre par nom
+  if (c.typeCompteName) {
+    try {
+      let rec = await searchRead(session, "x_type_de_compte", [["x_name", "=", c.typeCompteName]], ["id"], 1).catch(() => [] as any[]);
+      if (!rec.length) rec = await searchRead(session, "x_type_de_compte", [["display_name", "=", c.typeCompteName]], ["id"], 1).catch(() => [] as any[]);
+      if (rec.length) vals.x_type_de_compte_id = rec[0].id;
+    } catch {}
+  }
   // Pays via code ISO2
   if (c.countryCode) {
     try {
@@ -3738,10 +3750,11 @@ export async function createMarketplaceOrder(
   session: OdooSession,
   partnerId: number,
   lines: MarketplaceLine[],
-  opts: { origin?: string; confirm?: boolean; assign?: boolean; tag?: string; price0?: boolean } = {}
+  opts: { origin?: string; confirm?: boolean; assign?: boolean; tag?: string; price0?: boolean; pricelistName?: string } = {}
 ): Promise<{ id: number; name: string }> {
   const vals: any = {
     partner_id: partnerId,
+    user_id: false, // vendeur vide (règle Imparfaite)
     order_line: lines.map(l => {
       const line: any = { product_id: l.productId, product_uom_qty: l.qty };
       if (l.name) line.name = l.name;
@@ -3751,6 +3764,13 @@ export async function createMarketplaceOrder(
     }),
   };
   if (opts.origin) vals.origin = opts.origin;
+  // Liste de prix (ex: "walafranceoffert2026" → met les prix à 0)
+  if (opts.pricelistName) {
+    try {
+      const pl = await searchRead(session, "product.pricelist", [["name", "=", opts.pricelistName]], ["id"], 1);
+      if (pl.length) vals.pricelist_id = pl[0].id;
+    } catch {}
+  }
   // Date de livraison = aujourd'hui
   try {
     const now = new Date();

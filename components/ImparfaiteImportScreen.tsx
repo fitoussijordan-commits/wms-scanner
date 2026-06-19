@@ -149,16 +149,19 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
       try {
         const lines = g.items.filter(it => it.matched).map(it => ({ productId: it.productId, qty: it.qty, name: it.articleName }));
         if (!lines.length) { res.push({ ref: g.ref, ok: false, msg: "aucune ligne mappée" }); continue; }
-        // 1) nouveau client (toujours)
+        // 1) nouveau client (toujours) — numéro client = réf commande, type de compte = Imparfaite
         const partnerId = await odoo.createMarketplaceClient(session, {
           name: g.client.name || g.client.company || "Client Imparfaite",
+          ref: g.ref,
           email: g.client.email, phone: g.client.phone, company: g.client.company,
           street: g.client.addr1, street2: [g.client.addr2, g.client.addr3].filter(Boolean).join(" "),
           zip: g.client.zip, city: g.client.city, countryCode: g.client.country,
+          typeCompteName: "Imparfaite",
         });
-        // 2) commande confirmée + réservée, lignes à 0 €
+        // 2) commande confirmée + réservée, vendeur vide, pricelist offert, tag Imparfaite
         const order = await odoo.createMarketplaceOrder(session, partnerId, lines, {
-          origin: `Imparfaite ${g.ref}`, confirm: true, assign: true, price0: true, tag: "Imparfaite",
+          origin: `Imparfaite ${g.ref}`, confirm: true, assign: true, price0: true,
+          pricelistName: "walafranceoffert2026", tag: "Imparfaite",
         });
         await markImparfaiteProcessed([g.ref], order.name).catch(() => {});
         res.push({ ref: g.ref, ok: true, msg: order.name });
