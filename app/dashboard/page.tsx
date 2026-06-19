@@ -1411,7 +1411,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   const [alertsWarningOpen, setAlertsWarningOpen] = useState(true);
 
   // ── Suivi DLV ────────────────────────────────────────────────────────────
-  type DlvRow = { productId: number; ref: string; name: string; lotId: number; lotName: string; qty: number; dlvDate: string; sellByDate: Date; daysToSellBy: number; avgMonthly: number; unitsSellable: number; unitsAtRisk: number; status: "overdue" | "critical" | "risk" | "watch" | "ok" | "unknown"; marginMonths: number; nbMonths: number };
+  type DlvRow = { productId: number; ref: string; name: string; lotId: number; lotName: string; qty: number; qtyDispo: number; dlvDate: string; sellByDate: Date; daysToSellBy: number; avgMonthly: number; unitsSellable: number; unitsAtRisk: number; status: "overdue" | "critical" | "risk" | "watch" | "ok" | "unknown"; marginMonths: number; nbMonths: number };
   const [dlvRows, setDlvRows] = useState<DlvRow[]>([]);
   const [dlvLoading, setDlvLoading] = useState(false);
   const [dlvSearch, setDlvSearch] = useState("");
@@ -1424,7 +1424,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
     const n = name.toLowerCase();
     return DLV_FLEX_KEYWORDS.some(k => n.includes(k)) ? DLV_FLEX_MARGIN_MONTHS : DLV_SELL_MARGIN_MONTHS;
   };
-  const [dlvColWidths, setDlvColWidths] = useState<Record<string, number>>({ "Statut": 115, "Ref": 100, "Produit": 210, "Lot": 120, "DLV": 120, "Sell-by": 120, "J. restants": 90, "Qté stock": 85, "Conso/mois": 92, "Vendable": 85, "À risque": 85 });
+  const [dlvColWidths, setDlvColWidths] = useState<Record<string, number>>({ "Statut": 115, "Ref": 100, "Produit": 210, "Lot": 120, "DLV": 120, "Sell-by": 120, "J. restants": 90, "Stock dispo": 85, "Conso/mois": 92, "Vendable": 85, "À risque": 85 });
   const dlvResizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null);
   const [dlvAvgMonthlyByRef, setDlvAvgMonthlyByRef] = useState<Record<string, number>>({});
   const [dlvAvgNbMonths, setDlvAvgNbMonths] = useState<Record<string, number>>({});
@@ -1752,7 +1752,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         const hasEnoughHistory = avgMonthly === 0 ? false : (nbMonths === 0 || nbMonths >= DLV_MIN_MONTHS);
         const monthsToSellBy = Math.max(0, daysToSellBy / 30);
         const unitsSellable = avgMonthly > 0 ? Math.floor(monthsToSellBy * avgMonthly) : 0;
-        const unitsAtRisk = Math.max(0, lot.qty - (avgMonthly > 0 ? unitsSellable : 0));
+        const unitsAtRisk = Math.max(0, lot.qtyDispo - (avgMonthly > 0 ? unitsSellable : 0));
 
         let status: DlvRow["status"];
         if (avgMonthly === 0 || !hasEnoughHistory) status = "unknown";
@@ -1762,7 +1762,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         else if (daysToSellBy < 90) status = "watch";
         else status = "ok";
 
-        return { ...lot, sellByDate, daysToSellBy, avgMonthly, unitsSellable: avgMonthly > 0 ? unitsSellable : lot.qty, unitsAtRisk: avgMonthly > 0 ? unitsAtRisk : 0, status, marginMonths, nbMonths };
+        return { ...lot, sellByDate, daysToSellBy, avgMonthly, unitsSellable: avgMonthly > 0 ? unitsSellable : lot.qtyDispo, unitsAtRisk: avgMonthly > 0 ? unitsAtRisk : 0, status, marginMonths, nbMonths };
       });
       // Trier : hors délai → critiques → risques → attention → ok → inconnus
       const ORDER = { overdue: 0, critical: 1, risk: 2, watch: 3, ok: 4, unknown: 5 };
@@ -1799,7 +1799,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       { header: "DLV",         key: "dlv",        width: 14 },
       { header: "Sell-by",     key: "sellby",     width: 14 },
       { header: "J. restants", key: "days",       width: 12 },
-      { header: "Qté stock",   key: "qty",        width: 11 },
+      { header: "Stock dispo",  key: "qty",        width: 11 },
       { header: "Conso/mois",  key: "conso",      width: 11 },
       { header: "Vendable",    key: "vendable",   width: 11 },
       { header: "À risque",    key: "arisque",    width: 11 },
@@ -1827,7 +1827,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         dlv:     fmtD(new Date(r.dlvDate.split(" ")[0] + "T00:00:00")),
         sellby:  fmtD(r.sellByDate),
         days:    r.daysToSellBy <= 0 ? "Dépassé" : r.daysToSellBy,
-        qty:     Math.round(r.qty),
+        qty:     Math.round(r.qtyDispo),
         conso:   r.avgMonthly || "",
         vendable: r.avgMonthly > 0 ? r.unitsSellable : "",
         arisque: r.avgMonthly > 0 ? Math.round(r.unitsAtRisk) : "",
@@ -4912,7 +4912,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                   { key: "DLV",        label: "DLV",         align: "left"   },
                   { key: "Sell-by",    label: "Sell-by",     align: "left"   },
                   { key: "J. restants",label: "J. restants", align: "center" },
-                  { key: "Qté stock",  label: "Qté stock",   align: "right"  },
+                  { key: "Stock dispo",  label: "Stock dispo",   align: "right"  },
                   { key: "Conso/mois", label: "Conso/mois",  align: "right"  },
                   { key: "Vendable",   label: "Vendable",    align: "right"  },
                   { key: "À risque",   label: "À risque",    align: "right"  },
@@ -4977,7 +4977,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                                 <td style={{ padding: "10px 14px", whiteSpace: "nowrap", fontWeight: 600, overflow: "hidden" }}>{fmtDate(new Date(r.dlvDate.split(" ")[0] + "T00:00:00"))}</td>
                                 <td style={{ padding: "10px 14px", whiteSpace: "nowrap", overflow: "hidden", color: r.daysToSellBy <= 0 ? "#dc2626" : r.daysToSellBy < 90 ? "#c2410c" : "var(--text-primary)", fontWeight: 600 }}>{fmtDate(r.sellByDate)}</td>
                                 <td style={{ padding: "10px 14px", whiteSpace: "nowrap", textAlign: "center", fontWeight: 700, overflow: "hidden", color: r.daysToSellBy <= 0 ? "#dc2626" : r.daysToSellBy < 30 ? "#dc2626" : r.daysToSellBy < 90 ? "#c2410c" : "var(--text-primary)" }}>{fmtDays(r.daysToSellBy)}</td>
-                                <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 600, overflow: "hidden" }}>{Math.round(r.qty)}</td>
+                                <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 600, overflow: "hidden" }}>{Math.round(r.qtyDispo)}</td>
                                 <td style={{ padding: "10px 14px", textAlign: "right", overflow: "hidden" }}>
                                   {r.avgMonthly === 0 ? <span style={{ color: "var(--text-muted)" }}>—</span> : (
                                     <div>
