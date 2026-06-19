@@ -41,11 +41,16 @@ async function loadXLSX(): Promise<any> {
   return (window as any).XLSX;
 }
 
-// Lecture tolérante d'une cellule par mots-clés d'en-tête
-function pick(row: any, keys: string[]): any {
+// Lecture tolérante d'une cellule par mots-clés d'en-tête.
+// exclude = mots-clés à NE PAS matcher (ex: "article" pour ne pas confondre "Nom" et "Nom de l'Article").
+function pick(row: any, keys: string[], exclude: string[] = []): any {
   const rk = Object.keys(row);
-  const norm = (s: string) => s.toLowerCase().replace(/[\s\-_*().]/g, "");
-  const found = rk.find(k => keys.some(t => norm(k).includes(norm(t))));
+  const norm = (s: string) => s.toLowerCase().replace(/[\s\-_*().']/g, "");
+  const isExcluded = (k: string) => exclude.some(x => norm(k).includes(norm(x)));
+  // 1) match EXACT d'abord (le plus fiable)
+  let found = rk.find(k => !isExcluded(k) && keys.some(t => norm(k) === norm(t)));
+  // 2) sinon, match par inclusion
+  if (!found) found = rk.find(k => !isExcluded(k) && keys.some(t => norm(k).includes(norm(t))));
   return found ? row[found] : null;
 }
 
@@ -77,7 +82,7 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
         qty: Number(pick(r, ["Quantité", "quantite", "qty"]) ?? 1) || 1,
         price: String(pick(r, ["Prix de l'Article", "prix"]) ?? "0").trim(),
         sku: String(pick(r, ["SKU de l'Article", "sku"]) ?? "").trim(),
-        name: String(pick(r, ["Nom"]) ?? "").trim(),
+        name: String(pick(r, ["Nom"], ["article"]) ?? "").trim(),
         company: String(pick(r, ["Société", "societe"]) ?? "").trim(),
         email: String(pick(r, ["Email"]) ?? "").trim(),
         phone: String(pick(r, ["Téléphone", "telephone"]) ?? "").trim(),
