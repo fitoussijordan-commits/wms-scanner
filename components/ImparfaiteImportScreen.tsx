@@ -22,7 +22,7 @@ interface RawLine {
   name: string; company: string; email: string; phone: string;
   addr1: string; addr2: string; addr3: string; zip: string; city: string; country: string;
 }
-interface OrderItem { sku: string; articleName: string; qty: number; price: number; productId: number; odooRef: string; matched: boolean; }
+interface OrderItem { sku: string; articleName: string; qty: number; price: number; productId: number; odooRef: string; odooName: string; matched: boolean; }
 interface OrderGroup {
   ref: string; date: string;
   client: { name: string; company: string; email: string; phone: string; addr1: string; addr2: string; addr3: string; zip: string; city: string; country: string };
@@ -115,7 +115,7 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
           const m: any = matches[l.sku];
           return {
             sku: l.sku, articleName: l.articleName, qty: l.qty, price: parseFloat(l.price) || 0,
-            productId: m?.product_id || 0, odooRef: m?.default_code || "", matched: !!m?.product_id,
+            productId: m?.product_id || 0, odooRef: m?.default_code || "", odooName: m?.product_name || "", matched: !!m?.product_id,
           };
         });
         return {
@@ -137,7 +137,7 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
   };
   const applyFix = (orderRef: string, sku: string, prod: any) => {
     setGroups(prev => prev.map(g => g.ref !== orderRef ? g : {
-      ...g, items: g.items.map(it => it.sku === sku ? { ...it, matched: true, productId: prod.id, odooRef: prod.default_code || "" } : it),
+      ...g, items: g.items.map(it => it.sku === sku ? { ...it, matched: true, productId: prod.id, odooRef: prod.default_code || "", odooName: prod.name || "" } : it),
     }));
     setFixRef(null); setFixQuery(""); setFixResults([]);
     onToast("Produit associé ✓", "success");
@@ -230,7 +230,11 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
                   <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{g.ref}
                     {g.alreadyImported && <span style={{ ...chip(C.orangeSoft, C.orange), marginLeft: 8 }}>déjà importée</span>}
                   </div>
-                  <div style={{ fontSize: 12, color: C.textSec }}>{g.client.name}{g.client.city ? ` · ${g.client.zip} ${g.client.city}` : ""}</div>
+                  <div style={{ fontSize: 12, color: C.textSec, fontWeight: 600 }}>{g.client.name || <span style={{ color: C.red }}>nom manquant</span>}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted }}>
+                    {[g.client.addr1, [g.client.addr2, g.client.addr3].filter(Boolean).join(" ")].filter(Boolean).join(" · ") || <span style={{ color: C.red }}>adresse manquante</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: C.textMuted }}>{g.client.zip} {g.client.city} {g.client.country}</div>
                   <div style={{ fontSize: 11, color: C.textMuted }}>{g.client.email}{g.client.phone ? ` · ${g.client.phone}` : ""}</div>
                 </div>
                 <div style={{ fontSize: 11, color: C.textMuted }}>{g.items.length} article(s)</div>
@@ -247,6 +251,17 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
                         ? <span style={{ fontSize: 11, color: C.green, fontWeight: 700 }}>✓ {it.odooRef || "ok"}</span>
                         : <button onClick={() => { setFixRef(fixing ? null : `${g.ref}|${it.sku}`); setFixQuery(""); setFixResults([]); }} style={{ fontSize: 11, color: C.red, fontWeight: 700, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>{fixing ? "fermer" : "non trouvé → associer"}</button>}
                     </div>
+                    {/* Vérification matching : nom du produit Odoo trouvé (à comparer avec le nom Imparfaite) */}
+                    {it.matched && it.odooName && (() => {
+                      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+                      const a = norm(it.articleName), b = norm(it.odooName);
+                      const close = a && b && (a.includes(b.slice(0, 8)) || b.includes(a.slice(0, 8)));
+                      return (
+                        <div style={{ fontSize: 10.5, marginTop: 2, paddingLeft: 2, color: close ? C.textMuted : C.orange, fontWeight: close ? 400 : 700 }}>
+                          {close ? "→ " : "⚠ vérifier → "}Odoo : {it.odooName}
+                        </div>
+                      );
+                    })()}
                     {fixing && (
                       <div style={{ marginTop: 6 }}>
                         <input value={fixQuery} autoFocus onChange={e => { setFixQuery(e.target.value); searchOdoo(e.target.value); }}
