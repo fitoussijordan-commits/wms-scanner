@@ -629,21 +629,84 @@ function PlanSvg({ countByZone, onPick }: { countByZone: (z: string) => number; 
   const SectionLabel = ({ x, y, w, text }: { x: number; y: number; w: number; text: string }) => (
     <text x={x + w / 2} y={y} textAnchor="middle" fontSize={12} fontWeight={800} fill="#64748b" letterSpacing={0.5}>{text}</text>
   );
-  const W = 1240;
-  const bW = 120, bGap = 12, bPairGap = 28;
-  const rW = 132, rGap = 12;
+  // Rack "bibliothèque" vu de dessus : un casier vertical avec des traits = étagères.
+  const Rack = ({ x, y, w, h, z, shelves = 4 }: { x: number; y: number; w: number; h: number; z: string; shelves?: number }) => {
+    const n = countByZone(z);
+    const isDone = done(z);
+    return (
+      <g style={{ cursor: "pointer" }} onClick={() => onPick(z)}>
+        <rect x={x} y={y} width={w} height={h} rx={6} fill={fill(z)} stroke={stroke(z)} strokeWidth={2.5} />
+        {/* étagères (traits horizontaux) façon bibliothèque */}
+        {Array.from({ length: shelves - 1 }).map((_, i) => (
+          <line key={i} x1={x + 4} y1={y + (h / shelves) * (i + 1)} x2={x + w - 4} y2={y + (h / shelves) * (i + 1)}
+            stroke={isDone ? "#86efac" : "#e2e8f0"} strokeWidth={1.5} />
+        ))}
+        {isDone && <circle cx={x + w - 11} cy={y + 11} r={5} fill="#22c55e" />}
+        {/* étiquette du rack sur un bandeau bas */}
+        <rect x={x} y={y + h - 26} width={w} height={26} rx={0} fill={isDone ? "#bbf7d0" : "#e2e8f0"} />
+        <text x={x + w / 2} y={y + h - 13} textAnchor="middle" dominantBaseline="central" fontSize={15} fontWeight={800} fill={txt(z)}>{z}</text>
+        {n > 0 && <text x={x + w / 2} y={y + 16} textAnchor="middle" fontSize={9.5} fontWeight={700} fill="#16a34a">{n} l.</text>}
+      </g>
+    );
+  };
+
+  const W = 1240, H = 540;
+  const PAD = 26;
+
+  // ── ZONE B (haut) : paires de racks B-C / D-E / F-G / H-I, sous un bandeau "Rack" ──
+  const pairs = [["B", "C"], ["D", "E"], ["F", "G"], ["H", "I"]];
+  const zoneAW = 130;                          // largeur colonne "Zone A" à gauche
+  const backX0 = PAD + zoneAW + 20;            // début des paires (après la zone A)
+  const backW = W - PAD - backX0;
+  const pairGap = 26;
+  const pairW = (backW - pairGap * (pairs.length - 1)) / pairs.length; // largeur d'une paire
+  const inGap = 8;
+  const rackW = (pairW - inGap) / 2;           // largeur d'un rack dans la paire
+  const backY = 60, backH = 150;
+
+  // ── ZONE C (bas) : R1→R7 en allées ──
+  const rGap = 12;
+  const rW = (W - 2 * PAD - rGap * (ZONE_R.length - 1)) / ZONE_R.length;
+  const rY = 330, rH = 160;
+
+  const Band = ({ x, y, w, text, fill = "#eef2f7", color = "#475569" }: { x: number; y: number; w: number; text: string; fill?: string; color?: string }) => (
+    <g>
+      <rect x={x} y={y} width={w} height={20} rx={4} fill={fill} />
+      <text x={x + w / 2} y={y + 13} textAnchor="middle" fontSize={11} fontWeight={800} fill={color}>{text}</text>
+    </g>
+  );
+
   return (
-    <svg viewBox={`0 0 ${W} 380`} style={{ width: "100%", height: "auto", display: "block" }} fontFamily="'DM Sans', sans-serif">
-      <SectionLabel x={0} y={20} w={W} text="ZONE B — RACK DE STOCKAGE" />
-      {ZONE_B.map((z, k) => {
-        const pair = Math.floor(k / 2), inPair = k % 2;
-        const x = 40 + pair * (2 * bW + bGap + bPairGap) + inPair * (bW + bGap);
-        return <Zone key={z} x={x} y={34} w={bW} h={88} z={z} />;
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} fontFamily="'DM Sans', sans-serif">
+      {/* sol + murs */}
+      <rect x={6} y={6} width={W - 12} height={H - 12} rx={14} fill="#fbfcfe" stroke="#e5e7eb" strokeWidth={1.5} />
+      <text x={W / 2} y={30} textAnchor="middle" fontSize={13} fontWeight={800} fill="#334155" letterSpacing={0.5}>PLAN MAGASIN — INVENTAIRE</text>
+
+      {/* ZONE A (rack séparé, à gauche) */}
+      <Band x={PAD} y={42} w={zoneAW} text="ZONE A — RACK" fill="#e0f2fe" color="#0369a1" />
+      <Rack x={PAD} y={backY + 4} w={zoneAW} h={backH + 240} z="A" shelves={9} />
+
+      {/* ZONE B : 4 paires de racks sous bandeaux "Rack" */}
+      {pairs.map((pair, pi) => {
+        const px = backX0 + pi * (pairW + pairGap);
+        return (
+          <g key={pi}>
+            <Band x={px} y={42} w={pairW} text="RACK" />
+            <Rack x={px} y={backY + 4} w={rackW} h={backH} z={pair[0]} shelves={5} />
+            <Rack x={px + rackW + inGap} y={backY + 4} w={rackW} h={backH} z={pair[1]} shelves={5} />
+          </g>
+        );
       })}
-      <SectionLabel x={20} y={186} w={120} text="ZONE A" />
-      <Zone x={40} y={200} w={120} h={150} z="A" />
-      <SectionLabel x={190} y={186} w={W - 200} text="ZONE C — RAYONS PICKING" />
-      {ZONE_R.map((z, k) => <Zone key={z} x={200 + k * (rW + rGap)} y={200} w={rW} h={92} z={z} />)}
+      <Band x={backX0} y={backY + backH + 14} w={backW} text="ZONE B — RACK DE STOCKAGE" fill="#e9e6f5" color="#6d28d9" />
+
+      {/* ZONE C : rayons picking R1→R7 */}
+      <Band x={PAD} y={rY - 28} w={W - 2 * PAD} text="ZONE C — RAYONS PICKING" fill="#dcfce7" color="#15803d" />
+      {ZONE_R.map((z, k) => (
+        <Rack key={z} x={PAD + k * (rW + rGap)} y={rY} w={rW} h={rH} z={z} shelves={6} />
+      ))}
+      <text x={W / 2} y={rY + rH + 22} textAnchor="middle" fontSize={11} fontWeight={700} fill="#dc2626">
+        R1 à R6 : picking devant + stock derrière le picking
+      </text>
     </svg>
   );
 }
