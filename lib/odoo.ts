@@ -3785,11 +3785,13 @@ export async function createMarketplaceOrder(
       if (pl.length) { pricelistId = pl[0].id; vals.pricelist_id = pricelistId; }
     } catch {}
   }
-  // Date de livraison = aujourd'hui
+  // Date d'expédition prévue = aujourd'hui (champ custom date x_studio_date_dexpdition_prvue)
   try {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
-    vals.commitment_date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    vals.x_studio_date_dexpdition_prvue = today; // champ "date" → YYYY-MM-DD
+    vals.commitment_date = `${today} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   } catch {}
   // Étiquette (crm.tag)
   if (opts.tag) {
