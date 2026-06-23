@@ -1671,13 +1671,19 @@ export default function Page() {
         });
         let eshopOrders: any[] = [];
         try {
+          // Commandes déjà préparées (partagé via Odoo) → à EXCLURE du badge "en attente"
+          let preparedSet = new Set<string>();
+          try { preparedSet = new Set(await odoo.loadPreparedOrders(session)); } catch {}
           const res = await fetch("/api/sendcloud?action=orders");
           if (res.ok) {
             const data = await res.json();
             eshopOrders = (data.orders || []).filter((o: any) => {
               const statusCode = o?.order_details?.status?.code ?? o?.status?.code;
               if (statusCode !== "0") return false;
-              const integId = o?.integration_id;
+              // déjà préparée → ne pas compter
+              const num = o?.order_number;
+              if (num && preparedSet.has(num)) return false;
+              const integId = o?.order_details?.integration?.id ?? o?.integration_id ?? null;
               if (integId && integId !== 527093) return false;
               const carrierStr = [
                 o?.shipping_details?.delivery_indicator || "",
