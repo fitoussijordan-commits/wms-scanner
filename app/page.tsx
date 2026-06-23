@@ -5831,16 +5831,6 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
   useEffect(() => { loadParcels(); }, []);
 
-  // Masque une commande fantôme/test (partagé via Supabase) → disparaît de la liste.
-  const hideOrder = async (orderNumber: string) => {
-    if (!confirm(`Masquer la commande ${orderNumber} ? (elle ne s'affichera plus sur aucun poste)`)) return;
-    try {
-      const next = await (await import("@/lib/supabase")).hideEshopOrder(orderNumber);
-      setHiddenOrders(next);
-      setParcels(prev => prev.filter(p => p.order_number !== orderNumber));
-      onToast(`Commande ${orderNumber} masquée`);
-    } catch (e: any) { onToast("Erreur : " + e.message); }
-  };
 
   // BL : tente le vrai PDF SendCloud, sinon génère le BL local en fallback
   const printPackingSlip = async (p: any) => {
@@ -6515,10 +6505,6 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                 style={{ flexShrink: 0, padding: "10px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
                 Code-barre
-              </button>
-              <button onClick={() => hideOrder(p.order_number)} title="Masquer (commande fantôme/test)"
-                style={{ flexShrink: 0, padding: "10px 12px", background: C.white, color: C.textMuted, border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
-                ✕
               </button>
             </div>
           </div>
