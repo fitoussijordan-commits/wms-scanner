@@ -222,7 +222,8 @@ export async function loadScanSessions(): Promise<WmsScanSession[]> {
     .order("created_at", { ascending: false })
     .limit(50);
   if (error) throw new Error(error.message);
-  return (data || []) as WmsScanSession[];
+  // Exclure les prépas libres (nom préfixé "PREP::") qui partagent la même table.
+  return (data || []).filter((d: any) => !String(d.name || "").startsWith("PREP::")) as WmsScanSession[];
 }
 
 export async function createScanSession(name: string): Promise<WmsScanSession> {
@@ -255,12 +256,15 @@ export async function deleteScanSession(id: string): Promise<void> {
 // ══════════════════════════════════════════
 export interface WmsPrepLine { ref: string; qty: number; name: string; location: string; stock: number; found: boolean; checked?: boolean; }
 export interface WmsPrepList { id: string; name: string; date: string; entries: WmsPrepLine[]; }
-const PREP_PREFIX = "PRÉPA:";
+const PREP_PREFIX = "PREP::"; // ASCII only (un préfixe accentué cassait le filtre .like)
 
 export async function loadPrepLists(): Promise<WmsPrepList[]> {
-  const { data, error } = await sb.from("wms_scan_sessions").select("*").like("name", `${PREP_PREFIX}%`).order("created_at", { ascending: false }).limit(50);
+  // Filtre client-side (robuste) plutôt que .like server-side.
+  const { data, error } = await sb.from("wms_scan_sessions").select("*").order("created_at", { ascending: false }).limit(100);
   if (error) throw new Error(error.message);
-  return (data || []).map((d: any) => ({ ...d, name: String(d.name).slice(PREP_PREFIX.length) })) as WmsPrepList[];
+  return (data || [])
+    .filter((d: any) => String(d.name || "").startsWith(PREP_PREFIX))
+    .map((d: any) => ({ ...d, name: String(d.name).slice(PREP_PREFIX.length) })) as WmsPrepList[];
 }
 export async function createPrepList(name: string, entries: WmsPrepLine[]): Promise<WmsPrepList> {
   const date = new Date().toISOString().slice(0, 10);
