@@ -5776,13 +5776,13 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         status: { id: 1000, message: o.order_details?.status?.message || "Ouvert" },
         _raw: o,
       }));
-      // Filter: status "Ouvert" (code "0") + transporteur Mondial Relay ou Colissimo uniquement + boutique 527093
+      // Filter: status "Ouvert" (code "0") + transporteur Mondial Relay ou Colissimo + boutique 527093
       const allowedParcels = allParcels.filter((o: any) => {
         // Statut ouvert
         const statusCode = o._raw?.order_details?.status?.code ?? o._raw?.status?.code;
         if (statusCode !== "0") return false;
-        // Boutique : garde uniquement l'intégration 527093 (Dr. Hauschka FR)
-        const integId = o._raw?.integration_id;
+        // Boutique : garde uniquement l'intégration 527093 (Dr. Hauschka FR) — id racine ou imbriqué
+        const integId = o._raw?.order_details?.integration?.id ?? o._raw?.integration_id ?? null;
         if (integId && integId !== 527093) return false;
         // Transporteur : uniquement Mondial Relay et Colissimo
         const carrierStr = [
