@@ -2731,6 +2731,7 @@ export interface FefoAnomaly {
   olderLot: string;        // lot plus ancien qui était dispo
   olderDluo: string;       // DLUO (plus proche) du lot plus ancien
   olderStockAtDate: number;// stock de ce lot plus ancien au moment de la sortie
+  olderStockNow: number;   // stock RESTANT aujourd'hui de ce lot plus ancien
 }
 
 /**
@@ -2774,6 +2775,19 @@ export async function analyzeFefo(
   for (const l of allLots) {
     const dluo = l.expiration_date || l.use_date || l.removal_date || "";
     lotMap[l.id] = { name: l.name, dluo: dluo ? String(dluo).slice(0, 10) : "", productId: Array.isArray(l.product_id) ? l.product_id[0] : l.product_id };
+  }
+
+  // 3bis) Stock ACTUEL par lot (emplacements internes) → pour ne signaler que les
+  //       anomalies où il reste encore du stock du lot plus ancien AUJOURD'HUI.
+  const curQuants = await searchRead(
+    session, "stock.quant",
+    [["product_id", "in", productIds], ["location_id.usage", "=", "internal"], ["lot_id", "!=", false], ["quantity", ">", 0]],
+    ["lot_id", "quantity"], 50000
+  );
+  const currentStockByLot: Record<number, number> = {};
+  for (const q of curQuants) {
+    const lid = Array.isArray(q.lot_id) ? q.lot_id[0] : q.lot_id;
+    if (lid) currentStockByLot[lid] = (currentStockByLot[lid] || 0) + (q.quantity || 0);
   }
 
   // 4) TOUS les mouvements internes (done) de ces produits, par lot, pour reconstruire
@@ -2846,6 +2860,9 @@ export async function analyzeFefo(
       const lot = lotMap[lid];
       if (!lot || !lot.dluo) continue;
       if (st <= 0) continue;
+      // CONDITION : il doit RESTER du stock de ce lot plus ancien AUJOURD'HUI
+      // (sinon ce n'était pas une vraie erreur ou elle a été rattrapée depuis).
+      if ((currentStockByLot[lid] || 0) <= 0) continue;
       if (lot.dluo < soldLot.dluo) { // DLUO plus tôt = à sortir en priorité
         if (!worst || lot.dluo < worst.dluo) worst = { lotId: lid, dluo: lot.dluo, stock: st };
       }
@@ -2858,6 +2875,7 @@ export async function analyzeFefo(
         pickingRef: line.reference || line.origin || "",
         soldLot: soldLot.name, soldDluo: soldLot.dluo, soldQty: line.qty_done || 0,
         olderLot: lotMap[worst.lotId].name, olderDluo: worst.dluo, olderStockAtDate: Math.round(worst.stock),
+        olderStockNow: Math.round(currentStockByLot[worst.lotId] || 0),
       });
     }
   }

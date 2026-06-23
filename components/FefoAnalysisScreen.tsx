@@ -55,8 +55,8 @@ export default function FefoAnalysisScreen({ session, onBack, onToast }: Props) 
   };
 
   const exportCsv = () => {
-    const head = ["Date", "Réf", "Produit", "Bon", "Lot sorti", "DLUO sorti", "Qté", "Lot + ancien dispo", "DLUO + ancien", "Stock à la date"];
-    const rows = anomalies.map(a => [a.date, a.productRef, a.productName, a.pickingRef, a.soldLot, a.soldDluo, String(a.soldQty), a.olderLot, a.olderDluo, String(a.olderStockAtDate)]);
+    const head = ["Date", "Réf", "Produit", "Bon", "Lot sorti", "DLUO sorti", "Qté", "Lot + ancien dispo", "DLUO + ancien", "Stock à la date", "Stock restant aujourd'hui"];
+    const rows = anomalies.map(a => [a.date, a.productRef, a.productName, a.pickingRef, a.soldLot, a.soldDluo, String(a.soldQty), a.olderLot, a.olderDluo, String(a.olderStockAtDate), String(a.olderStockNow)]);
     const esc = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
     const csv = [head, ...rows].map(r => r.map(esc).join(";")).join("\n");
     const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
@@ -132,7 +132,7 @@ export default function FefoAnalysisScreen({ session, onBack, onToast }: Props) 
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                   <thead>
                     <tr style={{ background: C.bg, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.textMuted, textAlign: "left" }}>
-                      <th style={th}>Date</th><th style={th}>Produit</th><th style={th}>Lot sorti</th><th style={th}>Qté</th><th style={th}>Lot + ancien dispo</th><th style={th}>Stock</th>
+                      <th style={th}>Date</th><th style={th}>Produit</th><th style={th}>Lot sorti</th><th style={th}>Qté</th><th style={th}>Lot + ancien dispo</th><th style={th}>Stock restant</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -153,7 +153,10 @@ export default function FefoAnalysisScreen({ session, onBack, onToast }: Props) 
                           <div style={{ fontWeight: 700, fontFamily: "monospace", color: C.orange }}>{a.olderLot}</div>
                           <div style={{ fontSize: 11, color: C.orange }}>DLUO {a.olderDluo} ← plus ancien</div>
                         </td>
-                        <td style={{ ...td, fontWeight: 800, textAlign: "right" }}>{a.olderStockAtDate}</td>
+                        <td style={{ ...td, textAlign: "right" }}>
+                          <div style={{ fontWeight: 800, color: C.orange }}>{a.olderStockNow}</div>
+                          <div style={{ fontSize: 10, color: C.textMuted }}>encore en stock</div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
