@@ -1351,8 +1351,16 @@ export default function Page() {
   useEffect(() => {
     if (!session) return;
     refreshNotifs();
-    const t = setInterval(refreshNotifs, 60_000);
-    return () => clearInterval(t);
+    // Refresh au focus + polling 30s/60s.
+    let timer: any = null; let lastRun = Date.now();
+    const visible = () => document.visibilityState === "visible";
+    const tick = () => { lastRun = Date.now(); refreshNotifs(); };
+    const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { tick(); schedule(); }, visible() ? 30_000 : 60_000); };
+    const onWake = () => { if (visible() && Date.now() - lastRun > 3000) tick(); schedule(); };
+    schedule();
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    return () => { if (timer) clearTimeout(timer); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
   }, [session, refreshNotifs]);
 
   // ── Control Center (desktop only) ────────────────────────────────────────
@@ -1538,8 +1546,16 @@ export default function Page() {
   useEffect(() => {
     if (screen !== "home" || !session) return;
     loadBadges();
-    const id = setInterval(loadBadges, 2 * 60 * 1000); // toutes les 2 min
-    return () => clearInterval(id);
+    // Refresh au focus + polling 45s (au lieu de 2 min figées).
+    let timer: any = null; let lastRun = Date.now();
+    const visible = () => document.visibilityState === "visible";
+    const tick = () => { lastRun = Date.now(); loadBadges(); };
+    const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { tick(); schedule(); }, visible() ? 45_000 : 120_000); };
+    const onWake = () => { if (visible() && Date.now() - lastRun > 3000) tick(); schedule(); };
+    schedule();
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    return () => { if (timer) clearTimeout(timer); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
   }, [screen, session, loadBadges]);
 
   // Polling nouvelles commandes en attente — desktop uniquement, toutes les 60s
@@ -1647,8 +1663,16 @@ export default function Page() {
     }
 
     checkNewOrders();
-    const interval = setInterval(checkNewOrders, 60_000);
-    return () => clearInterval(interval);
+    // Refresh au focus + polling 30s/60s.
+    let timer: any = null; let lastRun = Date.now();
+    const visible = () => document.visibilityState === "visible";
+    const tick = () => { lastRun = Date.now(); checkNewOrders(); };
+    const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { tick(); schedule(); }, visible() ? 30_000 : 60_000); };
+    const onWake = () => { if (visible() && Date.now() - lastRun > 3000) tick(); schedule(); };
+    schedule();
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    return () => { if (timer) clearTimeout(timer); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
@@ -1729,8 +1753,16 @@ export default function Page() {
     };
     ccRefreshRef.current = refresh;
     refresh();
-    const interval = setInterval(refresh, 60_000);
-    return () => clearInterval(interval);
+    // Polling adaptatif : 20s au premier plan, 60s en arrière-plan, + refresh au focus.
+    let timer: any = null; let lastRun = Date.now();
+    const visible = () => document.visibilityState === "visible";
+    const tick = () => { lastRun = Date.now(); refresh(); };
+    const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { tick(); schedule(); }, visible() ? 20_000 : 60_000); };
+    const onWake = () => { if (visible() && Date.now() - lastRun > 3000) tick(); schedule(); };
+    schedule();
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    return () => { if (timer) clearTimeout(timer); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
@@ -5847,7 +5879,20 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     setLoading(false);
   };
 
-  useEffect(() => { loadParcels(); }, []);
+  useEffect(() => {
+    loadParcels();
+    // Refresh des commandes e-shop au focus + polling 30s (était : 1 seul chargement).
+    let timer: any = null; let lastRun = Date.now();
+    const visible = () => document.visibilityState === "visible";
+    const tick = () => { lastRun = Date.now(); loadParcels(); };
+    const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { tick(); schedule(); }, visible() ? 30_000 : 90_000); };
+    const onWake = () => { if (visible() && Date.now() - lastRun > 3000) tick(); schedule(); };
+    schedule();
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    return () => { if (timer) clearTimeout(timer); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
 
   // BL : tente le vrai PDF SendCloud, sinon génère le BL local en fallback
