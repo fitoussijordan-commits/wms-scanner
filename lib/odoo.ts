@@ -62,6 +62,26 @@ export async function searchRead(session: OdooSession, model: string, domain: an
   return call(session, "/web/dataset/call_kw", { model, method: "search_read", args: [domain], kwargs: { fields, limit, order } });
 }
 
+// Récupère TOUS les enregistrements en paginant (par lots de `chunk`), sans plafond.
+// Évite la troncature silencieuse d'Odoo sur les gros volumes.
+export async function searchReadAll(
+  session: OdooSession, model: string, domain: any[], fields: string[], order = "", chunk = 10000
+): Promise<any[]> {
+  const out: any[] = [];
+  let offset = 0;
+  while (true) {
+    const batch = await call(session, "/web/dataset/call_kw", {
+      model, method: "search_read", args: [domain], kwargs: { fields, limit: chunk, offset, order },
+    });
+    if (!batch || !batch.length) break;
+    out.push(...batch);
+    if (batch.length < chunk) break; // dernière page
+    offset += chunk;
+    if (offset > 1_000_000) break;   // garde-fou absolu
+  }
+  return out;
+}
+
 export async function callMethod(session: OdooSession, model: string, method: string, args: any[] = [], kwargs: any = {}) {
   return call(session, "/web/dataset/call_kw", { model, method, args, kwargs });
 }
@@ -2756,9 +2776,9 @@ export async function analyzeFefo(
     ["lot_id", "!=", false],
   ];
   if (productId) outDomain.push(["product_id", "=", productId]);
-  const outLines: any[] = await searchRead(
+  const outLines: any[] = await searchReadAll(
     session, "stock.move.line", outDomain,
-    ["product_id", "lot_id", "qty_done", "date", "reference", "origin"], 20000, "date asc"
+    ["product_id", "lot_id", "qty_done", "date", "reference", "origin"], "date asc"
   );
   if (!outLines.length) return { anomalies: [], nbSorties: 0, nbProduits: 0 };
 
@@ -2770,7 +2790,7 @@ export async function analyzeFefo(
   for (const p of products) prodMap[p.id] = { ref: p.default_code || "", name: p.name || "" };
 
   // 3) Lots de ces produits → DLUO.
-  const allLots = await searchRead(session, "stock.lot", [["product_id", "in", productIds]], ["id", "name", "product_id", "expiration_date", "use_date", "removal_date"], 50000);
+  const allLots = await searchReadAll(session, "stock.lot", [["product_id", "in", productIds]], ["id", "name", "product_id", "expiration_date", "use_date", "removal_date"]);
   const lotMap: Record<number, { name: string; dluo: string; productId: number }> = {};
   for (const l of allLots) {
     const dluo = l.expiration_date || l.use_date || l.removal_date || "";
@@ -2779,10 +2799,10 @@ export async function analyzeFefo(
 
   // 3bis) Stock ACTUEL par lot (emplacements internes) → pour ne signaler que les
   //       anomalies où il reste encore du stock du lot plus ancien AUJOURD'HUI.
-  const curQuants = await searchRead(
+  const curQuants = await searchReadAll(
     session, "stock.quant",
     [["product_id", "in", productIds], ["location_id.usage", "=", "internal"], ["lot_id", "!=", false], ["quantity", ">", 0]],
-    ["lot_id", "quantity"], 50000
+    ["lot_id", "quantity"]
   );
   const currentStockByLot: Record<number, number> = {};
   for (const q of curQuants) {
@@ -2793,11 +2813,11 @@ export async function analyzeFefo(
   // 4) TOUS les mouvements internes (done) de ces produits, par lot, pour reconstruire
   //    le stock par lot dans le temps. On regarde l'impact sur le stock INTERNE :
   //    +qty quand ça ENTRE en interne, -qty quand ça SORT de l'interne.
-  const moveLines: any[] = await searchRead(
+  const moveLines: any[] = await searchReadAll(
     session, "stock.move.line",
     [["state", "=", "done"], ["product_id", "in", productIds], ["lot_id", "!=", false], ["date", "<=", endDT]],
     ["product_id", "lot_id", "qty_done", "date", "location_id", "location_usage", "location_dest_id", "location_dest_usage"],
-    50000, "date asc"
+    "date asc"
   );
   // location_usage / location_dest_usage ne sont pas toujours dispo → on récupère l'usage des emplacements.
   const locIds = new Set<number>();
