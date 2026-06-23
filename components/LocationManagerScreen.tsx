@@ -103,12 +103,14 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
     setCreating(false);
   };
 
-  // ── Suggestion de voisins : A12 → préfixe "A", numéro 12. On propose les
-  //    numéros de l'étage (from..to) qui n'existent pas encore. ──
-  const parseLoc = (name: string): { prefix: string; num: number } | null => {
-    const m = name.match(/^(.*?)(\d+)\s*$/); // tout sauf le nombre final + nombre final
+  // ── Suggestion de voisins ──
+  // Chez nous, le VRAI emplacement = 1er tronçon (avant le 1er "-"). Ex: "A12-RKC1-..." → "A12".
+  // On incrémente le numéro de ce 1er tronçon : A12 → A10, A11, A13 (la queue de stockage est ignorée).
+  const parseLoc = (fullName: string): { prefix: string; num: number; pad: number } | null => {
+    const firstSeg = fullName.split("-")[0].trim(); // "A12"
+    const m = firstSeg.match(/^(.*?)(\d+)\s*$/);
     if (!m) return null;
-    return { prefix: m[1], num: parseInt(m[2], 10) };
+    return { prefix: m[1], num: parseInt(m[2], 10), pad: m[2].length };
   };
   const suggestions = useMemo(() => {
     if (!suggestFor) return [] as { name: string; barcode: string }[];
@@ -116,28 +118,25 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
     if (!base) return [];
     const from = parseInt(suggestRange.from, 10), to = parseInt(suggestRange.to, 10);
     if (Number.isNaN(from) || Number.isNaN(to) || to < from) return [];
-    // largeur de numéro (A12 → 2 chiffres → on garde le même padding)
-    const pad = String(base.num).length;
-    const existing = new Set(locs.map(l => l.name.trim().toLowerCase()));
+    // On compare sur le 1er tronçon uniquement (les vrais emplacements).
+    const existingFirstSeg = new Set(locs.map(l => l.name.split("-")[0].trim().toLowerCase()));
     const out: { name: string; barcode: string }[] = [];
-    // motif du code-barres : on remplace le numéro dans le code-barres du cousin
-    const cousinBc = suggestFor.barcode ? String(suggestFor.barcode) : suggestFor.name;
     for (let n = from; n <= to; n++) {
-      if (n === base.num) continue; // le cousin lui-même
-      const name = `${base.prefix}${String(n).padStart(pad, "0")}`;
-      if (existing.has(name.toLowerCase())) continue; // déjà créé
-      // code-barres : remplace le numéro du cousin par le nouveau
-      const barcode = cousinBc.replace(String(base.num), String(n).padStart(pad, "0"));
-      out.push({ name, barcode });
+      if (n === base.num) continue; // l'emplacement de référence lui-même
+      const name = `${base.prefix}${String(n).padStart(base.pad, "0")}`; // ex: "A10"
+      if (existingFirstSeg.has(name.toLowerCase())) continue; // déjà créé
+      out.push({ name, barcode: name }); // code-barres = le nom de l'emplacement (1er tronçon)
     }
     return out;
   }, [suggestFor, suggestRange, locs]);
 
   const openSuggest = (l: Loc) => {
     const base = parseLoc(l.name);
-    if (!base) { onToast("Nom non numéroté — pas de voisins à proposer", "info"); return; }
+    if (!base) { onToast("Emplacement non numéroté — pas de voisins à proposer", "info"); return; }
+    // Pré-remplit la plage autour du numéro courant : dizaine → dizaine+9 (ex: 43 → 40 à 49).
+    const start = Math.floor(base.num / 10) * 10;
+    setSuggestRange({ from: String(start), to: String(start + 9) });
     setSuggestFor(l);
-    setSuggestRange({ from: "10", to: "13" });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -192,13 +191,13 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
       {/* Suggestion de création de voisins (ex: A12 → A10, A11, A13) */}
       {suggestFor && (
         <div style={{ background: C.white, border: `1.5px solid ${C.purple}`, borderRadius: 14, padding: 16, marginBottom: 16, boxShadow: `0 0 0 3px ${C.purpleSoft}` }}>
-          <div style={{ fontSize: 12, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Créer les voisins de « {suggestFor.name} »</div>
+          <div style={{ fontSize: 12, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Créer les voisins de « {suggestFor.name.split("-")[0]} »</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, color: C.textMuted }}>Étages du n°</span>
             <input type="number" value={suggestRange.from} onChange={e => setSuggestRange(r => ({ ...r, from: e.target.value }))} style={{ ...inp, width: 64 }} />
             <span style={{ fontSize: 12, color: C.textMuted }}>au</span>
             <input type="number" value={suggestRange.to} onChange={e => setSuggestRange(r => ({ ...r, to: e.target.value }))} style={{ ...inp, width: 64 }} />
-            <span style={{ fontSize: 11, color: C.textMuted }}>(même parent / type / base que {suggestFor.name})</span>
+            <span style={{ fontSize: 11, color: C.textMuted }}>(même parent / type que {suggestFor.name.split("-")[0]})</span>
           </div>
           {suggestions.length === 0 ? (
             <div style={{ fontSize: 12, color: C.textMuted }}>Aucun voisin manquant sur cette plage.</div>
