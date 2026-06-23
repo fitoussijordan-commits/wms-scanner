@@ -17,7 +17,7 @@ interface Props {
 }
 
 // ── Vue liste des sessions ────────────────────────────────────────────────────
-function SessionListView({ session, onBack, onToast, onOpen }: Props & { onOpen: (s: WmsScanSession) => void }) {
+function SessionListView({ session, onBack, onToast, onOpen, onPrepMode }: Props & { onOpen: (s: WmsScanSession) => void; onPrepMode: () => void }) {
   const [sessions, setSessions] = useState<WmsScanSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState("");
@@ -62,10 +62,13 @@ function SessionListView({ session, onBack, onToast, onOpen }: Props & { onOpen:
         <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Scan libre</div>
           <div style={{ fontSize: 12, color: C.textMuted }}>Sessions de scan cross-device</div>
         </div>
+        <button onClick={onPrepMode} style={{ background: "#eff6ff", color: C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 10, padding: "8px 14px", cursor: "pointer", fontSize: 12.5, fontWeight: 700, fontFamily: "inherit" }}>
+          📋 Prépa libre
+        </button>
       </div>
 
       {/* Créer nouvelle session */}
@@ -369,11 +372,143 @@ function SessionScanView({ session, scanSession, onBack, onToast }: Props & { sc
 }
 
 // ── Composant principal ───────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+//  PRÉPA LIBRE — colle un texte (réf + qté), génère une liste de prépa
+//  triée par emplacement (pour re-préparer / vérifier le poids).
+// ════════════════════════════════════════════════════════════════
+interface PrepLine {
+  ref: string;
+  qty: number;
+  found: boolean;
+  productId: number;
+  name: string;
+  location: string;   // emplacement (court)
+  stock: number;
+}
+
+function shortLoc(full: string): string { return (full || "").split("/").pop() || full; }
+
+// Parse le texte collé : chaque ligne "[1010361] Nom … 1,00 …" → { ref, qty }.
+function parsePrepText(text: string): { ref: string; qty: number }[] {
+  const out: { ref: string; qty: number }[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    // réf entre crochets [1010361]
+    const refM = line.match(/\[([A-Za-z0-9\-_.]+)\]/);
+    if (!refM) continue;
+    const ref = refM[1];
+    // quantité = premier nombre décimal après la réf (1,00 ou 1.00 ou 2)
+    const after = line.slice(refM.index! + refM[0].length);
+    const qtyM = after.match(/(\d+(?:[.,]\d+)?)/);
+    const qty = qtyM ? Math.round(parseFloat(qtyM[1].replace(",", "."))) : 1;
+    out.push({ ref, qty: qty > 0 ? qty : 1 });
+  }
+  // cumul si une réf revient
+  const byRef: Record<string, number> = {};
+  for (const o of out) byRef[o.ref] = (byRef[o.ref] || 0) + o.qty;
+  return Object.entries(byRef).map(([ref, qty]) => ({ ref, qty }));
+}
+
+function FreePrepView({ session, onBack, onToast }: Props) {
+  const [text, setText] = useState("");
+  const [lines, setLines] = useState<PrepLine[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState<Set<string>>(new Set());
+
+  const generate = async () => {
+    const parsed = parsePrepText(text);
+    if (!parsed.length) { onToast("Aucune réf [XXXX] détectée", "error"); return; }
+    setLoading(true); setDone(new Set());
+    try {
+      const refs = parsed.map(p => p.ref);
+      // 1) résoudre les réfs Odoo (default_code)
+      const prods = await odoo.searchRead(session, "product.product", [["default_code", "in", refs]], ["id", "default_code", "name"], refs.length);
+      const byCode: Record<string, { id: number; name: string }> = {};
+      for (const p of prods) if (p.default_code) byCode[String(p.default_code)] = { id: p.id, name: p.name || "" };
+      // 2) emplacements (le plus rempli) pour les produits trouvés
+      const ids = Object.values(byCode).map(p => p.id);
+      const locMap = ids.length ? await odoo.getProductLocations(session, ids) as Record<number, any> : {};
+      // 3) construire les lignes
+      const result: PrepLine[] = parsed.map(p => {
+        const prod = byCode[p.ref];
+        if (!prod) return { ref: p.ref, qty: p.qty, found: false, productId: 0, name: "", location: "", stock: 0 };
+        const loc = locMap[prod.id];
+        return {
+          ref: p.ref, qty: p.qty, found: true, productId: prod.id, name: prod.name,
+          location: loc ? shortLoc(loc.location_name) : "—", stock: loc ? Math.round(loc.quantity) : 0,
+        };
+      });
+      // tri par emplacement (les non trouvés à la fin)
+      result.sort((a, b) => {
+        if (a.found !== b.found) return a.found ? -1 : 1;
+        return (a.location || "").localeCompare(b.location || "");
+      });
+      setLines(result);
+      const nf = result.filter(r => !r.found).length;
+      onToast(`${result.length} ligne(s)${nf ? ` · ${nf} non trouvée(s)` : ""}`, nf ? "info" : "success");
+    } catch (e: any) { onToast("Erreur : " + (e?.message || e), "error"); }
+    setLoading(false);
+  };
+
+  const toggle = (ref: string) => setDone(prev => { const n = new Set(prev); n.has(ref) ? n.delete(ref) : n.add(ref); return n; });
+
+  return (
+    <div style={{ padding: "20px 16px", maxWidth: 560, margin: "0 auto", fontFamily: "'DM Sans', sans-serif", paddingBottom: 90 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+        </button>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Prépa libre</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>Colle un texte (réf + qté) → liste de prépa par emplacement</div>
+        </div>
+      </div>
+
+      <textarea value={text} onChange={e => setText(e.target.value)} rows={6}
+        placeholder={"[1010361] Fluide de Jour Equilibrant - 50 ml   1,00 …\n[1010310] Crème de Jour à la Rose - 30 ml   2,00 …"}
+        style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "monospace", background: C.white, color: C.text, resize: "vertical", marginBottom: 10 }} />
+      <button onClick={generate} disabled={loading}
+        style={{ width: "100%", padding: "12px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 11, fontWeight: 800, fontSize: 15, cursor: "pointer", fontFamily: "inherit", opacity: loading ? 0.6 : 1 }}>
+        {loading ? "Génération…" : "Générer la préparation"}
+      </button>
+
+      {lines.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>{done.size}/{lines.length} préparé(s) · touche une ligne pour cocher</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {lines.map(l => {
+              const ok = done.has(l.ref);
+              return (
+                <div key={l.ref} onClick={() => l.found && toggle(l.ref)}
+                  style={{ background: ok ? C.greenSoft : !l.found ? "#fef2f2" : C.white, border: `1px solid ${ok ? C.green : !l.found ? "#fecaca" : C.border}`, borderRadius: 10, padding: "10px 12px", boxShadow: C.shadow, display: "flex", alignItems: "center", gap: 10, cursor: l.found ? "pointer" : "default", opacity: ok ? 0.65 : 1 }}>
+                  <div style={{ width: 70, textAlign: "center", flexShrink: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, fontFamily: "monospace", color: l.found ? C.text : C.red }}>{l.found ? l.location : "?"}</div>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>{l.ref}</div>
+                    {l.found
+                      ? <div style={{ fontSize: 12, color: C.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</div>
+                      : <div style={{ fontSize: 11, color: C.red, fontWeight: 700 }}>réf introuvable dans Odoo</div>}
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: ok ? C.green : C.text, flexShrink: 0 }}>×{l.qty}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function FreeScanScreen(props: Props) {
   const [activeSession, setActiveSession] = useState<WmsScanSession | null>(null);
+  const [mode, setMode] = useState<"sessions" | "prep">("sessions");
 
+  if (mode === "prep") return <FreePrepView {...props} onBack={() => setMode("sessions")} />;
   if (activeSession) {
     return <SessionScanView {...props} scanSession={activeSession} onBack={() => setActiveSession(null)} />;
   }
-  return <SessionListView {...props} onOpen={setActiveSession} />;
+  return <SessionListView {...props} onOpen={setActiveSession} onPrepMode={() => setMode("prep")} />;
 }
