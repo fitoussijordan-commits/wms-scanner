@@ -250,6 +250,34 @@ export async function deleteScanSession(id: string): Promise<void> {
 }
 
 // ══════════════════════════════════════════
+// PRÉPA LIBRE PARTAGÉE — réutilise wms_scan_sessions avec un nom préfixé "PRÉPA:".
+// entries = lignes de prépa { ref, qty, name, location, stock, found, checked }.
+// ══════════════════════════════════════════
+export interface WmsPrepLine { ref: string; qty: number; name: string; location: string; stock: number; found: boolean; checked?: boolean; }
+export interface WmsPrepList { id: string; name: string; date: string; entries: WmsPrepLine[]; }
+const PREP_PREFIX = "PRÉPA:";
+
+export async function loadPrepLists(): Promise<WmsPrepList[]> {
+  const { data, error } = await sb.from("wms_scan_sessions").select("*").like("name", `${PREP_PREFIX}%`).order("created_at", { ascending: false }).limit(50);
+  if (error) throw new Error(error.message);
+  return (data || []).map((d: any) => ({ ...d, name: String(d.name).slice(PREP_PREFIX.length) })) as WmsPrepList[];
+}
+export async function createPrepList(name: string, entries: WmsPrepLine[]): Promise<WmsPrepList> {
+  const date = new Date().toISOString().slice(0, 10);
+  const { data, error } = await sb.from("wms_scan_sessions").insert({ name: PREP_PREFIX + name, date, entries }).select().single();
+  if (error) throw new Error(error.message);
+  return { ...(data as any), name: String((data as any).name).slice(PREP_PREFIX.length) };
+}
+export async function updatePrepEntries(id: string, entries: WmsPrepLine[]): Promise<void> {
+  const { error } = await sb.from("wms_scan_sessions").update({ entries, updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+export async function deletePrepList(id: string): Promise<void> {
+  const { error } = await sb.from("wms_scan_sessions").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // INVENTAIRE TOURNANT (cross-device)
 // ══════════════════════════════════════════
 
