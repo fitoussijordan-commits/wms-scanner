@@ -5673,6 +5673,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
   // ── Shared data ──
   const [parcels, setParcels] = useState<any[]>([]);
+  const [hiddenOrders, setHiddenOrders] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [matchData, setMatchData] = useState<Record<string, any>>({});
@@ -5795,7 +5796,12 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         const isColissimo = carrierStr.includes("colissimo");
         return isMondialRelay || isColissimo;
       });
-      setParcels(allowedParcels);
+      // Exclure les commandes masquées (fantômes/tests) — liste partagée Supabase
+      let hidden: string[] = [];
+      try { hidden = await (await import("@/lib/supabase")).getHiddenEshopOrders(); } catch {}
+      setHiddenOrders(hidden);
+      const visibleParcels = allowedParcels.filter((o: any) => !hidden.includes(o.order_number));
+      setParcels(visibleParcels);
 
       // Match SKUs with Odoo (only for filtered orders)
       const allRefs = Array.from(new Set(
@@ -5824,6 +5830,17 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   };
 
   useEffect(() => { loadParcels(); }, []);
+
+  // Masque une commande fantôme/test (partagé via Supabase) → disparaît de la liste.
+  const hideOrder = async (orderNumber: string) => {
+    if (!confirm(`Masquer la commande ${orderNumber} ? (elle ne s'affichera plus sur aucun poste)`)) return;
+    try {
+      const next = await (await import("@/lib/supabase")).hideEshopOrder(orderNumber);
+      setHiddenOrders(next);
+      setParcels(prev => prev.filter(p => p.order_number !== orderNumber));
+      onToast(`Commande ${orderNumber} masquée`);
+    } catch (e: any) { onToast("Erreur : " + e.message); }
+  };
 
   // BL : tente le vrai PDF SendCloud, sinon génère le BL local en fallback
   const printPackingSlip = async (p: any) => {
@@ -6454,14 +6471,18 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
   // ── TAB RENDERS ────────────────────────────────────────────────────────────
 
-  const renderOrdersTab = () => (
+  const renderOrdersTab = () => {
+    // Les commandes déjà PRÉPARÉES sortent de la liste "ouvertes" (anti double-préparation).
+    const openParcels = parcels.filter(p => !preparedIds.has(p.order_number));
+    const preparedCount = parcels.length - openParcels.length;
+    return (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{parcels.length} commande{parcels.length > 1 ? "s" : ""} ouvertes</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{openParcels.length} commande{openParcels.length > 1 ? "s" : ""} ouverte{openParcels.length > 1 ? "s" : ""}{preparedCount > 0 ? <span style={{ color: C.green, fontWeight: 600 }}> · {preparedCount} préparée{preparedCount > 1 ? "s" : ""}</span> : null}</span>
         <div style={{ display: "flex", gap: 6 }}>
-          {parcels.length > 0 && (
+          {openParcels.length > 0 && (
             <button
-              onClick={async () => { for (const p of parcels) await doPrintOrderBarcode(p); }}
+              onClick={async () => { for (const p of openParcels) await doPrintOrderBarcode(p); }}
               style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700, color: C.blue, border: `1px solid ${C.blueBorder}`, display: "inline-flex", alignItems: "center", gap: 6 }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
               Tout imprimer
@@ -6474,8 +6495,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       </div>
       {error && <Alert type="error">{error}</Alert>}
       {loading && parcels.length === 0 && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement des commandes SendCloud...</div>}
-      {!loading && parcels.length === 0 && !error && <Alert type="info">Aucune commande ouverte.</Alert>}
-      {parcels.map((p: any) => {
+      {!loading && openParcels.length === 0 && !error && <Alert type="info">Aucune commande ouverte{preparedCount > 0 ? ` (${preparedCount} déjà préparée${preparedCount > 1 ? "s" : ""})` : ""}.</Alert>}
+      {openParcels.map((p: any) => {
         const isPrepared = preparedIds.has(p.order_number);
         const items = p.parcel_items || [];
         return (
@@ -6495,12 +6516,17 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
                 Code-barre
               </button>
+              <button onClick={() => hideOrder(p.order_number)} title="Masquer (commande fantôme/test)"
+                style={{ flexShrink: 0, padding: "10px 12px", background: C.white, color: C.textMuted, border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+                ✕
+              </button>
             </div>
           </div>
         );
       })}
     </>
-  );
+    );
+  };
 
   const renderPrepTab = () => {
     if (prepOrder) return renderPrepDetail();

@@ -486,6 +486,37 @@ export async function markEshopOrdersProcessed(orderNumbers: string[], devis: st
 }
 
 // ══════════════════════════════════════════
+// COMMANDES E-SHOP MASQUÉES (fantômes/tests SendCloud) — partagé via wms_sync_meta
+// ══════════════════════════════════════════
+export async function getHiddenEshopOrders(): Promise<string[]> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_hidden_orders").single();
+    if (data?.value) return JSON.parse(data.value);
+  } catch {}
+  return [];
+}
+export async function hideEshopOrder(orderNumber: string): Promise<string[]> {
+  const list = await getHiddenEshopOrders();
+  if (!list.includes(orderNumber)) list.push(orderNumber);
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "eshop_hidden_orders", value: JSON.stringify(list), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+  return list;
+}
+export async function unhideEshopOrder(orderNumber: string): Promise<string[]> {
+  let list = await getHiddenEshopOrders();
+  list = list.filter(n => n !== orderNumber);
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "eshop_hidden_orders", value: JSON.stringify(list), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+  return list;
+}
+
+// ══════════════════════════════════════════
 // IMPORT MARKETPLACE IMPARFAITE — garde-fou anti-doublon (réfs de commande déjà importées)
 // Réutilise la table wms_eshop_processed avec un préfixe "IMP:" pour ne pas mélanger.
 // ══════════════════════════════════════════
