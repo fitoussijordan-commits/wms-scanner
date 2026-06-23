@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useMemo } from "react";
 import * as odoo from "@/lib/odoo";
+import { PutawayTab } from "@/components/ArticleCreatorScreen";
 
 const C = {
   bg: "#f8fafc", white: "#ffffff", text: "#1a1a2e", textSec: "#374151",
@@ -28,12 +29,17 @@ interface Props {
 }
 
 export default function LocationManagerScreen({ session, onBack, onToast, onPrintLocation }: Props) {
+  const [tab, setTab] = useState<"locations" | "putaway">("locations");
   const [locs, setLocs] = useState<Loc[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   // formulaire de création (rempli par duplication)
   const [form, setForm] = useState<{ name: string; barcode: string; parentId: number; parentName: string; usage: string } | null>(null);
   const [creating, setCreating] = useState(false);
+  // suggestion de création de voisins (ex: A12 → A10,A11,A13)
+  const [suggestFor, setSuggestFor] = useState<Loc | null>(null);
+  const [suggestRange, setSuggestRange] = useState({ from: "10", to: "13" });
+  const [bulkCreating, setBulkCreating] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -97,6 +103,77 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
     setCreating(false);
   };
 
+  // ── Suggestion de voisins : A12 → préfixe "A", numéro 12. On propose les
+  //    numéros de l'étage (from..to) qui n'existent pas encore. ──
+  const parseLoc = (name: string): { prefix: string; num: number } | null => {
+    const m = name.match(/^(.*?)(\d+)\s*$/); // tout sauf le nombre final + nombre final
+    if (!m) return null;
+    return { prefix: m[1], num: parseInt(m[2], 10) };
+  };
+  const suggestions = useMemo(() => {
+    if (!suggestFor) return [] as { name: string; barcode: string }[];
+    const base = parseLoc(suggestFor.name);
+    if (!base) return [];
+    const from = parseInt(suggestRange.from, 10), to = parseInt(suggestRange.to, 10);
+    if (Number.isNaN(from) || Number.isNaN(to) || to < from) return [];
+    // largeur de numéro (A12 → 2 chiffres → on garde le même padding)
+    const pad = String(base.num).length;
+    const existing = new Set(locs.map(l => l.name.trim().toLowerCase()));
+    const out: { name: string; barcode: string }[] = [];
+    // motif du code-barres : on remplace le numéro dans le code-barres du cousin
+    const cousinBc = suggestFor.barcode ? String(suggestFor.barcode) : suggestFor.name;
+    for (let n = from; n <= to; n++) {
+      if (n === base.num) continue; // le cousin lui-même
+      const name = `${base.prefix}${String(n).padStart(pad, "0")}`;
+      if (existing.has(name.toLowerCase())) continue; // déjà créé
+      // code-barres : remplace le numéro du cousin par le nouveau
+      const barcode = cousinBc.replace(String(base.num), String(n).padStart(pad, "0"));
+      out.push({ name, barcode });
+    }
+    return out;
+  }, [suggestFor, suggestRange, locs]);
+
+  const openSuggest = (l: Loc) => {
+    const base = parseLoc(l.name);
+    if (!base) { onToast("Nom non numéroté — pas de voisins à proposer", "info"); return; }
+    setSuggestFor(l);
+    setSuggestRange({ from: "10", to: "13" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const createSuggestions = async () => {
+    if (!suggestFor || !suggestions.length) return;
+    const parentId = Array.isArray(suggestFor.location_id) ? suggestFor.location_id[0] : 0;
+    if (!parentId) { onToast("Parent introuvable", "error"); return; }
+    if (!confirm(`Créer ${suggestions.length} emplacement(s) : ${suggestions.map(s => s.name).join(", ")} ?`)) return;
+    setBulkCreating(true);
+    let ok = 0;
+    for (const s of suggestions) {
+      try {
+        const exists = await odoo.locationBarcodeExists(session, s.barcode);
+        if (exists) continue;
+        await odoo.createLocation(session, { name: s.name, barcode: s.barcode, parentId, usage: suggestFor.usage || "internal" });
+        ok++;
+      } catch {}
+    }
+    onToast(`${ok}/${suggestions.length} emplacement(s) créé(s) ✓`, "success");
+    setSuggestFor(null);
+    await load();
+    setBulkCreating(false);
+  };
+
+  // Barre d'onglets
+  const TabBar = (
+    <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+      {([["locations", "Emplacements"], ["putaway", "Stratégie de rangement"]] as const).map(([k, label]) => (
+        <button key={k} onClick={() => setTab(k)} style={{
+          padding: "8px 16px", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
+          background: tab === k ? C.blue : C.white, color: tab === k ? "#fff" : C.textSec, boxShadow: tab === k ? "none" : `inset 0 0 0 1px ${C.border}`,
+        }}>{label}</button>
+      ))}
+    </div>
+  );
+
   return (
     <div style={{ paddingBottom: 90 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
@@ -105,9 +182,42 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
         </button>
         <div>
           <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Gestion emplacements</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>Duplique un emplacement, modifie nom + code-barres, crée et imprime</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>Emplacements + stratégie de rangement</div>
         </div>
       </div>
+      {TabBar}
+      {tab === "putaway" && <PutawayTab session={session} onToast={onToast} />}
+      {tab === "locations" && (
+    <div>
+      {/* Suggestion de création de voisins (ex: A12 → A10, A11, A13) */}
+      {suggestFor && (
+        <div style={{ background: C.white, border: `1.5px solid ${C.purple}`, borderRadius: 14, padding: 16, marginBottom: 16, boxShadow: `0 0 0 3px ${C.purpleSoft}` }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Créer les voisins de « {suggestFor.name} »</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: C.textMuted }}>Étages du n°</span>
+            <input type="number" value={suggestRange.from} onChange={e => setSuggestRange(r => ({ ...r, from: e.target.value }))} style={{ ...inp, width: 64 }} />
+            <span style={{ fontSize: 12, color: C.textMuted }}>au</span>
+            <input type="number" value={suggestRange.to} onChange={e => setSuggestRange(r => ({ ...r, to: e.target.value }))} style={{ ...inp, width: 64 }} />
+            <span style={{ fontSize: 11, color: C.textMuted }}>(même parent / type / base que {suggestFor.name})</span>
+          </div>
+          {suggestions.length === 0 ? (
+            <div style={{ fontSize: 12, color: C.textMuted }}>Aucun voisin manquant sur cette plage.</div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+              {suggestions.map(s => (
+                <span key={s.name} style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace", background: C.purpleSoft, color: C.purple, borderRadius: 8, padding: "4px 10px" }}>{s.name}</span>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={createSuggestions} disabled={bulkCreating || !suggestions.length}
+              style={{ flex: 1, padding: "10px 0", background: suggestions.length ? C.purple : C.border, color: "#fff", border: "none", borderRadius: 10, fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "inherit", opacity: bulkCreating ? 0.6 : 1 }}>
+              {bulkCreating ? "Création…" : `Créer ${suggestions.length} emplacement(s)`}
+            </button>
+            <button onClick={() => setSuggestFor(null)} style={{ padding: "10px 16px", background: C.white, color: C.textSec, border: `1.5px solid ${C.border}`, borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Annuler</button>
+          </div>
+        </div>
+      )}
 
       {/* Formulaire de création (apparaît après duplication) */}
       {form && (
@@ -161,6 +271,10 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
                   <div style={{ fontSize: 11, color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.complete_name}</div>
                   {l.barcode && <div style={{ fontSize: 11, fontFamily: "monospace", color: C.blue, marginTop: 1 }}>{l.barcode}</div>}
                 </div>
+                <button onClick={() => openSuggest(l)} title="Proposer les voisins manquants (A12 → A10, A11, A13)"
+                  style={{ padding: "6px 12px", background: C.purpleSoft, color: C.purple, border: `1px solid ${C.purple}44`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
+                  + Voisins
+                </button>
                 <button onClick={() => duplicate(l)} title="Dupliquer"
                   style={{ padding: "6px 12px", background: C.blueSoft, color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
                   Dupliquer
@@ -174,6 +288,8 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
             {!filtered.length && <div style={{ textAlign: "center", padding: 30, color: C.textMuted, fontSize: 13 }}>Aucun emplacement</div>}
           </div>
         </>
+      )}
+    </div>
       )}
     </div>
   );
