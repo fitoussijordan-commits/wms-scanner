@@ -2715,6 +2715,157 @@ export async function getDlvStockLots(session: OdooSession): Promise<{
 }
 
 // ============================================
+// ANALYSE FEFO — détecte les sorties d'un lot récent alors qu'un lot plus ancien
+// (DLUO plus proche) était encore en stock à cette date. Lecture seule.
+// ============================================
+
+export interface FefoAnomaly {
+  productId: number;
+  productRef: string;
+  productName: string;
+  date: string;            // date de la sortie (YYYY-MM-DD)
+  pickingRef: string;      // référence du bon (origin/picking)
+  soldLot: string;         // lot sorti
+  soldDluo: string;        // DLUO du lot sorti
+  soldQty: number;
+  olderLot: string;        // lot plus ancien qui était dispo
+  olderDluo: string;       // DLUO (plus proche) du lot plus ancien
+  olderStockAtDate: number;// stock de ce lot plus ancien au moment de la sortie
+}
+
+/**
+ * Analyse les sorties CLIENT sur une période et repère les écarts FEFO.
+ * @param productId  optionnel — limiter à un produit.
+ */
+export async function analyzeFefo(
+  session: OdooSession,
+  dateStart: string,   // "YYYY-MM-DD"
+  dateEnd: string,     // "YYYY-MM-DD"
+  productId?: number
+): Promise<{ anomalies: FefoAnomaly[]; nbSorties: number; nbProduits: number }> {
+  const startDT = `${dateStart} 00:00:00`;
+  const endDT = `${dateEnd} 23:59:59`;
+
+  // 1) Sorties CLIENT (move lines done, avec lot) de la période.
+  const outDomain: any[] = [
+    ["state", "=", "done"],
+    ["location_dest_id.usage", "=", "customer"],
+    ["date", ">=", startDT],
+    ["date", "<=", endDT],
+    ["lot_id", "!=", false],
+  ];
+  if (productId) outDomain.push(["product_id", "=", productId]);
+  const outLines: any[] = await searchRead(
+    session, "stock.move.line", outDomain,
+    ["product_id", "lot_id", "qty_done", "date", "reference", "origin"], 20000, "date asc"
+  );
+  if (!outLines.length) return { anomalies: [], nbSorties: 0, nbProduits: 0 };
+
+  const productIds = Array.from(new Set(outLines.map((l: any) => l.product_id[0]))) as number[];
+
+  // 2) Produits → ref/nom.
+  const products = await searchRead(session, "product.product", [["id", "in", productIds]], ["id", "default_code", "name"], productIds.length);
+  const prodMap: Record<number, { ref: string; name: string }> = {};
+  for (const p of products) prodMap[p.id] = { ref: p.default_code || "", name: p.name || "" };
+
+  // 3) Lots de ces produits → DLUO.
+  const allLots = await searchRead(session, "stock.lot", [["product_id", "in", productIds]], ["id", "name", "product_id", "expiration_date", "use_date", "removal_date"], 50000);
+  const lotMap: Record<number, { name: string; dluo: string; productId: number }> = {};
+  for (const l of allLots) {
+    const dluo = l.expiration_date || l.use_date || l.removal_date || "";
+    lotMap[l.id] = { name: l.name, dluo: dluo ? String(dluo).slice(0, 10) : "", productId: Array.isArray(l.product_id) ? l.product_id[0] : l.product_id };
+  }
+
+  // 4) TOUS les mouvements internes (done) de ces produits, par lot, pour reconstruire
+  //    le stock par lot dans le temps. On regarde l'impact sur le stock INTERNE :
+  //    +qty quand ça ENTRE en interne, -qty quand ça SORT de l'interne.
+  const moveLines: any[] = await searchRead(
+    session, "stock.move.line",
+    [["state", "=", "done"], ["product_id", "in", productIds], ["lot_id", "!=", false], ["date", "<=", endDT]],
+    ["product_id", "lot_id", "qty_done", "date", "location_id", "location_usage", "location_dest_id", "location_dest_usage"],
+    50000, "date asc"
+  );
+  // location_usage / location_dest_usage ne sont pas toujours dispo → on récupère l'usage des emplacements.
+  const locIds = new Set<number>();
+  for (const m of moveLines) {
+    if (Array.isArray(m.location_id)) locIds.add(m.location_id[0]);
+    if (Array.isArray(m.location_dest_id)) locIds.add(m.location_dest_id[0]);
+  }
+  const locs = await searchRead(session, "stock.location", [["id", "in", Array.from(locIds)]], ["id", "usage"], locIds.size || 1);
+  const locUsage: Record<number, string> = {};
+  for (const l of locs) locUsage[l.id] = l.usage;
+
+  // Timeline d'événements par lot : { lotId, date, delta } (delta sur le stock interne).
+  interface Evt { lotId: number; date: string; delta: number; }
+  const events: Evt[] = [];
+  for (const m of moveLines) {
+    const lotId = Array.isArray(m.lot_id) ? m.lot_id[0] : m.lot_id;
+    const qty = m.qty_done || 0;
+    if (!lotId || !qty) continue;
+    const srcUsage = Array.isArray(m.location_id) ? locUsage[m.location_id[0]] : "";
+    const dstUsage = Array.isArray(m.location_dest_id) ? locUsage[m.location_dest_id[0]] : "";
+    const inInternal = dstUsage === "internal";
+    const outInternal = srcUsage === "internal";
+    let delta = 0;
+    if (inInternal && !outInternal) delta = qty;        // entrée nette en interne
+    else if (outInternal && !inInternal) delta = -qty;  // sortie nette de l'interne
+    else delta = 0;                                      // transfert interne→interne : ignoré
+    if (delta !== 0) events.push({ lotId, date: m.date, delta });
+  }
+  events.sort((a, b) => a.date.localeCompare(b.date));
+
+  // 5) Pour chaque sortie analysée, on rejoue les événements JUSQU'À sa date pour
+  //    connaître le stock de chaque lot, puis on cherche un lot DLUO plus ancien dispo.
+  // Index des événements par produit, triés.
+  const evtByProduct: Record<number, Evt[]> = {};
+  for (const e of events) {
+    const pid = lotMap[e.lotId]?.productId;
+    if (pid == null) continue;
+    (evtByProduct[pid] ||= []).push(e);
+  }
+
+  const anomalies: FefoAnomaly[] = [];
+  for (const line of outLines) {
+    const pid = line.product_id[0];
+    const soldLotId = Array.isArray(line.lot_id) ? line.lot_id[0] : line.lot_id;
+    const soldLot = lotMap[soldLotId];
+    if (!soldLot || !soldLot.dluo) continue; // sans DLUO on ne peut pas juger
+    const lineDate = line.date;
+    // Stock par lot juste AVANT cette sortie (on rejoue les events < lineDate, et ceux à la même
+    // date mais on s'arrête avant les sorties — approximation : events strictement antérieurs).
+    const stockByLot: Record<number, number> = {};
+    for (const e of (evtByProduct[pid] || [])) {
+      if (e.date < lineDate) stockByLot[e.lotId] = (stockByLot[e.lotId] || 0) + e.delta;
+      else break;
+    }
+    // Cherche un lot du même produit, DLUO plus PROCHE (plus ancien à consommer), avec stock > 0.
+    let worst: { lotId: number; dluo: string; stock: number } | null = null;
+    for (const [lotIdStr, st] of Object.entries(stockByLot)) {
+      const lid = Number(lotIdStr);
+      if (lid === soldLotId) continue;
+      const lot = lotMap[lid];
+      if (!lot || !lot.dluo) continue;
+      if (st <= 0) continue;
+      if (lot.dluo < soldLot.dluo) { // DLUO plus tôt = à sortir en priorité
+        if (!worst || lot.dluo < worst.dluo) worst = { lotId: lid, dluo: lot.dluo, stock: st };
+      }
+    }
+    if (worst) {
+      const p = prodMap[pid] || { ref: "", name: "" };
+      anomalies.push({
+        productId: pid, productRef: p.ref, productName: p.name,
+        date: String(lineDate).slice(0, 10),
+        pickingRef: line.reference || line.origin || "",
+        soldLot: soldLot.name, soldDluo: soldLot.dluo, soldQty: line.qty_done || 0,
+        olderLot: lotMap[worst.lotId].name, olderDluo: worst.dluo, olderStockAtDate: Math.round(worst.stock),
+      });
+    }
+  }
+  anomalies.sort((a, b) => a.date.localeCompare(b.date));
+  return { anomalies, nbSorties: outLines.length, nbProduits: productIds.length };
+}
+
+// ============================================
 // CONSO MENSUELLE DEPUIS ODOO (pour DLV + Suivi Stock)
 // ============================================
 
