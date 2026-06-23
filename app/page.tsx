@@ -15,6 +15,7 @@ import InventoryCountScreen from "@/components/InventoryCountScreen";
 import EshopSortiesScreen from "@/components/EshopSortiesScreen";
 import LocationManagerScreen from "@/components/LocationManagerScreen";
 import ImparfaiteImportScreen from "@/components/ImparfaiteImportScreen";
+import { writeHeaders } from "@/lib/writeToken";
 import ReturnsScreen from "@/components/ReturnsScreen";
 import PackingScreen from "@/components/PackingScreen";
 import OrderScreen from "@/components/OrderScreen";
@@ -11018,7 +11019,7 @@ function EshopChariotSkus({ session }: { session: any }) {
     const qty = stock[sku] ?? 0;
     setPushing(sku);
     try {
-      const r = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(sku)}&qty=${qty}`).then(x => x.json());
+      const r = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(sku)}&qty=${qty}`, { headers: writeHeaders }).then(x => x.json());
       if (r.ok) setSwStock(prev => ({ ...prev, [sku]: r.newStock }));
     } catch {}
     setPushing(null);

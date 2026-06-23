@@ -1,14 +1,20 @@
 // app/api/shopware-explore/route.ts — Exploration API Shopware 5 + Pickware + EshaTNT
 import { NextRequest, NextResponse } from "next/server";
+import { checkRateLimit, getClientIp } from "@/lib/rateLimiter";
 
-function getCreds(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
+// Credentials Shopware : UNIQUEMENT depuis l'environnement serveur.
+// (Plus de lecture depuis l'URL → la clé ne transite plus en query param/logs,
+//  plus de domaine/user en dur dans un dépôt public.)
+function getCreds() {
   return {
-    url: searchParams.get("sw_url") || process.env.SHOPWARE_URL || "https://fr.hau.vonaffenfels.de",
-    user: searchParams.get("sw_user") || process.env.SHOPWARE_USER || "jordan",
-    key: searchParams.get("sw_key") || process.env.SHOPWARE_API_KEY || "",
+    url: process.env.SHOPWARE_URL || "",
+    user: process.env.SHOPWARE_USER || "",
+    key: process.env.SHOPWARE_API_KEY || "",
   };
 }
+
+// Actions qui ÉCRIVENT dans Shopware → exigent le token interne (x-wms-token).
+const WRITE_ACTIONS = new Set(["setStock", "binSetStock"]);
 
 async function swFetch(path: string, creds: { url: string; user: string; key: string }, method = "GET", body?: any) {
   const base64 = Buffer.from(`${creds.user}:${creds.key}`).toString("base64");
@@ -39,7 +45,28 @@ async function safeJson(res: Response): Promise<{ ok: boolean; status: number; j
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const action = searchParams.get("action") || "ping";
-  const creds = getCreds(req);
+
+  // ── Rate limiting : 120 req / 60s par IP ──
+  const ip = getClientIp(req);
+  const rl = checkRateLimit(`sw:${ip}`, 120, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Trop de requêtes" }, { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetIn / 1000)) } });
+  }
+
+  // ── Actions d'écriture : token interne obligatoire ──
+  // WMS_WRITE_TOKEN (serveur) doit valoir NEXT_PUBLIC_WMS_TOKEN (client).
+  if (WRITE_ACTIONS.has(action)) {
+    const expected = process.env.WMS_WRITE_TOKEN || "";
+    const received = req.headers.get("x-wms-token") || "";
+    if (!expected || received !== expected) {
+      return NextResponse.json({ error: "Non autorisé (écriture)" }, { status: 401 });
+    }
+  }
+
+  const creds = getCreds();
+  if (!creds.url || !creds.key) {
+    return NextResponse.json({ error: "Shopware non configuré (env serveur)" }, { status: 500 });
+  }
 
   try {
     // ── ping: test auth ──

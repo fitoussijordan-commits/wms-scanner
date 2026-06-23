@@ -1,6 +1,7 @@
 // app/api/sendcloud/route.ts — Server-side proxy for SendCloud API
 import { NextRequest, NextResponse } from "next/server";
 import { fetchT } from "@/lib/fetchTimeout";
+import { checkRateLimit, getClientIp } from "@/lib/rateLimiter";
 
 export const maxDuration = 30;
 
@@ -330,6 +331,10 @@ async function pollLabel(auth: string, parcelId: number, attempts = 15, delayMs 
 }
 
 export async function GET(req: NextRequest) {
+  const ip = getClientIp(req);
+  const rl = checkRateLimit(`sc:${ip}`, 90, 60_000);
+  if (!rl.allowed) return NextResponse.json({ error: "Trop de requêtes" }, { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetIn / 1000)) } });
+
   const auth = getAuth();
   if (!auth) return NextResponse.json({ error: "SENDCLOUD_PUBLIC_KEY / SENDCLOUD_SECRET_KEY non configurées" }, { status: 500 });
 
@@ -783,6 +788,10 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const ip = getClientIp(req);
+  const rl = checkRateLimit(`sc-post:${ip}`, 40, 60_000);
+  if (!rl.allowed) return NextResponse.json({ error: "Trop de requêtes" }, { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetIn / 1000)) } });
+
   const auth = getAuth();
   if (!auth) return NextResponse.json({ error: "Clés SendCloud manquantes" }, { status: 500 });
 

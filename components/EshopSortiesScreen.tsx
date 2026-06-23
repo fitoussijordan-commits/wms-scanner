@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, Fragment as Fragment2 } from "react";
 import * as odoo from "@/lib/odoo";
 import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, type EshopMappingOverrides } from "@/lib/supabase";
+import { writeHeaders } from "@/lib/writeToken";
 
 const C = {
   bg: "#f8fafc", white: "#ffffff", text: "#1a1a2e", textSec: "#374151",
@@ -500,7 +501,7 @@ function StockSyncTab({ session, onToast }: { session: odoo.OdooSession; onToast
     if (!confirm(`Écrire le stock Shopware de ${r.ref} :\n${r.shopware ?? "?"} → ${r.odoo} ?\n\n⚠ Cette action modifie le stock affiché sur le site.`)) return;
     setPushing(r.ref);
     try {
-      const res = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(r.ref)}&qty=${r.odoo}`).then(x => x.json());
+      const res = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(r.ref)}&qty=${r.odoo}`, { headers: writeHeaders }).then(x => x.json());
       if (res.ok) {
         setRows(prev => prev.map(x => x.ref === r.ref ? { ...x, shopware: res.newStock ?? r.odoo } : x));
         onToast(`✓ ${r.ref} : Shopware ${res.oldStock} → ${res.newStock}`, "success");
@@ -675,7 +676,7 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
     setPushing(r.number);
     try {
       // 1) écrire le stock global (instantané)
-      const res = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(r.number)}&qty=${qty}`).then(x => x.json());
+      const res = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(r.number)}&qty=${qty}`, { headers: writeHeaders }).then(x => x.json());
       if (!res.ok) throw new Error(res.error || "échec écriture stock");
       // 2) emplacement : lu depuis la map préchargée (pas d'appel réseau → rapide)
       const loc = binMap[String(r.detailId)];
