@@ -388,23 +388,37 @@ interface PrepLine {
 
 function shortLoc(full: string): string { return (full || "").split("/").pop() || full; }
 
-// Parse le texte collé : chaque ligne "[1010361] Nom … 1,00 …" → { ref, qty }.
+// Parse le texte collé. Structure Odoo : "[réf] Nom(peut contenir des chiffres)\tqté\tqté\tUnités".
+// La QUANTITÉ est dans une colonne SÉPARÉE (tabulation), PAS dans le nom du produit.
+// → on découpe sur tabulations / espaces multiples et on prend le nombre de la colonne quantité.
 function parsePrepText(text: string): { ref: string; qty: number }[] {
   const out: { ref: string; qty: number }[] = [];
   for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-    // réf entre crochets [1010361]
+    const line = raw.replace(/\s+$/, "");
+    if (!line.trim()) continue;
     const refM = line.match(/\[([A-Za-z0-9\-_.]+)\]/);
     if (!refM) continue;
     const ref = refM[1];
-    // quantité = premier nombre décimal après la réf (1,00 ou 1.00 ou 2)
+
+    // On coupe la ligne en colonnes sur les tabulations OU groupes de 2+ espaces.
     const after = line.slice(refM.index! + refM[0].length);
-    const qtyM = after.match(/(\d+(?:[.,]\d+)?)/);
-    const qty = qtyM ? Math.round(parseFloat(qtyM[1].replace(",", "."))) : 1;
+    const cols = after.split(/\t+|\s{2,}/).map(c => c.trim()).filter(Boolean);
+    // La 1re colonne = nom (à ignorer, contient "- 145 ml" etc.). La quantité = 1re colonne
+    // PUREMENT numérique parmi les suivantes (ex: "2,00"). On exclut donc le nom.
+    let qty = 1;
+    for (let i = 1; i < cols.length; i++) {
+      const m = cols[i].match(/^(\d+(?:[.,]\d+)?)$/); // colonne entièrement numérique
+      if (m) { qty = Math.round(parseFloat(m[1].replace(",", "."))); break; }
+    }
+    // Repli : si aucune colonne propre, on prend le DERNIER nombre avant "Unités".
+    if (qty === 1 && !cols.slice(1).some(c => /^\d/.test(c))) {
+      const nums = after.match(/\d+(?:[.,]\d+)?/g) || [];
+      // on enlève les nombres collés à "ml"/"g" (taille produit dans le nom)
+      const qtyNums = (after.replace(/\d+(?:[.,]\d+)?\s*(ml|g|cl|l|mg)\b/gi, " ").match(/\d+(?:[.,]\d+)?/g)) || nums;
+      if (qtyNums[0]) qty = Math.round(parseFloat(qtyNums[0].replace(",", ".")));
+    }
     out.push({ ref, qty: qty > 0 ? qty : 1 });
   }
-  // cumul si une réf revient
   const byRef: Record<string, number> = {};
   for (const o of out) byRef[o.ref] = (byRef[o.ref] || 0) + o.qty;
   return Object.entries(byRef).map(([ref, qty]) => ({ ref, qty }));
