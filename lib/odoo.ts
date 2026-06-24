@@ -1737,6 +1737,54 @@ export async function matchEshopSkus(
 }
 
 // Get main stock location for product IDs (where most qty is stored)
+// Prépa libre depuis des OUT Odoo : à partir de n° de bons (WH/OUT/…), renvoie
+// les lignes (produit + qté DEMANDÉE) avec l'emplacement WMS (le plus rempli).
+export interface OutPrepLine { ref: string; qty: number; name: string; productId: number; location: string; stock: number; found: boolean; }
+export async function getOutPickingLines(
+  session: OdooSession, pickingNames: string[]
+): Promise<{ lines: OutPrepLine[]; foundPickings: string[]; missing: string[] }> {
+  const names = Array.from(new Set(pickingNames.map(n => n.trim().toUpperCase()).filter(Boolean)));
+  if (!names.length) return { lines: [], foundPickings: [], missing: [] };
+
+  // 1) Trouver les pickings par nom.
+  const picks = await searchRead(session, "stock.picking", [["name", "in", names]], ["id", "name"], names.length * 2);
+  const foundPickings = picks.map((p: any) => p.name);
+  const missing = names.filter(n => !foundPickings.includes(n));
+  if (!picks.length) return { lines: [], foundPickings: [], missing: names };
+
+  // 2) Mouvements de ces pickings → produit + qté demandée (product_uom_qty).
+  const pickIds = picks.map((p: any) => p.id);
+  const moves = await searchRead(session, "stock.move",
+    [["picking_id", "in", pickIds], ["product_uom_qty", ">", 0]],
+    ["product_id", "product_uom_qty"], 5000);
+
+  // Cumul par produit.
+  const qtyByProd: Record<number, number> = {};
+  for (const m of moves) {
+    const pid = Array.isArray(m.product_id) ? m.product_id[0] : m.product_id;
+    if (pid) qtyByProd[pid] = (qtyByProd[pid] || 0) + (m.product_uom_qty || 0);
+  }
+  const productIds = Object.keys(qtyByProd).map(Number);
+  if (!productIds.length) return { lines: [], foundPickings, missing };
+
+  // 3) Réf/nom + emplacement (le plus rempli).
+  const prods = await searchRead(session, "product.product", [["id", "in", productIds]], ["id", "default_code", "name"], productIds.length);
+  const prodMap: Record<number, { ref: string; name: string }> = {};
+  for (const p of prods) prodMap[p.id] = { ref: p.default_code || "", name: p.name || "" };
+  const locMap = await getProductLocations(session, productIds) as Record<number, any>;
+
+  const lines: OutPrepLine[] = productIds.map(pid => {
+    const p = prodMap[pid] || { ref: "", name: "" };
+    const loc = locMap[pid];
+    return {
+      ref: p.ref || String(pid), qty: Math.round(qtyByProd[pid]), name: p.name, productId: pid,
+      location: loc ? (loc.location_name || "").split("/").pop() || "—" : "—",
+      stock: loc ? Math.round(loc.quantity) : 0, found: true,
+    };
+  });
+  return { lines, foundPickings, missing };
+}
+
 export async function getProductLocations(session: OdooSession, productIds: number[]) {
   if (!productIds.length) return {};
 

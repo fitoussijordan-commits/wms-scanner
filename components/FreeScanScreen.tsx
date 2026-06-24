@@ -442,9 +442,28 @@ function sortPicking(a: PrepLine, b: PrepLine): number {
 
 // ── Création d'une prépa libre (coller texte → générer → enregistrer partagé) ──
 function FreePrepCreate({ session, onBack, onToast, onCreated }: Props & { onCreated: (p: WmsPrepList) => void }) {
+  const [src, setSrc] = useState<"out" | "text">("out");
   const [text, setText] = useState("");
+  const [outNums, setOutNums] = useState("");
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Création depuis des n° de OUT Odoo (WH/OUT/…).
+  const generateFromOut = async () => {
+    const nums = outNums.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+    if (!nums.length) { onToast("Donne au moins un n° de OUT", "error"); return; }
+    setLoading(true);
+    try {
+      const { lines, foundPickings, missing } = await odoo.getOutPickingLines(session, nums);
+      if (!lines.length) { onToast(`Aucune ligne trouvée${missing.length ? ` (introuvables : ${missing.join(", ")})` : ""}`, "error"); setLoading(false); return; }
+      const sorted = [...lines].sort((a, b) => sortPicking(a as any, b as any));
+      const entries: WmsPrepLine[] = sorted.map(l => ({ ref: l.ref, qty: l.qty, name: l.name, location: l.location, stock: l.stock, found: l.found, checked: false }));
+      const list = await createPrepList(name.trim() || `OUT ${foundPickings.join("+")}`, entries);
+      onToast(`Prépa créée depuis ${foundPickings.length} OUT${missing.length ? ` · ${missing.length} introuvable(s)` : ""} ✓`, "success");
+      onCreated(list);
+    } catch (e: any) { onToast("Erreur : " + (e?.message || e), "error"); }
+    setLoading(false);
+  };
 
   const generateAndSave = async () => {
     const parsed = parsePrepText(text);
@@ -480,17 +499,40 @@ function FreePrepCreate({ session, onBack, onToast, onCreated }: Props & { onCre
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
         <div><div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Nouvelle prépa libre</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>Colle un texte (réf + qté) → liste partagée triée par picking</div></div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>Depuis un OUT Odoo, ou en collant un texte → liste partagée triée picking</div></div>
       </div>
+
+      {/* Source */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+        {([["out", "N° de OUT"], ["text", "Coller un texte"]] as const).map(([k, label]) => (
+          <button key={k} onClick={() => setSrc(k)} style={{ flex: 1, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700, background: src === k ? C.blue : C.white, color: src === k ? "#fff" : C.textSec, boxShadow: src === k ? "none" : `inset 0 0 0 1px ${C.border}` }}>{label}</button>
+        ))}
+      </div>
+
       <input value={name} onChange={e => setName(e.target.value)} placeholder="Nom de la prépa (optionnel)"
         style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "inherit", marginBottom: 8 }} />
-      <textarea value={text} onChange={e => setText(e.target.value)} rows={6}
-        placeholder={"[1010361] Fluide de Jour Equilibrant - 50 ml\t1,00\t1,00\tUnités\n[1010310] Crème de Jour à la Rose - 30 ml\t2,00\t2,00\tUnités"}
-        style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "monospace", background: C.white, color: C.text, resize: "vertical", marginBottom: 10 }} />
-      <button onClick={generateAndSave} disabled={loading}
-        style={{ width: "100%", padding: "12px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 11, fontWeight: 800, fontSize: 15, cursor: "pointer", fontFamily: "inherit", opacity: loading ? 0.6 : 1 }}>
-        {loading ? "Génération…" : "Générer et partager la prépa"}
-      </button>
+
+      {src === "out" ? (
+        <>
+          <textarea value={outNums} onChange={e => setOutNums(e.target.value)} rows={3}
+            placeholder={"N° de OUT (un ou plusieurs)\nWH/OUT/12345\nWH/OUT/12346"}
+            style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "monospace", background: C.white, color: C.text, resize: "vertical", marginBottom: 10 }} />
+          <button onClick={generateFromOut} disabled={loading}
+            style={{ width: "100%", padding: "12px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 11, fontWeight: 800, fontSize: 15, cursor: "pointer", fontFamily: "inherit", opacity: loading ? 0.6 : 1 }}>
+            {loading ? "Récupération Odoo…" : "Créer la prépa depuis le(s) OUT"}
+          </button>
+        </>
+      ) : (
+        <>
+          <textarea value={text} onChange={e => setText(e.target.value)} rows={6}
+            placeholder={"[1010361] Fluide de Jour Equilibrant - 50 ml\t1,00\t1,00\tUnités\n[1010310] Crème de Jour à la Rose - 30 ml\t2,00\t2,00\tUnités"}
+            style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "monospace", background: C.white, color: C.text, resize: "vertical", marginBottom: 10 }} />
+          <button onClick={generateAndSave} disabled={loading}
+            style={{ width: "100%", padding: "12px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 11, fontWeight: 800, fontSize: 15, cursor: "pointer", fontFamily: "inherit", opacity: loading ? 0.6 : 1 }}>
+            {loading ? "Génération…" : "Générer et partager la prépa"}
+          </button>
+        </>
+      )}
     </div>
   );
 }
