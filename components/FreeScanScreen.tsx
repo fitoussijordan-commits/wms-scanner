@@ -17,6 +17,21 @@ interface Props {
   onToast: (msg: string, type?: "success" | "error" | "info") => void;
 }
 
+// Barre d'onglets Scan libre / Prépa libre (style cohérent avec les autres outils).
+function ScanTabBar({ active, onScan, onPrep }: { active: "scan" | "prep"; onScan: () => void; onPrep: () => void }) {
+  return (
+    <div style={{ display: "flex", gap: 4, padding: 4, background: C.bg, borderRadius: 12, marginBottom: 16 }}>
+      {([["scan", "Sessions de scan", onScan], ["prep", "Prépa libre", onPrep]] as const).map(([k, label, fn]) => (
+        <button key={k} onClick={fn} style={{
+          flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
+          background: active === k ? C.white : "transparent", color: active === k ? C.text : C.textMuted,
+          boxShadow: active === k ? "0 1px 4px rgba(0,0,0,0.08)" : "none", transition: "all 0.15s",
+        }}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
 // ── Vue liste des sessions ────────────────────────────────────────────────────
 function SessionListView({ session, onBack, onToast, onOpen, onPrepMode }: Props & { onOpen: (s: WmsScanSession) => void; onPrepMode: () => void }) {
   const [sessions, setSessions] = useState<WmsScanSession[]>([]);
@@ -59,7 +74,7 @@ function SessionListView({ session, onBack, onToast, onOpen, onPrepMode }: Props
 
   return (
     <div style={{ padding: "20px 16px", maxWidth: 480, margin: "0 auto", fontFamily: "'DM Sans', sans-serif" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
         <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
@@ -67,10 +82,8 @@ function SessionListView({ session, onBack, onToast, onOpen, onPrepMode }: Props
           <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Scan libre</div>
           <div style={{ fontSize: 12, color: C.textMuted }}>Sessions de scan cross-device</div>
         </div>
-        <button onClick={onPrepMode} style={{ background: "#eff6ff", color: C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 10, padding: "8px 14px", cursor: "pointer", fontSize: 12.5, fontWeight: 700, fontFamily: "inherit" }}>
-          📋 Prépa libre
-        </button>
       </div>
+      <ScanTabBar active="scan" onScan={() => {}} onPrep={onPrepMode} />
 
       {/* Créer nouvelle session */}
       <div style={{ background: C.white, border: `1.5px solid ${C.blue}`, borderRadius: 14, padding: 14, marginBottom: 20, boxShadow: "0 0 0 3px #eff6ff" }}>
@@ -568,25 +581,35 @@ function FreePrepOpen({ onBack, onToast, prep }: Pick<Props, "onToast"> & { onBa
         <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
-        <div><div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>{prep.name}</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>{doneCount}/{entries.length} préparé(s) · partagé temps réel · trié picking</div></div>
+        <div style={{ flex: 1 }}><div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>{prep.name}</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>{doneCount}/{entries.length} préparé · temps réel · ordre picking</div></div>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+
+      {/* Barre de progression */}
+      <div style={{ height: 8, background: C.bg, borderRadius: 99, overflow: "hidden", marginBottom: 14 }}>
+        <div style={{ height: "100%", width: `${entries.length ? (doneCount / entries.length) * 100 : 0}%`, background: C.green, transition: "width .2s" }} />
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {entries.map(l => {
           const ok = !!l.checked;
           return (
             <div key={l.ref} onClick={() => l.found && toggle(l.ref)}
-              style={{ background: ok ? C.greenSoft : !l.found ? "#fef2f2" : C.white, border: `1px solid ${ok ? C.green : !l.found ? "#fecaca" : C.border}`, borderRadius: 10, padding: "10px 12px", boxShadow: C.shadow, display: "flex", alignItems: "center", gap: 10, cursor: l.found ? "pointer" : "default", opacity: ok ? 0.6 : 1 }}>
-              <div style={{ width: 78, textAlign: "center", flexShrink: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 800, fontFamily: "monospace", color: l.found ? C.text : C.red }}>{l.found ? l.location : "?"}</div>
-              </div>
+              style={{ background: ok ? C.greenSoft : C.white, border: `1.5px solid ${ok ? C.green : !l.found ? "#fecaca" : C.border}`, borderRadius: 14, padding: "12px 14px", boxShadow: ok ? "none" : C.shadow, display: "flex", alignItems: "center", gap: 12, cursor: l.found ? "pointer" : "default" }}>
+              {/* Produit + emplacement complet */}
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>{l.ref}</div>
-                {l.found
-                  ? <div style={{ fontSize: 12, color: C.textSec, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</div>
-                  : <div style={{ fontSize: 11, color: C.red, fontWeight: 700 }}>réf introuvable dans Odoo</div>}
+                {/* Emplacement COMPLET, en bandeau (peut passer à la ligne) */}
+                <div style={{ display: "inline-block", padding: "3px 8px", borderRadius: 7, background: ok ? "#dcfce7" : l.found ? "#eef2ff" : "#fef2f2",
+                  fontSize: 12, fontWeight: 800, fontFamily: "monospace", color: l.found ? (ok ? C.green : C.blue) : C.red, marginBottom: 5, wordBreak: "break-all" }}>
+                  📍 {l.found ? l.location : "?"}
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: ok ? C.textMuted : C.text, textDecoration: ok ? "line-through" : "none" }}>{l.found ? l.name : "Réf introuvable dans Odoo"}</div>
+                <div style={{ fontSize: 11.5, fontFamily: "monospace", color: C.textMuted, marginTop: 1 }}>{l.ref}</div>
               </div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: ok ? C.green : C.text, flexShrink: 0 }}>×{l.qty}</div>
+              {/* Quantité */}
+              <div style={{ minWidth: 46, height: 46, borderRadius: 12, background: ok ? C.green : "#0f172a", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, flexShrink: 0 }}>
+                {ok ? "✓" : `×${l.qty}`}
+              </div>
             </div>
           );
         })}
@@ -610,14 +633,15 @@ function FreePrepList({ session, onBack, onToast }: Props) {
 
   return (
     <div style={{ padding: "20px 16px", maxWidth: 560, margin: "0 auto", fontFamily: "'DM Sans', sans-serif", paddingBottom: 90 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
         <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
-        <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Prépa libre</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>Listes partagées entre tous les postes</div></div>
-        <button onClick={() => setView("create")} style={{ background: C.blue, color: "#fff", border: "none", borderRadius: 10, padding: "9px 14px", cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "inherit" }}>+ Nouvelle</button>
+        <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Scan libre</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>Prépas partagées entre tous les postes</div></div>
       </div>
+      <ScanTabBar active="prep" onScan={onBack} onPrep={() => {}} />
+      <button onClick={() => setView("create")} style={{ width: "100%", background: C.blue, color: "#fff", border: "none", borderRadius: 11, padding: "11px 0", cursor: "pointer", fontSize: 14, fontWeight: 800, fontFamily: "inherit", marginBottom: 14 }}>+ Nouvelle prépa</button>
       {loading ? <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement…</div> : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {lists.length === 0 && <div style={{ textAlign: "center", padding: 30, color: C.textMuted, fontSize: 13 }}>Aucune prépa. Crée-en une avec « + Nouvelle ».</div>}
