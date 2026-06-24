@@ -6183,11 +6183,23 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       return;
     }
     const newCount = current + 1;
-    setScannedSkus(prev => ({ ...prev, [matched.sku]: newCount }));
+    const updatedScanned: Record<string, number> = { ...scannedSkus, [matched.sku]: newCount };
+    setScannedSkus(updatedScanned);
     if (newCount >= required) {
       vibrateSuccess();
       onToast(`✓ ${matched.description || matched.sku}`);
-      setLocConfirmed(false); // reset for next item
+      // Prochain article à préparer (après mise à jour des quantités).
+      const next = items.find((it: any) => (updatedScanned[it.sku] || 0) < (it.quantity || 1));
+      if (next && !next._isChariot) {
+        // Si le prochain article est au MÊME emplacement → on garde la confirmation
+        // (évite de rescanner l'emplacement pour chaque produit d'un même casier, ex. AV).
+        const curLoc = shortLoc(getLocation(matched.sku)?.location_name || "").toLowerCase();
+        const nextLoc = shortLoc(getLocation(next.sku)?.location_name || "").toLowerCase();
+        const sameLoc = curLoc && nextLoc && curLoc === nextLoc;
+        setLocConfirmed(!!sameLoc); // reste confirmé si même emplacement, sinon à rescanner
+      } else {
+        setLocConfirmed(false);
+      }
     }
   };
 
@@ -6252,8 +6264,15 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     const current = waveScannedSkus[matched.sku] || 0;
     if (current >= matched.totalQty) { setWaveScanError(`⚠ "${matched.name}" déjà prélevé`); return; }
     const newCount = current + 1;
-    setWaveScannedSkus(prev => ({ ...prev, [matched.sku]: newCount }));
-    if (newCount >= matched.totalQty) { vibrateSuccess(); onToast(`✓ ${matched.name}`); setWaveLocConfirmed(false); }
+    const updated = { ...waveScannedSkus, [matched.sku]: newCount };
+    setWaveScannedSkus(updated);
+    if (newCount >= matched.totalQty) {
+      vibrateSuccess(); onToast(`✓ ${matched.name}`);
+      // Garde la confirmation si le prochain article est au même emplacement.
+      const next = waveItems.find(it => (updated[it.sku] || 0) < it.totalQty);
+      const sameLoc = next && !next._isChariot && next.location && matched.location && next.location.toLowerCase() === matched.location.toLowerCase();
+      setWaveLocConfirmed(!!sameLoc);
+    }
   }, [buildWaveItems, waveScannedSkus, waveLocConfirmed]);
 
   useScannerListener(handleWaveScan, eshopTab === "wave");
@@ -6294,11 +6313,17 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       const maxQty = item?.quantity || 1;
       const clamped = Math.max(0, Math.min(maxQty, newQty));
       const wasComplete = (scannedSkus[sku] || 0) >= maxQty;
+      const updated = { ...scannedSkus, [sku]: clamped };
       setScannedSkus((prev: any) => ({ ...prev, [sku]: clamped }));
       if (!wasComplete && clamped >= maxQty) {
         vibrateSuccess();
         onToast(`✓ ${item?.description || sku}`);
-        setLocConfirmed(false);
+        // Garde la confirmation si le prochain article est au même emplacement.
+        const next = items.find((it: any) => (updated[it.sku] || 0) < (it.quantity || 1));
+        const curLoc = shortLoc(getLocation(sku)?.location_name || "").toLowerCase();
+        const nextLoc = next ? shortLoc(getLocation(next.sku)?.location_name || "").toLowerCase() : "";
+        const sameLoc = next && !next._isChariot && curLoc && nextLoc && curLoc === nextLoc;
+        setLocConfirmed(!!sameLoc);
       }
     };
 
@@ -6747,8 +6772,14 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       const maxQty = item?.totalQty || 1;
       const clamped = Math.max(0, Math.min(maxQty, newQty));
       const wasComplete = (waveScannedSkus[sku] || 0) >= maxQty;
-      setWaveScannedSkus(prev => ({ ...prev, [sku]: clamped }));
-      if (!wasComplete && clamped >= maxQty) { vibrateSuccess(); onToast(`✓ ${item?.name || sku}`); setWaveLocConfirmed(false); }
+      const updated = { ...waveScannedSkus, [sku]: clamped };
+      setWaveScannedSkus(updated);
+      if (!wasComplete && clamped >= maxQty) {
+        vibrateSuccess(); onToast(`✓ ${item?.name || sku}`);
+        const next = items.find(it => (updated[it.sku] || 0) < it.totalQty);
+        const sameLoc = next && !next._isChariot && next.location && item?.location && next.location.toLowerCase() === item.location.toLowerCase();
+        setWaveLocConfirmed(!!sameLoc);
+      }
     };
 
     const cancelWave = () => {
