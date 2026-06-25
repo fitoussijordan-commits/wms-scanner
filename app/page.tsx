@@ -4379,7 +4379,96 @@ function Alert({ type, children }: { type: string; children: React.ReactNode }) 
 // LABELS SCREEN
 // ============================================
 function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToast: (msg: string) => void; session: any }) {
-  const [tab, setTab] = useState<"blank" | "palette" | "chain">("blank");
+  const [tab, setTab] = useState<"blank" | "palette" | "chain" | "adresse">("blank");
+
+  // ── ADRESSE (étiquettes affranchissement 70×45) ──
+  type AddrRow = { name: string; line1: string; line2: string; zip: string; city: string; country: string };
+  const emptyAddr = (): AddrRow => ({ name: "", line1: "", line2: "", zip: "", city: "", country: "" });
+  const [addr, setAddr] = useState<AddrRow>(emptyAddr());
+  const [addrBatch, setAddrBatch] = useState<AddrRow[]>([]);
+  const [addrPrinting, setAddrPrinting] = useState(false);
+  const addrFileRef = useRef<HTMLInputElement>(null);
+
+  // Construit le template 70×45 d'une adresse (destinataire seul, centré, lisible).
+  const buildAddrTemplate = (a: AddrRow): LabelTemplate => {
+    const W = 70, H = 45;
+    const els: LabelElement[] = [];
+    // Lignes à afficher (on saute les vides), CP+Ville sur une même ligne.
+    const lines: { text: string; size: number; bold?: boolean }[] = [];
+    if (a.name) lines.push({ text: a.name, size: 13, bold: true });
+    if (a.line1) lines.push({ text: a.line1, size: 11 });
+    if (a.line2) lines.push({ text: a.line2, size: 11 });
+    const cpCity = [a.zip, a.city].filter(Boolean).join(" ");
+    if (cpCity) lines.push({ text: cpCity, size: 12, bold: true });
+    if (a.country && a.country.toUpperCase() !== "FR" && a.country.toUpperCase() !== "FRANCE")
+      lines.push({ text: a.country.toUpperCase(), size: 11, bold: true });
+    // Centrage vertical approximatif : hauteur de bloc ≈ somme des hauteurs de ligne.
+    const lineH = 6.5; // mm par ligne
+    const blockH = lines.length * lineH;
+    let y = Math.max(4, (H - blockH) / 2);
+    for (const ln of lines) {
+      els.push({ id: Math.random().toString(36).slice(2, 8), type: "text", x: 3, y, w: W - 6, h: lineH, text: ln.text, fontSize: ln.size, bold: ln.bold, align: "center" });
+      y += lineH;
+    }
+    return { widthMM: W, heightMM: H, elements: els };
+  };
+
+  // Imprime une liste d'adresses (1 étiquette chacune) sur l'imprimante étiquettes.
+  const printAddresses = async (rows: AddrRow[]) => {
+    const valid = rows.filter(r => (r.name || "").trim() || (r.line1 || "").trim() || (r.city || "").trim());
+    if (!valid.length) { onToast("⚠️ Aucune adresse à imprimer"); return; }
+    if (!printerId) { onToast("⚠️ Sélectionne une imprimante"); return; }
+    setAddrPrinting(true);
+    let ok = 0;
+    try {
+      for (const r of valid) {
+        const pdfB64 = await generateLabelPDF(buildAddrTemplate(r));
+        const res = await pn.printPdfLabel(printerId, pdfB64, `Adresse ${r.name || r.city}`, 1);
+        if (res.success) ok++; else { onToast(`❌ ${r.name || r.city}: ${res.error || "erreur"}`); break; }
+        await new Promise(res => setTimeout(res, 300));
+      }
+      if (ok === valid.length) onToast(`✅ ${ok} étiquette(s) imprimée(s)`);
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setAddrPrinting(false);
+  };
+
+  // Import Excel/CSV : détecte automatiquement les colonnes par leurs en-têtes.
+  const importAddrFile = async (file: File) => {
+    try {
+      const XLSX = await import("xlsx");
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      if (!rows.length) { onToast("⚠️ Fichier vide"); return; }
+      // Repère la ligne d'en-tête (1ère ligne non vide) et mappe les colonnes.
+      const header = (rows[0] || []).map((c: any) => String(c).toLowerCase().trim());
+      const findCol = (...keys: string[]) => header.findIndex((h: string) => keys.some(k => h.includes(k)));
+      const cName = findCol("nom complet", "destinataire", "nom", "name", "société", "societe", "raison");
+      const cFirst = findCol("prénom", "prenom", "first");
+      const cAddr = findCol("adresse", "rue", "address", "ligne 1", "line1", "voie");
+      const cAddr2 = findCol("complément", "complement", "ligne 2", "line2", "adresse 2");
+      const cZip = findCol("code postal", "cp", "zip", "postal");
+      const cCity = findCol("ville", "city", "commune");
+      const cCountry = findCol("pays", "country");
+      const get = (row: any[], i: number) => (i >= 0 && row[i] != null ? String(row[i]).trim() : "");
+      const out: AddrRow[] = [];
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i] || [];
+        const nom = [get(row, cFirst), get(row, cName)].filter(Boolean).join(" ").trim();
+        const r: AddrRow = {
+          name: nom || get(row, cName),
+          line1: get(row, cAddr), line2: get(row, cAddr2),
+          zip: get(row, cZip), city: get(row, cCity), country: get(row, cCountry),
+        };
+        if (r.name || r.line1 || r.city) out.push(r);
+      }
+      if (!out.length) { onToast("⚠️ Aucune adresse détectée — vérifie les en-têtes (Nom, Adresse, CP, Ville)"); return; }
+      setAddrBatch(out);
+      onToast(`✅ ${out.length} adresse(s) importée(s)`);
+    } catch (e: any) { onToast("❌ Lecture fichier : " + e.message); }
+  };
+
   const getDefaultTemplate = (): LabelTemplate => {
     const cfg = pn.getLabelTypeConfig("blank");
     return { widthMM: cfg.labelSize.widthMM, heightMM: cfg.labelSize.heightMM, elements: [] };
@@ -4661,7 +4750,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
 
       {/* Tabs */}
       <div style={{ display: "flex", background: C.bg, borderRadius: 10, padding: 3, marginBottom: 14 }}>
-        {([["blank", "Vierge"], ["palette", "Palette"], ["chain", "Chaîne"]] as const).map(([id, label]) => (
+        {([["blank", "Vierge"], ["palette", "Palette"], ["chain", "Chaîne"], ["adresse", "Adresse"]] as const).map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
             style={{ flex: 1, padding: "10px 0", fontSize: 13, fontWeight: 600, cursor: "pointer", border: "none", fontFamily: "inherit", borderRadius: 8, transition: "all .15s",
               background: tab === id ? C.white : "transparent", color: tab === id ? C.text : C.textMuted,
@@ -4694,6 +4783,71 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
               }}
               printing={loading}
             />
+          </div>
+        )}
+
+        {/* ── ADRESSE (affranchissement 70×45) ── */}
+        {tab === "adresse" && (
+          <div>
+            <div style={{ background: C.blueSoft, border: `1px solid ${C.blue}33`, borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 12.5, color: C.text }}>
+              Étiquette <strong>destinataire 70×45 mm</strong> pour affranchissement (lettre A5).
+              Saisis une adresse à la main, ou importe un fichier Excel/CSV pour imprimer en masse.
+            </div>
+
+            {/* Saisie manuelle */}
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 10 }}>Adresse destinataire</div>
+            {inp(addr.name, v => setAddr({ ...addr, name: v }), "Nom Prénom ou Société", "Nom")}
+            {inp(addr.line1, v => setAddr({ ...addr, line1: v }), "N° et rue", "Adresse")}
+            {inp(addr.line2, v => setAddr({ ...addr, line2: v }), "Bâtiment, étage… (option)", "Complément")}
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ width: 120 }}>{inp(addr.zip, v => setAddr({ ...addr, zip: v }), "75001", "Code postal")}</div>
+              <div style={{ flex: 1 }}>{inp(addr.city, v => setAddr({ ...addr, city: v }), "Ville", "Ville")}</div>
+            </div>
+            {inp(addr.country, v => setAddr({ ...addr, country: v }), "France (laisser vide si FR)", "Pays")}
+
+            <button onClick={() => printAddresses([addr])} disabled={addrPrinting}
+              style={{ width: "100%", marginTop: 6, padding: "13px 0", background: addrPrinting ? C.textMuted : C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: addrPrinting ? "default" : "pointer", fontFamily: "inherit" }}>
+              {addrPrinting ? "Impression…" : "🖨️ Imprimer cette étiquette"}
+            </button>
+            <button onClick={() => setAddr(emptyAddr())}
+              style={{ width: "100%", marginTop: 6, padding: "8px 0", background: C.white, color: C.textMuted, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              Effacer
+            </button>
+
+            <div style={{ height: 1, background: C.border, margin: "18px 0" }} />
+
+            {/* Import masse */}
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>Impression en masse (Excel / CSV)</div>
+            <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 10 }}>
+              Colonnes reconnues automatiquement : <strong>Nom</strong> (ou Nom + Prénom, Société), <strong>Adresse</strong>, <strong>Complément</strong>, <strong>Code postal</strong> (CP), <strong>Ville</strong>, <strong>Pays</strong>. 1ʳᵉ ligne = en-têtes.
+            </div>
+            <input ref={addrFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) importAddrFile(f); e.target.value = ""; }} />
+            <button onClick={() => addrFileRef.current?.click()}
+              style={{ width: "100%", padding: "12px 0", background: C.white, color: C.blue, border: `1.5px dashed ${C.blue}`, borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+              📁 Charger un fichier
+            </button>
+
+            {addrBatch.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{addrBatch.length} adresse(s)</div>
+                  <button onClick={() => setAddrBatch([])} style={{ fontSize: 12, color: C.red, background: "none", border: "none", cursor: "pointer", fontWeight: 600, fontFamily: "inherit" }}>Vider</button>
+                </div>
+                <div style={{ maxHeight: 240, overflowY: "auto" as const, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+                  {addrBatch.map((r, i) => (
+                    <div key={i} style={{ padding: "8px 12px", borderBottom: i < addrBatch.length - 1 ? `1px solid ${C.border}` : "none", fontSize: 12.5, color: C.text }}>
+                      <div style={{ fontWeight: 700 }}>{r.name || "—"}</div>
+                      <div style={{ color: C.textMuted, fontSize: 11.5 }}>{[r.line1, r.line2, [r.zip, r.city].filter(Boolean).join(" "), r.country].filter(Boolean).join(", ")}</div>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => printAddresses(addrBatch)} disabled={addrPrinting}
+                  style={{ width: "100%", marginTop: 10, padding: "13px 0", background: addrPrinting ? C.textMuted : C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: addrPrinting ? "default" : "pointer", fontFamily: "inherit" }}>
+                  {addrPrinting ? "Impression…" : `🖨️ Imprimer les ${addrBatch.length} étiquettes`}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
