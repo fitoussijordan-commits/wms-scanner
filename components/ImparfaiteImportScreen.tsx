@@ -206,6 +206,12 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
           try { const d = await odoo.debugTntService(session, out); alert(JSON.stringify(d, null, 2)); }
           catch (e: any) { alert("Erreur : " + (e?.message || e)); }
         }} style={{ background: C.white, color: C.purple, border: `1.5px solid ${C.purple}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>🔍 Diag TNT</button>
+        <button onClick={async () => {
+          const so = prompt("Diag champs commande — n° de commande (ex: S12345) :");
+          if (!so) return;
+          try { const d = await odoo.debugSaleOrderFields(session, so); alert(JSON.stringify(d, null, 2)); }
+          catch (e: any) { alert("Erreur : " + (e?.message || e)); }
+        }} style={{ background: C.white, color: C.purple, border: `1.5px solid ${C.purple}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>🔍 Diag champs</button>
       </div>
 
       {error && <div style={{ background: C.redSoft, border: "1px solid #fecaca", borderRadius: 10, padding: "10px 14px", color: C.red, fontSize: 13, marginBottom: 12 }}>{error}</div>}

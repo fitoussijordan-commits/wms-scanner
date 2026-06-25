@@ -1739,6 +1739,26 @@ export async function matchEshopSkus(
 // Get main stock location for product IDs (where most qty is stored)
 // DIAGNOSTIC TNT : inspecte les enregistrements tnt.shipping.service liés à un OUT,
 // pour comprendre comment cibler/appliquer un service (ex: "JE") via set_service.
+// Diag : inspecte une commande (par n°, ex "S12345") et liste les champs liés à
+// la facturation/force_invoiced, + la valeur actuelle sur cette commande.
+export async function debugSaleOrderFields(session: OdooSession, orderName: string): Promise<any> {
+  const out: any = { order: orderName };
+  try {
+    const fields = await callMethod(session, "sale.order", "fields_get", [], { attributes: ["string", "type"] });
+    const keys = Object.keys(fields || {});
+    // champs dont le nom OU le libellé évoque "facture/invoice/force"
+    out.matching = keys
+      .filter(k => /force|invoic|factur/i.test(k) || /force|invoic|factur/i.test((fields[k]?.string || "")))
+      .map(k => ({ field: k, string: fields[k]?.string, type: fields[k]?.type }));
+    // valeur actuelle sur la commande si on la trouve
+    try {
+      const so = await searchRead(session, "sale.order", [["name", "=", orderName.trim()]], ["id", "name", ...out.matching.map((m: any) => m.field)], 1);
+      out.current = so[0] || null;
+    } catch (e: any) { out.currentError = e.message; }
+  } catch (e: any) { out.error = e.message; }
+  return out;
+}
+
 export async function debugTntService(session: OdooSession, pickingName: string): Promise<any> {
   const out: any = { picking: pickingName };
   try {

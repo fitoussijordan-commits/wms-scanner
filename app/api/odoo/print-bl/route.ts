@@ -50,11 +50,24 @@ async function addDateOverlay(
     const boxW = dateWidth + (overlayTotal && overlayTotal > 1 ? 120 : 20);
     const boxX = width / 2 - boxW / 2;
     page.drawRectangle({
-      x: boxX, y: dateY - 10,
-      width: boxW, height: dateFontSize + 16,
+      x: boxX, y: dateY - 18,
+      width: boxW, height: dateFontSize + 24,
       color: rgb(1, 1, 1), opacity: 0.9,
     });
     page.drawText(dateStr, { x: dateX, y: dateY, size: dateFontSize, font, color: rgb(0.08, 0.08, 0.08) });
+
+    // Sous la grosse date : jour + heure RÉELS d'impression, en tout petit.
+    try {
+      const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const now = new Date();
+      const printedStr = "Imprimé le " + now.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" })
+        + " à " + now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+      const printedSize = 8;
+      const printedWidth = regular.widthOfTextAtSize(printedStr, printedSize);
+      const printedX = width / 2 - printedWidth / 2;
+      const printedY = dateY - 12; // juste sous la grosse date
+      page.drawText(printedStr, { x: printedX, y: printedY, size: printedSize, font: regular, color: rgb(0.45, 0.45, 0.45) });
+    } catch {}
 
     if (overlayIndex !== undefined && overlayTotal !== undefined && overlayTotal > 1) {
       const posStr = `${overlayIndex}/${overlayTotal}`;
