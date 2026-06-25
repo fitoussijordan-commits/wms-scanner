@@ -11615,7 +11615,8 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
   const [liveProgress, setLiveProgress] = useState<Record<number, { done: number; total: number; doneLines: number; totalLines: number }>>({});
   const liveProgressRef = useRef(liveProgress); liveProgressRef.current = liveProgress;
   useEffect(() => {
-    if (!session) return;
+    // Ne rafraîchit que dans l'onglet liste de Préparation (là où la barre est visible).
+    if (!session || prepTab !== "list") return;
     let stop = false;
     const ids = (pickings || []).map((p: any) => p.id).filter(Boolean);
     if (!ids.length) { setLiveProgress({}); return; }
@@ -11638,7 +11639,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
     document.addEventListener("visibilitychange", onWake);
     return () => { stop = true; clearTimeout(timer); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, (pickings || []).map((p: any) => p.id).join(",")]);
+  }, [session, prepTab, (pickings || []).map((p: any) => p.id).join(",")]);
 
   // ── Multi-scan state ──
   const [multiScanInput, setMultiScanInput] = useState("");
