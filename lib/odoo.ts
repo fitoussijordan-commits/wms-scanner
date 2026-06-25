@@ -4116,7 +4116,7 @@ export async function createMarketplaceOrder(
   session: OdooSession,
   partnerId: number,
   lines: MarketplaceLine[],
-  opts: { origin?: string; confirm?: boolean; assign?: boolean; tag?: string; price0?: boolean; pricelistName?: string; tntService?: string } = {}
+  opts: { origin?: string; confirm?: boolean; assign?: boolean; tag?: string; price0?: boolean; pricelistName?: string; tntService?: string; forceInvoiced?: boolean } = {}
 ): Promise<{ id: number; name: string; tnt?: { ok: boolean; reason?: string; serviceId?: number } }> {
   const vals: any = {
     partner_id: partnerId,
@@ -4157,6 +4157,13 @@ export async function createMarketplaceOrder(
   }
 
   const id = await create(session, "sale.order", vals) as number;
+
+  // "Forcer le statut à 'Entièrement facturé'" (champ custom force_invoiced d'un module
+  // externe) → empêche la génération de facture à la validation du OUT. Write protégé :
+  // si le champ n'existe pas (module absent), on n'interrompt pas l'import.
+  if (opts.forceInvoiced) {
+    try { await write(session, "sale.order", [id], { force_invoiced: true }); } catch {}
+  }
 
   // La pricelist est READONLY une fois la commande confirmée (state=sale).
   // On la (ré)impose donc TANT QU'ON EST EN BROUILLON, puis on recalcule les prix.

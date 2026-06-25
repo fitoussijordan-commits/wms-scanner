@@ -171,7 +171,8 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
         const order = await odoo.createMarketplaceOrder(session, partnerId, lines, {
           origin: `Imparfaite ${g.ref}`, confirm: true, assign: true, price0: true,
           pricelistName: "WALAOFFERT_2023", tag: "Imparfaite",
-          tntService: "JE",   // service TNT "13:00 Express - Essentiel Flexibilité" sur le OUT
+          tntService: "JE",       // service TNT "13:00 Express - Essentiel Flexibilité" sur le OUT
+          forceInvoiced: true,    // "Forcer le statut à 'Entièrement facturé'" (pas de facture à la validation du OUT)
         });
         await markImparfaiteProcessed([g.ref], order.name).catch(() => {});
         const tntMsg = order.tnt ? (order.tnt.ok ? " · TNT JE ✓" : ` · TNT ⚠ (${order.tnt.reason})`) : "";
