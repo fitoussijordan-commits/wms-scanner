@@ -3834,11 +3834,14 @@ export async function getInventoryTheoretical(
     2000
   );
   const qKey = (pid: number, lot: number | null, loc: number | null) => `${pid}|${lot ?? 0}|${loc ?? 0}`;
-  // Map scommande exacte produit+lot+emplacement
+  // Map exacte produit+lot+emplacement
   const exact: Record<string, { quantId: number; qty: number }> = {};
-  // Agrégat produit+lot (tous emplacements) pour le mode scan libre (locationId null)
-  // bestQty = qty du quant choisi comme cible (le plus rempli) → sert à appliquer un DELTA.
+  // Agrégat produit+lot (tous emplacements) — scan libre avec lot connu.
   const byProdLot: Record<string, { quantId: number; qty: number; bestQty: number }> = {};
+  // Agrégat produit SEUL (tous lots, tous emplacements) — scan libre SANS lot
+  // (corrige le faux écart sur les produits gérés par lot : le théorique doit
+  //  sommer TOUT le stock du produit, pas exiger "lot = aucun").
+  const byProd: Record<number, { quantId: number; qty: number; bestQty: number }> = {};
   for (const q of quants) {
     const pid = Array.isArray(q.product_id) ? q.product_id[0] : q.product_id;
     const lot = q.lot_id ? (Array.isArray(q.lot_id) ? q.lot_id[0] : q.lot_id) : null;
@@ -3848,16 +3851,23 @@ export async function getInventoryTheoretical(
     const plKey = `${pid}|${lot ?? 0}`;
     if (!byProdLot[plKey]) byProdLot[plKey] = { quantId: q.id, qty: 0, bestQty: qty };
     byProdLot[plKey].qty += qty;
-    // garde le quant avec le plus de stock comme cible de correction par défaut
     if (qty >= byProdLot[plKey].bestQty) { byProdLot[plKey].quantId = q.id; byProdLot[plKey].bestQty = qty; }
+    if (!byProd[pid]) byProd[pid] = { quantId: q.id, qty: 0, bestQty: qty };
+    byProd[pid].qty += qty;
+    if (qty >= byProd[pid].bestQty) { byProd[pid].quantId = q.id; byProd[pid].bestQty = qty; }
   }
   return keys.map(k => {
     if (k.locationId != null) {
       const hit = exact[qKey(k.productId, k.lotId, k.locationId)];
       return { ...k, quantId: hit?.quantId ?? null, theoretical: hit?.qty ?? 0, quantQty: hit?.qty ?? 0 };
     }
-    // mode scan libre : somme sur tous les emplacements pour ce produit+lot
-    const hit = byProdLot[`${k.productId}|${k.lotId ?? 0}`];
+    // Scan libre AVEC lot → somme du produit+lot sur tous les emplacements.
+    if (k.lotId != null) {
+      const hit = byProdLot[`${k.productId}|${k.lotId}`];
+      return { ...k, quantId: hit?.quantId ?? null, theoretical: hit?.qty ?? 0, quantQty: hit?.bestQty ?? 0 };
+    }
+    // Scan libre SANS lot → somme de TOUT le stock du produit (tous lots/emplacements).
+    const hit = byProd[k.productId];
     return { ...k, quantId: hit?.quantId ?? null, theoretical: hit?.qty ?? 0, quantQty: hit?.bestQty ?? 0 };
   });
 }
