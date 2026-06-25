@@ -157,11 +157,15 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
         // 1) nouveau client (toujours) — numéro client = réf commande, type de compte = Imparfaite
         const partnerId = await odoo.createMarketplaceClient(session, {
           name: g.client.name || g.client.company || "Client Imparfaite",
-          ref: g.ref,
+          // Référence = "Imparfaite" + n° de commande (sans le #), ex: Imparfaite289110776
+          ref: `Imparfaite${g.ref.replace(/^#/, "")}`,
           email: g.client.email, phone: g.client.phone, company: g.client.company,
           street: g.client.addr1, street2: [g.client.addr2, g.client.addr3].filter(Boolean).join(" "),
           zip: g.client.zip, city: g.client.city, countryCode: g.client.country,
           typeCompteName: "Imparfaite",
+          isCompany: true,                    // Société (pas Individu)
+          tag: "Imparfaite",                  // étiquette client
+          pricelistName: "WALAOFFERT_2023",   // liste de prix (nom EN/US = WALAOFFERT_2026 fr)
         });
         // 2) commande confirmée + réservée, vendeur vide, pricelist offert, tag Imparfaite
         const order = await odoo.createMarketplaceOrder(session, partnerId, lines, {

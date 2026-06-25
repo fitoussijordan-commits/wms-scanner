@@ -3957,6 +3957,9 @@ export interface MarketplaceClient {
   countryCode?: string;  // ISO2 (ex: "FR")
   // Type de compte (champ custom many2one x_type_de_compte_id) → résolu par nom, ex: "Imparfaite"
   typeCompteName?: string;
+  isCompany?: boolean;     // true → company_type "company" (Société), sinon "person"
+  tag?: string;            // étiquette client (res.partner.category_id), ex: "Imparfaite"
+  pricelistName?: string;  // liste de prix client (property_product_pricelist), ex: "WALAOFFERT_2023"
 }
 export interface MarketplaceLine { productId: number; qty: number; name?: string; price?: number; }
 
@@ -3964,10 +3967,10 @@ export interface MarketplaceLine { productId: number; qty: number; name?: string
 export async function createMarketplaceClient(session: OdooSession, c: MarketplaceClient): Promise<number> {
   const vals: any = {
     name: c.name || "Client marketplace",
-    company_type: "person",
+    company_type: c.isCompany ? "company" : "person", // Société si demandé
     customer_rank: 1,
   };
-  if (c.ref) vals.ref = c.ref;                       // numéro client = réf commande
+  if (c.ref) vals.ref = c.ref;                       // numéro client = réf commande (ex: Imparfaite289...)
   if (c.email) vals.email = c.email;
   if (c.phone) vals.phone = c.phone;
   if (c.street) vals.street = c.street;
@@ -3992,6 +3995,22 @@ export async function createMarketplaceClient(session: OdooSession, c: Marketpla
         catch { try { typeId = await create(session, "x_type_de_compte", { name: c.typeCompteName }) as number; } catch {} }
       }
       if (typeId) vals.x_type_de_compte_id = typeId;
+    } catch {}
+  }
+  // Étiquette client (res.partner.category_id, many2many) — trouve ou crée le tag.
+  if (c.tag) {
+    try {
+      let t = await searchRead(session, "res.partner.category", [["name", "=", c.tag]], ["id"], 1);
+      const tagId = t.length ? t[0].id : await create(session, "res.partner.category", { name: c.tag }) as number;
+      if (tagId) vals.category_id = [[6, 0, [tagId]]];
+    } catch {}
+  }
+  // Liste de prix client (property_product_pricelist) — par nom (EN/US), tolérant.
+  if (c.pricelistName) {
+    try {
+      let pl = await searchRead(session, "product.pricelist", [["name", "=", c.pricelistName]], ["id"], 1);
+      if (!pl.length) pl = await searchRead(session, "product.pricelist", [["name", "ilike", c.pricelistName]], ["id"], 1);
+      if (pl.length) vals.property_product_pricelist = pl[0].id;
     } catch {}
   }
   // Pays via code ISO2
