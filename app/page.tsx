@@ -1498,6 +1498,10 @@ export default function Page() {
           if (statusCode !== "0") return false;
           const num = o.order_number;
           if (num && preparedSet.has(num)) return false; // déjà préparée
+          // commandes de test (fantômes désync Shopware↔SendCloud) → exclure
+          const email = (o.shipping_address?.email || "").toLowerCase();
+          const recipient = (o.shipping_address?.name || "").toLowerCase();
+          if (email.includes("@drhauschka.fr") || /\btest test\b/.test(recipient)) return false;
           const integId = o.order_details?.integration?.id ?? o.integration_id ?? null;
           if (integId && integId !== 527093) return false;
           const carrierStr = [
@@ -1715,6 +1719,10 @@ export default function Page() {
               // déjà préparée → ne pas compter
               const num = o?.order_number;
               if (num && preparedSet.has(num)) return false;
+              // commandes de test (fantômes) → exclure
+              const email = (o?.shipping_address?.email || "").toLowerCase();
+              const recipient = (o?.shipping_address?.name || "").toLowerCase();
+              if (email.includes("@drhauschka.fr") || /\btest test\b/.test(recipient)) return false;
               const integId = o?.order_details?.integration?.id ?? o?.integration_id ?? null;
               if (integId && integId !== 527093) return false;
               const carrierStr = [
@@ -5831,6 +5839,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         // Statut ouvert
         const statusCode = o._raw?.order_details?.status?.code ?? o._raw?.status?.code;
         if (statusCode !== "0") return false;
+        // Commandes de TEST (fantômes restées "Ouvert" dans SendCloud) → exclure.
+        // Détection sûre : email interne @drhauschka.fr OU destinataire "TEST TEST".
+        const email = (o._raw?.shipping_address?.email || o.email || "").toLowerCase();
+        const recipient = (o._raw?.shipping_address?.name || o.name || "").toLowerCase();
+        if (email.includes("@drhauschka.fr") || /\btest test\b/.test(recipient)) return false;
         // Boutique : garde uniquement l'intégration 527093 (Dr. Hauschka FR) — id racine ou imbriqué
         const integId = o._raw?.order_details?.integration?.id ?? o._raw?.integration_id ?? null;
         if (integId && integId !== 527093) return false;
