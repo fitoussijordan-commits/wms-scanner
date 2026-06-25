@@ -7,6 +7,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchT } from "@/lib/fetchTimeout";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
+// Jamais de cache : on veut l'heure réelle à chaque impression.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 const PRINTNODE_API_URL = "https://api.printnode.com";
 
 function pnHeaders() {
@@ -60,8 +64,9 @@ async function addDateOverlay(
     try {
       const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
       const now = new Date();
-      const printedStr = "Imprimé le " + now.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" })
-        + " à " + now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+      const TZ = "Europe/Paris"; // le serveur Vercel tourne en UTC → on force le fuseau FR
+      const printedStr = "Imprimé le " + now.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: TZ })
+        + " à " + now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: TZ });
       const printedSize = 8;
       const printedWidth = regular.widthOfTextAtSize(printedStr, printedSize);
       const printedX = width / 2 - printedWidth / 2;
