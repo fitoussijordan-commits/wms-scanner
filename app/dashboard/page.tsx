@@ -1774,8 +1774,11 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         const unitsAtRisk = Math.max(0, lot.qtyDispo - (avgMonthly > 0 ? unitsSellable : 0));
 
         let status: DlvRow["status"];
-        if (avgMonthly === 0 || !hasEnoughHistory) status = "unknown";
-        else if (daysToSellBy <= 0) status = "overdue";
+        // PRIORITÉ : une sell-by DÉPASSÉE avec du stock = alerte "hors délai",
+        // même sans conso (sinon ces lots à écouler passaient en "Sans conso" et
+        // disparaissaient du filtre Alertes / de l'export).
+        if (daysToSellBy <= 0 && lot.qtyDispo > 0) status = "overdue";
+        else if (avgMonthly === 0 || !hasEnoughHistory) status = "unknown";
         else if (daysToSellBy < 30) status = "critical";
         else if (unitsAtRisk > 0) status = "risk";
         else if (daysToSellBy < 90) status = "watch";
