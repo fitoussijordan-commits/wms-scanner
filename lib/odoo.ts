@@ -1737,6 +1737,37 @@ export async function matchEshopSkus(
 }
 
 // Get main stock location for product IDs (where most qty is stored)
+// DIAGNOSTIC TNT : inspecte les enregistrements tnt.shipping.service liés à un OUT,
+// pour comprendre comment cibler/appliquer un service (ex: "JE") via set_service.
+export async function debugTntService(session: OdooSession, pickingName: string): Promise<any> {
+  const out: any = { picking: pickingName };
+  try {
+    const picks = await searchRead(session, "stock.picking", [["name", "=", pickingName.trim().toUpperCase()]], ["id", "name", "carrier_id"], 1);
+    if (!picks.length) return { error: "OUT introuvable" };
+    const pick = picks[0];
+    out.pickingId = pick.id;
+    out.carrier = pick.carrier_id;
+    // champs du modèle tnt.shipping.service
+    try {
+      const fields = await callMethod(session, "tnt.shipping.service", "fields_get", [], { attributes: ["string", "type", "relation"] });
+      out.serviceFields = Object.keys(fields || {});
+      out.serviceFieldsDetail = fields;
+    } catch (e: any) { out.serviceFieldsError = e.message; }
+    // enregistrements liés à ce picking (on tente plusieurs noms de champ de lien)
+    for (const f of ["picking_id", "stock_picking_id", "delivery_id"]) {
+      try {
+        const recs = await searchRead(session, "tnt.shipping.service", [[f, "=", pick.id]], ["id", "display_name"], 20);
+        if (recs.length) { out.linkedVia = f; out.services = recs; break; }
+      } catch {}
+    }
+    // si rien trouvé, on prend juste un échantillon du modèle
+    if (!out.services) {
+      try { out.sample = await searchRead(session, "tnt.shipping.service", [], ["id", "display_name"], 10); } catch (e: any) { out.sampleError = e.message; }
+    }
+  } catch (e: any) { out.error = e.message; }
+  return out;
+}
+
 // Prépa libre depuis des OUT Odoo : à partir de n° de bons (WH/OUT/…), renvoie
 // les lignes (produit + qté DEMANDÉE) avec l'emplacement WMS (le plus rempli).
 export interface OutPrepLine { ref: string; qty: number; name: string; productId: number; location: string; stock: number; found: boolean; }

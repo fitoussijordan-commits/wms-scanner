@@ -193,10 +193,16 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
         <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
         </button>
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Import Imparfaite</div>
           <div style={{ fontSize: 12, color: C.textMuted }}>1 commande = 1 client + 1 commande Odoo (confirmée, lignes à 0 €)</div>
         </div>
+        <button onClick={async () => {
+          const out = prompt("Diag TNT — n° de OUT (ex: WH/OUT/39817) :");
+          if (!out) return;
+          try { const d = await odoo.debugTntService(session, out); alert(JSON.stringify(d, null, 2)); }
+          catch (e: any) { alert("Erreur : " + (e?.message || e)); }
+        }} style={{ background: C.white, color: C.purple, border: `1.5px solid ${C.purple}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>🔍 Diag TNT</button>
       </div>
 
       {error && <div style={{ background: C.redSoft, border: "1px solid #fecaca", borderRadius: 10, padding: "10px 14px", color: C.red, fontSize: 13, marginBottom: 12 }}>{error}</div>}
