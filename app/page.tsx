@@ -11629,7 +11629,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
     // Polling adaptatif : rapide quand l'onglet est visible, lent en arrière-plan.
     let timer: any;
     const schedule = () => {
-      const delay = document.visibilityState === "visible" ? 8000 : 30000;
+      const delay = document.visibilityState === "visible" ? 3000 : 30000;
       timer = setTimeout(async () => { if (!stop) { await tick(); schedule(); } }, delay);
     };
     schedule();
