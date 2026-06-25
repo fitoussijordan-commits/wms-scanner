@@ -12064,7 +12064,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
                               {/* Boutons */}
                               <div style={{ display: "flex", gap: 6 }}>
                                 <button onClick={() => onOpen(p)} style={{ flex: 1, padding: "11px 0", background: C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                                  {prog && !progDone ? "Reprendre" : "Préparer"}
+                                  {prog && prog.done > 0 && !progDone ? "Reprendre" : "Préparer"}
                                 </button>
                                 <button onClick={() => requestPrint({ type: "picking", title: p.name, barcode: p.name })}
                                   style={{ padding: "11px 13px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}
