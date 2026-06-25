@@ -855,6 +855,35 @@ export async function getPickingMoveLines(session: OdooSession, pickingId: numbe
   );
 }
 
+// Progression réelle (partagée, lue depuis Odoo) pour PLUSIEURS pickings d'un coup.
+// Renvoie pour chaque id : unités faites/réservées + lignes faites/totales.
+// Permet une barre de chargement dynamique reflétant le travail de TOUS les préparateurs.
+export async function getPickingsProgress(
+  session: OdooSession, pickingIds: number[]
+): Promise<Record<number, { done: number; total: number; doneLines: number; totalLines: number }>> {
+  const out: Record<number, { done: number; total: number; doneLines: number; totalLines: number }> = {};
+  if (!pickingIds.length) return out;
+  for (const id of pickingIds) out[id] = { done: 0, total: 0, doneLines: 0, totalLines: 0 };
+
+  const lines = await searchRead(
+    session, "stock.move.line",
+    [["picking_id", "in", pickingIds], ["reserved_uom_qty", ">", 0]],
+    ["picking_id", "qty_done", "reserved_uom_qty"],
+    5000
+  );
+  for (const ml of lines) {
+    const pid = Array.isArray(ml.picking_id) ? ml.picking_id[0] : ml.picking_id;
+    if (!pid || !out[pid]) continue;
+    const reserved = ml.reserved_uom_qty || 0;
+    const done = Math.min(ml.qty_done || 0, reserved); // borne : pas plus que réservé
+    out[pid].total += reserved;
+    out[pid].done += done;
+    out[pid].totalLines += 1;
+    if (done >= reserved) out[pid].doneLines += 1;
+  }
+  return out;
+}
+
 // Crée une nouvelle ligne de mouvement pour un lot scanné différent du lot réservé.
 // C'est l'approche correcte dans Odoo : ne pas changer le lot_id d'une ligne réservée,
 // mais créer une nouvelle ligne pour le lot réellement prélevé.

@@ -11611,6 +11611,35 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
   const [scanCode, setScanCode] = useState("");
   const [prepTab, setPrepTab] = useState<"list" | "multiscan" | "groups">("list");
 
+  // ── Progression LIVE (lue depuis Odoo, partagée entre préparateurs) ──
+  const [liveProgress, setLiveProgress] = useState<Record<number, { done: number; total: number; doneLines: number; totalLines: number }>>({});
+  const liveProgressRef = useRef(liveProgress); liveProgressRef.current = liveProgress;
+  useEffect(() => {
+    if (!session) return;
+    let stop = false;
+    const ids = (pickings || []).map((p: any) => p.id).filter(Boolean);
+    if (!ids.length) { setLiveProgress({}); return; }
+    const tick = async () => {
+      try {
+        const prog = await odoo.getPickingsProgress(session, ids);
+        if (!stop) setLiveProgress(prog);
+      } catch { /* on garde l'ancienne valeur */ }
+    };
+    tick(); // immédiat
+    // Polling adaptatif : rapide quand l'onglet est visible, lent en arrière-plan.
+    let timer: any;
+    const schedule = () => {
+      const delay = document.visibilityState === "visible" ? 8000 : 30000;
+      timer = setTimeout(async () => { if (!stop) { await tick(); schedule(); } }, delay);
+    };
+    schedule();
+    const onWake = () => { if (!stop) tick(); };
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    return () => { stop = true; clearTimeout(timer); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, (pickings || []).map((p: any) => p.id).join(",")]);
+
   // ── Multi-scan state ──
   const [multiScanInput, setMultiScanInput] = useState("");
   const [multiScanLoading, setMultiScanLoading] = useState(false);
@@ -11976,7 +12005,9 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
                         )}
                         {group.map((p: any) => {
                           const moveCount = (p.move_ids_without_package || []).length;
-                          const prog = progressCache?.[p.id];
+                          // Priorité à la progression LIVE (Odoo, partagée) ; fallback cache local.
+                          const live = liveProgress?.[p.id];
+                          const prog = (live && live.total > 0) ? live : progressCache?.[p.id];
                           const progPct = prog && prog.total > 0 ? Math.round((prog.done / prog.total) * 100) : null;
                           const progDone = prog && prog.total > 0 && prog.done >= prog.total;
                           return (
