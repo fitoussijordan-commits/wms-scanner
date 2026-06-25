@@ -10462,7 +10462,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct, desktop }: 
         <div style={{ display: "flex", gap: 8 }}>
           <input
             ref={searchInputRef}
-            autoFocus
+            autoFocus={desktop}
             value={query}
             onChange={e => {
               const val = e.target.value;
