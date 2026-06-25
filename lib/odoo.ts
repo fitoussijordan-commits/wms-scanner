@@ -710,6 +710,39 @@ const PICKING_FIELDS = [
   "user_id",
 ];
 
+// Cherche les AUTRES préparations (pick) du même client encore en cours,
+// pour avertir au moment d'imprimer qu'il faut peut-être les coupler.
+// On exclut le picking courant (et son groupage _groupIds).
+export async function findSiblingPickingsForPartner(
+  session: OdooSession,
+  partnerId: number,
+  excludeIds: number[] = []
+): Promise<{ id: number; name: string; user: string | null; state: string; origin: string }[]> {
+  if (!partnerId) return [];
+  const { pickTypeIds } = await _resolveWaitingIds(session);
+  if (!pickTypeIds.length) return [];
+  const recs = await searchRead(
+    session, "stock.picking",
+    [
+      ["partner_id", "=", partnerId],
+      ["picking_type_id", "in", pickTypeIds],
+      ["state", "in", ["confirmed", "waiting", "partially_available", "assigned"]],
+    ],
+    ["id", "name", "user_id", "state", "origin"],
+    50
+  );
+  const excl = new Set(excludeIds);
+  return recs
+    .filter((p: any) => !excl.has(p.id))
+    .map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      user: Array.isArray(p.user_id) ? p.user_id[1] : null,
+      state: p.state,
+      origin: p.origin || "",
+    }));
+}
+
 // Get pick-type pickings in confirmed/assigned state (preparation)
 export async function getOutgoingPickings(session: OdooSession) {
   // Find pick picking type(s) — preparation before delivery
