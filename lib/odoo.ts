@@ -188,22 +188,22 @@ export async function globalSearch(session: OdooSession, query: string): Promise
     // Locations by complete_name (internal + transit)
     searchRead(session, "stock.location",
       [["complete_name", "ilike", trimmed], ["usage", "in", ["internal", "transit"]]],
-      ["id", "name", "complete_name", "barcode", "usage"], 6),
+      ["id", "name", "complete_name", "barcode", "usage"], 20),
     // Products by internal ref OR name
     searchRead(session, "product.product",
       ["|", ["default_code", "ilike", trimmed], ["name", "ilike", trimmed]],
-      PRODUCT_FIELDS, 8),
+      PRODUCT_FIELDS, 50),
     // Products by barcode (exact — only if query looks like a barcode)
     trimmed.length >= 6 ? searchRead(session, "product.product",
-      [["barcode", "=", trimmed]], PRODUCT_FIELDS, 2) : Promise.resolve([]),
+      [["barcode", "=", trimmed]], PRODUCT_FIELDS, 5) : Promise.resolve([]),
     // Lots by name
     searchRead(session, "stock.lot",
       [["name", "ilike", trimmed]],
-      ["id", "name", "product_id", "expiration_date"], 6),
+      ["id", "name", "product_id", "expiration_date"], 20),
     // Supplier refs
     searchRead(session, "product.supplierinfo",
       [["product_code", "ilike", trimmed]],
-      ["id", "product_code", "product_id", "product_tmpl_id"], 8),
+      ["id", "product_code", "product_id", "product_tmpl_id"], 30),
   ]);
 
   const results: GlobalSearchResult[] = [];
