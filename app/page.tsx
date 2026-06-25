@@ -3558,15 +3558,17 @@ export default function Page() {
               if (!printerId) { showToast("⚠️ Aucune imprimante BL configurée"); return; }
               const ids: number[] = picking._groupIds || [picking.id];
               // ── Vérif temps réel : autre(s) commande(s) du même client déjà en prépa ? ──
+              let siblingCount = 0;
               const partnerId = Array.isArray(picking.partner_id) ? picking.partner_id[0] : null;
               if (partnerId) {
                 try {
                   const siblings = await odoo.findSiblingPickingsForPartner(session, partnerId, ids);
                   if (siblings.length > 0) {
+                    siblingCount = siblings.length;
                     const clientName = Array.isArray(picking.partner_id) ? picking.partner_id[1] : "ce client";
                     const lignes = siblings.map(s => `• ${s.name}${s.user ? ` (préparée par ${s.user})` : ""}${s.origin ? ` — ${s.origin}` : ""}`).join("\n");
                     const ok = window.confirm(
-                      `⚠️ ATTENTION — ${clientName} a déjà ${siblings.length} commande(s) en préparation :\n\n${lignes}\n\n👉 Pense à les COUPLER avec celle-ci.\n\nImprimer quand même ?`
+                      `⚠️ ATTENTION — ${clientName} a déjà ${siblings.length} commande(s) en préparation :\n\n${lignes}\n\n👉 Pense à les COUPLER avec celle-ci.\n\nLe bon sera marqué ${siblings.length + 1}/${siblings.length + 1}. Imprimer quand même ?`
                     );
                     if (!ok) return;
                   }
@@ -3575,12 +3577,15 @@ export default function Page() {
               showToast(`🖨️ Impression ${picking.name}…`);
               const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
               const total = ids.length;
+              // Si client avec d'autres commandes en prépa ET impression d'un seul bon →
+              // on note "N/total" (N = cette commande, total = toutes celles du client).
+              const coupleTotal = (total === 1 && siblingCount > 0) ? siblingCount + 1 : 0;
               for (let i = 0; i < ids.length; i++) {
                 const r = await odoo.printPickingReportDirect(session, ids[i], printerId, {
                   title: `Bon_${picking.name}.pdf`,
                   overlayDate: pickingDate,
-                  overlayIndex: i + 1,
-                  overlayTotal: total,
+                  overlayIndex: coupleTotal ? coupleTotal : i + 1,
+                  overlayTotal: coupleTotal ? coupleTotal : total,
                 });
                 if (!r.success) showToast(`❌ ${r.error}`);
                 else showToast(`✅ BL ${picking.name} imprimé`);
