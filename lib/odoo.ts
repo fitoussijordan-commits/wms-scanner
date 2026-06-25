@@ -1786,8 +1786,8 @@ export async function applyTntService(
     // 2) Trouver la ligne dont service_code == code (insensible casse/espaces).
     const want = code.trim().toUpperCase();
     let target = recs.find((r: any) => (r.service_code || "").trim().toUpperCase() === want);
-    // Filet de secours : matcher sur le libellé "13:00 Express" si le code ne correspond pas.
-    if (!target) target = recs.find((r: any) => /13[:h]?00/.test(String(r.service_label || r.display_name || "")) && /express/i.test(String(r.service_label || r.display_name || "")));
+    // Filet de secours : pour JE on vise "13:00 Express - Essentiel Flexibilité" (libellé exact).
+    if (!target && want === "JE") target = recs.find((r: any) => /13[:h]?00/.test(String(r.service_label || r.display_name || "")) && /essentiel|flexib/i.test(String(r.service_label || r.display_name || "")));
     if (!target) return { ok: false, reason: "service-not-found" };
 
     // 3) Appeler set_service sur cet enregistrement.
@@ -1796,6 +1796,31 @@ export async function applyTntService(
   } catch (e: any) {
     return { ok: false, reason: e?.message || "error" };
   }
+}
+
+// Comme applyTntService, mais déclenche d'abord le calcul des services TNT côté
+// picking s'ils n'existent pas encore (équivalent du bouton "GET SERVICE"),
+// puis réessaie quelques fois (le calcul peut être asynchrone).
+export async function applyTntServiceWithRetry(
+  session: OdooSession, pickingId: number, code = "JE"
+): Promise<{ ok: boolean; serviceId?: number; reason?: string }> {
+  let last = await applyTntService(session, pickingId, code);
+  if (last.ok || last.reason !== "no-services") return last;
+
+  // Pas de services encore calculés → tenter de les générer via le picking.
+  // On essaie plusieurs noms de méthode possibles selon le module TNT installé.
+  const genMethods = ["get_service", "get_services", "action_get_service", "compute_tnt_services", "get_tnt_services"];
+  for (const m of genMethods) {
+    try { await callMethod(session, "stock.picking", m, [[pickingId]]); break; }
+    catch {}
+  }
+  // Réessais (le calcul peut prendre un instant).
+  for (let i = 0; i < 3; i++) {
+    await new Promise(r => setTimeout(r, 800));
+    last = await applyTntService(session, pickingId, code);
+    if (last.ok || last.reason !== "no-services") return last;
+  }
+  return last;
 }
 
 // Prépa libre depuis des OUT Odoo : à partir de n° de bons (WH/OUT/…), renvoie
@@ -4091,8 +4116,8 @@ export async function createMarketplaceOrder(
   session: OdooSession,
   partnerId: number,
   lines: MarketplaceLine[],
-  opts: { origin?: string; confirm?: boolean; assign?: boolean; tag?: string; price0?: boolean; pricelistName?: string } = {}
-): Promise<{ id: number; name: string }> {
+  opts: { origin?: string; confirm?: boolean; assign?: boolean; tag?: string; price0?: boolean; pricelistName?: string; tntService?: string } = {}
+): Promise<{ id: number; name: string; tnt?: { ok: boolean; reason?: string; serviceId?: number } }> {
   const vals: any = {
     partner_id: partnerId,
     user_id: false, // vendeur vide (règle Imparfaite)
@@ -4143,21 +4168,32 @@ export async function createMarketplaceOrder(
     } catch {}
   }
 
+  let tntResult: { ok: boolean; reason?: string; serviceId?: number } | undefined;
   if (opts.confirm) {
     try {
       await callMethod(session, "sale.order", "action_confirm", [[id]]);
-      // réservation du stock sur le(s) picking(s) générés
+      // pickings générés par la confirmation (sortie TNT)
+      let outPickIds: number[] = [];
+      try {
+        const picks = await searchRead(session, "stock.picking",
+          [["sale_id", "=", id], ["picking_type_code", "=", "outgoing"], ["state", "not in", ["done", "cancel"]]],
+          ["id"], 10);
+        outPickIds = picks.map((p: any) => p.id);
+      } catch {}
+      // réservation du stock
       if (opts.assign) {
-        try {
-          const picks = await searchRead(session, "stock.picking", [["sale_id", "=", id], ["state", "not in", ["done", "cancel"]]], ["id"], 10);
-          for (const p of picks) { try { await callMethod(session, "stock.picking", "action_assign", [[p.id]]); } catch {} }
-        } catch {}
+        for (const pid of outPickIds) { try { await callMethod(session, "stock.picking", "action_assign", [[pid]]); } catch {} }
+      }
+      // service TNT par défaut (ex: "JE") sur le OUT
+      if (opts.tntService && outPickIds.length) {
+        try { tntResult = await applyTntServiceWithRetry(session, outPickIds[0], opts.tntService); }
+        catch (e: any) { tntResult = { ok: false, reason: e?.message || "tnt-error" }; }
       }
     } catch {}
   }
 
   const recs = await searchRead(session, "sale.order", [["id", "=", id]], ["id", "name"], 1);
-  return { id, name: recs[0]?.name || String(id) };
+  return { id, name: recs[0]?.name || String(id), tnt: tntResult };
 }
 
 // Stock disponible (quantity - reserved) par référence interne Odoo. Pour la synchro Shopware.

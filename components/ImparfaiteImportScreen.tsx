@@ -171,9 +171,11 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
         const order = await odoo.createMarketplaceOrder(session, partnerId, lines, {
           origin: `Imparfaite ${g.ref}`, confirm: true, assign: true, price0: true,
           pricelistName: "WALAOFFERT_2023", tag: "Imparfaite",
+          tntService: "JE",   // service TNT "13:00 Express - Essentiel Flexibilité" sur le OUT
         });
         await markImparfaiteProcessed([g.ref], order.name).catch(() => {});
-        res.push({ ref: g.ref, ok: true, msg: order.name });
+        const tntMsg = order.tnt ? (order.tnt.ok ? " · TNT JE ✓" : ` · TNT ⚠ (${order.tnt.reason})`) : "";
+        res.push({ ref: g.ref, ok: true, msg: order.name + tntMsg });
       } catch (e: any) {
         res.push({ ref: g.ref, ok: false, msg: e?.message || "erreur" });
       }
