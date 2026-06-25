@@ -832,6 +832,16 @@ export default function Dashboard() {
 
     // ── Feuilles PAR MOIS (plusieurs factures) ──
     if (bmvFactures.length > 1) {
+      // Nom de feuille UNIQUE (ExcelJS refuse les doublons → ex. 2 factures "Juillet 2025").
+      const usedSheetNames = new Set<string>();
+      const uniqueSheetName = (base: string) => {
+        let name = base.replace(/[\\/?*[\]:]/g, "").slice(0, 31) || "Feuille";
+        if (!usedSheetNames.has(name)) { usedSheetNames.add(name); return name; }
+        let i = 2;
+        while (usedSheetNames.has(`${name.slice(0, 27)} (${i})`)) i++;
+        const out = `${name.slice(0, 27)} (${i})`;
+        usedSheetNames.add(out); return out;
+      };
       // Synthèse annuelle en tête de la Synthèse
       wsS.addRow([]);
       const sepA = wsS.addRow(["── PAR MOIS ──", ""]); sepA.getCell(1).font = { bold: true, color: { argb: C.accent } };
@@ -840,8 +850,8 @@ export default function Dashboard() {
       for (const f of bmvFactures) {
         const rowsM = bmvCroise.filter(c => c.mois === f.mois);
         if (!rowsM.length) continue;
-        const safe = f.mois.replace(/[\\/?*[\]:]/g, "").slice(0, 31);
-        const wm = wb.addWorksheet(safe, { properties: { tabColor: { argb: "FF7C3AED" } } });
+        // nom = mois + n° facture pour distinguer 2 factures du même mois
+        const wm = wb.addWorksheet(uniqueSheetName(`${f.mois}${f.num ? " " + f.num : ""}`), { properties: { tabColor: { argb: "FF7C3AED" } } });
         wm.columns = [
           { header: "Réf Odoo", key: "ref", width: 12 }, { header: "Client", key: "client", width: 28 },
           { header: "Date", key: "date", width: 9 }, { header: "Colis", key: "colis", width: 7 },
@@ -1256,11 +1266,19 @@ export default function Dashboard() {
 
     // ── Feuilles PAR MOIS (fichier multi-factures) ──────────────────
     if (carFactures.length > 1) {
+      const usedSheetNames = new Set<string>();
+      const uniqueSheetName = (base: string) => {
+        let name = base.replace(/[\\/?*[\]:]/g, "").slice(0, 31) || "Feuille";
+        if (!usedSheetNames.has(name)) { usedSheetNames.add(name); return name; }
+        let i = 2;
+        while (usedSheetNames.has(`${name.slice(0, 27)} (${i})`)) i++;
+        const out = `${name.slice(0, 27)} (${i})`;
+        usedSheetNames.add(out); return out;
+      };
       for (const f of carFactures) {
         const rowsM = carCroise.filter(c => c.mois === f.mois_label);
         if (!rowsM.length) continue;
-        const safe = f.mois_label.replace(/[\\/?*[\]:]/g, "").slice(0, 31);
-        const ws = wb.addWorksheet(safe, { properties: { tabColor: { argb: "FF7C3AED" } } });
+        const ws = wb.addWorksheet(uniqueSheetName(`${f.mois_label}${f.num ? " " + f.num : ""}`), { properties: { tabColor: { argb: "FF7C3AED" } } });
         ws.columns = [
           { header: "Référence", key: "ref", width: 12 }, { header: "Client", key: "client", width: 28 },
           { header: "Colis", key: "colis", width: 7 }, { header: "Coût réel €", key: "cout", width: 13 },
