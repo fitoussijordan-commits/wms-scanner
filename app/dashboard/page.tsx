@@ -501,7 +501,7 @@ export default function Dashboard() {
   // ── BMV (autre transporteur — facture annexe) ──────────────────────────────
   interface BmvExped { recep: string; date: string; date_iso: string; ref: string; dest: string; dpt: string; ville: string; transport: number; options: number; colis: number; coutReel: number; mois?: string; }
   interface BmvStats { num: string; date_facture: string; nb_expeditions: number; total_transport: number; surcharge_carburant: number; surcharge_taux: number; total_general_ht: number; avec_ref: number; sans_ref: number; }
-  interface BmvFacture { num: string; mois: string; nb_expeditions: number; total_transport: number; surcharge_carburant: number; total_general_ht: number; }
+  interface BmvFacture { num: string; mois: string; dateKey: string; nb_expeditions: number; total_transport: number; surcharge_carburant: number; total_general_ht: number; }
   interface BmvCrossed extends BmvExped { client: string; partnerRef?: string; montantHT: number; montantTTC: number; pct: number | null; matched: boolean; approx: boolean; alert: boolean; matchedRef: string; groupe?: string[]; groupeDetail?: { ref: string; montantHT: number; montantTTC: number }[]; }
   const [bmvLoading, setBmvLoading] = useState(false);
   const [bmvPdfName, setBmvPdfName] = useState("");
@@ -546,14 +546,15 @@ export default function Dashboard() {
         if (data.error) { setBmvError(`Erreur extraction (${file.name}) : ` + data.error); return; }
         const st: BmvStats = data.stats;
         const mois = bmvMoisLabel(st?.date_facture || "");
+        const dateKey = (st?.date_facture || "").slice(0, 7); // "YYYY-MM" → tri chronologique fiable
         const exps: BmvExped[] = (data.expeditions || []).map((e: BmvExped) => ({ ...e, mois }));
         allExps.push(...exps);
-        factures.push({ num: st?.num || "", mois, nb_expeditions: st?.nb_expeditions || exps.length, total_transport: st?.total_transport || 0, surcharge_carburant: st?.surcharge_carburant || 0, total_general_ht: st?.total_general_ht || 0 });
+        factures.push({ num: st?.num || "", mois, dateKey, nb_expeditions: st?.nb_expeditions || exps.length, total_transport: st?.total_transport || 0, surcharge_carburant: st?.surcharge_carburant || 0, total_general_ht: st?.total_general_ht || 0 });
         totTransport += st?.total_transport || 0; totCarb += st?.surcharge_carburant || 0;
         totGeneral += st?.total_general_ht || 0; totAvec += st?.avec_ref || 0; totSans += st?.sans_ref || 0;
       }
-      // tri des factures par mois chronologique
-      factures.sort((a, b) => a.mois.localeCompare(b.mois));
+      // tri des factures par mois CHRONOLOGIQUE (par dateKey YYYY-MM, puis n° facture)
+      factures.sort((a, b) => (a.dateKey || "").localeCompare(b.dateKey || "") || (a.num || "").localeCompare(b.num || ""));
       const r2 = (n: number) => Math.round(n * 100) / 100;
       setBmvExped(allExps);
       setBmvFactures(factures);
