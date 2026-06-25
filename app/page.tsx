@@ -2943,7 +2943,7 @@ export default function Page() {
       <main style={isDesktopUI
         ? { marginLeft: 248, padding: screen === "home" ? "28px 36px 60px" : "28px 24px 60px" }
         : { maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px", width: "100%", boxSizing: "border-box", overflowX: "hidden" }}>
-       <div style={isDesktopUI ? { maxWidth: screen === "home" ? 1240 : (screen === "waitingOrders" || screen === "eshopSorties") ? 1400 : (screen === "inventory" || screen === "productImport") ? 1000 : 720, margin: "0 auto" } : undefined}>
+       <div style={isDesktopUI ? { maxWidth: screen === "home" ? 1240 : "100%", margin: "0 auto" } : undefined}>
 
         {/* ===== HOME (PDA / mobile) ===== */}
         {screen === "home" && !isDesktopUI && <>
