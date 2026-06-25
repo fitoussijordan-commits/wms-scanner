@@ -1756,16 +1756,46 @@ export async function debugTntService(session: OdooSession, pickingName: string)
     // enregistrements liés à ce picking (on tente plusieurs noms de champ de lien)
     for (const f of ["picking_id", "stock_picking_id", "delivery_id"]) {
       try {
-        const recs = await searchRead(session, "tnt.shipping.service", [[f, "=", pick.id]], ["id", "display_name"], 20);
+        const recs = await searchRead(session, "tnt.shipping.service", [[f, "=", pick.id]], ["id", "display_name", "service_code", "service_label", "due_date"], 20);
         if (recs.length) { out.linkedVia = f; out.services = recs; break; }
       } catch {}
     }
     // si rien trouvé, on prend juste un échantillon du modèle
     if (!out.services) {
-      try { out.sample = await searchRead(session, "tnt.shipping.service", [], ["id", "display_name"], 10); } catch (e: any) { out.sampleError = e.message; }
+      try { out.sample = await searchRead(session, "tnt.shipping.service", [], ["id", "display_name", "service_code", "service_label"], 10); } catch (e: any) { out.sampleError = e.message; }
     }
   } catch (e: any) { out.error = e.message; }
   return out;
+}
+
+// Applique un service TNT (par défaut "JE" = 13:00 Express) sur le OUT d'un picking.
+// Cible la ligne tnt.shipping.service liée au picking dont service_code == code,
+// puis appelle la méthode set_service (= bouton "Use Service" d'Odoo).
+export async function applyTntService(
+  session: OdooSession, pickingId: number, code = "JE"
+): Promise<{ ok: boolean; serviceId?: number; reason?: string }> {
+  try {
+    // 1) Récupérer les services TNT liés à ce picking.
+    const recs = await searchRead(
+      session, "tnt.shipping.service",
+      [["picking_id", "=", pickingId]],
+      ["id", "service_code", "service_label", "display_name"], 50
+    );
+    if (!recs.length) return { ok: false, reason: "no-services" };
+
+    // 2) Trouver la ligne dont service_code == code (insensible casse/espaces).
+    const want = code.trim().toUpperCase();
+    let target = recs.find((r: any) => (r.service_code || "").trim().toUpperCase() === want);
+    // Filet de secours : matcher sur le libellé "13:00 Express" si le code ne correspond pas.
+    if (!target) target = recs.find((r: any) => /13[:h]?00/.test(String(r.service_label || r.display_name || "")) && /express/i.test(String(r.service_label || r.display_name || "")));
+    if (!target) return { ok: false, reason: "service-not-found" };
+
+    // 3) Appeler set_service sur cet enregistrement.
+    await callMethod(session, "tnt.shipping.service", "set_service", [[target.id]]);
+    return { ok: true, serviceId: target.id };
+  } catch (e: any) {
+    return { ok: false, reason: e?.message || "error" };
+  }
 }
 
 // Prépa libre depuis des OUT Odoo : à partir de n° de bons (WH/OUT/…), renvoie
