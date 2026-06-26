@@ -2156,6 +2156,36 @@ export async function deletePackingList(session: OdooSession, attachmentId: numb
 // ============================================
 
 // Get all stock.quant ids for a product (with optional lot filter)
+// DIAG : pourquoi un ajustement WH/Sortie "revient" ? Liste les quants en sortie
+// + les move/move.line actifs qui les maintiennent, pour un produit (par réf).
+export async function debugSortie(session: OdooSession, ref: string): Promise<any> {
+  const out: any = { ref };
+  try {
+    const prods = await searchRead(session, "product.product", ["|", ["default_code", "=", ref], ["barcode", "=", ref]], ["id", "name", "default_code"], 1);
+    if (!prods.length) return { error: "produit introuvable" };
+    const pid = prods[0].id; out.product = prods[0];
+    // emplacements de sortie
+    const locs = await searchRead(session, "stock.location", ["|", ["usage", "=", "output"], ["complete_name", "ilike", "sortie"]], ["id", "complete_name", "usage"], 50);
+    out.outputLocs = locs;
+    const locIds = locs.map((l: any) => l.id);
+    // quants de ce produit dans ces emplacements (TOUS, y compris négatifs)
+    out.quants = await searchRead(session, "stock.quant",
+      [["product_id", "=", pid], ["location_id", "in", locIds]],
+      ["id", "location_id", "lot_id", "quantity", "reserved_quantity", "inventory_quantity"], 100);
+    // move.lines actifs touchant ces emplacements (source OU destination)
+    out.moveLines = await searchRead(session, "stock.move.line",
+      ["&", ["product_id", "=", pid], "&", ["state", "not in", ["done", "cancel"]],
+        "|", ["location_id", "in", locIds], ["location_dest_id", "in", locIds]],
+      ["id", "picking_id", "move_id", "state", "location_id", "location_dest_id", "lot_id", "reserved_uom_qty", "qty_done"], 100);
+    // moves actifs touchant ces emplacements
+    out.moves = await searchRead(session, "stock.move",
+      ["&", ["product_id", "=", pid], "&", ["state", "not in", ["done", "cancel"]],
+        "|", ["location_id", "in", locIds], ["location_dest_id", "in", locIds]],
+      ["id", "picking_id", "name", "state", "location_id", "location_dest_id", "product_uom_qty", "quantity_done"], 100);
+  } catch (e: any) { out.error = e.message; }
+  return out;
+}
+
 export async function getQuantsForProduct(session: OdooSession, productId: number): Promise<any[]> {
   const quants = await searchRead(
     session, "stock.quant",
@@ -2288,29 +2318,27 @@ export async function applyInventoryAdjustment(
 // produit/lot) : les appliquer un par un crée des mouvements séparés qui se
 // régénèrent l'un l'autre. Ici on écrit tous les inventory_quantity puis on applique
 // l'inventaire en un seul appel groupé → les écarts se neutralisent ensemble.
+// Applique plusieurs ajustements de quant en respectant un ORDRE précis :
+// d'abord les quants dont la qté actuelle est POSITIVE (on les solde), PUIS les
+// négatifs. Sinon Odoo recrée la compensation entre un −X et un +X du même
+// produit/lot en sortie et l'écart "revient". Chaque quant est appliqué
+// individuellement (action_apply_inventory ligne par ligne) dans cet ordre.
 export async function applyInventoryAdjustmentBatch(
   session: OdooSession,
-  items: { quantId: number; newQty: number }[],
+  items: { quantId: number; newQty: number; currentQty?: number }[],
   reason?: string
 ): Promise<void> {
   if (!items.length) return;
-  const ids = items.map(i => i.quantId);
-  // 1. Écrire la quantité cible sur chaque quant (un write par quant car valeurs différentes).
-  for (const it of items) {
-    await write(session, "stock.quant", [it.quantId], { inventory_quantity: it.newQty });
+  // Tri : positifs (currentQty >= 0) d'abord, négatifs ensuite.
+  const ordered = [...items].sort((a, b) => {
+    const ca = a.currentQty ?? 0, cb = b.currentQty ?? 0;
+    const na = ca < 0 ? 1 : 0, nb = cb < 0 ? 1 : 0;
+    if (na !== nb) return na - nb;       // négatifs après
+    return cb - ca;                       // plus gros positif d'abord
+  });
+  for (const it of ordered) {
+    await applyInventoryAdjustment(session, it.quantId, it.newQty, reason);
   }
-  // 2. Appliquer en UN SEUL coup.
-  if (reason?.trim()) {
-    try {
-      const wizardId = await create(session, "stock.inventory.adjustment.name", {
-        inventory_adjustment_name: reason.trim(),
-        quant_ids: [[6, 0, ids]],
-      }) as number;
-      await callMethod(session, "stock.inventory.adjustment.name", "action_apply", [[wizardId]]);
-      return;
-    } catch { /* fallback sans raison */ }
-  }
-  await callMethod(session, "stock.quant", "action_apply_inventory", [ids]);
 }
 
 // Applique un DELTA (écart) sur un quant : nouvelle qty = qty propre du quant + delta.

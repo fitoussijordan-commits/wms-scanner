@@ -10234,7 +10234,7 @@ function InventoryScreen({ session, onBack, onToast, initialProduct, desktop }: 
       // Appliquer TOUS les quants modifiés en UN SEUL batch. Crucial pour les couples
       // qui se compensent (WH/Sortie −9 / +9) : appliqués ensemble, ils se neutralisent
       // et ne se régénèrent plus l'un l'autre (avant : une boucle séparée recréait le ±).
-      const items = changedQuants.map((q: any) => ({ quantId: q.id, newQty: parseFloat(adjustments[q.id]) }));
+      const items = changedQuants.map((q: any) => ({ quantId: q.id, newQty: parseFloat(adjustments[q.id]), currentQty: q.quantity }));
       await odoo.applyInventoryAdjustmentBatch(session, items, reason || undefined);
       // Maj état local
       setQuants(prev => prev.map(pq => {
