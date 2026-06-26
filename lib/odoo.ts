@@ -2310,7 +2310,7 @@ export async function applyInventoryAdjustmentBatch(
       return;
     } catch { /* fallback sans raison */ }
   }
-  await callMethod(session, "stock.quant", "action_apply_inventory", [[ids]]);
+  await callMethod(session, "stock.quant", "action_apply_inventory", [ids]);
 }
 
 // Applique un DELTA (écart) sur un quant : nouvelle qty = qty propre du quant + delta.
