@@ -4173,11 +4173,14 @@ export async function validateOrderPickings(
           try { await write(session, "stock.move.line", [ml.id], { qty_done: want }); } catch {}
         }
       }
-      // 3. Valider (gère immediate transfer + backorder).
-      await validatePicking(session, p.id);
+      // 3. Valider en mode STRICT : si Odoo veut un reliquat (stock insuffisant),
+      //    on REFUSE et on lève une erreur → l'utilisateur traitera le reliquat à la main.
+      await validatePickingStrict(session, p.id);
       out.validated.push(p.name);
     } catch (e: any) {
       out.failed.push({ name: p.name, error: e?.message || "erreur" });
+      // On ARRÊTE la chaîne : si le pick échoue, on ne valide pas le OUT derrière.
+      break;
     }
   }
   return out;
