@@ -2386,10 +2386,15 @@ export async function createInventoryAdjustment(
 }
 
 // Tous les emplacements avec stock négatif (pour corrections)
+// On inclut les emplacements internes ET de sortie (usage=output / nom "sortie"),
+// car certains Odoo placent WH/Sortie en usage="output" → sinon ses négatifs
+// n'apparaissent pas ici alors qu'ils existent (visibles dans Sorties orphelines).
 export async function getNegativeStockQuants(session: OdooSession): Promise<any[]> {
   const quants = await searchRead(
     session, "stock.quant",
-    [["quantity", "<", 0], ["location_id.usage", "=", "internal"]],
+    ["&", ["quantity", "<", 0],
+      "|", ["location_id.usage", "=", "internal"],
+      "|", ["location_id.usage", "=", "output"], ["location_id.complete_name", "ilike", "sortie"]],
     ["id", "product_id", "location_id", "lot_id", "quantity", "reserved_quantity"],
     500
   );
