@@ -669,25 +669,45 @@ export async function printLabel(
 export interface AddressLabelData { name: string; line1: string; line2: string; zip: string; city: string; country: string; }
 export function generateAddressZPL(a: AddressLabelData): string {
   const W = mm(70), H = mm(45);
-  const cW = W - 30;
-  const lines: { text: string; fs: number }[] = [];
-  if (a.name) lines.push({ text: a.name, fs: 30 });
-  if (a.line1) lines.push({ text: a.line1, fs: 26 });
-  if (a.line2) lines.push({ text: a.line2, fs: 24 });
+  const MARGIN = 12;            // marge réduite → on exploite presque toute la largeur
+  const cW = W - MARGIN * 2;
+  // Poids relatif de chaque ligne (le nom et CP/Ville plus gros que la rue).
+  const lines: { text: string; weight: number }[] = [];
+  if (a.name) lines.push({ text: a.name, weight: 1.15 });
+  if (a.line1) lines.push({ text: a.line1, weight: 1.0 });
+  if (a.line2) lines.push({ text: a.line2, weight: 0.9 });
   const cpCity = [a.zip, a.city].filter(Boolean).join(" ");
-  if (cpCity) lines.push({ text: cpCity, fs: 28 });
+  if (cpCity) lines.push({ text: cpCity, weight: 1.15 });
   const c = (a.country || "").trim().toUpperCase();
-  if (c && c !== "FR" && c !== "FRANCE") lines.push({ text: c, fs: 26 });
+  if (c && c !== "FR" && c !== "FRANCE") lines.push({ text: c, weight: 1.0 });
+  if (!lines.length) return "^XA^XZ";
 
-  const totalH = lines.reduce((s, l) => s + l.fs + 8, 0);
-  let y = Math.max(10, Math.round((H - totalH) / 2));
-  const zpl: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
+  const GAP = 10;              // espace vertical entre lignes (dots)
+  const totalWeight = lines.reduce((s, l) => s + l.weight, 0);
+  // Hauteur dispo pour le texte (on garde un petit padding haut/bas).
+  const avail = H - 24 - GAP * (lines.length - 1);
+  // Taille de base = ce qui remplit la hauteur ; bornée pour rester lisible/propre.
+  let base = Math.floor(avail / totalWeight);
+  base = Math.max(28, Math.min(70, base));
+  // Contrainte largeur : aucune ligne ne doit déborder → on réduit base si besoin.
   for (const l of lines) {
-    const cpl = Math.floor(cW / (l.fs * 0.58));
-    const txt = l.text.length > cpl ? l.text.substring(0, cpl) : l.text;
-    zpl.push(`^FO15,${y}^A0N,${l.fs},${l.fs}^FB${cW},1,0,C^FD${txt}^FS`);
-    y += l.fs + 8;
+    const fs = Math.round(base * l.weight);
+    const maxFsForWidth = Math.floor(cW / Math.max(1, l.text.length) / 0.58);
+    if (fs > maxFsForWidth) base = Math.min(base, Math.floor(maxFsForWidth / l.weight));
   }
+  base = Math.max(24, base);
+
+  const sizes = lines.map(l => Math.max(22, Math.round(base * l.weight)));
+  const totalH = sizes.reduce((s, fs) => s + fs, 0) + GAP * (lines.length - 1);
+  let y = Math.max(8, Math.round((H - totalH) / 2));
+  const zpl: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
+  lines.forEach((l, i) => {
+    const fs = sizes[i];
+    const cpl = Math.floor(cW / (fs * 0.55));
+    const txt = l.text.length > cpl ? l.text.substring(0, cpl) : l.text;
+    zpl.push(`^FO${MARGIN},${y}^A0N,${fs},${fs}^FB${cW},1,0,C^FD${txt}^FS`);
+    y += fs + GAP;
+  });
   zpl.push("^XZ");
   return zpl.join("\n");
 }
