@@ -41,6 +41,15 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
   const [suggestRange, setSuggestRange] = useState({ from: "10", to: "13" });
   const [bulkCreating, setBulkCreating] = useState(false);
 
+  // Écran étroit (PDA Zebra) → carte en colonne : infos en haut, boutons en dessous.
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const check = () => setNarrow(window.innerWidth < 420);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
   const load = async () => {
     setLoading(true);
     try { setLocs(await odoo.getLocations(session) as Loc[]); }
@@ -264,24 +273,27 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
           <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>{filtered.length} emplacement{filtered.length > 1 ? "s" : ""}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {filtered.map(l => (
-              <div key={l.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 14px", boxShadow: C.shadow, display: "flex", alignItems: "center", gap: 10 }}>
+              <div key={l.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 14px", boxShadow: C.shadow, display: "flex", flexDirection: narrow ? "column" : "row", alignItems: narrow ? "stretch" : "center", gap: 10 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{l.name}</div>
-                  <div style={{ fontSize: 11, color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.complete_name}</div>
-                  {l.barcode && <div style={{ fontSize: 11, fontFamily: "monospace", color: C.blue, marginTop: 1 }}>{l.barcode}</div>}
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, wordBreak: "break-all" }}>{l.name}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: narrow ? "normal" : "nowrap", wordBreak: "break-all" }}>{l.complete_name}</div>
+                  {l.barcode && <div style={{ fontSize: 11, fontFamily: "monospace", color: C.blue, marginTop: 1, wordBreak: "break-all" }}>{l.barcode}</div>}
                 </div>
-                <button onClick={() => openSuggest(l)} title="Proposer les voisins manquants (A12 → A10, A11, A13)"
-                  style={{ padding: "6px 12px", background: C.purpleSoft, color: C.purple, border: `1px solid ${C.purple}44`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
-                  + Voisins
-                </button>
-                <button onClick={() => duplicate(l)} title="Dupliquer"
-                  style={{ padding: "6px 12px", background: C.blueSoft, color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
-                  Dupliquer
-                </button>
-                <button onClick={() => onPrintLocation(l.name, l.barcode ? String(l.barcode) : l.name)} title="Imprimer l'étiquette"
-                  style={{ padding: "6px 10px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
-                  🖨
-                </button>
+                {/* PDA : boutons sur une rangée sous les infos → le nom n'est plus coupé */}
+                <div style={{ display: "flex", gap: 8, flexShrink: 0, justifyContent: narrow ? "stretch" : "flex-end" }}>
+                  <button onClick={() => openSuggest(l)} title="Proposer les voisins manquants (A12 → A10, A11, A13)"
+                    style={{ flex: narrow ? 1 : undefined, padding: "8px 12px", background: C.purpleSoft, color: C.purple, border: `1px solid ${C.purple}44`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                    + Voisins
+                  </button>
+                  <button onClick={() => duplicate(l)} title="Dupliquer"
+                    style={{ flex: narrow ? 1 : undefined, padding: "8px 12px", background: C.blueSoft, color: C.blue, border: `1px solid ${C.blue}44`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                    Dupliquer
+                  </button>
+                  <button onClick={() => onPrintLocation(l.name, l.barcode ? String(l.barcode) : l.name)} title="Imprimer l'étiquette"
+                    style={{ padding: "8px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
+                    🖨
+                  </button>
+                </div>
               </div>
             ))}
             {!filtered.length && <div style={{ textAlign: "center", padding: 30, color: C.textMuted, fontSize: 13 }}>Aucun emplacement</div>}
