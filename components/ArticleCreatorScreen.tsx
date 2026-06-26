@@ -118,12 +118,13 @@ interface Props {
 }
 
 export default function ArticleCreatorScreen({ session, onBack, onToast, initialTab = "creation" }: Props) {
-  const [tab, setTab] = useState<"creation" | "seuils" | "nonvendable">(initialTab);
+  const [tab, setTab] = useState<"creation" | "seuils" | "nonvendable" | "abloquer">(initialTab);
 
   const TAB_LABELS: Record<string, string> = {
     creation: "Création article",
     seuils: "Seuils d'alerte",
     nonvendable: "Stock non vendable",
+    abloquer: "Stock à bloquer",
   };
 
   return (
@@ -138,7 +139,7 @@ export default function ArticleCreatorScreen({ session, onBack, onToast, initial
 
       {/* Onglets */}
       <div style={{ display: "flex", background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "0 16px", overflowX: "auto" }}>
-        {(["creation", "seuils", "nonvendable"] as const).map(t => (
+        {(["creation", "seuils", "nonvendable", "abloquer"] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -159,7 +160,9 @@ export default function ArticleCreatorScreen({ session, onBack, onToast, initial
         ? <CreationTab session={session} onToast={onToast} />
         : tab === "seuils"
         ? <SeuilsTab   session={session} onToast={onToast} />
-        : <NonVendableTab session={session} onToast={onToast} />
+        : tab === "nonvendable"
+        ? <NonVendableTab session={session} onToast={onToast} />
+        : <ABloquerTab session={session} onToast={onToast} />
       }
     </div>
   );
@@ -973,6 +976,210 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
                         ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                         : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                       }
+                    </button>
+                  </div>
+                </div>
+              );
+            });
+          })()}
+        </div>
+      ) : null}
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ONGLET STOCK À BLOQUER
+// Articles vendables (sale_ok = true) mais SANS stock dispo à la vente (free_qty <= 0)
+// → incohérents : vendables sur le site alors qu'on ne peut pas livrer.
+// Bouton = décocher "Peut être vendu" (sale_ok = false).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface ABloquerRow {
+  id: number;
+  default_code: string;
+  name: string;
+  free_qty: number;
+  qty_available: number;
+  product_tmpl_id: number;
+  blocking: boolean;
+}
+
+export function ABloquerTab({ session, onToast }: { session: odoo.OdooSession; onToast: (msg: string, type?: "success"|"error"|"info") => void }) {
+  const [rows, setRows]       = useState<ABloquerRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [search, setSearch]   = useState("");
+  const [activeCats, setActiveCats] = useState<Set<string>>(new Set());
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      // Vendable coché mais rien de dispo à la vente (free_qty = physique - réservé <= 0).
+      const data = await odoo.searchRead(
+        session,
+        "product.product",
+        [["sale_ok", "=", true], ["free_qty", "<=", 0], ["active", "=", true]],
+        ["id", "name", "default_code", "free_qty", "qty_available", "product_tmpl_id"],
+        0,
+        "default_code asc"
+      );
+      setRows(data.map((r: any) => ({
+        id: r.id,
+        default_code: r.default_code || "",
+        name: r.name || "",
+        free_qty: r.free_qty ?? 0,
+        qty_available: r.qty_available ?? 0,
+        product_tmpl_id: Array.isArray(r.product_tmpl_id) ? r.product_tmpl_id[0] : r.product_tmpl_id,
+        blocking: false,
+      })));
+    } catch (e: any) {
+      onToast("Erreur chargement : " + (e?.message ?? e), "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [session]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const blockSaleOk = async (row: ABloquerRow) => {
+    setRows(prev => prev.map(r => r.id === row.id ? { ...r, blocking: true } : r));
+    try {
+      await odoo.callMethod(session, "product.template", "write", [[row.product_tmpl_id], { sale_ok: false }]);
+      onToast(`✓ "${row.name}" n'est plus vendable`, "success");
+      setRows(prev => prev.filter(r => r.id !== row.id));
+    } catch (e: any) {
+      onToast("Erreur : " + (e?.message ?? e), "error");
+      setRows(prev => prev.map(r => r.id === row.id ? { ...r, blocking: false } : r));
+    }
+  };
+
+  function refPriority(code: string): number {
+    const first = (code || "").trim().charAt(0);
+    if (["1","2","3","4","5"].includes(first)) return 0;
+    if (["6","7","8","9"].includes(first)) return 1;
+    return 2;
+  }
+
+  const availableCats = CAT_FILTERS.filter(cf => rows.some(r => getCatCode(r.default_code) === cf.code));
+  const toggleCat = (code: string) => {
+    setActiveCats(prev => { const next = new Set(prev); next.has(code) ? next.delete(code) : next.add(code); return next; });
+  };
+
+  const filtered = rows
+    .filter(r => {
+      if (activeCats.size > 0 && !activeCats.has(getCatCode(r.default_code))) return false;
+      if (!search) return true;
+      return r.default_code.toLowerCase().includes(search.toLowerCase()) || r.name.toLowerCase().includes(search.toLowerCase());
+    })
+    .sort((a, b) => {
+      const pa = refPriority(a.default_code), pb = refPriority(b.default_code);
+      if (pa !== pb) return pa - pb;
+      return a.default_code.localeCompare(b.default_code);
+    });
+
+  const showGroups = activeCats.size === 0 && !search;
+  const GROUP_LABELS: Record<number, string> = { 0: "Articles vente (1–5)", 1: "Autres catégories (6–9)", 2: "Codes spéciaux (AV…)" };
+
+  return (
+    <div style={{ ...S.body, maxWidth: 760 }}>
+      <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: "#991b1b" }}>
+        Articles <strong>vendables</strong> mais <strong>sans stock disponible</strong> à la vente. Décoche « Peut être vendu » pour les bloquer.
+      </div>
+
+      {/* Recherche + refresh */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input style={{ ...S.input, flex: 1 }} placeholder="Rechercher (ref, nom)…" value={search} onChange={e => setSearch(e.target.value)} />
+        <button onClick={load} disabled={loading}
+          style={{ ...S.btn, width: "auto", padding: "9px 14px", background: "#f3f4f6", color: "#374151", display: "flex", alignItems: "center", gap: 6 }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" style={loading ? { animation: "spin 1s linear infinite" } : {}}>
+            <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+        </button>
+      </div>
+
+      {/* Chips catégories */}
+      {!loading && availableCats.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {availableCats.map(cf => {
+            const active = activeCats.has(cf.code);
+            const count = rows.filter(r => getCatCode(r.default_code) === cf.code).length;
+            return (
+              <button key={cf.code} onClick={() => toggleCat(cf.code)}
+                style={{ padding: "5px 11px", borderRadius: 99, border: "1.5px solid", borderColor: active ? "#dc2626" : "#d1d5db",
+                  background: active ? "#dc2626" : "#fff", color: active ? "#fff" : "#374151",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", transition: "all 0.12s" }}>
+                {cf.code} · {cf.label} <span style={{ opacity: 0.7, fontSize: 11 }}>({count})</span>
+              </button>
+            );
+          })}
+          {activeCats.size > 0 && (
+            <button onClick={() => setActiveCats(new Set())}
+              style={{ padding: "5px 11px", borderRadius: 99, border: "1.5px solid #e5e7eb", background: "#f3f4f6", color: "#6b7280", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              ✕ Tout afficher
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Compteur */}
+      {!loading && (
+        <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 600 }}>
+          {filtered.length === 0
+            ? rows.length === 0 ? "✓ Aucun article vendable sans stock dispo" : "Aucun résultat"
+            : `${filtered.length} article${filtered.length > 1 ? "s" : ""} vendable(s) sans stock dispo`}
+        </div>
+      )}
+
+      {/* Tableau */}
+      {loading ? (
+        <div style={{ display: "flex", justifyContent: "center", padding: 40, color: "#6b7280" }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}>
+            <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+        </div>
+      ) : filtered.length > 0 ? (
+        <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 90px 44px", padding: "8px 14px", background: "#f1f5f9", borderBottom: "1px solid #e5e7eb",
+            fontSize: 10, fontWeight: 700, color: "#6b7280", letterSpacing: "0.06em", textTransform: "uppercase" as const }}>
+            <span>Référence</span><span>Désignation</span><span style={{ textAlign: "right" }}>Dispo</span><span/>
+          </div>
+          {(() => {
+            let lastGroup = -1;
+            return filtered.map((row, i) => {
+              const grp = refPriority(row.default_code);
+              const showSep = !search && grp !== lastGroup;
+              lastGroup = grp;
+              return (
+                <div key={row.id}>
+                  {showGroups && showSep && (
+                    <div style={{ padding: "6px 14px", fontSize: 10, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase" as const,
+                      color: grp === 0 ? "#1d4ed8" : grp === 1 ? "#7c3aed" : "#9ca3af",
+                      background: grp === 0 ? "#eff6ff" : grp === 1 ? "#f5f3ff" : "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
+                      {GROUP_LABELS[grp]}
+                    </div>
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 90px 44px", padding: "9px 14px", alignItems: "center",
+                    background: i % 2 === 0 ? "#fff" : "#fafafa", borderBottom: i < filtered.length - 1 ? "1px solid #f3f4f6" : "none" }}>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: "#374151", fontFamily: "'Courier New', monospace", letterSpacing: "0.04em", fontVariantNumeric: "slashed-zero" }}>
+                      {row.default_code || "—"}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }} title={row.name}>
+                      {row.name}
+                    </span>
+                    <span style={{ fontSize: 13, fontWeight: 700, textAlign: "right", fontFamily: "monospace", color: row.free_qty < 0 ? "#dc2626" : "#374151" }}>
+                      {row.free_qty % 1 === 0 ? row.free_qty : row.free_qty.toFixed(2)}
+                    </span>
+                    <button onClick={() => blockSaleOk(row)} disabled={row.blocking} title='Décocher "Peut être vendu"'
+                      style={{ background: row.blocking ? "#f3f4f6" : "#fee2e2", border: "none", borderRadius: 6, cursor: row.blocking ? "wait" : "pointer",
+                        padding: "5px 6px", display: "flex", alignItems: "center", justifyContent: "center",
+                        color: row.blocking ? "#9ca3af" : "#991b1b", transition: "background 0.15s", marginLeft: "auto" }}
+                      onMouseEnter={e => !row.blocking && (e.currentTarget.style.background = "#fecaca")}
+                      onMouseLeave={e => !row.blocking && (e.currentTarget.style.background = "#fee2e2")}>
+                      {row.blocking
+                        ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                        : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>}
                     </button>
                   </div>
                 </div>
