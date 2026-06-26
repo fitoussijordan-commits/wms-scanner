@@ -1544,8 +1544,14 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   useEffect(() => {
     if (!session) return;
     loadTodayOut();
-    const t = setInterval(loadTodayOut, 2 * 60 * 1000); // refresh toutes les 2 min
-    return () => clearInterval(t);
+    // Refresh seulement quand l'onglet est visible (rien en arrière-plan → économie Vercel).
+    let t: any = null;
+    const start = () => { if (t) clearInterval(t); if (document.visibilityState === "visible") t = setInterval(loadTodayOut, 3 * 60 * 1000); };
+    const onVis = () => { if (document.visibilityState === "visible") { loadTodayOut(); start(); } else if (t) { clearInterval(t); t = null; } };
+    start();
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    return () => { if (t) clearInterval(t); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("focus", onVis); };
   }, [session, loadTodayOut]);
 
   // Mode Libre

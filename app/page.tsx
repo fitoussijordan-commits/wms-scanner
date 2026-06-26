@@ -1358,7 +1358,7 @@ export default function Page() {
     let timer: any = null; let lastRun = Date.now();
     const visible = () => document.visibilityState === "visible";
     const tick = () => { lastRun = Date.now(); refreshNotifs(); };
-    const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { tick(); schedule(); }, visible() ? 30_000 : 60_000); };
+    const schedule = () => { if (timer) clearTimeout(timer); if (!visible()) return; timer = setTimeout(() => { tick(); schedule(); }, 90_000); };
     const onWake = () => { if (visible() && Date.now() - lastRun > 3000) tick(); schedule(); };
     schedule();
     window.addEventListener("focus", onWake);
@@ -1557,7 +1557,7 @@ export default function Page() {
     let timer: any = null; let lastRun = Date.now();
     const visible = () => document.visibilityState === "visible";
     const tick = () => { lastRun = Date.now(); loadBadges(); };
-    const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { tick(); schedule(); }, visible() ? 45_000 : 120_000); };
+    const schedule = () => { if (timer) clearTimeout(timer); if (!visible()) return; timer = setTimeout(() => { tick(); schedule(); }, 135_000); };
     const onWake = () => { if (visible() && Date.now() - lastRun > 3000) tick(); schedule(); };
     schedule();
     window.addEventListener("focus", onWake);
@@ -1674,7 +1674,7 @@ export default function Page() {
     let timer: any = null; let lastRun = Date.now();
     const visible = () => document.visibilityState === "visible";
     const tick = () => { lastRun = Date.now(); checkNewOrders(); };
-    const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { tick(); schedule(); }, visible() ? 30_000 : 60_000); };
+    const schedule = () => { if (timer) clearTimeout(timer); if (!visible()) return; timer = setTimeout(() => { tick(); schedule(); }, 90_000); };
     const onWake = () => { if (visible() && Date.now() - lastRun > 3000) tick(); schedule(); };
     schedule();
     window.addEventListener("focus", onWake);
@@ -1768,7 +1768,7 @@ export default function Page() {
     let timer: any = null; let lastRun = Date.now();
     const visible = () => document.visibilityState === "visible";
     const tick = () => { lastRun = Date.now(); refresh(); };
-    const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { tick(); schedule(); }, visible() ? 20_000 : 60_000); };
+    const schedule = () => { if (timer) clearTimeout(timer); if (!visible()) return; timer = setTimeout(() => { tick(); schedule(); }, 60_000); };
     const onWake = () => { if (visible() && Date.now() - lastRun > 3000) tick(); schedule(); };
     schedule();
     window.addEventListener("focus", onWake);
@@ -6087,7 +6087,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     let timer: any = null; let lastRun = Date.now();
     const visible = () => document.visibilityState === "visible";
     const tick = () => { lastRun = Date.now(); loadParcels(); };
-    const schedule = () => { if (timer) clearTimeout(timer); timer = setTimeout(() => { tick(); schedule(); }, visible() ? 30_000 : 90_000); };
+    const schedule = () => { if (timer) clearTimeout(timer); if (!visible()) return; timer = setTimeout(() => { tick(); schedule(); }, 90_000); };
     const onWake = () => { if (visible() && Date.now() - lastRun > 3000) tick(); schedule(); };
     schedule();
     window.addEventListener("focus", onWake);
@@ -11809,14 +11809,15 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenCollab, onOpen
       } catch { /* on garde l'ancienne valeur */ }
     };
     tick(); // immédiat
-    // Polling adaptatif : rapide quand l'onglet est visible, lent en arrière-plan.
+    // Polling visible uniquement (30s). En arrière-plan : AUCUN appel (économie Vercel).
     let timer: any;
     const schedule = () => {
-      const delay = document.visibilityState === "visible" ? 3000 : 30000;
-      timer = setTimeout(async () => { if (!stop) { await tick(); schedule(); } }, delay);
+      if (document.visibilityState !== "visible") return; // onglet caché → on arrête
+      timer = setTimeout(async () => { if (!stop) { await tick(); schedule(); } }, 30000);
     };
     schedule();
-    const onWake = () => { if (!stop) tick(); };
+    // Au retour sur l'onglet : un rafraîchissement immédiat + on relance le cycle.
+    const onWake = () => { if (!stop && document.visibilityState === "visible") { tick(); schedule(); } };
     window.addEventListener("focus", onWake);
     document.addEventListener("visibilitychange", onWake);
     return () => { stop = true; clearTimeout(timer); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
