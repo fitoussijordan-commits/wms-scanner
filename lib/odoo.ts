@@ -2156,36 +2156,6 @@ export async function deletePackingList(session: OdooSession, attachmentId: numb
 // ============================================
 
 // Get all stock.quant ids for a product (with optional lot filter)
-// DIAG : pourquoi un ajustement WH/Sortie "revient" ? Liste les quants en sortie
-// + les move/move.line actifs qui les maintiennent, pour un produit (par réf).
-export async function debugSortie(session: OdooSession, ref: string): Promise<any> {
-  const out: any = { ref };
-  try {
-    const prods = await searchRead(session, "product.product", ["|", ["default_code", "=", ref], ["barcode", "=", ref]], ["id", "name", "default_code"], 1);
-    if (!prods.length) return { error: "produit introuvable" };
-    const pid = prods[0].id; out.product = prods[0];
-    // emplacements de sortie
-    const locs = await searchRead(session, "stock.location", ["|", ["usage", "=", "output"], ["complete_name", "ilike", "sortie"]], ["id", "complete_name", "usage"], 50);
-    out.outputLocs = locs;
-    const locIds = locs.map((l: any) => l.id);
-    // quants de ce produit dans ces emplacements (TOUS, y compris négatifs)
-    out.quants = await searchRead(session, "stock.quant",
-      [["product_id", "=", pid], ["location_id", "in", locIds]],
-      ["id", "location_id", "lot_id", "quantity", "reserved_quantity", "inventory_quantity"], 100);
-    // move.lines actifs touchant ces emplacements (source OU destination)
-    out.moveLines = await searchRead(session, "stock.move.line",
-      ["&", ["product_id", "=", pid], "&", ["state", "not in", ["done", "cancel"]],
-        "|", ["location_id", "in", locIds], ["location_dest_id", "in", locIds]],
-      ["id", "picking_id", "move_id", "state", "location_id", "location_dest_id", "lot_id", "reserved_uom_qty", "qty_done"], 100);
-    // moves actifs touchant ces emplacements
-    out.moves = await searchRead(session, "stock.move",
-      ["&", ["product_id", "=", pid], "&", ["state", "not in", ["done", "cancel"]],
-        "|", ["location_id", "in", locIds], ["location_dest_id", "in", locIds]],
-      ["id", "picking_id", "name", "state", "location_id", "location_dest_id", "product_uom_qty", "quantity_done"], 100);
-  } catch (e: any) { out.error = e.message; }
-  return out;
-}
-
 export async function getQuantsForProduct(session: OdooSession, productId: number): Promise<any[]> {
   const quants = await searchRead(
     session, "stock.quant",
