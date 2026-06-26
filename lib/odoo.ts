@@ -2283,6 +2283,36 @@ export async function applyInventoryAdjustment(
   await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
 }
 
+// Applique PLUSIEURS ajustements de quant en UNE SEULE opération.
+// Indispensable quand des quants se compensent (ex: WH/Sortie −9 et +9 sur le même
+// produit/lot) : les appliquer un par un crée des mouvements séparés qui se
+// régénèrent l'un l'autre. Ici on écrit tous les inventory_quantity puis on applique
+// l'inventaire en un seul appel groupé → les écarts se neutralisent ensemble.
+export async function applyInventoryAdjustmentBatch(
+  session: OdooSession,
+  items: { quantId: number; newQty: number }[],
+  reason?: string
+): Promise<void> {
+  if (!items.length) return;
+  const ids = items.map(i => i.quantId);
+  // 1. Écrire la quantité cible sur chaque quant (un write par quant car valeurs différentes).
+  for (const it of items) {
+    await write(session, "stock.quant", [it.quantId], { inventory_quantity: it.newQty });
+  }
+  // 2. Appliquer en UN SEUL coup.
+  if (reason?.trim()) {
+    try {
+      const wizardId = await create(session, "stock.inventory.adjustment.name", {
+        inventory_adjustment_name: reason.trim(),
+        quant_ids: [[6, 0, ids]],
+      }) as number;
+      await callMethod(session, "stock.inventory.adjustment.name", "action_apply", [[wizardId]]);
+      return;
+    } catch { /* fallback sans raison */ }
+  }
+  await callMethod(session, "stock.quant", "action_apply_inventory", [[ids]]);
+}
+
 // Applique un DELTA (écart) sur un quant : nouvelle qty = qty propre du quant + delta.
 // Indispensable en SCAN LIBRE où le théorique = somme de tous les emplacements mais
 // la correction ne porte que sur UN quant : il faut ajuster du net, pas réécrire l'absolu.

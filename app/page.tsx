@@ -10230,18 +10230,27 @@ function InventoryScreen({ session, onBack, onToast, initialProduct, desktop }: 
     const total = changedQuants.length;
     const reason = adjustReason;
     setAdjustReason(""); // reset la raison
-    let errors = 0;
-    for (const q of changedQuants) {
-      const newQty = parseFloat(adjustments[q.id]);
-      try {
-        await odoo.applyInventoryAdjustment(session, q.id, newQty, reason || undefined);
-        // Update local state
-        setQuants(prev => prev.map(pq => pq.id === q.id ? { ...pq, quantity: newQty } : pq));
-        setAdjustments(prev => ({ ...prev, [q.id]: String(newQty) }));
-      } catch (e: any) { errors++; onToast("Erreur: " + e.message); }
+    try {
+      // Appliquer TOUS les quants modifiés en UN SEUL batch. Crucial pour les couples
+      // qui se compensent (WH/Sortie −9 / +9) : appliqués ensemble, ils se neutralisent
+      // et ne se régénèrent plus l'un l'autre (avant : une boucle séparée recréait le ±).
+      const items = changedQuants.map((q: any) => ({ quantId: q.id, newQty: parseFloat(adjustments[q.id]) }));
+      await odoo.applyInventoryAdjustmentBatch(session, items, reason || undefined);
+      // Maj état local
+      setQuants(prev => prev.map(pq => {
+        const it = items.find(i => i.quantId === pq.id);
+        return it ? { ...pq, quantity: it.newQty } : pq;
+      }));
+      setAdjustments(prev => {
+        const n = { ...prev };
+        for (const it of items) n[it.quantId] = String(it.newQty);
+        return n;
+      });
+      onToast(`✅ ${total} ajustement(s) appliqué(s)`);
+    } catch (e: any) {
+      onToast("Erreur: " + e.message);
     }
     setSaving(false);
-    onToast(errors === 0 ? `✅ ${total} ajustement(s) appliqué(s)` : `⚠️ ${total - errors} OK · ${errors} erreur(s)`);
   };
 
   // Recherche d'emplacement pour le formulaire nouvelle ligne / stock initial
