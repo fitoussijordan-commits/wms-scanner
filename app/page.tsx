@@ -4425,8 +4425,9 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
   const [addrPrinting, setAddrPrinting] = useState(false);
   const addrFileRef = useRef<HTMLInputElement>(null);
 
-  // Imprime une liste d'adresses (1 étiquette chacune) sur l'imprimante étiquettes.
-  const printAddresses = async (rows: AddrRow[]) => {
+  // Imprime une liste d'adresses. copies = nb d'exemplaires PAR adresse (manuel = qté
+  // du sélecteur ; import en masse = 1 chacune).
+  const printAddresses = async (rows: AddrRow[], copies = 1) => {
     const valid = rows.filter(r => (r.name || "").trim() || (r.line1 || "").trim() || (r.city || "").trim());
     if (!valid.length) { onToast("⚠️ Aucune adresse à imprimer"); return; }
     if (!printerId) { onToast("⚠️ Sélectionne une imprimante"); return; }
@@ -4437,7 +4438,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
         // ZPL (pas PDF) → compatible imprimante RAW Zebra, comme les étiquettes produit/emplacement.
         const res = await pn.printAddressLabel(printerId, {
           name: r.name, line1: r.line1, line2: r.line2, zip: r.zip, city: r.city, country: r.country,
-        }, 1);
+        }, Math.max(1, copies));
         if (res.success) ok++; else { onToast(`❌ ${r.name || r.city}: ${res.error || "erreur"}`); break; }
         await new Promise(res => setTimeout(res, 300));
       }
@@ -4819,7 +4820,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
             </div>
             {inp(addr.country, v => setAddr({ ...addr, country: v }), "France (laisser vide si FR)", "Pays")}
 
-            <button onClick={() => printAddresses([addr])} disabled={addrPrinting}
+            <button onClick={() => printAddresses([addr], qty)} disabled={addrPrinting}
               style={{ width: "100%", marginTop: 6, padding: "13px 0", background: addrPrinting ? C.textMuted : C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: addrPrinting ? "default" : "pointer", fontFamily: "inherit" }}>
               {addrPrinting ? "Impression…" : "🖨️ Imprimer cette étiquette"}
             </button>
