@@ -4425,30 +4425,6 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
   const [addrPrinting, setAddrPrinting] = useState(false);
   const addrFileRef = useRef<HTMLInputElement>(null);
 
-  // Construit le template 70×45 d'une adresse (destinataire seul, centré, lisible).
-  const buildAddrTemplate = (a: AddrRow): LabelTemplate => {
-    const W = 70, H = 45;
-    const els: LabelElement[] = [];
-    // Lignes à afficher (on saute les vides), CP+Ville sur une même ligne.
-    const lines: { text: string; size: number; bold?: boolean }[] = [];
-    if (a.name) lines.push({ text: a.name, size: 13, bold: true });
-    if (a.line1) lines.push({ text: a.line1, size: 11 });
-    if (a.line2) lines.push({ text: a.line2, size: 11 });
-    const cpCity = [a.zip, a.city].filter(Boolean).join(" ");
-    if (cpCity) lines.push({ text: cpCity, size: 12, bold: true });
-    if (a.country && a.country.toUpperCase() !== "FR" && a.country.toUpperCase() !== "FRANCE")
-      lines.push({ text: a.country.toUpperCase(), size: 11, bold: true });
-    // Centrage vertical approximatif : hauteur de bloc ≈ somme des hauteurs de ligne.
-    const lineH = 6.5; // mm par ligne
-    const blockH = lines.length * lineH;
-    let y = Math.max(4, (H - blockH) / 2);
-    for (const ln of lines) {
-      els.push({ id: Math.random().toString(36).slice(2, 8), type: "text", x: 3, y, w: W - 6, h: lineH, text: ln.text, fontSize: ln.size, bold: ln.bold, align: "center" });
-      y += lineH;
-    }
-    return { widthMM: W, heightMM: H, elements: els };
-  };
-
   // Imprime une liste d'adresses (1 étiquette chacune) sur l'imprimante étiquettes.
   const printAddresses = async (rows: AddrRow[]) => {
     const valid = rows.filter(r => (r.name || "").trim() || (r.line1 || "").trim() || (r.city || "").trim());
@@ -4458,8 +4434,10 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
     let ok = 0;
     try {
       for (const r of valid) {
-        const pdfB64 = await generateLabelPDF(buildAddrTemplate(r));
-        const res = await pn.printPdfLabel(printerId, pdfB64, `Adresse ${r.name || r.city}`, 1);
+        // ZPL (pas PDF) → compatible imprimante RAW Zebra, comme les étiquettes produit/emplacement.
+        const res = await pn.printAddressLabel(printerId, {
+          name: r.name, line1: r.line1, line2: r.line2, zip: r.zip, city: r.city, country: r.country,
+        }, 1);
         if (res.success) ok++; else { onToast(`❌ ${r.name || r.city}: ${res.error || "erreur"}`); break; }
         await new Promise(res => setTimeout(res, 300));
       }

@@ -664,6 +664,44 @@ export async function printLabel(
   return printProductLabel(printerId, productName, barcode);
 }
 
+// Étiquette ADRESSE destinataire 70×45 mm — ZPL (compatible imprimante RAW Zebra).
+// Taille FORCÉE à 70×45 (indépendante du sélecteur de taille).
+export interface AddressLabelData { name: string; line1: string; line2: string; zip: string; city: string; country: string; }
+export function generateAddressZPL(a: AddressLabelData): string {
+  const W = mm(70), H = mm(45);
+  const cW = W - 30;
+  const lines: { text: string; fs: number }[] = [];
+  if (a.name) lines.push({ text: a.name, fs: 30 });
+  if (a.line1) lines.push({ text: a.line1, fs: 26 });
+  if (a.line2) lines.push({ text: a.line2, fs: 24 });
+  const cpCity = [a.zip, a.city].filter(Boolean).join(" ");
+  if (cpCity) lines.push({ text: cpCity, fs: 28 });
+  const c = (a.country || "").trim().toUpperCase();
+  if (c && c !== "FR" && c !== "FRANCE") lines.push({ text: c, fs: 26 });
+
+  const totalH = lines.reduce((s, l) => s + l.fs + 8, 0);
+  let y = Math.max(10, Math.round((H - totalH) / 2));
+  const zpl: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
+  for (const l of lines) {
+    const cpl = Math.floor(cW / (l.fs * 0.58));
+    const txt = l.text.length > cpl ? l.text.substring(0, cpl) : l.text;
+    zpl.push(`^FO15,${y}^A0N,${l.fs},${l.fs}^FB${cW},1,0,C^FD${txt}^FS`);
+    y += l.fs + 8;
+  }
+  zpl.push("^XZ");
+  return zpl.join("\n");
+}
+
+export async function printAddressLabel(
+  printerId: number, data: AddressLabelData, qty: number = 1
+): Promise<{ success: boolean; jobId?: number; error?: string }> {
+  try {
+    const zpl = generateAddressZPL(data);
+    const jobId = await submitPrintJob(printerId, `Adresse: ${data.name || data.city}`, zpl, qty);
+    return { success: true, jobId };
+  } catch (e: any) { return { success: false, error: e.message }; }
+}
+
 // ============================================
 // BIG LABEL — 150×100mm paysage (format palette)
 // ============================================
