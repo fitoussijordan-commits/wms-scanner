@@ -4142,6 +4142,47 @@ export async function createEshopQuotation(
   return { id, name: recs[0]?.name || String(id) };
 }
 
+// Valide automatiquement TOUS les pickings d'une commande, dans l'ordre logique
+// (pick/internal d'abord, puis out/delivery). Pour chaque picking : réserve (assign),
+// remplit les qty_done = réservé, puis valide (gère wizards immediate/backorder).
+// Renvoie le détail par picking pour affichage.
+export async function validateOrderPickings(
+  session: OdooSession, orderId: number
+): Promise<{ validated: string[]; failed: { name: string; error: string }[] }> {
+  const out: { validated: string[]; failed: { name: string; error: string }[] } = { validated: [], failed: [] };
+  // Pickings non terminés de la commande.
+  const picks = await searchRead(session, "stock.picking",
+    [["sale_id", "=", orderId], ["state", "not in", ["done", "cancel"]]],
+    ["id", "name", "picking_type_code", "state"], 20);
+  if (!picks.length) return out;
+  // Ordre : pick/internal avant out/outgoing (sinon le out n'a pas encore le stock).
+  const rank = (c: string) => (c === "internal" ? 0 : c === "outgoing" ? 2 : 1);
+  picks.sort((a: any, b: any) => rank(a.picking_type_code) - rank(b.picking_type_code));
+
+  for (const p of picks) {
+    try {
+      // 1. Réserver le stock.
+      try { await callMethod(session, "stock.picking", "action_assign", [[p.id]]); } catch {}
+      // 2. Remplir qty_done = réservé sur chaque ligne (sinon validation = reliquat).
+      const mls = await searchRead(session, "stock.move.line",
+        [["picking_id", "=", p.id], ["state", "not in", ["done", "cancel"]]],
+        ["id", "reserved_uom_qty", "qty_done"], 500);
+      for (const ml of mls) {
+        const want = ml.reserved_uom_qty || 0;
+        if (want > 0 && (ml.qty_done || 0) < want) {
+          try { await write(session, "stock.move.line", [ml.id], { qty_done: want }); } catch {}
+        }
+      }
+      // 3. Valider (gère immediate transfer + backorder).
+      await validatePicking(session, p.id);
+      out.validated.push(p.name);
+    } catch (e: any) {
+      out.failed.push({ name: p.name, error: e?.message || "erreur" });
+    }
+  }
+  return out;
+}
+
 // ============================================
 // IMPORT MARKETPLACE (Imparfaite) — 1 commande = 1 nouveau client + 1 sale.order
 // ============================================

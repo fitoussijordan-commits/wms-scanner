@@ -76,6 +76,10 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   const [partner, setPartner] = useState<{ id: number; name: string } | null>(null);
   const [partnerInput, setPartnerInput] = useState("");
   const [creatingQuote, setCreatingQuote] = useState(false);
+  // Valider automatiquement le pick + le out dans Odoo après création (choix mémorisé).
+  const [autoValidate, setAutoValidate] = useState<boolean>(() => {
+    try { return localStorage.getItem("eshop_auto_validate") === "1"; } catch { return false; }
+  });
 
   useEffect(() => {
     fetch("/api/shopware-explore?action=orderStatuses").then(r => r.json()).then(d => {
@@ -238,7 +242,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
     if (!partner) { onToast("Renseigne d'abord le client e-shop", "error"); return; }
     if (!toDeduct.length && !chariotDeductions.length) { onToast("Aucune ligne mappée à déduire", "info"); return; }
     if (blocked.length && !confirm(`${blocked.length} référence(s) NON mappée(s) seront ignorées. Continuer quand même ?`)) return;
-    if (!confirm(`Créer et CONFIRMER la commande Odoo pour ${partner.name} avec ${toDeduct.length} ligne(s) ?\n(génère le bon de préparation)`)) return;
+    if (!confirm(`Créer et CONFIRMER la commande Odoo pour ${partner.name} avec ${toDeduct.length} ligne(s) ?\n(génère le bon de préparation)${autoValidate ? "\n\n⚠ Le pick ET le OUT seront VALIDÉS automatiquement (stock déduit)." : ""}`)) return;
     setCreatingQuote(true);
     try {
       let q: any = null;
@@ -270,6 +274,15 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
         XLSX.writeFile(wb, `Devis_${q.name}_${dateFrom}.xlsx`);
       } catch {}
       if (q) onToast(`✓ Commande ${q.name} confirmée (pick généré) — ${includedNumbers.length} commande(s) sorties · Excel téléchargé`, "success");
+      // ── Validation auto du pick + OUT dans Odoo (si la case est cochée) ──
+      if (q && autoValidate) {
+        try {
+          const r = await odoo.validateOrderPickings(session, q.id);
+          if (r.validated.length) onToast(`✓ Validé dans Odoo : ${r.validated.join(", ")}`, "success");
+          if (r.failed.length) onToast(`⚠ Validation partielle : ${r.failed.map(f => `${f.name} (${f.error})`).join(" · ")}`, "error");
+          if (!r.validated.length && !r.failed.length) onToast("ℹ Aucun picking à valider", "info");
+        } catch (e: any) { onToast("⚠ Validation Odoo : " + e.message, "error"); }
+      }
       // ── CHARIOT : décrémente le stock chariot des réfs chariot vendues ──
       if (chariotDeductions.length) {
         try {
@@ -421,6 +434,12 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
             <button onClick={resolvePartner} style={{ padding: "0 16px", background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Vérifier</button>
           </div>
           {partner && <div style={{ fontSize: 13, color: C.green, fontWeight: 700, marginBottom: 10 }}>✓ {partner.name} (id {partner.id})</div>}
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: "pointer", fontSize: 13, color: C.text, userSelect: "none" }}>
+            <input type="checkbox" checked={autoValidate}
+              onChange={e => { setAutoValidate(e.target.checked); try { localStorage.setItem("eshop_auto_validate", e.target.checked ? "1" : "0"); } catch {} }}
+              style={{ width: 17, height: 17, cursor: "pointer", accentColor: C.green }} />
+            Valider automatiquement le <strong>pick</strong> + le <strong>OUT</strong> dans Odoo
+          </label>
           <button onClick={createQuote} disabled={creatingQuote || !partner || !toDeduct.length}
             style={{ width: "100%", padding: "13px", background: (!partner || !toDeduct.length) ? "#cbd5e1" : C.green, color: "#fff", border: "none", borderRadius: 11, fontWeight: 800, fontSize: 15, cursor: (!partner || !toDeduct.length) ? "default" : "pointer", opacity: creatingQuote ? 0.6 : 1 }}>
             {creatingQuote ? "Création…" : `Créer + confirmer la commande (${toDeduct.length} ligne${toDeduct.length > 1 ? "s" : ""})`}
