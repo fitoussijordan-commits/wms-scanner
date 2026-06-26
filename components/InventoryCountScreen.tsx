@@ -46,6 +46,15 @@ function SessionList({ onBack, onToast, onOpen }: Props & { onOpen: (s: WmsInven
   const today = new Date();
   const dateStr = `${String(today.getDate()).padStart(2, "0")}/${String(today.getMonth() + 1).padStart(2, "0")}`;
 
+  // Écran étroit (PDA Zebra ~360px) → on empile pour éviter le chevauchement.
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const check = () => setNarrow(window.innerWidth < 420);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
   const load = useCallback(async () => {
     try { setSessions(await loadInventorySessions()); }
     catch (e: any) { onToast("Erreur chargement : " + e.message, "error"); }
@@ -84,23 +93,24 @@ function SessionList({ onBack, onToast, onOpen }: Props & { onOpen: (s: WmsInven
       </div>
 
       {/* Nouvelle session */}
-      <div style={{ background: C.white, border: `1.5px solid ${C.blue}`, borderRadius: 14, padding: 16, marginBottom: 20, boxShadow: "0 0 0 3px #eff6ff" }}>
+      <div style={{ background: C.white, border: `1.5px solid ${C.blue}`, borderRadius: 14, padding: narrow ? 12 : 16, marginBottom: 20, boxShadow: narrow ? "none" : "0 0 0 3px #eff6ff", boxSizing: "border-box" }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 12 }}>Nouvel inventaire</div>
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          {([["location", "Par allée / emplacement"], ["scan", "Scan libre"]] as const).map(([m, lbl]) => (
+          {([["location", narrow ? "📍 Par emplacement" : "Par allée / emplacement"], ["scan", narrow ? "🔍 Scan libre" : "Scan libre"]] as const).map(([m, lbl]) => (
             <button key={m} onClick={() => setMode(m)}
-              style={{ flex: 1, padding: "10px 8px", borderRadius: 10, border: `1.5px solid ${mode === m ? C.blue : C.border}`, background: mode === m ? C.blueSoft : C.white, color: mode === m ? C.blue : C.textSec, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+              style={{ flex: 1, padding: "10px 6px", borderRadius: 10, border: `1.5px solid ${mode === m ? C.blue : C.border}`, background: mode === m ? C.blueSoft : C.white, color: mode === m ? C.blue : C.textSec, fontWeight: 700, fontSize: narrow ? 12 : 13, cursor: "pointer", fontFamily: "inherit", lineHeight: 1.2 }}>
               {lbl}
             </button>
           ))}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        {/* PDA (écran étroit) : champ puis bouton plein largeur empilés → pas de chevauchement */}
+        <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 8 }}>
           <input value={newName} onChange={e => setNewName(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") handleCreate(); }}
             placeholder={`Inventaire ${dateStr}`}
-            style={{ flex: 1, padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.bg, color: C.text }} />
+            style={{ flex: 1, width: narrow ? "100%" : undefined, boxSizing: "border-box", padding: "11px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.bg, color: C.text }} />
           <button onClick={handleCreate} disabled={creating}
-            style={{ padding: "0 18px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: creating ? 0.6 : 1 }}>
+            style={{ padding: narrow ? "11px 0" : "0 18px", width: narrow ? "100%" : undefined, background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: creating ? 0.6 : 1, fontFamily: "inherit" }}>
             {creating ? "…" : "Créer →"}
           </button>
         </div>
