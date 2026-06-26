@@ -5,6 +5,7 @@ import * as odoo from "@/lib/odoo";
 import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByNumero as palFind, createPalette as palCreate, upsertLigne as palUpsert, updateLigneQty as palUpdateQty, updatePalette as palUpdate, searchProductInPalettes as palSearch, searchLotInPalettes as palSearchLot, searchByEmplacement as palSearchEmpl, generatePaletteZPL as palZPL, loadPickingSlots, upsertPickingSlot, deletePickingSlot } from "@/lib/supabase-palettes";
 import type { WmsPickingSlot } from "@/lib/supabase-palettes";
 import { createNotification, loadTodayNotifications, type WmsNotification, getCartonsConfig, saveCartonsConfig } from "@/lib/supabase";
+import * as sbase from "@/lib/supabase";
 import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
@@ -1252,6 +1253,8 @@ export default function Page() {
   const [multiScanList, setMultiScanList] = useState<any[]>([]); // Persisté entre navigations
   const [selectedPicking, setSelectedPicking] = useState<any>(null);
   const [pendingConfirmPicking, setPendingConfirmPicking] = useState<any>(null); // picking à confirmer avant ouverture
+  // Préparation collaborative à 2 (début/fin) : session Supabase + rôle.
+  const [coPrep, setCoPrep] = useState<{ id: string; role: "start" | "end" } | null>(null);
   const [confirmCartonReco, setConfirmCartonReco] = useState<odoo.CartonReco | null>(null); // reco carton pour la modale de confirmation
 
   // Calcule la reco carton quand la modale de confirmation du pick s'ouvre
@@ -2036,6 +2039,35 @@ export default function Page() {
       setScreen("prepDetail");
     } catch (e: any) { setError(e.message); }
     setLoading(false);
+  };
+
+  // Lance ou rejoint la préparation à 2. Crée la session si absente (rôle "start"),
+  // sinon rejoint (rôle "end"). Puis ouvre l'écran de prépa en mode collaboratif.
+  const openPickingCollab = async (picking: any) => {
+    if (!session) return;
+    const me = session.name || "Préparateur";
+    try {
+      let st = await sbase.findCoPrep(picking.name);
+      let role: "start" | "end";
+      if (!st) {
+        st = await sbase.createCoPrep(picking.name, me);
+        role = "start";
+      } else {
+        const mine = st.participants.find((p: any) => p.name === me);
+        if (mine) { role = mine.role; }
+        else if (st.participants.length >= 2) {
+          showToast("⚠️ Déjà 2 préparateurs sur cette commande");
+          return;
+        } else {
+          st = await sbase.joinCoPrep(st.id, me);
+          role = st.participants.find((p: any) => p.name === me)?.role || "end";
+        }
+      }
+      setCoPrep({ id: st.id, role });
+      await openPicking(picking);
+    } catch (e: any) {
+      showToast("❌ " + (e?.message || "Erreur collaboration"));
+    }
   };
 
   const openGroupPicking = async (pickingGroup: any[]) => {
@@ -3546,6 +3578,7 @@ export default function Page() {
             multiScanList={multiScanList}
             setMultiScanList={setMultiScanList}
             onOpen={(p: any) => setPendingConfirmPicking(p)}
+            onOpenCollab={(p: any) => openPickingCollab(p)}
             onOpenGroup={(group: any[]) => { if (group.length === 1) { setPendingConfirmPicking(group[0]); } else { setMultiScanList([]); openGroupPicking(group); } }}
             onScanPicking={openPickingByName}
             onCheckAvail={checkPickingAvailability}
@@ -3614,7 +3647,10 @@ export default function Page() {
             onValidate={validatePrepPicking}
             onValidateAndPack={validateAndPack}
             onRecheckAvail={recheckPrepAvailability}
+            coPrep={coPrep}
+            onCloseCoPrep={() => { if (coPrep) { sbase.closeCoPrep(coPrep.id).catch(() => {}); setCoPrep(null); } }}
             onBack={() => {
+              setCoPrep(null); // on quitte le mode collab en sortant
               // Sauvegarder la progression dans le cache avant de quitter
               const lines = pickingMoveLinesRef.current.filter((ml: any) => (ml.reserved_uom_qty || 0) > 0);
               const doneLines = lines.filter((ml: any) => (qtyOverridesRef.current?.[ml.id] ?? ml.qty_done ?? 0) >= (ml.reserved_uom_qty || 0)).length;
@@ -11765,7 +11801,7 @@ function SettingsScreen({ onBack, session, isDark, onToggleDark }: { onBack: () 
 // ============================================
 // PREPARATION LIST SCREEN
 // ============================================
-function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanPicking, onCheckAvail, onRefresh, onPrintBL, progressCache, session, onRegisterScanHandler, multiScanList, setMultiScanList }: any) {
+function PrepListScreen({ pickings, loading, error, onOpen, onOpenCollab, onOpenGroup, onScanPicking, onCheckAvail, onRefresh, onPrintBL, progressCache, session, onRegisterScanHandler, multiScanList, setMultiScanList }: any) {
   const [scanCode, setScanCode] = useState("");
   const [prepTab, setPrepTab] = useState<"list" | "multiscan" | "groups">("list");
 
@@ -12224,6 +12260,12 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
                                 <button onClick={() => onOpen(p)} style={{ flex: 1, padding: "11px 0", background: C.text, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                                   {prog && prog.done > 0 && !progDone ? "Reprendre" : "Préparer"}
                                 </button>
+                                {onOpenCollab && (
+                                  <button onClick={() => onOpenCollab(p)} title="Préparer à 2 (début / fin)"
+                                    style={{ padding: "11px 12px", background: C.bg, color: "#7c3aed", border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}>
+                                    👥
+                                  </button>
+                                )}
                                 <button onClick={() => requestPrint({ type: "picking", title: p.name, barcode: p.name })}
                                   style={{ padding: "11px 13px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}
                                   title="Imprimer code-barres colis">
@@ -12254,9 +12296,74 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenGroup, onScanP
 // ============================================
 // PREPARATION DETAIL SCREEN
 // ============================================
-function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onManualConfirmLoc, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, qtyOverrides, onValidate, onValidateAndPack, onBack, onReport, onRecheckAvail, session }: any) {
+function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, prepStep, onScan, onManualConfirmLoc, onTakeAll, onCancelStep, onAutoFill, onAdjustQty, qtyOverrides, onValidate, onValidateAndPack, onBack, onReport, onRecheckAvail, session, coPrep, onCloseCoPrep }: any) {
+  // ── Préparation collaborative à 2 : état partagé temps réel (lignes faites par l'autre) ──
+  const [coLines, setCoLines] = useState<Record<string, sbase.CoPrepLineState>>({});
+  const [coPartners, setCoPartners] = useState<sbase.CoPrepParticipant[]>([]);
+  const myName = session?.name || "Préparateur";
+  // Abonnement realtime : on reçoit les lignes prélevées par l'autre.
+  useEffect(() => {
+    if (!coPrep?.id) { setCoLines({}); setCoPartners([]); return; }
+    let cancelled = false;
+    const apply = (st: sbase.CoPrepState | null) => {
+      if (!st || cancelled) return;
+      setCoLines(st.lines || {});
+      setCoPartners(st.participants || []);
+    };
+    // état initial
+    sbase.findCoPrep(picking.name).then(apply).catch(() => {});
+    const ch = sbase.sb.channel(`coprep-${coPrep.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "wms_scan_sessions", filter: `id=eq.${coPrep.id}` },
+        (payload: any) => {
+          const p = Array.isArray(payload.new?.entries) ? payload.new.entries[0] : payload.new?.entries;
+          if (p) { setCoLines(p.lines || {}); setCoPartners(p.participants || []); }
+        })
+      .subscribe();
+    return () => { cancelled = true; sbase.sb.removeChannel(ch); };
+  }, [coPrep?.id, picking?.name]);
+
+  // Validation : en collab, on ferme la session partagée d'abord (les 2 écrans se débranchent).
+  const doValidate = () => { if (coPrep && onCloseCoPrep) onCloseCoPrep(); onValidate?.(); };
+  const doValidateAndPack = () => { if (coPrep && onCloseCoPrep) onCloseCoPrep(); onValidateAndPack?.(); };
+
+  // Une ligne est "faite par l'autre" si l'état partagé la marque complétée par qqn d'autre.
+  const doneByOther = (ml: any): string | null => {
+    const st = coLines[String(ml.id)];
+    if (st && st.by !== myName && st.qtyDone >= (ml.reserved_uom_qty || 0)) return st.by;
+    return null;
+  };
+
+  // Push collab : à chaque fois que MA progression locale change, je publie mes lignes faites.
+  const coPushedRef = useRef<Record<string, number>>({});
+  useEffect(() => {
+    if (!coPrep?.id) return;
+    const ov = qtyOverrides || {};
+    for (const ml of moveLines) {
+      const q = ov[ml.id];
+      if (q === undefined || q <= 0) continue;
+      const key = String(ml.id);
+      if (coPushedRef.current[key] === q) continue; // déjà publié à cette valeur
+      coPushedRef.current[key] = q;
+      sbase.setCoPrepLine(coPrep.id, ml.id, q, myName).then(res => {
+        if (!res.ok && res.takenBy) {
+          // L'autre avait déjà pris cette ligne au même instant → on l'informe.
+          // (pas bloquant : la ligne est de toute façon faite)
+        }
+      }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qtyOverrides, coPrep?.id]);
+
   // ── qty helper: overrides take priority over moveLines data ──
-  const getQty = (ml: any) => qtyOverrides?.[ml.id] !== undefined ? qtyOverrides[ml.id] : (ml.qty_done || 0);
+  // En collab, une ligne complétée par l'AUTRE compte comme faite (pour griser + progression).
+  const getQty = (ml: any) => {
+    const local = qtyOverrides?.[ml.id] !== undefined ? qtyOverrides[ml.id] : (ml.qty_done || 0);
+    if (coPrep) {
+      const st = coLines[String(ml.id)];
+      if (st && st.qtyDone > local) return st.qtyDone; // l'autre a fait plus → on prend sa valeur
+    }
+    return local;
+  };
 
   // ── Colis state (synced with Odoo) ──
   const [colis, setColis] = useState<{ id: number; odooPackageId: number | null; name: string; lines: number[]; weight: number | null; closed: boolean }[]>([]);
@@ -12305,17 +12412,22 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   };
 
   // ── Compute sorted move lines one per card ──
+  // En collab rôle "end", on inverse l'ordre : ce préparateur part de la FIN du picking.
   const allLines = useMemo(() => {
-    return [...moveLines].sort((a: any, b: any) => {
+    const sorted = [...moveLines].sort((a: any, b: any) => {
       const la = (a.location_id?.[1] || "").toLowerCase();
       const lb = (b.location_id?.[1] || "").toLowerCase();
       return la < lb ? -1 : la > lb ? 1 : 0;
     });
-  }, [moveLines]);
+    if (coPrep?.role === "end") sorted.reverse();
+    return sorted;
+  }, [moveLines, coPrep?.role]);
 
   const currentLine = useMemo(() => {
     return allLines.find((ml: any) => getQty(ml) < (ml.reserved_uom_qty || 0));
-  }, [allLines]);
+    // coLines en dép : si l'autre complète une ligne en temps réel, on la saute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allLines, coLines]);
 
   // Quand on dévie du circuit (scan d'un emplacement hors ordre), prepStep pointe
   // vers la vraie ligne scannée. On affiche cette ligne dans la carte, pas currentLine.
@@ -12548,7 +12660,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         sub={`${doneLines}/${totalLines} articles préparés`}
         color={allDone ? C.green : C.orange}
         onClick={() => {
-          if (allDone) { onValidate(); return; }
+          if (allDone) { doValidate(); return; }
           setShowBackorderWarning(true);
         }}
         disabled={loading || doneLines === 0}
@@ -12560,7 +12672,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
             label={loading ? "Envoi..." : "Valider + Emballer"}
             sub="Valide la prépa et ouvre l'emballage"
             color="#0d9488"
-            onClick={() => { if (allDone) { onValidateAndPack(); return; } }}
+            onClick={() => { if (allDone) { doValidateAndPack(); return; } }}
             disabled={loading}
           />
         </div>
@@ -12589,6 +12701,19 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
           }
         </button>
       </div>
+
+      {/* ── Bandeau préparation à 2 ── */}
+      {coPrep && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 10, padding: "8px 12px", marginBottom: 10 }}>
+          <span style={{ fontSize: 16 }}>👥</span>
+          <div style={{ flex: 1, fontSize: 12, color: "#5b21b6", fontWeight: 600, lineHeight: 1.3 }}>
+            Préparation à 2 — tu commences par {coPrep.role === "end" ? "la FIN" : "le DÉBUT"} du circuit.
+            {coPartners.length > 1
+              ? <span style={{ display: "block", fontWeight: 500, color: "#7c3aed" }}>Avec : {coPartners.filter((p: any) => p.name !== myName).map((p: any) => p.name).join(", ") || "en attente…"}</span>
+              : <span style={{ display: "block", fontWeight: 500, color: "#7c3aed" }}>En attente du 2ᵉ préparateur…</span>}
+          </div>
+        </div>
+      )}
 
       {/* ── Progress bar ── */}
       <div style={{ marginBottom: 10 }}>
@@ -12903,12 +13028,17 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
                     {shortLoc(ml.location_id?.[1] || "")}
                     {ml.lot_id && ` · ${ml.lot_id[1]}`}
                     <span style={{ color: C.green, fontWeight: 700, marginLeft: 6 }}>{getQty(ml)}/{ml.reserved_uom_qty || 0}</span>
+                    {coPrep && doneByOther(ml) && <span style={{ color: "#7c3aed", fontWeight: 700, marginLeft: 6 }}>👤 {doneByOther(ml)}</span>}
                   </div>
                 </div>
+                {coPrep && doneByOther(ml) ? (
+                  <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 700, flexShrink: 0 }}>verrouillé</div>
+                ) : (
                 <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                   <button onClick={() => onAdjustQty(ml.id, getQty(ml) - 1)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.red }}>−</button>
                   <button onClick={() => onAdjustQty(ml.id, getQty(ml) + 1)} disabled={getQty(ml) >= (ml.reserved_uom_qty || 0)} style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${C.border}`, background: C.white, fontSize: 18, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.blue, opacity: getQty(ml) >= (ml.reserved_uom_qty || 0) ? 0.3 : 1 }}>+</button>
                 </div>
+                )}
               </div>
             ))}
           </div>
@@ -12940,7 +13070,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         sub={allDone ? "Tout préparé — prêt à valider" : `${doneLines}/${totalLines} articles préparés`}
         color={allDone ? C.green : C.orange}
         onClick={() => {
-          if (allDone) { onValidate(); return; }
+          if (allDone) { doValidate(); return; }
           setShowBackorderWarning(true);
         }}
         disabled={loading || doneLines === 0}
@@ -12952,7 +13082,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
             label={loading ? "Envoi..." : "Valider + Emballer"}
             sub="Valide la prépa et ouvre l'emballage"
             color="#0d9488"
-            onClick={() => { if (allDone) { onValidateAndPack(); return; } }}
+            onClick={() => { if (allDone) { doValidateAndPack(); return; } }}
             disabled={loading}
           />
         </div>
@@ -12999,7 +13129,7 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
                   style={{ width: "100%", padding: 14, background: "#2563eb", color: "#fff", border: "none", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                   ← Retourner préparer les articles manquants
                 </button>
-                <button onClick={() => { setShowBackorderWarning(false); onValidate(); }}
+                <button onClick={() => { setShowBackorderWarning(false); doValidate(); }}
                   style={{ width: "100%", padding: 12, background: "#f3f4f6", color: "#6b7280", border: "1.5px solid #d1d5db", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
                   Valider quand même (créer un backorder)
                 </button>

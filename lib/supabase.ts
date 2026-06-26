@@ -282,6 +282,113 @@ export async function deletePrepList(id: string): Promise<void> {
 }
 
 // ══════════════════════════════════════════
+// PRÉPARATION COLLABORATIVE À 2 (début / fin)
+// Réutilise wms_scan_sessions avec un nom préfixé "COPREP::<picking>".
+// entries[0] porte tout l'état : participants + progression par ligne.
+// ══════════════════════════════════════════
+
+const COPREP_PREFIX = "COPREP::";
+
+// Progression d'une ligne de move (clé = id de la stock.move.line).
+export interface CoPrepLineState { mlId: number; qtyDone: number; by: string; at: number; }
+export interface CoPrepParticipant { name: string; role: "start" | "end"; joinedAt: number; }
+export interface CoPrepState {
+  id: string;                 // id Supabase de la session
+  picking: string;            // nom du picking (WH/PICK/…)
+  participants: CoPrepParticipant[];
+  lines: Record<string, CoPrepLineState>; // mlId(string) → état
+  status: "open" | "done";
+}
+
+// payload stocké dans wms_scan_sessions.entries (un seul objet)
+interface CoPrepPayload { picking: string; participants: CoPrepParticipant[]; lines: Record<string, CoPrepLineState>; status: "open" | "done"; }
+
+function rowToCoPrep(d: any): CoPrepState {
+  const p = (Array.isArray(d.entries) ? d.entries[0] : d.entries) as CoPrepPayload | undefined;
+  return {
+    id: d.id,
+    picking: p?.picking || String(d.name || "").slice(COPREP_PREFIX.length),
+    participants: p?.participants || [],
+    lines: p?.lines || {},
+    status: p?.status || "open",
+  };
+}
+
+// Trouve une session collaborative ouverte pour ce picking (s'il y en a une).
+export async function findCoPrep(picking: string): Promise<CoPrepState | null> {
+  const name = COPREP_PREFIX + picking;
+  const { data, error } = await sb.from("wms_scan_sessions")
+    .select("*").eq("name", name).order("created_at", { ascending: false }).limit(1);
+  if (error) throw new Error(error.message);
+  if (!data || !data.length) return null;
+  const st = rowToCoPrep(data[0]);
+  return st.status === "done" ? null : st;
+}
+
+// Crée la session (1er préparateur = rôle "start").
+export async function createCoPrep(picking: string, starterName: string): Promise<CoPrepState> {
+  const payload: CoPrepPayload = {
+    picking,
+    participants: [{ name: starterName, role: "start", joinedAt: Date.now() }],
+    lines: {},
+    status: "open",
+  };
+  const { data, error } = await sb.from("wms_scan_sessions")
+    .insert({ name: COPREP_PREFIX + picking, date: new Date().toISOString().slice(0, 10), entries: [payload] })
+    .select().single();
+  if (error) throw new Error(error.message);
+  return rowToCoPrep(data);
+}
+
+// Rejoint une session existante (2e préparateur = rôle "end"). Max 2.
+export async function joinCoPrep(id: string, joinerName: string): Promise<CoPrepState> {
+  const { data: cur, error: e1 } = await sb.from("wms_scan_sessions").select("*").eq("id", id).single();
+  if (e1) throw new Error(e1.message);
+  const st = rowToCoPrep(cur);
+  if (!st.participants.find(p => p.name === joinerName)) {
+    if (st.participants.length >= 2) throw new Error("Déjà 2 préparateurs sur cette commande");
+    const role: "start" | "end" = st.participants.some(p => p.role === "start") ? "end" : "start";
+    st.participants.push({ name: joinerName, role, joinedAt: Date.now() });
+    await writeCoPrep(id, st);
+  }
+  return st;
+}
+
+// Écrit l'état complet (participants + lignes + statut).
+async function writeCoPrep(id: string, st: CoPrepState): Promise<void> {
+  const payload: CoPrepPayload = { picking: st.picking, participants: st.participants, lines: st.lines, status: st.status };
+  const { error } = await sb.from("wms_scan_sessions")
+    .update({ entries: [payload], updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// Marque une ligne comme prélevée (verrou simple : on relit avant d'écrire).
+// Renvoie { ok:false, takenBy } si la ligne a déjà été prise par l'autre entre-temps.
+export async function setCoPrepLine(
+  id: string, mlId: number, qtyDone: number, by: string
+): Promise<{ ok: boolean; takenBy?: string; state: CoPrepState }> {
+  const { data: cur, error } = await sb.from("wms_scan_sessions").select("*").eq("id", id).single();
+  if (error) throw new Error(error.message);
+  const st = rowToCoPrep(cur);
+  const existing = st.lines[String(mlId)];
+  // Verrou : si quelqu'un d'AUTRE a déjà complété cette ligne, on refuse.
+  if (existing && existing.by !== by && existing.qtyDone >= qtyDone && qtyDone > 0) {
+    return { ok: false, takenBy: existing.by, state: st };
+  }
+  st.lines[String(mlId)] = { mlId, qtyDone, by, at: Date.now() };
+  await writeCoPrep(id, st);
+  return { ok: true, state: st };
+}
+
+// Clôt la session collaborative (après validation Odoo).
+export async function closeCoPrep(id: string): Promise<void> {
+  const { data: cur, error } = await sb.from("wms_scan_sessions").select("*").eq("id", id).single();
+  if (!error && cur) { const st = rowToCoPrep(cur); st.status = "done"; await writeCoPrep(id, st); }
+  // on supprime carrément pour ne pas polluer
+  await sb.from("wms_scan_sessions").delete().eq("id", id);
+}
+
+// ══════════════════════════════════════════
 // INVENTAIRE TOURNANT (cross-device)
 // ══════════════════════════════════════════
 
