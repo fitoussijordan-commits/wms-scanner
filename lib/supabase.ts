@@ -282,6 +282,38 @@ export async function deletePrepList(id: string): Promise<void> {
 }
 
 // ══════════════════════════════════════════
+// DROITS UTILISATEURS (par login Odoo) — qui voit quels outils
+// Table wms_user_permissions : { login (text, PK), tools (jsonb = string[]), updated_at }
+// ══════════════════════════════════════════
+
+export interface WmsUserPerm { login: string; tools: string[]; }
+
+// Charge tous les droits (map login → liste d'outils autorisés).
+export async function loadUserPermissions(): Promise<Record<string, string[]>> {
+  const { data, error } = await sb.from("wms_user_permissions").select("login, tools").limit(1000);
+  if (error) throw new Error(error.message);
+  const out: Record<string, string[]> = {};
+  for (const r of (data || [])) out[String(r.login).toLowerCase()] = Array.isArray(r.tools) ? r.tools : [];
+  return out;
+}
+
+// Droits d'UN utilisateur (null = aucune config enregistrée pour lui).
+export async function loadUserPermission(login: string): Promise<string[] | null> {
+  const { data, error } = await sb.from("wms_user_permissions")
+    .select("tools").eq("login", login.toLowerCase()).limit(1);
+  if (error) throw new Error(error.message);
+  if (!data || !data.length) return null;
+  return Array.isArray(data[0].tools) ? data[0].tools : [];
+}
+
+// Enregistre/écrase les droits d'un utilisateur.
+export async function saveUserPermission(login: string, tools: string[]): Promise<void> {
+  const { error } = await sb.from("wms_user_permissions")
+    .upsert({ login: login.toLowerCase(), tools, updated_at: new Date().toISOString() }, { onConflict: "login" });
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // PRÉPARATION COLLABORATIVE À 2 (début / fin)
 // Réutilise wms_scan_sessions avec un nom préfixé "COPREP::<picking>".
 // entries[0] porte tout l'état : participants + progression par ligne.

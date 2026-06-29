@@ -6,6 +6,7 @@ import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByN
 import type { WmsPickingSlot } from "@/lib/supabase-palettes";
 import { createNotification, loadTodayNotifications, type WmsNotification, getCartonsConfig, saveCartonsConfig } from "@/lib/supabase";
 import * as sbase from "@/lib/supabase";
+import AdminScreen, { ALL_TOOLS } from "@/components/AdminScreen";
 import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
@@ -1088,7 +1089,7 @@ export default function Page() {
     setIsDark(val);
   };
 
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager" | "imparfaite" | "fefo">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager" | "imparfaite" | "fefo" | "admin">("login");
 
   // ── UI desktop (refonte) : ≥1024px ET non tactile — le PDA garde l'UI actuelle ──
   const [isDesktopUI, setIsDesktopUI] = useState(false);
@@ -1255,6 +1256,18 @@ export default function Page() {
   const [pendingConfirmPicking, setPendingConfirmPicking] = useState<any>(null); // picking à confirmer avant ouverture
   // Préparation collaborative à 2 (début/fin) : session Supabase + rôle.
   const [coPrep, setCoPrep] = useState<{ id: string; role: "start" | "end" } | null>(null);
+  // Droits d'accès de l'utilisateur courant : null = pas encore chargé / non configuré (défaut).
+  const [myTools, setMyTools] = useState<string[] | null>(null);
+  // Charge les droits de l'utilisateur depuis Supabase à la connexion.
+  useEffect(() => {
+    if (!session?.login) { setMyTools(null); return; }
+    if (odoo.isAdmin(session)) { setMyTools(null); return; } // admin = tout, pas de filtrage
+    let stop = false;
+    sbase.loadUserPermission(session.login)
+      .then(tools => { if (!stop) setMyTools(tools); }) // null si non configuré → défaut
+      .catch(() => { if (!stop) setMyTools(null); });
+    return () => { stop = true; };
+  }, [session?.login]);
   const [confirmCartonReco, setConfirmCartonReco] = useState<odoo.CartonReco | null>(null); // reco carton pour la modale de confirmation
 
   // Calcule la reco carton quand la modale de confirmation du pick s'ouvre
@@ -2790,8 +2803,35 @@ export default function Page() {
     { key: "fefo", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>, label: "Analyse FEFO", onClick: () => setScreen("fefo"), admin: true, badge: null, badgeColor: "" },
     { key: "dashboard", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; }, admin: true, badge: null, badgeColor: "" },
     { key: "order", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>, label: "Commande", onClick: () => { try { localStorage.setItem("wms_order_session", JSON.stringify(session)); } catch {} window.open("/order", "_blank"); }, admin: false, badge: null, badgeColor: "" },
+    { key: "admin", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>, label: "Administration", onClick: () => setScreen("admin"), admin: true, badge: null, badgeColor: "" },
   ];
-  const visibleTools = toolItems.filter(t => !t.admin || (session && odoo.isAdmin(session)));
+  // ── Droits d'accès ──
+  // Admin → voit tout. Sinon : si l'utilisateur a une config (myTools), on s'y tient ;
+  // s'il n'a AUCUNE config (null), on applique un jeu d'outils de base par défaut.
+  const amAdmin = session ? odoo.isAdmin(session) : false;
+  const DEFAULT_TOOLS = new Set([
+    "transfer", "prep", "waitingOrders", "packing", "arrival", "eshop",
+    "inventory", "inventoryCount", "freeScan", "returns", "labels", "reprintLabel", "order",
+  ]);
+  const canSee = (key: string): boolean => {
+    if (amAdmin) return true;
+    if (myTools === null) return DEFAULT_TOOLS.has(key); // non configuré → base
+    return myTools.includes(key);
+  };
+  const visibleTools = toolItems.filter(t => canSee(t.key));
+  const visibleOps = opsItems.filter(it => canSee(it.key));
+
+  // Garde-fou : si l'écran courant correspond à un outil non autorisé, on renvoie à l'accueil.
+  // (les écrans "système" — home, login, settings, prepDetail… — ne sont pas filtrés)
+  useEffect(() => {
+    if (!session || amAdmin) return;
+    const SYSTEM = new Set(["login", "home", "done", "settings", "history", "prepDetail", "admin"]);
+    if (SYSTEM.has(screen)) return;
+    // "admin" déjà protégé par isAdmin au rendu. Pour les autres, vérifie le droit.
+    const known = [...opsItems, ...toolItems].some(t => t.key === screen);
+    if (known && !canSee(screen)) { setScreen("home"); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, myTools, amAdmin, session?.login]);
 
   if (screen === "login") return <Login onLogin={login} loading={loading} error={error} />;
 
@@ -2827,7 +2867,7 @@ export default function Page() {
             </button>
 
             <div style={label}>Opérations</div>
-            {opsItems.map(it => (
+            {visibleOps.map(it => (
               <button key={it.key} className="dk-nav" onClick={it.onClick} style={navItem(screen === it.key)}>
                 <span style={{ display: "flex", color: screen === it.key ? DK.primary : DK.text2 }}>{it.icon}</span>
                 {it.label}
@@ -3047,7 +3087,7 @@ export default function Page() {
           <div style={{ marginTop: 20 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginBottom: 10, paddingLeft: 2 }}>Opérations</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {opsItems.map((btn, i) => (
+              {visibleOps.map((btn, i) => (
                 <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 8, padding: "18px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, cursor: "pointer", fontFamily: "inherit", boxShadow: C.shadow, position: "relative" as const }}>
                   <div style={{ width: 40, height: 40, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: "#374151" }}>{btn.icon}</div>
                   <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{btn.label}</span>
@@ -3221,7 +3261,7 @@ export default function Page() {
                 <div>
                   <div style={secTitle}>Opérations</div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 28 }}>
-                    {opsItems.map((btn, i) => (
+                    {visibleOps.map((btn, i) => (
                       <button key={i} className="dk-op" onClick={btn.onClick} style={{ ...card, padding: 20, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, position: "relative" as const }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 14 }}>
                           <div style={{ width: 46, height: 46, borderRadius: 13, background: btn.soft, color: btn.color, display: "flex", alignItems: "center", justifyContent: "center" }}>{btn.icon}</div>
@@ -3732,6 +3772,9 @@ export default function Page() {
         )}
         {screen === "negativeStock" && session && odoo.isAdmin(session) && (
           <NegativeStockScreen session={session} onBack={goHome} onToast={showToast} onGoToInventory={(p) => { setInventoryInitProduct(p); setScreen("inventory"); }} />
+        )}
+        {screen === "admin" && session && odoo.isAdmin(session) && (
+          <AdminScreen session={session} onBack={goHome} onToast={showToast} />
         )}
         {screen === "waitingOrders" && session && (
           <WaitingOrdersScreen

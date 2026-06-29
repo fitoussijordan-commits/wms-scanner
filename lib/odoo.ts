@@ -9,6 +9,16 @@ export function isAdmin(session: OdooSession): boolean {
   return ADMIN_LOGINS.includes(session.login?.toLowerCase());
 }
 
+// Liste des utilisateurs actifs Odoo (pour le panneau Administration des droits).
+export async function getActiveUsers(session: OdooSession): Promise<{ id: number; name: string; login: string }[]> {
+  const users = await searchRead(session, "res.users",
+    [["active", "=", true], ["share", "=", false]],
+    ["id", "name", "login"], 500, "name");
+  return users
+    .filter((u: any) => u.login && u.login.includes("@"))
+    .map((u: any) => ({ id: u.id, name: u.name || u.login, login: String(u.login).toLowerCase() }));
+}
+
 async function rpc(config: OdooConfig, endpoint: string, params: any, sessionId?: string) {
   const res = await fetch("/api/odoo/proxy", {
     method: "POST",
