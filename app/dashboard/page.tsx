@@ -462,15 +462,39 @@ export default function Dashboard() {
   const [tab, setTab] = useState<string>("stock-monitor");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  // ── Ventes client/produit ──
+  // ── Ventes client/produit (avec autocomplétion) ──
   const [vcClient, setVcClient] = useState("");
   const [vcProduct, setVcProduct] = useState("");
+  const [vcClientId, setVcClientId] = useState<number | null>(null);
+  const [vcProductId, setVcProductId] = useState<number | null>(null);
+  const [vcClientSugg, setVcClientSugg] = useState<{ id: number; name: string; ref: string }[]>([]);
+  const [vcProductSugg, setVcProductSugg] = useState<{ id: number; name: string; ref: string }[]>([]);
   const [vcLoading, setVcLoading] = useState(false);
   const [vcResult, setVcResult] = useState<{ partner: string; product: string; sales: odoo.ClientProductSale[] } | null>(null);
+  const vcClientTimer = useRef<any>(null);
+  const vcProductTimer = useRef<any>(null);
+
+  const vcOnClientType = (val: string) => {
+    setVcClient(val); setVcClientId(null);
+    if (vcClientTimer.current) clearTimeout(vcClientTimer.current);
+    if (val.trim().length < 2) { setVcClientSugg([]); return; }
+    vcClientTimer.current = setTimeout(async () => {
+      try { if (session) setVcClientSugg(await odoo.suggestPartners(session, val)); } catch {}
+    }, 250);
+  };
+  const vcOnProductType = (val: string) => {
+    setVcProduct(val); setVcProductId(null);
+    if (vcProductTimer.current) clearTimeout(vcProductTimer.current);
+    if (val.trim().length < 2) { setVcProductSugg([]); return; }
+    vcProductTimer.current = setTimeout(async () => {
+      try { if (session) setVcProductSugg(await odoo.suggestProducts(session, val)); } catch {}
+    }, 250);
+  };
   const vcSearch = async () => {
-    if (!session || !vcClient.trim() || !vcProduct.trim()) return;
-    setVcLoading(true); setVcResult(null);
-    try { setVcResult(await odoo.searchClientProductSales(session, vcClient, vcProduct)); }
+    if (!session) return;
+    if ((!vcClientId && !vcClient.trim()) || (!vcProductId && !vcProduct.trim())) return;
+    setVcLoading(true); setVcResult(null); setVcClientSugg([]); setVcProductSugg([]);
+    try { setVcResult(await odoo.searchClientProductSales(session, vcClient, vcProduct, vcClientId, vcProductId)); }
     catch (e: any) { setError("Recherche ventes : " + (e?.message ?? e)); }
     setVcLoading(false);
   };
@@ -5826,13 +5850,39 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
               <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Toutes les livraisons validées (OUT) d&apos;un produit pour un client, avec les lots et le lien vers la commande.</div>
             </div>
 
-            <form onSubmit={e => { e.preventDefault(); vcSearch(); }} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-              <input value={vcClient} onChange={e => setVcClient(e.target.value)} placeholder="Nom du client…"
-                style={{ flex: "1 1 220px", padding: "10px 14px", border: "1.5px solid var(--border)", borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)" }} />
-              <input value={vcProduct} onChange={e => setVcProduct(e.target.value)} placeholder="Réf, EAN ou nom du produit…"
-                style={{ flex: "1 1 220px", padding: "10px 14px", border: "1.5px solid var(--border)", borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)" }} />
-              <button type="submit" disabled={vcLoading || !vcClient.trim() || !vcProduct.trim()}
-                style={{ padding: "10px 22px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: vcLoading || !vcClient.trim() || !vcProduct.trim() ? "not-allowed" : "pointer", opacity: vcLoading || !vcClient.trim() || !vcProduct.trim() ? 0.5 : 1, fontFamily: "inherit" }}>
+            <form onSubmit={e => { e.preventDefault(); vcSearch(); }} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16, alignItems: "flex-start" }}>
+              {/* Champ CLIENT avec autocomplétion */}
+              <div style={{ flex: "1 1 240px", position: "relative" }}>
+                <input value={vcClient} onChange={e => vcOnClientType(e.target.value)} placeholder="Nom du client…" autoComplete="off"
+                  style={{ width: "100%", boxSizing: "border-box", padding: "10px 14px", border: `1.5px solid ${vcClientId ? "var(--accent)" : "var(--border)"}`, borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)" }} />
+                {vcClientSugg.length > 0 && !vcClientId && (
+                  <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 20, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.12)", maxHeight: 260, overflowY: "auto" }}>
+                    {vcClientSugg.map(c => (
+                      <button key={c.id} type="button" onClick={() => { setVcClient(c.name); setVcClientId(c.id); setVcClientSugg([]); }}
+                        style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", background: "none", border: "none", borderBottom: "1px solid var(--border)", cursor: "pointer", fontFamily: "inherit", fontSize: 13, color: "var(--text-primary)" }}>
+                        {c.name}{c.ref ? <span style={{ color: "var(--text-muted)", fontSize: 11 }}> · {c.ref}</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {/* Champ PRODUIT avec autocomplétion */}
+              <div style={{ flex: "1 1 240px", position: "relative" }}>
+                <input value={vcProduct} onChange={e => vcOnProductType(e.target.value)} placeholder="Réf, EAN ou nom du produit…" autoComplete="off"
+                  style={{ width: "100%", boxSizing: "border-box", padding: "10px 14px", border: `1.5px solid ${vcProductId ? "var(--accent)" : "var(--border)"}`, borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)" }} />
+                {vcProductSugg.length > 0 && !vcProductId && (
+                  <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 20, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.12)", maxHeight: 260, overflowY: "auto" }}>
+                    {vcProductSugg.map(p => (
+                      <button key={p.id} type="button" onClick={() => { setVcProduct(p.ref ? `${p.ref} — ${p.name}` : p.name); setVcProductId(p.id); setVcProductSugg([]); }}
+                        style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", background: "none", border: "none", borderBottom: "1px solid var(--border)", cursor: "pointer", fontFamily: "inherit", fontSize: 13, color: "var(--text-primary)" }}>
+                        {p.ref ? <span style={{ fontFamily: "monospace", color: "var(--text-secondary)" }}>{p.ref}</span> : null} {p.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button type="submit" disabled={vcLoading || (!vcClientId && !vcClient.trim()) || (!vcProductId && !vcProduct.trim())}
+                style={{ padding: "10px 22px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: vcLoading ? "not-allowed" : "pointer", opacity: vcLoading || (!vcClientId && !vcClient.trim()) || (!vcProductId && !vcProduct.trim()) ? 0.5 : 1, fontFamily: "inherit" }}>
                 {vcLoading ? "Recherche…" : "Rechercher"}
               </button>
             </form>

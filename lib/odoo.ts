@@ -9,6 +9,26 @@ export function isAdmin(session: OdooSession): boolean {
   return ADMIN_LOGINS.includes(session.login?.toLowerCase());
 }
 
+// Suggestions clients (autocomplétion). Renvoie id + nom + réf.
+export async function suggestPartners(session: OdooSession, q: string): Promise<{ id: number; name: string; ref: string }[]> {
+  const t = q.trim();
+  if (t.length < 2) return [];
+  const rows = await searchRead(session, "res.partner",
+    ["|", ["name", "ilike", t], ["ref", "ilike", t]],
+    ["id", "name", "ref"], 12, "name");
+  return rows.map((r: any) => ({ id: r.id, name: r.name || "", ref: r.ref || "" }));
+}
+
+// Suggestions produits (autocomplétion). Renvoie id + nom + réf.
+export async function suggestProducts(session: OdooSession, q: string): Promise<{ id: number; name: string; ref: string }[]> {
+  const t = q.trim();
+  if (t.length < 2) return [];
+  const rows = await searchRead(session, "product.product",
+    ["|", "|", ["default_code", "ilike", t], ["barcode", "ilike", t], ["name", "ilike", t]],
+    ["id", "name", "default_code"], 12, "default_code");
+  return rows.map((r: any) => ({ id: r.id, name: r.name || "", ref: r.default_code || "" }));
+}
+
 // ── Recherche des VENTES (livraisons OUT) d'un produit pour un client ──
 // Renvoie une ligne par livraison validée (done) : date, n° OUT, commande, qté, lots.
 export interface ClientProductSale {
@@ -21,21 +41,27 @@ export interface ClientProductSale {
   lots: string[];        // lots du produit livrés
 }
 export async function searchClientProductSales(
-  session: OdooSession, clientQuery: string, productQuery: string
+  session: OdooSession, clientQuery: string, productQuery: string,
+  // ids précis si l'utilisateur a sélectionné dans l'autocomplétion (prioritaire sur le texte)
+  partnerId?: number | null, productId?: number | null
 ): Promise<{ partner: string; product: string; sales: ClientProductSale[] }> {
   const cq = clientQuery.trim(), pq = productQuery.trim();
-  if (!cq || !pq) return { partner: "", product: "", sales: [] };
+  if (!partnerId && !cq) return { partner: "", product: "", sales: [] };
+  if (!productId && !pq) return { partner: "", product: "", sales: [] };
 
-  // 1. Partenaire(s) correspondant au nom (on prend tous les matches).
-  const partners = await searchRead(session, "res.partner",
-    ["|", ["name", "ilike", cq], ["ref", "=", cq]], ["id", "name"], 20);
+  // 1. Partenaire : id précis si fourni, sinon recherche par nom/réf.
+  const partners = partnerId
+    ? await searchRead(session, "res.partner", [["id", "=", partnerId]], ["id", "name"], 1)
+    : await searchRead(session, "res.partner", ["|", ["name", "ilike", cq], ["ref", "=", cq]], ["id", "name"], 20);
   if (!partners.length) return { partner: "", product: "", sales: [] };
   const partnerIds = partners.map((p: any) => p.id);
 
-  // 2. Produit(s) par réf, code-barres ou nom.
-  const prods = await searchRead(session, "product.product",
-    ["|", "|", ["default_code", "=", pq], ["barcode", "=", pq], ["name", "ilike", pq],
-    ], ["id", "name", "default_code"], 10);
+  // 2. Produit : id précis si fourni, sinon recherche par réf/EAN/nom.
+  const prods = productId
+    ? await searchRead(session, "product.product", [["id", "=", productId]], ["id", "name", "default_code"], 1)
+    : await searchRead(session, "product.product",
+        ["|", "|", ["default_code", "=", pq], ["barcode", "=", pq], ["name", "ilike", pq]],
+        ["id", "name", "default_code"], 10);
   if (!prods.length) return { partner: partners[0].name, product: "", sales: [] };
   const productIds = prods.map((p: any) => p.id);
 
