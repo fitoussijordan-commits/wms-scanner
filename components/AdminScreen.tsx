@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import * as odoo from "@/lib/odoo";
 import { loadUserPermissions, saveUserPermission } from "@/lib/supabase";
 
@@ -52,7 +52,7 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
 
   const myLogin = (session.login || "").toLowerCase();
 
-  const load = useCallback(async () => {
+  const load = async () => {
     setLoading(true);
     try {
       const [u, p] = await Promise.all([odoo.getActiveUsers(session), loadUserPermissions()]);
@@ -60,8 +60,11 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
       setPerms(p);
     } catch (e: any) { onToast("Erreur chargement : " + (e?.message ?? e), "error"); }
     setLoading(false);
-  }, [session, onToast]);
-  useEffect(() => { load(); }, [load]);
+  };
+  // Chargement UNE SEULE FOIS au montage (sinon un re-render du parent rechargerait
+  // les droits depuis Supabase et écraserait les cases en cours d'édition).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, []);
 
   // Outils autorisés pour l'utilisateur sélectionné (par défaut : aucun = config vide).
   const current = selected ? (perms[selected] ?? []) : [];
