@@ -1258,13 +1258,17 @@ export default function Page() {
   const [coPrep, setCoPrep] = useState<{ id: string; role: "start" | "end" } | null>(null);
   // Droits d'accès de l'utilisateur courant : null = pas encore chargé / non configuré (défaut).
   const [myTools, setMyTools] = useState<string[] | null>(null);
-  // Charge les droits de l'utilisateur depuis Supabase à la connexion.
+  // Charge les droits de l'utilisateur depuis Supabase à la connexion (UNE fois par login).
+  const permLoadedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!session?.login) { setMyTools(null); return; }
-    if (odoo.isAdmin(session)) { setMyTools(null); return; } // admin = tout, pas de filtrage
+    const login = session?.login || null;
+    if (!login) { permLoadedFor.current = null; return; }
+    if (permLoadedFor.current === login) return; // déjà chargé pour ce login → on ne refait rien
+    permLoadedFor.current = login;
+    if (odoo.isAdmin(session!)) { setMyTools(null); return; } // admin = tout, pas de filtrage
     let stop = false;
-    sbase.loadUserPermission(session.login)
-      .then(tools => { if (!stop) setMyTools(tools); }) // null si non configuré → défaut
+    sbase.loadUserPermission(login)
+      .then(tools => { if (!stop) setMyTools(tools); })
       .catch(() => { if (!stop) setMyTools(null); });
     return () => { stop = true; };
   }, [session?.login]);
