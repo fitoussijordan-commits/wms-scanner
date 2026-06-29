@@ -222,8 +222,12 @@ export async function loadScanSessions(): Promise<WmsScanSession[]> {
     .order("created_at", { ascending: false })
     .limit(50);
   if (error) throw new Error(error.message);
-  // Exclure les prépas libres (nom préfixé "PREP::") qui partagent la même table.
-  return (data || []).filter((d: any) => !String(d.name || "").startsWith("PREP::")) as WmsScanSession[];
+  // Exclure les entrées qui partagent la même table mais ne sont pas des sessions de scan :
+  // prépas libres ("PREP::") et prépas collaboratives ("COPREP::").
+  return (data || []).filter((d: any) => {
+    const n = String(d.name || "");
+    return !n.startsWith("PREP::") && !n.startsWith("COPREP::");
+  }) as WmsScanSession[];
 }
 
 export async function createScanSession(name: string): Promise<WmsScanSession> {
