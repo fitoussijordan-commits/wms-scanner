@@ -9,6 +9,76 @@ export function isAdmin(session: OdooSession): boolean {
   return ADMIN_LOGINS.includes(session.login?.toLowerCase());
 }
 
+// ── Recherche des VENTES (livraisons OUT) d'un produit pour un client ──
+// Renvoie une ligne par livraison validée (done) : date, n° OUT, commande, qté, lots.
+export interface ClientProductSale {
+  pickingId: number;
+  pickingName: string;   // WH/OUT/...
+  date: string;          // date_done
+  orderName: string;     // S0xxxx (origin)
+  orderId: number | null;// id sale.order (pour le lien)
+  qty: number;           // qté livrée
+  lots: string[];        // lots du produit livrés
+}
+export async function searchClientProductSales(
+  session: OdooSession, clientQuery: string, productQuery: string
+): Promise<{ partner: string; product: string; sales: ClientProductSale[] }> {
+  const cq = clientQuery.trim(), pq = productQuery.trim();
+  if (!cq || !pq) return { partner: "", product: "", sales: [] };
+
+  // 1. Partenaire(s) correspondant au nom (on prend tous les matches).
+  const partners = await searchRead(session, "res.partner",
+    ["|", ["name", "ilike", cq], ["ref", "=", cq]], ["id", "name"], 20);
+  if (!partners.length) return { partner: "", product: "", sales: [] };
+  const partnerIds = partners.map((p: any) => p.id);
+
+  // 2. Produit(s) par réf, code-barres ou nom.
+  const prods = await searchRead(session, "product.product",
+    ["|", "|", ["default_code", "=", pq], ["barcode", "=", pq], ["name", "ilike", pq],
+    ], ["id", "name", "default_code"], 10);
+  if (!prods.length) return { partner: partners[0].name, product: "", sales: [] };
+  const productIds = prods.map((p: any) => p.id);
+
+  // 3. Livraisons sortantes VALIDÉES de ces clients (OUT done).
+  const picks = await searchRead(session, "stock.picking",
+    [["partner_id", "in", partnerIds], ["picking_type_code", "=", "outgoing"], ["state", "=", "done"]],
+    ["id", "name", "date_done", "origin", "sale_id"], 1000, "date_done desc");
+  if (!picks.length) return { partner: partners[0].name, product: prods[0].name, sales: [] };
+  const pickById: Record<number, any> = {};
+  for (const p of picks) pickById[p.id] = p;
+
+  // 4. Lignes de mouvement de CE produit dans ces livraisons (qté faite > 0).
+  const mls = await searchRead(session, "stock.move.line",
+    [["picking_id", "in", picks.map((p: any) => p.id)], ["product_id", "in", productIds], ["qty_done", ">", 0]],
+    ["picking_id", "qty_done", "lot_id"], 5000);
+
+  // 5. Agrégation par livraison : qté totale + lots.
+  const byPick: Record<number, { qty: number; lots: Set<string> }> = {};
+  for (const ml of mls) {
+    const pid = Array.isArray(ml.picking_id) ? ml.picking_id[0] : ml.picking_id;
+    if (!pid) continue;
+    if (!byPick[pid]) byPick[pid] = { qty: 0, lots: new Set() };
+    byPick[pid].qty += ml.qty_done || 0;
+    if (ml.lot_id) byPick[pid].lots.add(Array.isArray(ml.lot_id) ? ml.lot_id[1] : String(ml.lot_id));
+  }
+
+  const sales: ClientProductSale[] = Object.entries(byPick).map(([pidStr, agg]) => {
+    const pid = Number(pidStr);
+    const p = pickById[pid];
+    return {
+      pickingId: pid,
+      pickingName: p?.name || String(pid),
+      date: p?.date_done || "",
+      orderName: p?.origin || (Array.isArray(p?.sale_id) ? p.sale_id[1] : ""),
+      orderId: Array.isArray(p?.sale_id) ? p.sale_id[0] : null,
+      qty: Math.round(agg.qty * 100) / 100,
+      lots: Array.from(agg.lots),
+    };
+  }).sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  return { partner: partners[0].name, product: prods[0].name, sales };
+}
+
 // Liste des utilisateurs actifs Odoo (pour le panneau Administration des droits).
 export async function getActiveUsers(session: OdooSession): Promise<{ id: number; name: string; login: string }[]> {
   const users = await searchRead(session, "res.users",

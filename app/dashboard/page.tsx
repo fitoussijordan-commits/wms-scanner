@@ -291,6 +291,7 @@ const TABS = [
   { key: "transporteurs", label: "Analyse transporteurs", icon: I.truck },
   { key: "bmv", label: "Analyse BMV", icon: I.truck },
   { key: "reception", label: "Réception", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg> },
+  { key: "ventes-client", label: "Ventes client/produit", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> },
 ] as const;
 
 // ─── CATALOGUE — définition des colonnes disponibles ────────────────────────
@@ -461,6 +462,18 @@ export default function Dashboard() {
   const [tab, setTab] = useState<string>("stock-monitor");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // ── Ventes client/produit ──
+  const [vcClient, setVcClient] = useState("");
+  const [vcProduct, setVcProduct] = useState("");
+  const [vcLoading, setVcLoading] = useState(false);
+  const [vcResult, setVcResult] = useState<{ partner: string; product: string; sales: odoo.ClientProductSale[] } | null>(null);
+  const vcSearch = async () => {
+    if (!session || !vcClient.trim() || !vcProduct.trim()) return;
+    setVcLoading(true); setVcResult(null);
+    try { setVcResult(await odoo.searchClientProductSales(session, vcClient, vcProduct)); }
+    catch (e: any) { setError("Recherche ventes : " + (e?.message ?? e)); }
+    setVcLoading(false);
+  };
 
   // ─── Réception fournisseur ───────────────────────────────────────────────
   interface RecepRow { odooRef: string; supplierRef: string; productName: string; qty: number; lot: string; pickingName: string; date: string; }
@@ -5802,6 +5815,73 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ══════════════════ VENTES CLIENT / PRODUIT (OUT) ══════════════════ */}
+        {tab === "ventes-client" && (
+          <div style={{ maxWidth: 980, margin: "0 auto" }}>
+            <div style={{ padding: "20px 0 12px" }}>
+              <div style={{ fontWeight: 800, fontSize: 16, color: "var(--text-primary)" }}>Ventes client / produit</div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Toutes les livraisons validées (OUT) d&apos;un produit pour un client, avec les lots et le lien vers la commande.</div>
+            </div>
+
+            <form onSubmit={e => { e.preventDefault(); vcSearch(); }} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+              <input value={vcClient} onChange={e => setVcClient(e.target.value)} placeholder="Nom du client…"
+                style={{ flex: "1 1 220px", padding: "10px 14px", border: "1.5px solid var(--border)", borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)" }} />
+              <input value={vcProduct} onChange={e => setVcProduct(e.target.value)} placeholder="Réf, EAN ou nom du produit…"
+                style={{ flex: "1 1 220px", padding: "10px 14px", border: "1.5px solid var(--border)", borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: "var(--bg-input)", color: "var(--text-primary)" }} />
+              <button type="submit" disabled={vcLoading || !vcClient.trim() || !vcProduct.trim()}
+                style={{ padding: "10px 22px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: vcLoading || !vcClient.trim() || !vcProduct.trim() ? "not-allowed" : "pointer", opacity: vcLoading || !vcClient.trim() || !vcProduct.trim() ? 0.5 : 1, fontFamily: "inherit" }}>
+                {vcLoading ? "Recherche…" : "Rechercher"}
+              </button>
+            </form>
+
+            {vcResult && (
+              <>
+                <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 10 }}>
+                  {vcResult.sales.length === 0
+                    ? <span>Aucune livraison trouvée pour <strong>{vcResult.product || vcProduct}</strong> chez <strong>{vcResult.partner || vcClient}</strong>.</span>
+                    : <span><strong>{vcResult.sales.length}</strong> livraison(s) · Client : <strong>{vcResult.partner}</strong> · Produit : <strong>{vcResult.product}</strong> · Total livré : <strong>{vcResult.sales.reduce((s, r) => s + r.qty, 0)}</strong> u.</span>}
+                </div>
+                {vcResult.sales.length > 0 && (
+                  <div style={{ overflowX: "auto", border: "1px solid var(--border)", borderRadius: 12 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ background: "var(--bg-raised)", textAlign: "left" }}>
+                          <th style={{ padding: "10px 12px", fontWeight: 700, color: "var(--text-muted)" }}>Date</th>
+                          <th style={{ padding: "10px 12px", fontWeight: 700, color: "var(--text-muted)" }}>Livraison</th>
+                          <th style={{ padding: "10px 12px", fontWeight: 700, color: "var(--text-muted)" }}>Commande</th>
+                          <th style={{ padding: "10px 12px", fontWeight: 700, color: "var(--text-muted)", textAlign: "right" }}>Qté</th>
+                          <th style={{ padding: "10px 12px", fontWeight: 700, color: "var(--text-muted)" }}>Lots</th>
+                          <th style={{ padding: "10px 12px" }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {vcResult.sales.map((s, i) => {
+                          const odooBase = (session?.config.url || "").replace(/\/$/, "");
+                          const orderLink = s.orderId ? `${odooBase}/web#id=${s.orderId}&model=sale.order&view_type=form` : null;
+                          return (
+                            <tr key={s.pickingId} style={{ borderTop: "1px solid var(--border)", background: i % 2 ? "var(--bg-raised)" : "transparent" }}>
+                              <td style={{ padding: "9px 12px", color: "var(--text-primary)", whiteSpace: "nowrap" }}>{s.date ? s.date.slice(0, 10) : "—"}</td>
+                              <td style={{ padding: "9px 12px", fontFamily: "monospace", color: "var(--text-secondary)" }}>{s.pickingName}</td>
+                              <td style={{ padding: "9px 12px", color: "var(--text-primary)" }}>{s.orderName || "—"}</td>
+                              <td style={{ padding: "9px 12px", textAlign: "right", fontWeight: 700, color: "var(--text-primary)" }}>{s.qty}</td>
+                              <td style={{ padding: "9px 12px", color: "var(--text-secondary)", fontSize: 12 }}>{s.lots.length ? s.lots.join(", ") : "—"}</td>
+                              <td style={{ padding: "9px 12px", textAlign: "right" }}>
+                                {orderLink
+                                  ? <a href={orderLink} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>Ouvrir ↗</a>
+                                  : <span style={{ color: "var(--text-muted)" }}>—</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </main>
