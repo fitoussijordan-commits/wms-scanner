@@ -516,6 +516,26 @@ export default function Dashboard() {
   const [recProdHits, setRecProdHits] = useState<RecProdHit[]>([]);
   const [recProdLoading, setRecProdLoading] = useState(false);
   const [recProdSearched, setRecProdSearched] = useState(false);
+  const [recLotSearch, setRecLotSearch] = useState("");
+  const [recSearchCollapsed, setRecSearchCollapsed] = useState(false);
+  const [recVendorOpen, setRecVendorOpen] = useState(false);
+  const [recVendorFilter, setRecVendorFilter] = useState("");
+  // Favoris fournisseurs (localStorage, propre à ce navigateur)
+  const [recFavs, setRecFavs] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("wms_rec_fav_vendors");
+      if (raw) setRecFavs(new Set(JSON.parse(raw)));
+    } catch {}
+  }, []);
+  const toggleRecFav = useCallback((id: number) => {
+    setRecFavs(prev => {
+      const s = new Set(prev);
+      s.has(id) ? s.delete(id) : s.add(id);
+      try { localStorage.setItem("wms_rec_fav_vendors", JSON.stringify(Array.from(s))); } catch {}
+      return s;
+    });
+  }, []);
 
   // ─── Étiquette Sendcloud (saisie libre) ───────────────────────────────────
   const [etqText, setEtqText] = useState("");
@@ -2444,13 +2464,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         if (Array.isArray(p.partner_id) && p.partner_id[0]) byId[p.partner_id[0]] = p.partner_id[1];
       }
       const vendors = Object.entries(byId).map(([id, name]) => ({ id: Number(id), name }))
-        .sort((a, b) => {
-          // Favori : WALA toujours en tête
-          const aFav = /wala/i.test(a.name), bFav = /wala/i.test(b.name);
-          if (aFav && !bFav) return -1;
-          if (bFav && !aFav) return 1;
-          return a.name.localeCompare(b.name);
-        });
+        .sort((a, b) => a.name.localeCompare(b.name));
       setRecVendors(vendors);
     } catch (e: any) { setError(e.message); } finally { setRecVendorsLoading(false); }
   }, [session]);
@@ -2565,43 +2579,53 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
 
   // ── Réception : recherche un produit → toutes les réceptions (done) le contenant ──
   const searchRecByProduct = useCallback(async () => {
-    if (!session || !recProdSearch.trim()) return;
+    const prodQ = recProdSearch.trim();
+    const lotQ = recLotSearch.trim();
+    if (!session || (!prodQ && !lotQ)) return;
     setRecProdLoading(true); setError(""); setRecProdHits([]); setRecProdSearched(true);
     try {
-      const q = recProdSearch.trim();
-      // 1. Trouver les produits correspondants : réf interne, code-barres, nom, ou réf fournisseur (supplierinfo)
-      const [byProd, bySupplier] = await Promise.all([
-        odoo.searchRead(session, "product.product",
-          ["|", "|", ["default_code", "ilike", q], ["barcode", "ilike", q], ["name", "ilike", q]],
-          ["id", "product_tmpl_id"], 200),
-        odoo.searchRead(session, "product.supplierinfo",
-          [["product_code", "ilike", q]], ["product_id", "product_tmpl_id"], 200),
-      ]);
-      const prodIds = new Set<number>();
-      for (const p of byProd) prodIds.add(p.id);
-      // supplierinfo peut pointer produit OU template → résoudre les templates en variantes
-      const tmplIds = new Set<number>();
-      for (const si of bySupplier) {
-        if (Array.isArray(si.product_id) && si.product_id[0]) prodIds.add(si.product_id[0]);
-        else if (Array.isArray(si.product_tmpl_id) && si.product_tmpl_id[0]) tmplIds.add(si.product_tmpl_id[0]);
-      }
-      if (tmplIds.size) {
-        const variants = await odoo.searchRead(session, "product.product",
-          [["product_tmpl_id", "in", Array.from(tmplIds)]], ["id"], 500);
-        for (const v of variants) prodIds.add(v.id);
-      }
-      if (!prodIds.size) { setRecProdHits([]); setRecProdLoading(false); return; }
-
-      // 2. Types de transfert entrants
+      // 1. Types de transfert entrants
       const inTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "incoming"]], ["id"], 50);
       const inTypeIds = inTypes.map((t: any) => t.id);
 
-      // 3. Lignes reçues (done) pour ces produits, dans des réceptions entrantes
-      const mls = await odoo.searchRead(session, "stock.move.line", [
-        ["product_id", "in", Array.from(prodIds)],
+      // Domaine sur les lignes de mouvement : par produit et/ou par lot
+      const mlDomain: any[] = [
         ["state", "=", "done"],
         ["picking_id.picking_type_id", "in", inTypeIds],
-      ], ["qty_done", "picking_id"], 20000);
+      ];
+
+      if (prodQ) {
+        // Trouver les produits correspondants : réf interne, code-barres, nom, ou réf fournisseur
+        const [byProd, bySupplier] = await Promise.all([
+          odoo.searchRead(session, "product.product",
+            ["|", "|", ["default_code", "ilike", prodQ], ["barcode", "ilike", prodQ], ["name", "ilike", prodQ]],
+            ["id", "product_tmpl_id"], 200),
+          odoo.searchRead(session, "product.supplierinfo",
+            [["product_code", "ilike", prodQ]], ["product_id", "product_tmpl_id"], 200),
+        ]);
+        const prodIds = new Set<number>();
+        for (const p of byProd) prodIds.add(p.id);
+        const tmplIds = new Set<number>();
+        for (const si of bySupplier) {
+          if (Array.isArray(si.product_id) && si.product_id[0]) prodIds.add(si.product_id[0]);
+          else if (Array.isArray(si.product_tmpl_id) && si.product_tmpl_id[0]) tmplIds.add(si.product_tmpl_id[0]);
+        }
+        if (tmplIds.size) {
+          const variants = await odoo.searchRead(session, "product.product",
+            [["product_tmpl_id", "in", Array.from(tmplIds)]], ["id"], 500);
+          for (const v of variants) prodIds.add(v.id);
+        }
+        if (!prodIds.size) { setRecProdHits([]); setRecProdLoading(false); return; }
+        mlDomain.push(["product_id", "in", Array.from(prodIds)]);
+      }
+
+      if (lotQ) {
+        // Filtre par numéro de lot (lot_id.name ou lot_name libre)
+        mlDomain.unshift("|", ["lot_id.name", "ilike", lotQ], ["lot_name", "ilike", lotQ]);
+      }
+
+      // 3. Lignes reçues (done) correspondant au domaine
+      const mls = await odoo.searchRead(session, "stock.move.line", mlDomain, ["qty_done", "picking_id"], 20000);
       if (!mls.length) { setRecProdHits([]); setRecProdLoading(false); return; }
 
       // 4. Regrouper par réception + cumuler la qté
@@ -2628,7 +2652,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       hits.sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.pickingId - a.pickingId);
       setRecProdHits(hits);
     } catch (e: any) { setError(e.message); } finally { setRecProdLoading(false); }
-  }, [session, recProdSearch]);
+  }, [session, recProdSearch, recLotSearch]);
 
   // ── Réception : ouvrir une réception depuis un résultat de recherche produit ──
   const openRecFromHit = useCallback((hit: RecProdHit) => {
@@ -2636,6 +2660,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
     setRecPickings([{ id: hit.pickingId, name: hit.pickingName, date: hit.date }]);
     setRecPickingId(hit.pickingId);
     setRecRows([]);
+    setRecSearchCollapsed(true); // masque le bloc recherche, n'affiche que la réception
     // charge le détail directement (passe l'id/vendor pour éviter le lag d'état React)
     loadReceptions(hit.pickingId, hit.vendorId);
   }, [loadReceptions]);
@@ -5882,25 +5907,58 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                 <p style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>Réceptions terminées (Fait) par fournisseur — réf Odoo, réf fournisseur, qté reçue et lot.</p>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                {/* Liste 1 : fournisseur → charge les réceptions */}
-                <select
-                  value={recVendorId ?? ""}
-                  onChange={(e) => { const v = e.target.value ? Number(e.target.value) : null; setRecVendorId(v); setRecPickings([]); setRecPickingId(null); setRecRows([]); }}
-                  style={{ minWidth: 220, padding: "8px 12px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }}
-                  disabled={recVendorsLoading}
-                >
-                  <option value="">{recVendorsLoading ? "Chargement…" : "— Fournisseur —"}</option>
-                  {recVendors.map((v, i) => {
-                    const fav = /wala/i.test(v.name);
-                    const prevFav = i > 0 && /wala/i.test(recVendors[i - 1].name);
-                    return (
-                      <Fragment key={v.id}>
-                        {!fav && prevFav && <option disabled>──────────</option>}
-                        <option value={v.id}>{fav ? `⭐ ${v.name}` : v.name}</option>
-                      </Fragment>
-                    );
-                  })}
-                </select>
+                {/* Liste 1 : fournisseur (dropdown custom avec favoris cliquables) */}
+                {(() => {
+                  const selected = recVendors.find(v => v.id === recVendorId);
+                  // Favoris en tête, puis alphabétique ; filtré par la saisie
+                  const filtered = recVendors
+                    .filter(v => !recVendorFilter || v.name.toLowerCase().includes(recVendorFilter.toLowerCase()))
+                    .sort((a, b) => {
+                      const af = recFavs.has(a.id), bf = recFavs.has(b.id);
+                      if (af && !bf) return -1;
+                      if (bf && !af) return 1;
+                      return a.name.localeCompare(b.name);
+                    });
+                  return (
+                    <div style={{ position: "relative", minWidth: 240 }}>
+                      <button
+                        onClick={() => setRecVendorOpen(o => !o)}
+                        disabled={recVendorsLoading}
+                        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 12px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: selected ? "var(--text-primary)" : "var(--text-muted)", cursor: "pointer", fontFamily: "inherit" }}>
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {recVendorsLoading ? "Chargement…" : selected ? `${recFavs.has(selected.id) ? "⭐ " : ""}${selected.name}` : "— Fournisseur —"}
+                        </span>
+                        <span style={{ flexShrink: 0, color: "var(--text-muted)" }}>▾</span>
+                      </button>
+                      {recVendorOpen && (
+                        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 50, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.12)", maxHeight: 360, overflow: "auto" }}>
+                          <div style={{ position: "sticky", top: 0, background: "var(--bg-raised)", padding: 8, borderBottom: "1px solid var(--border)" }}>
+                            <input autoFocus value={recVendorFilter} onChange={e => setRecVendorFilter(e.target.value)} placeholder="Filtrer…"
+                              style={{ width: "100%", padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+                          </div>
+                          {filtered.map((v, i) => {
+                            const isFav = recFavs.has(v.id);
+                            const prevFav = i > 0 && recFavs.has(filtered[i - 1].id);
+                            return (
+                              <Fragment key={v.id}>
+                                {!isFav && prevFav && <div style={{ borderTop: "1px solid var(--border)" }} />}
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", background: v.id === recVendorId ? "var(--accent-soft)" : "transparent", cursor: "pointer" }}
+                                  onClick={() => { setRecVendorId(v.id); setRecPickings([]); setRecPickingId(null); setRecRows([]); setRecVendorOpen(false); setRecVendorFilter(""); }}>
+                                  <button onClick={(e) => { e.stopPropagation(); toggleRecFav(v.id); }} title={isFav ? "Retirer des favoris" : "Épingler en favori"}
+                                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0, color: isFav ? "#f59e0b" : "#cbd5e1" }}>
+                                    {isFav ? "★" : "☆"}
+                                  </button>
+                                  <span style={{ fontSize: 13, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.name}</span>
+                                </div>
+                              </Fragment>
+                            );
+                          })}
+                          {!filtered.length && <div style={{ padding: "10px", fontSize: 12, color: "var(--text-muted)" }}>Aucun fournisseur</div>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 <button className="wms-btn" onClick={loadRecPickings} disabled={!recVendorId || recPickingsLoading}>
                   {recPickingsLoading ? <Spinner /> : I.refresh} Charger
                 </button>
@@ -5923,47 +5981,60 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
               </div>
             </div>
 
-            {/* Recherche par produit → réceptions contenant ce produit */}
-            <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 14, padding: 16, marginBottom: 20 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>🔎 Rechercher un produit</div>
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>Trouve toutes les réceptions contenant ce produit (réf Odoo, réf fournisseur, code-barres ou nom). Cliquez sur une réception pour l'ouvrir.</div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <input
-                  value={recProdSearch}
-                  onChange={(e) => setRecProdSearch(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") searchRecByProduct(); }}
-                  placeholder="Réf, code-barres ou nom du produit…"
-                  style={{ flex: 1, minWidth: 260, padding: "8px 12px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }}
-                />
-                <button className="wms-btn wms-btn-primary" onClick={searchRecByProduct} disabled={!recProdSearch.trim() || recProdLoading}>
-                  {recProdLoading ? <Spinner /> : I.refresh} Rechercher
-                </button>
-                {(recProdHits.length > 0 || recProdSearched) && (
-                  <button className="wms-btn" onClick={() => { setRecProdSearch(""); setRecProdHits([]); setRecProdSearched(false); }}>Effacer</button>
+            {/* Recherche par produit / lot → réceptions correspondantes */}
+            {recSearchCollapsed ? (
+              <div style={{ marginBottom: 16 }}>
+                <button className="wms-btn" onClick={() => setRecSearchCollapsed(false)}>← Revenir à la recherche</button>
+              </div>
+            ) : (
+              <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 14, padding: 16, marginBottom: 20 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>🔎 Rechercher</div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>Par produit (réf Odoo, réf fournisseur, code-barres ou nom) et/ou par numéro de lot. Cliquez sur une réception pour l'ouvrir.</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    value={recProdSearch}
+                    onChange={(e) => setRecProdSearch(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") searchRecByProduct(); }}
+                    placeholder="Produit : réf, code-barres ou nom…"
+                    style={{ flex: 1, minWidth: 240, padding: "8px 12px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }}
+                  />
+                  <input
+                    value={recLotSearch}
+                    onChange={(e) => setRecLotSearch(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") searchRecByProduct(); }}
+                    placeholder="N° de lot…"
+                    style={{ width: 180, padding: "8px 12px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }}
+                  />
+                  <button className="wms-btn wms-btn-primary" onClick={searchRecByProduct} disabled={(!recProdSearch.trim() && !recLotSearch.trim()) || recProdLoading}>
+                    {recProdLoading ? <Spinner /> : I.refresh} Rechercher
+                  </button>
+                  {(recProdHits.length > 0 || recProdSearched) && (
+                    <button className="wms-btn" onClick={() => { setRecProdSearch(""); setRecLotSearch(""); setRecProdHits([]); setRecProdSearched(false); }}>Effacer</button>
+                  )}
+                </div>
+                {recProdSearched && !recProdLoading && (
+                  recProdHits.length > 0 ? (
+                    <div style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)", padding: "6px 12px", background: "var(--bg-subtle, #f8fafc)", borderBottom: "1px solid var(--border)" }}>
+                        {recProdHits.length} réception{recProdHits.length > 1 ? "s" : ""} trouvée{recProdHits.length > 1 ? "s" : ""} — cliquez pour ouvrir
+                      </div>
+                      {recProdHits.map((h) => (
+                        <button key={h.pickingId} onClick={() => openRecFromHit(h)}
+                          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", gap: 12, padding: "10px 12px", background: recPickingId === h.pickingId ? "var(--accent-soft)" : "transparent", border: "none", borderBottom: "1px solid var(--border)", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--accent)", fontFamily: "monospace" }}>{h.pickingName}</span>
+                            <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{h.vendorName || "—"}{h.date ? ` · ${h.date}` : ""}</span>
+                          </div>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a", whiteSpace: "nowrap" }}>{h.qty.toLocaleString("fr-FR")} reçus →</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 12, fontSize: 13, color: "var(--text-muted)" }}>Aucune réception trouvée.</div>
+                  )
                 )}
               </div>
-              {recProdSearched && !recProdLoading && (
-                recProdHits.length > 0 ? (
-                  <div style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-                    <div style={{ fontSize: 12, color: "var(--text-muted)", padding: "6px 12px", background: "var(--bg-subtle, #f8fafc)", borderBottom: "1px solid var(--border)" }}>
-                      {recProdHits.length} réception{recProdHits.length > 1 ? "s" : ""} trouvée{recProdHits.length > 1 ? "s" : ""}
-                    </div>
-                    {recProdHits.map((h) => (
-                      <button key={h.pickingId} onClick={() => openRecFromHit(h)}
-                        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", gap: 12, padding: "10px 12px", background: recPickingId === h.pickingId ? "var(--accent-soft)" : "transparent", border: "none", borderBottom: "1px solid var(--border)", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--accent)", fontFamily: "monospace" }}>{h.pickingName}</span>
-                          <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{h.vendorName || "—"}{h.date ? ` · ${h.date}` : ""}</span>
-                        </div>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a", whiteSpace: "nowrap" }}>{h.qty.toLocaleString("fr-FR")} reçus →</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div style={{ marginTop: 12, fontSize: 13, color: "var(--text-muted)" }}>Aucune réception trouvée pour « {recProdSearch} ».</div>
-                )
-              )}
-            </div>
+            )}
 
             {/* Résumé */}
             {recRows.length > 0 && (
