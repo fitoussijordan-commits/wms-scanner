@@ -1603,6 +1603,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
     { id: "poids", label: "Poids (kg)", key: "poids" },
     { id: "dimensions", label: "Dimensions (L×l×h cm)", key: "dimensions" },
     { id: "ref_fournisseur", label: "Référence fournisseur", key: "ref_fournisseur" },
+    { id: "conso_periode", label: "Consommation (période)", key: "conso_periode" },
     { id: "lots_en_stock", label: "Lots en stock", key: "lots_en_stock" },
     { id: "lot_expiry", label: "Date d'expiration (lot)", key: "lot_expiry" },
     { id: "so_client", label: "Client (commande)", key: "so_client" },
@@ -1617,6 +1618,11 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   const [libreRows, setLibreRows] = useState<Record<string, any>[]>([]);
   const [libreLoading, setLibreLoading] = useState(false);
   const [libreAnalyzed, setLibreAnalyzed] = useState(false);
+  // Bornage de dates pour la colonne "Consommation (période)"
+  const _todayISO = new Date().toISOString().slice(0, 10);
+  const _monthAgoISO = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  const [libreConsoFrom, setLibreConsoFrom] = useState(_monthAgoISO);
+  const [libreConsoTo, setLibreConsoTo] = useState(_todayISO);
 
   // ── Catalogue ──────────────────────────────────────────────────────────────
   const [catQuery, setCatQuery]           = useState("");
@@ -2810,6 +2816,21 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                   [["product_tmpl_id","=",p.product_tmpl_id[0]]], ["product_code","partner_id"], 1);
                 row["ref_fournisseur"] = suppliersT[0]?.product_code || "";
               }
+              if (libreCols.some(c => c.key === "conso_periode")) {
+                // Consommation = somme des sorties vers un emplacement client sur la période bornée
+                const custLocs = await odoo.searchRead(session, "stock.location",
+                  [["usage", "=", "customer"]], ["id"], 100);
+                const custLocIds = custLocs.map((l: any) => l.id);
+                const consoLines = await odoo.searchRead(session, "stock.move.line", [
+                  ["state", "=", "done"],
+                  ["product_id", "=", p.id],
+                  ["location_dest_id", "in", custLocIds],
+                  ["date", ">=", libreConsoFrom + " 00:00:00"],
+                  ["date", "<=", libreConsoTo + " 23:59:59"],
+                ], ["qty_done"], 20000);
+                const consoTotal = consoLines.reduce((s: number, l: any) => s + (l.qty_done || 0), 0);
+                row["conso_periode"] = Math.round(consoTotal);
+              }
               if (libreCols.some(c => c.key === "stock_dispo" || c.key === "stock_total" || c.key === "lots_en_stock")) {
                 const quants = await odoo.searchRead(session, "stock.quant",
                   [["product_id","=",p.id],["location_id.usage","=","internal"]],
@@ -2881,7 +2902,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
     }
     setLibreRows(rows);
     setLibreLoading(false);
-  }, [session, libreRefs, libreCols]);
+  }, [session, libreRefs, libreCols, libreConsoFrom, libreConsoTo]);
 
   const exportLibreExcel = useCallback(() => {
     if (libreRows.length === 0) return;
@@ -4797,6 +4818,21 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                     ))}
                   </select>
                 </div>
+                {libreCols.some(c => c.key === "conso_periode") && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>Période de consommation :</span>
+                    <label style={{ fontSize: 12, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
+                      Du
+                      <input type="date" value={libreConsoFrom} max={libreConsoTo} onChange={e => setLibreConsoFrom(e.target.value)}
+                        style={{ padding: "5px 8px", borderRadius: 8, border: "1.5px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-primary)", fontSize: 12, fontFamily: "inherit" }} />
+                    </label>
+                    <label style={{ fontSize: 12, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
+                      au
+                      <input type="date" value={libreConsoTo} min={libreConsoFrom} onChange={e => setLibreConsoTo(e.target.value)}
+                        style={{ padding: "5px 8px", borderRadius: 8, border: "1.5px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-primary)", fontSize: 12, fontFamily: "inherit" }} />
+                    </label>
+                  </div>
+                )}
                 <button className="wms-btn wms-btn-primary" onClick={generateLibreTable} disabled={libreLoading || libreCols.length === 0}
                   style={{ opacity: libreCols.length === 0 ? .5 : 1 }}>
                   {libreLoading ? <><Spinner size={14} /> Chargement...</> : "⚡ Générer le tableau"}
