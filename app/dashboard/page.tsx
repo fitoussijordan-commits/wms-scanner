@@ -1618,6 +1618,8 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   const [libreRows, setLibreRows] = useState<Record<string, any>[]>([]);
   const [libreLoading, setLibreLoading] = useState(false);
   const [libreAnalyzed, setLibreAnalyzed] = useState(false);
+  const [libreDragIdx, setLibreDragIdx] = useState<number | null>(null);
+  const [libreDragOverIdx, setLibreDragOverIdx] = useState<number | null>(null);
   // Bornage de dates pour la colonne "Consommation (période)"
   const _todayISO = new Date().toISOString().slice(0, 10);
   const _monthAgoISO = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
@@ -4799,9 +4801,27 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                 <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 12 }}>3 · Colonnes à récupérer</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
                   {libreCols.map((col, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, background: "var(--accent-soft)", border: "1.5px solid var(--accent)" }}>
+                    <div key={col.id}
+                      draggable
+                      onDragStart={() => setLibreDragIdx(i)}
+                      onDragOver={e => { e.preventDefault(); if (libreDragOverIdx !== i) setLibreDragOverIdx(i); }}
+                      onDragEnd={() => { setLibreDragIdx(null); setLibreDragOverIdx(null); }}
+                      onDrop={e => {
+                        e.preventDefault();
+                        setLibreCols(prev => {
+                          if (libreDragIdx === null || libreDragIdx === i) return prev;
+                          const n = [...prev];
+                          const [moved] = n.splice(libreDragIdx, 1);
+                          n.splice(i, 0, moved);
+                          return n;
+                        });
+                        setLibreDragIdx(null); setLibreDragOverIdx(null);
+                      }}
+                      style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 8, background: "var(--accent-soft)", border: "1.5px solid var(--accent)", cursor: "grab", opacity: libreDragIdx === i ? 0.4 : 1, boxShadow: libreDragOverIdx === i && libreDragIdx !== i ? "inset 3px 0 0 var(--accent)" : "none" }}>
+                      <span style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1, cursor: "grab" }}>⠿</span>
                       <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)" }}>{col.label}</span>
                       <button onClick={() => setLibreCols(prev => prev.filter((_, j) => j !== i))}
+                        title="Retirer"
                         style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
                     </div>
                   ))}
