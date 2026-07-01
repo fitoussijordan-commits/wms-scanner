@@ -509,6 +509,12 @@ export default function Dashboard() {
   const [recLoading, setRecLoading] = useState(false);
   const [recPickingsLoading, setRecPickingsLoading] = useState(false);
   const [recVendorsLoading, setRecVendorsLoading] = useState(false);
+  // ── Réception : recherche par produit ──
+  interface RecProdHit { pickingId: number; pickingName: string; date: string; vendorId: number | null; vendorName: string; qty: number; }
+  const [recProdSearch, setRecProdSearch] = useState("");
+  const [recProdHits, setRecProdHits] = useState<RecProdHit[]>([]);
+  const [recProdLoading, setRecProdLoading] = useState(false);
+  const [recProdSearched, setRecProdSearched] = useState(false);
 
   // ─── Analyse transporteurs ───────────────────────────────────────────────
   interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; options?: number; total: number; coutReel?: number; mois?: string }
@@ -2420,7 +2426,13 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         if (Array.isArray(p.partner_id) && p.partner_id[0]) byId[p.partner_id[0]] = p.partner_id[1];
       }
       const vendors = Object.entries(byId).map(([id, name]) => ({ id: Number(id), name }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .sort((a, b) => {
+          // Favori : WALA toujours en tête
+          const aFav = /wala/i.test(a.name), bFav = /wala/i.test(b.name);
+          if (aFav && !bFav) return -1;
+          if (bFav && !aFav) return 1;
+          return a.name.localeCompare(b.name);
+        });
       setRecVendors(vendors);
     } catch (e: any) { setError(e.message); } finally { setRecVendorsLoading(false); }
   }, [session]);
@@ -2446,13 +2458,15 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   }, [session, recVendorId]);
 
   // ── Réception : charge les lignes reçues pour la réception sélectionnée ──
-  const loadReceptions = useCallback(async () => {
-    if (!session || !recPickingId) return;
+  const loadReceptions = useCallback(async (overridePickingId?: number, overrideVendorId?: number | null) => {
+    const pid = overridePickingId ?? recPickingId;
+    const vid = overrideVendorId !== undefined ? overrideVendorId : recVendorId;
+    if (!session || !pid) return;
     setRecLoading(true); setError(""); setRecRows([]);
     try {
       const pickings = await odoo.searchRead(
         session, "stock.picking",
-        [["id", "=", recPickingId]],
+        [["id", "=", pid]],
         ["id", "name", "date_done", "scheduled_date"], 1
       );
       if (!pickings.length) { setRecRows([]); setRecLoading(false); return; }
@@ -2495,7 +2509,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         try {
           const sis = await odoo.searchRead(
             session, "product.supplierinfo",
-            [["partner_id", "=", recVendorId], ["product_tmpl_id", "in", Array.from(tmplIds)]],
+            [["partner_id", "=", vid], ["product_tmpl_id", "in", Array.from(tmplIds)]],
             ["product_code", "product_tmpl_id", "product_id"], 10000
           );
           for (const si of sis) {
@@ -2530,6 +2544,83 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       setRecRows(rows);
     } catch (e: any) { setError(e.message); } finally { setRecLoading(false); }
   }, [session, recPickingId, recVendorId]);
+
+  // ── Réception : recherche un produit → toutes les réceptions (done) le contenant ──
+  const searchRecByProduct = useCallback(async () => {
+    if (!session || !recProdSearch.trim()) return;
+    setRecProdLoading(true); setError(""); setRecProdHits([]); setRecProdSearched(true);
+    try {
+      const q = recProdSearch.trim();
+      // 1. Trouver les produits correspondants : réf interne, code-barres, nom, ou réf fournisseur (supplierinfo)
+      const [byProd, bySupplier] = await Promise.all([
+        odoo.searchRead(session, "product.product",
+          ["|", "|", ["default_code", "ilike", q], ["barcode", "ilike", q], ["name", "ilike", q]],
+          ["id", "product_tmpl_id"], 200),
+        odoo.searchRead(session, "product.supplierinfo",
+          [["product_code", "ilike", q]], ["product_id", "product_tmpl_id"], 200),
+      ]);
+      const prodIds = new Set<number>();
+      for (const p of byProd) prodIds.add(p.id);
+      // supplierinfo peut pointer produit OU template → résoudre les templates en variantes
+      const tmplIds = new Set<number>();
+      for (const si of bySupplier) {
+        if (Array.isArray(si.product_id) && si.product_id[0]) prodIds.add(si.product_id[0]);
+        else if (Array.isArray(si.product_tmpl_id) && si.product_tmpl_id[0]) tmplIds.add(si.product_tmpl_id[0]);
+      }
+      if (tmplIds.size) {
+        const variants = await odoo.searchRead(session, "product.product",
+          [["product_tmpl_id", "in", Array.from(tmplIds)]], ["id"], 500);
+        for (const v of variants) prodIds.add(v.id);
+      }
+      if (!prodIds.size) { setRecProdHits([]); setRecProdLoading(false); return; }
+
+      // 2. Types de transfert entrants
+      const inTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "incoming"]], ["id"], 50);
+      const inTypeIds = inTypes.map((t: any) => t.id);
+
+      // 3. Lignes reçues (done) pour ces produits, dans des réceptions entrantes
+      const mls = await odoo.searchRead(session, "stock.move.line", [
+        ["product_id", "in", Array.from(prodIds)],
+        ["state", "=", "done"],
+        ["picking_id.picking_type_id", "in", inTypeIds],
+      ], ["qty_done", "picking_id"], 20000);
+      if (!mls.length) { setRecProdHits([]); setRecProdLoading(false); return; }
+
+      // 4. Regrouper par réception + cumuler la qté
+      const byPick: Record<number, { name: string; qty: number }> = {};
+      for (const m of mls) {
+        if (!Array.isArray(m.picking_id)) continue;
+        const pid = m.picking_id[0];
+        if (!byPick[pid]) byPick[pid] = { name: m.picking_id[1], qty: 0 };
+        byPick[pid].qty += m.qty_done || 0;
+      }
+      const pickIds = Object.keys(byPick).map(Number);
+
+      // 5. Détails réceptions (date + fournisseur) pour l'ouverture au clic
+      const picks = await odoo.searchRead(session, "stock.picking",
+        [["id", "in", pickIds]], ["id", "name", "date_done", "scheduled_date", "partner_id"], 5000);
+      const hits: RecProdHit[] = picks.map((p: any) => ({
+        pickingId: p.id,
+        pickingName: p.name,
+        date: (p.date_done || p.scheduled_date || "").substring(0, 10),
+        vendorId: Array.isArray(p.partner_id) ? p.partner_id[0] : null,
+        vendorName: Array.isArray(p.partner_id) ? p.partner_id[1] : "",
+        qty: Math.round(byPick[p.id]?.qty || 0),
+      }));
+      hits.sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.pickingId - a.pickingId);
+      setRecProdHits(hits);
+    } catch (e: any) { setError(e.message); } finally { setRecProdLoading(false); }
+  }, [session, recProdSearch]);
+
+  // ── Réception : ouvrir une réception depuis un résultat de recherche produit ──
+  const openRecFromHit = useCallback((hit: RecProdHit) => {
+    setRecVendorId(hit.vendorId);
+    setRecPickings([{ id: hit.pickingId, name: hit.pickingName, date: hit.date }]);
+    setRecPickingId(hit.pickingId);
+    setRecRows([]);
+    // charge le détail directement (passe l'id/vendor pour éviter le lag d'état React)
+    loadReceptions(hit.pickingId, hit.vendorId);
+  }, [loadReceptions]);
 
   const recExportExcel = async () => {
     if (!recRows.length) return;
@@ -5716,7 +5807,16 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                   disabled={recVendorsLoading}
                 >
                   <option value="">{recVendorsLoading ? "Chargement…" : "— Fournisseur —"}</option>
-                  {recVendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                  {recVendors.map((v, i) => {
+                    const fav = /wala/i.test(v.name);
+                    const prevFav = i > 0 && /wala/i.test(recVendors[i - 1].name);
+                    return (
+                      <Fragment key={v.id}>
+                        {!fav && prevFav && <option disabled>──────────</option>}
+                        <option value={v.id}>{fav ? `⭐ ${v.name}` : v.name}</option>
+                      </Fragment>
+                    );
+                  })}
                 </select>
                 <button className="wms-btn" onClick={loadRecPickings} disabled={!recVendorId || recPickingsLoading}>
                   {recPickingsLoading ? <Spinner /> : I.refresh} Charger
@@ -5731,13 +5831,55 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                   <option value="">{recPickings.length ? `— Réception (${recPickings.length}) —` : "— Réception —"}</option>
                   {recPickings.map(p => <option key={p.id} value={p.id}>{p.name}{p.date ? ` · ${p.date}` : ""}</option>)}
                 </select>
-                <button className="wms-btn wms-btn-primary" onClick={loadReceptions} disabled={!recPickingId || recLoading}>
+                <button className="wms-btn wms-btn-primary" onClick={() => loadReceptions()} disabled={!recPickingId || recLoading}>
                   {recLoading ? <Spinner /> : I.refresh} Afficher
                 </button>
                 <button className="wms-btn" onClick={recExportExcel} disabled={!recRows.length}>
                   Export Excel
                 </button>
               </div>
+            </div>
+
+            {/* Recherche par produit → réceptions contenant ce produit */}
+            <div style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: 14, padding: 16, marginBottom: 20 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>🔎 Rechercher un produit</div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>Trouve toutes les réceptions contenant ce produit (réf Odoo, réf fournisseur, code-barres ou nom). Cliquez sur une réception pour l'ouvrir.</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  value={recProdSearch}
+                  onChange={(e) => setRecProdSearch(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") searchRecByProduct(); }}
+                  placeholder="Réf, code-barres ou nom du produit…"
+                  style={{ flex: 1, minWidth: 260, padding: "8px 12px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }}
+                />
+                <button className="wms-btn wms-btn-primary" onClick={searchRecByProduct} disabled={!recProdSearch.trim() || recProdLoading}>
+                  {recProdLoading ? <Spinner /> : I.refresh} Rechercher
+                </button>
+                {(recProdHits.length > 0 || recProdSearched) && (
+                  <button className="wms-btn" onClick={() => { setRecProdSearch(""); setRecProdHits([]); setRecProdSearched(false); }}>Effacer</button>
+                )}
+              </div>
+              {recProdSearched && !recProdLoading && (
+                recProdHits.length > 0 ? (
+                  <div style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)", padding: "6px 12px", background: "var(--bg-subtle, #f8fafc)", borderBottom: "1px solid var(--border)" }}>
+                      {recProdHits.length} réception{recProdHits.length > 1 ? "s" : ""} trouvée{recProdHits.length > 1 ? "s" : ""}
+                    </div>
+                    {recProdHits.map((h) => (
+                      <button key={h.pickingId} onClick={() => openRecFromHit(h)}
+                        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", gap: 12, padding: "10px 12px", background: recPickingId === h.pickingId ? "var(--accent-soft)" : "transparent", border: "none", borderBottom: "1px solid var(--border)", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--accent)", fontFamily: "monospace" }}>{h.pickingName}</span>
+                          <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{h.vendorName || "—"}{h.date ? ` · ${h.date}` : ""}</span>
+                        </div>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a", whiteSpace: "nowrap" }}>{h.qty.toLocaleString("fr-FR")} reçus →</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 12, fontSize: 13, color: "var(--text-muted)" }}>Aucune réception trouvée pour « {recProdSearch} ».</div>
+                )
+              )}
             </div>
 
             {/* Résumé */}
