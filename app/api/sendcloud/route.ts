@@ -1009,5 +1009,100 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ─── Liste des méthodes d'envoi (saisie manuelle d'étiquette) ───────────────
+  if (action === "shipping_methods") {
+    try {
+      const body = await req.json().catch(() => ({}));
+      const country = String(body.country || "FR").toUpperCase();
+      const weight = parseFloat(String(body.weight || "1")) || 1;
+      const sm = await scJson(`${V2}/shipping_methods?to_country=${country}&from_country=FR`, auth);
+      let methods: any[] = sm.shipping_methods || [];
+      // Ne garder que les méthodes compatibles avec le poids saisi
+      methods = methods.filter((m: any) => {
+        const min = parseFloat(m.min_weight ?? "0");
+        const max = parseFloat(m.max_weight ?? "999");
+        return weight >= min && weight <= max;
+      });
+      const list = methods
+        .map((m: any) => ({ id: m.id, name: m.name, carrier: m.carrier, min_weight: m.min_weight, max_weight: m.max_weight }))
+        .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name)));
+      return NextResponse.json({ methods: list });
+    } catch (e: any) {
+      return NextResponse.json({ error: e.message }, { status: 500 });
+    }
+  }
+
+  // ─── Création d'une étiquette à partir d'une saisie libre ───────────────────
+  if (action === "manual_label") {
+    try {
+      const b = await req.json();
+      const name = String(b.name || "").trim();
+      const address = String(b.address || "").trim();
+      const city = String(b.city || "").trim();
+      const postal = String(b.postal_code || "").trim();
+      const country = String(b.country || "FR").toUpperCase();
+      const email = String(b.email || "").trim();
+      const telephone = String(b.telephone || "").trim();
+      const weight = Math.max(0.001, parseFloat(String(b.weight || "1")) || 1).toFixed(3);
+      const methodId = b.shipping_method_id ? Number(b.shipping_method_id) : null;
+      const orderNumber = String(b.order_number || `MANUEL-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 900 + 100)}`);
+
+      if (!name || !address || !city || !postal) {
+        return NextResponse.json({ error: "Nom, adresse, code postal et ville sont requis" }, { status: 400 });
+      }
+      if (!methodId) return NextResponse.json({ error: "Méthode d'envoi requise" }, { status: 400 });
+
+      const payload = {
+        parcel: {
+          name,
+          company_name: String(b.company_name || ""),
+          address,
+          address_2: String(b.address_2 || ""),
+          city,
+          postal_code: postal,
+          country,
+          email,
+          telephone,
+          weight: String(weight),
+          order_number: orderNumber,
+          request_label: true,
+          shipment: { id: methodId },
+        },
+      };
+
+      const created = await scJson(`${V2}/parcels`, auth, { method: "POST", body: JSON.stringify(payload) });
+      let parcel = created.parcel || created;
+
+      // L'étiquette peut ne pas être prête immédiatement → polling
+      if (!(parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0])) {
+        parcel = (await pollLabel(auth, parcel.id, 15, 2500)) || parcel;
+      }
+
+      const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
+      if (!labelUrl) {
+        return NextResponse.json({
+          parcelId: parcel.id,
+          tracking: parcel.tracking_number || "",
+          orderNumber,
+          labelPending: true,
+          error: "Étiquette en cours de génération — réessaie dans quelques secondes",
+        }, { status: 202 });
+      }
+
+      const labelRes = await scFetch(labelUrl, auth);
+      if (!labelRes.ok) return NextResponse.json({ error: `Erreur PDF: ${labelRes.status}` }, { status: labelRes.status });
+      const pdfBuffer = Buffer.from(await labelRes.arrayBuffer());
+      return NextResponse.json({
+        parcelId: parcel.id,
+        tracking: parcel.tracking_number || "",
+        carrier: parcel.carrier?.code || "",
+        orderNumber,
+        labelBase64: pdfBuffer.toString("base64"),
+      });
+    } catch (e: any) {
+      return NextResponse.json({ error: e.message }, { status: 500 });
+    }
+  }
+
   return NextResponse.json({ error: "POST: action non supportée" }, { status: 405 });
 }

@@ -291,6 +291,7 @@ const TABS = [
   { key: "transporteurs", label: "Analyse transporteurs", icon: I.truck },
   { key: "bmv", label: "Analyse BMV", icon: I.truck },
   { key: "reception", label: "Réception", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg> },
+  { key: "etiquette", label: "Étiquette Sendcloud", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg> },
   { key: "ventes-client", label: "Ventes client/produit", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> },
 ] as const;
 
@@ -515,6 +516,23 @@ export default function Dashboard() {
   const [recProdHits, setRecProdHits] = useState<RecProdHit[]>([]);
   const [recProdLoading, setRecProdLoading] = useState(false);
   const [recProdSearched, setRecProdSearched] = useState(false);
+
+  // ─── Étiquette Sendcloud (saisie libre) ───────────────────────────────────
+  const [etqText, setEtqText] = useState("");
+  const [etqName, setEtqName] = useState("");
+  const [etqAddress, setEtqAddress] = useState("");
+  const [etqPostal, setEtqPostal] = useState("");
+  const [etqCity, setEtqCity] = useState("");
+  const [etqCountry, setEtqCountry] = useState("FR");
+  const [etqEmail, setEtqEmail] = useState("");
+  const [etqPhone, setEtqPhone] = useState("");
+  const [etqWeight, setEtqWeight] = useState("1");
+  const [etqMethods, setEtqMethods] = useState<{ id: number; name: string; carrier: string }[]>([]);
+  const [etqMethodId, setEtqMethodId] = useState<number | null>(null);
+  const [etqMethodsLoading, setEtqMethodsLoading] = useState(false);
+  const [etqCreating, setEtqCreating] = useState(false);
+  const [etqError, setEtqError] = useState("");
+  const [etqResult, setEtqResult] = useState<{ pdfUrl: string; tracking: string; orderNumber: string } | null>(null);
 
   // ─── Analyse transporteurs ───────────────────────────────────────────────
   interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; options?: number; total: number; coutReel?: number; mois?: string }
@@ -2621,6 +2639,71 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
     // charge le détail directement (passe l'id/vendor pour éviter le lag d'état React)
     loadReceptions(hit.pickingId, hit.vendorId);
   }, [loadReceptions]);
+
+  // ── Étiquette : parser le texte collé (nom, adresse, CP+ville, tél, email) ──
+  const parseEtqText = useCallback((raw: string) => {
+    const lines = raw.split(/\n/).map(l => l.trim()).filter(Boolean);
+    let name = "", address = "", postal = "", city = "", email = "", phone = "";
+    const rest: string[] = [];
+    for (const line of lines) {
+      // Email : contient @ (nettoie un éventuel markdown [x](mailto:x))
+      const emailMatch = line.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+      if (emailMatch && !email) { email = emailMatch[0]; continue; }
+      // Téléphone : ligne majoritairement composée de chiffres/espaces/+/. (>=9 chiffres)
+      const digits = line.replace(/[^\d]/g, "");
+      if (digits.length >= 9 && digits.length <= 15 && /^[\d\s.+()-]+$/.test(line) && !phone) { phone = line.replace(/\s+/g, ""); continue; }
+      // Code postal + ville : commence par un CP (5 chiffres FR, ou 4-6 chiffres)
+      const cpMatch = line.match(/^(\d{4,6})\s+(.+)$/);
+      if (cpMatch && !postal) { postal = cpMatch[1]; city = cpMatch[2].trim(); continue; }
+      rest.push(line);
+    }
+    // La 1re ligne restante = nom, les suivantes = adresse
+    if (rest.length) { name = rest[0]; address = rest.slice(1).join(", "); }
+    // Si pas d'adresse trouvée mais 2+ lignes restantes déjà consommées, garde le fallback
+    setEtqName(name); setEtqAddress(address); setEtqPostal(postal); setEtqCity(city);
+    setEtqEmail(email); setEtqPhone(phone);
+  }, []);
+
+  // ── Étiquette : charger les méthodes d'envoi Sendcloud ──
+  const loadEtqMethods = useCallback(async () => {
+    setEtqMethodsLoading(true); setEtqError("");
+    try {
+      const res = await fetch("/api/sendcloud?action=shipping_methods", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ country: etqCountry || "FR", weight: etqWeight || "1" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Erreur chargement méthodes");
+      setEtqMethods(data.methods || []);
+    } catch (e: any) { setEtqError(e.message); } finally { setEtqMethodsLoading(false); }
+  }, [etqCountry, etqWeight]);
+
+  // ── Étiquette : créer l'étiquette Sendcloud ──
+  const createEtqLabel = useCallback(async () => {
+    setEtqCreating(true); setEtqError(""); setEtqResult(null);
+    try {
+      const res = await fetch("/api/sendcloud?action=manual_label", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: etqName, address: etqAddress, postal_code: etqPostal, city: etqCity,
+          country: etqCountry, email: etqEmail, telephone: etqPhone, weight: etqWeight,
+          shipping_method_id: etqMethodId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Erreur création étiquette");
+      if (!data.labelBase64) throw new Error(data.error || "Étiquette non prête, réessaie");
+      // Convertit le base64 en blob URL pour aperçu + téléchargement
+      const bin = atob(data.labelBase64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      setEtqResult({ pdfUrl: url, tracking: data.tracking || "", orderNumber: data.orderNumber || "" });
+    } catch (e: any) { setEtqError(e.message); } finally { setEtqCreating(false); }
+  }, [etqName, etqAddress, etqPostal, etqCity, etqCountry, etqEmail, etqPhone, etqWeight, etqMethodId]);
 
   const recExportExcel = async () => {
     if (!recRows.length) return;
@@ -5924,6 +6007,108 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
             ) : (
               <div style={{ padding: "40px 0", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
                 {recLoading ? "Chargement…" : recPickingId ? "Aucune ligne pour cette réception." : recPickings.length ? "Choisissez une réception dans la liste puis cliquez sur « Afficher »." : "Choisissez un fournisseur, cliquez « Charger », puis sélectionnez une réception."}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ══════════════════ ÉTIQUETTE SENDCLOUD (saisie libre) ══════════════════ */}
+        {tab === "etiquette" && (
+          <div style={{ animation: "fadeIn .3s ease both", maxWidth: 900 }}>
+            <div style={{ marginBottom: 20 }}>
+              <h2 style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-.2px", marginBottom: 4, color: "#0f172a" }}>Étiquette Sendcloud</h2>
+              <p style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.5 }}>Collez le nom, l'adresse, le téléphone et l'email. Vérifiez les champs, choisissez le transporteur, puis générez l'étiquette.</p>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+              {/* Colonne gauche : saisie */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 6 }}>Texte à coller</label>
+                  <textarea
+                    value={etqText}
+                    onChange={(e) => { setEtqText(e.target.value); parseEtqText(e.target.value); }}
+                    placeholder={"Mme Ann Charlotte SOLAUX\n5 rue Edouard Lao\n59370 Mons-en-Baroeul\n0610334353\nacsolaux@hotmail.com"}
+                    rows={6}
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)", fontFamily: "inherit", resize: "vertical" }}
+                  />
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>Les champs à droite se remplissent automatiquement — corrigez-les si besoin.</div>
+                </div>
+              </div>
+
+              {/* Colonne droite : champs détectés */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {[
+                  { label: "Nom complet", val: etqName, set: setEtqName },
+                  { label: "Adresse", val: etqAddress, set: setEtqAddress },
+                ].map((f) => (
+                  <div key={f.label}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>{f.label}</label>
+                    <input value={f.val} onChange={(e) => f.set(e.target.value)} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 10 }}>
+                  <div style={{ width: 110 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Code postal</label>
+                    <input value={etqPostal} onChange={(e) => setEtqPostal(e.target.value)} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Ville</label>
+                    <input value={etqCity} onChange={(e) => setEtqCity(e.target.value)} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+                  </div>
+                  <div style={{ width: 70 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Pays</label>
+                    <input value={etqCountry} onChange={(e) => setEtqCountry(e.target.value.toUpperCase())} maxLength={2} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Téléphone</label>
+                    <input value={etqPhone} onChange={(e) => setEtqPhone(e.target.value)} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Email</label>
+                    <input value={etqEmail} onChange={(e) => setEtqEmail(e.target.value)} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Poids + méthode + action */}
+            <div style={{ marginTop: 20, paddingTop: 20, borderTop: "1px solid var(--border)", display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+              <div style={{ width: 120 }}>
+                <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Poids (kg)</label>
+                <input type="number" step="0.1" min="0.1" value={etqWeight} onChange={(e) => setEtqWeight(e.target.value)} style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+              </div>
+              <button className="wms-btn" onClick={loadEtqMethods} disabled={etqMethodsLoading}>
+                {etqMethodsLoading ? <Spinner /> : I.refresh} Charger les transporteurs
+              </button>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Transporteur / méthode</label>
+                <select value={etqMethodId ?? ""} onChange={(e) => setEtqMethodId(e.target.value ? Number(e.target.value) : null)} disabled={!etqMethods.length}
+                  style={{ width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }}>
+                  <option value="">{etqMethods.length ? `— ${etqMethods.length} méthodes —` : "— Charger d'abord —"}</option>
+                  {etqMethods.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </div>
+              <button className="wms-btn wms-btn-primary" onClick={createEtqLabel} disabled={etqCreating || !etqMethodId || !etqName || !etqPostal}>
+                {etqCreating ? <Spinner /> : "🏷️"} Créer l'étiquette
+              </button>
+            </div>
+
+            {etqError && <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: "#fef2f2", border: "1px solid #fecaca", color: "#dc2626", fontSize: 13 }}>⚠ {etqError}</div>}
+
+            {etqResult && (
+              <div style={{ marginTop: 20, padding: 16, borderRadius: 14, background: "var(--bg-raised)", border: "1px solid var(--border)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                  <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                    <strong style={{ color: "#0f172a" }}>Étiquette prête</strong>
+                    {etqResult.tracking && <span> · Suivi : <span style={{ fontFamily: "monospace" }}>{etqResult.tracking}</span></span>}
+                    {etqResult.orderNumber && <span> · Réf : <span style={{ fontFamily: "monospace" }}>{etqResult.orderNumber}</span></span>}
+                  </div>
+                  <a href={etqResult.pdfUrl} download={`etiquette_${etqResult.orderNumber || "sendcloud"}.pdf`} className="wms-btn wms-btn-primary" style={{ textDecoration: "none" }}>⬇ Télécharger le PDF</a>
+                </div>
+                <iframe src={etqResult.pdfUrl} title="Étiquette" style={{ width: "100%", height: 500, border: "1px solid var(--border)", borderRadius: 10, background: "#fff" }} />
               </div>
             )}
           </div>
