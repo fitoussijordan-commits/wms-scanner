@@ -3150,6 +3150,34 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   const [smFilter, setSmFilter] = useState<"all"|"critical"|"alert"|"ok">("all");
   const [smHideRuptDef, setSmHideRuptDef] = useState(false);
   const [smHideRuptFour, setSmHideRuptFour] = useState(false);
+  // Map réf fournisseur (minuscule) → réf Odoo, chargé à la demande pour la recherche
+  const [smSupRefMap, setSmSupRefMap] = useState<Record<string, string>>({});
+  const [smSupRefLoading, setSmSupRefLoading] = useState(false);
+  const loadSmSupRefs = useCallback(async () => {
+    if (!session || smSupRefLoading || Object.keys(smSupRefMap).length) return;
+    setSmSupRefLoading(true);
+    try {
+      // product.supplierinfo : product_code (réf fournisseur) → default_code du produit
+      const sis = await odoo.searchRead(session, "product.supplierinfo",
+        [["product_code", "!=", false]], ["product_code", "product_tmpl_id", "product_id"], 20000);
+      const tmplIds = Array.from(new Set(sis.map((s: any) => Array.isArray(s.product_tmpl_id) ? s.product_tmpl_id[0] : null).filter(Boolean)));
+      const codeByTmpl: Record<number, string> = {};
+      for (let i = 0; i < tmplIds.length; i += 1000) {
+        const slice = tmplIds.slice(i, i + 1000);
+        const tmpls = await odoo.searchRead(session, "product.template", [["id", "in", slice]], ["id", "default_code"], 2000);
+        for (const t of tmpls) if (t.default_code) codeByTmpl[t.id] = String(t.default_code);
+      }
+      const map: Record<string, string> = {};
+      for (const si of sis) {
+        const supCode = String(si.product_code || "").trim().toLowerCase();
+        if (!supCode) continue;
+        const tmplId = Array.isArray(si.product_tmpl_id) ? si.product_tmpl_id[0] : null;
+        const odooRef = tmplId ? codeByTmpl[tmplId] : "";
+        if (odooRef) map[supCode] = odooRef;
+      }
+      setSmSupRefMap(map);
+    } catch (e: any) { console.warn("supRefs:", e.message); } finally { setSmSupRefLoading(false); }
+  }, [session, smSupRefMap, smSupRefLoading]);
   const [smEditThr, setSmEditThr] = useState<{ref:string;val:string}|null>(null);
   const [smSupModal, setSmSupModal] = useState<{ref:string;name:string;cur:string}|null>(null);
   const [smSupInput, setSmSupInput] = useState("");
@@ -3799,10 +3827,15 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       if(smFilter==="ok"&&r.status!=="ok"&&r.status!=="no_data")return false;
       if(smHideRuptDef&&r.supplierDate==="9999-12-31")return false;
       if(smHideRuptFour&&r.supplierDate&&r.supplierDate!=="9999-12-31")return false;
-      if(smSearch){const q=smSearch.toLowerCase();if(!r.ref.toLowerCase().includes(q)&&!r.name.toLowerCase().includes(q))return false;}
+      if(smSearch){
+        const q=smSearch.toLowerCase();
+        // match réf Odoo, nom, OU réf fournisseur (via la map chargée à la demande)
+        const supMatch=Object.entries(smSupRefMap).some(([supCode,odooRef])=>odooRef.toLowerCase()===r.ref.toLowerCase()&&supCode.includes(q));
+        if(!r.ref.toLowerCase().includes(q)&&!r.name.toLowerCase().includes(q)&&!supMatch)return false;
+      }
       return true;
     }).sort((a,b)=>ord[a.status]-ord[b.status]||(a.daysLeft-b.daysLeft));
-  },[smRows,smFilter,smSearch,smHideRuptDef,smHideRuptFour]);
+  },[smRows,smFilter,smSearch,smHideRuptDef,smHideRuptFour,smSupRefMap]);
 
   const smCounts=useMemo(()=>({critical:smRows.filter(r=>r.status==="critical").length,alert:smRows.filter(r=>r.status==="alert").length,ok:smRows.filter(r=>r.status==="ok").length,rupture_def:smRows.filter(r=>r.supplierDate==="9999-12-31").length,rupture_four:smRows.filter(r=>r.supplierDate&&r.supplierDate!=="9999-12-31").length}),[smRows]);
 
@@ -4231,7 +4264,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                   ))}
                   <div style={{marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:6,padding:"6px 10px",border:"1px solid var(--border)",borderRadius:8,background:"#fff",width:240}}>
                     <span style={{color:"var(--text-muted)",display:"inline-flex"}}>{I.search}</span>
-                    <input placeholder="Référence ou nom" value={smSearch} onChange={e=>setSmSearch(e.target.value)}
+                    <input placeholder={smSupRefLoading?"Chargement réf. fourn…":"Réf, nom ou réf. fournisseur"} value={smSearch} onFocus={loadSmSupRefs} onChange={e=>setSmSearch(e.target.value)}
                       style={{border:"none",fontSize:13,fontFamily:"inherit",outline:"none",flex:1,background:"transparent"}}/>
                   </div>
                   <span style={{fontSize:12,color:"var(--text-muted)",fontVariantNumeric:"tabular-nums"}}>{smFiltered.length} ligne{smFiltered.length!==1?"s":""}</span>
