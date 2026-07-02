@@ -827,6 +827,33 @@ function playBeep(type: "ok" | "err") {
   } catch {}
 }
 
+// Petit jingle de satisfaction (accord ascendant) — joué à la validation d'une commande
+function playSuccessJingle() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    ctx.resume().then(() => {
+      // Do - Mi - Sol - Do (montée joyeuse)
+      const notes = [523.25, 659.25, 783.99, 1046.5];
+      const step = 0.11;
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = "triangle";
+        const t = ctx.currentTime + i * step;
+        osc.frequency.setValueAtTime(freq, t);
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(0.35, t + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + step + 0.08);
+        osc.start(t);
+        osc.stop(t + step + 0.1);
+        if (i === notes.length - 1) osc.onended = () => { try { ctx.close(); } catch {} };
+      });
+    }).catch(() => {});
+  } catch {}
+}
+
 // ============================================
 // LABEL PRINTING — Modal + PrintNode/fallback
 // ============================================
@@ -2429,19 +2456,21 @@ export default function Page() {
       showToast(`✓ ${actualLotName || ml.product_id[1]} · ${newQty}/${ml.reserved_uom_qty || "?"}`);
 
       // ── Lignes restantes à cet emplacement ───────────────────────────────
-      const morePending = optimisticLines.filter((m: any) =>
-        m.location_id?.[0] === currentStep!.locId &&
-        (m.qty_done || 0) < (m.reserved_uom_qty || 0)
-      );
+      // IMPORTANT : on utilise la MÊME logique (agrégée par produit) que le
+      // scan de l'emplacement (getPendingLinesAtLoc), sinon la ligne courante
+      // peut « disparaître » alors qu'il reste des produits à picker au même
+      // emplacement → écran figé nécessitant un re-scan de l'emplacement.
+      const morePending = getPendingLinesAtLoc(optimisticLines, currentStep!.locId);
 
       if (morePending.length === 0) {
         updatePrepStep(null);
         showToast(`✓ Emplacement ${currentStep!.locName} terminé`);
       } else {
-        // Rester sur la même ligne si encore en cours, sinon passer à la suivante
-        const stillCurrent = morePending.find((m: any) => m.id === ml.id);
+        // Rester sur le même produit s'il reste des unités, sinon passer au suivant
+        const currentProductId = ml.product_id?.[0];
+        const stillCurrent = morePending.find((m: any) => m.product_id?.[0] === currentProductId);
         const next = stillCurrent || morePending[0];
-        const nextRemaining = (next.reserved_uom_qty || 0) - (next.qty_done || 0);
+        const nextRemaining = getProductRemainingAtLoc(optimisticLines, currentStep!.locId, next.product_id?.[0]);
         updatePrepStep({
           locId: currentStep!.locId,
           locName: currentStep!.locName,
@@ -2652,6 +2681,7 @@ export default function Page() {
         await odoo.validatePickingStrict(session, id);
       }
       vibrateSuccess();
+      playSuccessJingle(); // 🎵 petit son de satisfaction à la validation
       showToast(`✅ ${selectedPicking.name} validé`);
       setScreen("prep");
       setSelectedPicking(null);
@@ -2686,6 +2716,7 @@ export default function Page() {
       }
       for (const id of ids) { await odoo.validatePickingStrict(session, id); }
       vibrateSuccess();
+      playSuccessJingle(); // 🎵 petit son de satisfaction à la validation
       showToast(`✅ ${selectedPicking.name} validé — ouverture emballage...`);
 
       // Trouver le OUT picking lié via group_id
@@ -6554,8 +6585,12 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
     const scannedCount = items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length;
     const progPct = items.length > 0 ? Math.round((scannedCount / items.length) * 100) : 0;
-    const doneItems = items.filter((it: any) => getScanned(it) >= (it.quantity || 1));
-    const remainingItems = items.filter((it: any) => getScanned(it) < (it.quantity || 1));
+    // "Préparés" = tout article déjà entamé (qty scannée > 0), pas seulement à 100%.
+    // Ainsi, décrémenter avec "−" ne fait plus sauter la ligne d'un bloc à l'autre :
+    // elle reste dans "Préparés" tant que la quantité est > 0.
+    const doneItems = items.filter((it: any) => getScanned(it) > 0);
+    // "Restant" = uniquement les articles pas encore commencés (qty scannée = 0).
+    const remainingItems = items.filter((it: any) => getScanned(it) === 0);
 
     const adjustQty = (sku: string, newQty: number) => {
       const item = items.find((i: any) => i.sku === sku);
@@ -6730,13 +6765,15 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             <div style={{ marginTop: 8 }}>
               {doneItems.map((item: any) => {
                 const loc = getLocation(item.sku);
+                const sc = scannedSkus[item.sku] || 0;
+                const full = sc >= (item.quantity || 1);
                 return (
-                  <div key={item.sku} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 6, background: C.greenSoft, border: `1px solid ${C.greenBorder}`, borderRadius: 10 }}>
+                  <div key={item.sku} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 6, background: full ? C.greenSoft : C.orangeSoft, border: `1px solid ${full ? C.greenBorder : C.orange}`, borderRadius: 10 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{getMatch(item.sku)?.product_name || item.description || item.sku}</div>
                       <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}>
                         {item._isChariot ? (<><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11V6a3 3 0 016 0v5"/><path d="M5 11h14l-1.2 9.2a2 2 0 01-2 1.8H8.2a2 2 0 01-2-1.8L5 11z"/></svg>Chariot</>) : loc ? shortLoc(loc.location_name) : "—"}
-                        <span style={{ color: C.green, fontWeight: 700, marginLeft: 6 }}>{scannedSkus[item.sku] || item.quantity}/{item.quantity}</span>
+                        <span style={{ color: full ? C.green : C.orange, fontWeight: 700, marginLeft: 6 }}>{sc}/{item.quantity}</span>
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
