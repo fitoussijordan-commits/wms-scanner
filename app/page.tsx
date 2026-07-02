@@ -1048,8 +1048,12 @@ function getPendingLinesAtLoc(lines: any[], locId: number): any[] {
   return lines.filter(m => {
     if (m.location_id?.[0] !== locId) return false;
     if ((m.reserved_uom_qty || 0) === 0) return false; // skip deviation lines
+    // Le produit doit rester à prendre (niveau produit, pour gérer les déviations)…
     const c = totals.get(m.product_id?.[0]) || { reserved: 0, done: 0 };
-    return c.done < c.reserved;
+    if (c.done >= c.reserved) return false;
+    // …ET cette ligne précise ne doit pas être déjà complète (évite de pointer
+    // vers une ligne « sœur » saturée → écran figé sur un emplacement multi-produits).
+    return (m.qty_done || 0) < (m.reserved_uom_qty || 0);
   });
 }
 // Restant pour un produit à un emplacement (tous lots + déviations)
@@ -12506,10 +12510,23 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   // vers la vraie ligne scannée. On affiche cette ligne dans la carte, pas currentLine.
   const activeLine = useMemo(() => {
     if (locOk && prepStep) {
-      return allLines.find((ml: any) => ml.id === prepStep.lineId) || currentLine;
+      const pointed = allLines.find((ml: any) => ml.id === prepStep.lineId);
+      // La ligne pointée est-elle encore à prendre ? (elle peut être une ligne
+      // "sœur" déjà complète alors que le produit a d'autres lignes en attente)
+      const pointedPending = pointed && getQty(pointed) < (pointed.reserved_uom_qty || 0);
+      if (pointedPending) return pointed;
+      // Sinon : chercher une ligne encore en attente au MÊME emplacement,
+      // en priorité pour le même produit, sinon n'importe quelle ligne restante.
+      const locId = prepStep.locId;
+      const prodId = pointed?.product_id?.[0];
+      const sameLocPending = allLines.filter((ml: any) =>
+        ml.location_id?.[0] === locId && getQty(ml) < (ml.reserved_uom_qty || 0)
+      );
+      const sameProduct = prodId ? sameLocPending.find((ml: any) => ml.product_id?.[0] === prodId) : null;
+      return sameProduct || sameLocPending[0] || currentLine;
     }
     return currentLine;
-  }, [locOk, prepStep?.lineId, allLines, currentLine]);
+  }, [locOk, prepStep?.lineId, prepStep?.locId, allLines, currentLine]);
 
   // Fusion visuelle : même produit + même lot + même emplacement → afficher le total combiné
   // (Odoo crée 1 ligne par BL, on les fusionne à l'écran sans toucher aux écritures Odoo)
