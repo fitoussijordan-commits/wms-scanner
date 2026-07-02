@@ -3147,7 +3147,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   const [smLoading, setSmLoading] = useState(false);
   const [smMsg, setSmMsg] = useState("");
   const [smSearch, setSmSearch] = useState("");
-  const [smFilter, setSmFilter] = useState<"all"|"critical"|"alert"|"ok">("all");
+  const [smFilter, setSmFilter] = useState<"all"|"critical"|"alert"|"ok"|"rupture_def"|"rupture_four">("all");
   const [smEditThr, setSmEditThr] = useState<{ref:string;val:string}|null>(null);
   const [smSupModal, setSmSupModal] = useState<{ref:string;name:string;cur:string}|null>(null);
   const [smSupInput, setSmSupInput] = useState("");
@@ -3795,12 +3795,14 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       if(smFilter==="critical"&&r.status!=="critical")return false;
       if(smFilter==="alert"&&r.status!=="alert")return false;
       if(smFilter==="ok"&&r.status!=="ok"&&r.status!=="no_data")return false;
+      if(smFilter==="rupture_def"&&r.supplierDate!=="9999-12-31")return false;
+      if(smFilter==="rupture_four"&&(!r.supplierDate||r.supplierDate==="9999-12-31"))return false;
       if(smSearch){const q=smSearch.toLowerCase();if(!r.ref.toLowerCase().includes(q)&&!r.name.toLowerCase().includes(q))return false;}
       return true;
     }).sort((a,b)=>ord[a.status]-ord[b.status]||(a.daysLeft-b.daysLeft));
   },[smRows,smFilter,smSearch]);
 
-  const smCounts=useMemo(()=>({critical:smRows.filter(r=>r.status==="critical").length,alert:smRows.filter(r=>r.status==="alert").length,ok:smRows.filter(r=>r.status==="ok").length}),[smRows]);
+  const smCounts=useMemo(()=>({critical:smRows.filter(r=>r.status==="critical").length,alert:smRows.filter(r=>r.status==="alert").length,ok:smRows.filter(r=>r.status==="ok").length,rupture_def:smRows.filter(r=>r.supplierDate==="9999-12-31").length,rupture_four:smRows.filter(r=>r.supplierDate&&r.supplierDate!=="9999-12-31").length}),[smRows]);
 
   // Options mois pour le sélecteur (mois courant + 5 suivants)
   const smMonthOptions = useMemo(()=>{
@@ -4213,6 +4215,20 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                       </button>
                     ))}
                   </div>
+                  {/* Filtres rupture (toggle indépendant) */}
+                  {([
+                    {f:"rupture_def" as const, label:"Rupture déf.", count:smCounts.rupture_def},
+                    {f:"rupture_four" as const, label:"Rupture fourn.", count:smCounts.rupture_four},
+                  ]).map(({f,label,count})=>{
+                    const active=smFilter===f;
+                    return (
+                      <button key={f} onClick={()=>setSmFilter(p=>p===f?"all":f)}
+                        style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 12px",borderRadius:8,border:`1px solid ${active?"#fecaca":"var(--border)"}`,background:active?"#fef2f2":"#fff",color:active?"#dc2626":"var(--text-muted)",fontSize:12.5,fontWeight:active?600:500,fontFamily:"inherit",cursor:"pointer",transition:"all .15s"}}>
+                        {I.ban}{label}
+                        <span style={{fontSize:11,fontWeight:700,padding:"1px 6px",borderRadius:20,background:active?"#dc2626":"var(--bg)",color:active?"#fff":"var(--text-muted)"}}>{count}</span>
+                      </button>
+                    );
+                  })}
                   <div style={{marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:6,padding:"6px 10px",border:"1px solid var(--border)",borderRadius:8,background:"#fff",width:240}}>
                     <span style={{color:"var(--text-muted)",display:"inline-flex"}}>{I.search}</span>
                     <input placeholder="Référence ou nom" value={smSearch} onChange={e=>setSmSearch(e.target.value)}
