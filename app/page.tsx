@@ -8739,14 +8739,14 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
     setScanLoading(false);
   };
 
-  // ── Prépare la liste des codes-barres produits (1 étiquette / 5 unités) ──
-  const preparePbList = async (picking: any) => {
-    setPbLoading(true); setPbRows([]); setPbOpen(true);
+  // ── Prépare la liste des codes-barres produits d'UN colis (1 étiquette / 5 unités) ──
+  const [pbPkgName, setPbPkgName] = useState("");
+  const preparePbList = async (picking: any, pkg: any) => {
+    setPbLoading(true); setPbRows([]); setPbOpen(true); setPbPkgName(pkg?.name || "");
     try {
-      const ids: number[] = picking._groupIds || [picking.id];
-      // Lignes de mouvement → quantité par produit (qté préparée, sinon réservée)
+      // Lignes de mouvement de CE colis uniquement (result_package_id = pkg.id)
       const mls = await odoo.searchRead(session, "stock.move.line",
-        [["picking_id", "in", ids]], ["product_id", "qty_done", "reserved_uom_qty"], 20000);
+        [["result_package_id", "=", pkg.id]], ["product_id", "qty_done", "reserved_uom_qty"], 20000);
       const qtyByProd: Record<number, number> = {};
       for (const ml of mls) {
         const pid = Array.isArray(ml.product_id) ? ml.product_id[0] : null;
@@ -9141,6 +9141,11 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
             ? <div style={{ fontSize: 11, color: C.textMuted }}>{weight} kg</div>
             : <div style={{ fontSize: 11, color: "#f59e0b" }}>Poids non renseigné</div>}
         </div>
+        <button onClick={() => preparePbList(picking, pkg)} disabled={pbLoading}
+          title="Imprimer les codes-barres produits (1 étiq. / 5 unités)"
+          style={{ padding: "7px 10px", background: C.white, color: C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: pbLoading ? "wait" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const }}>
+          🏷️ CB
+        </button>
         <button onClick={() => printPackingList(picking, pkg)} disabled={isPL}
           style={{ padding: "7px 12px", background: isPL ? C.border : C.blue, color: isPL ? C.textMuted : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: isPL ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const, opacity: isPL ? 0.6 : 1 }}>
           {isPL ? "…" : "🖨 Imprimer"}
@@ -9348,19 +9353,11 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
                 </button>
               )}
 
-              {/* Bouton : codes-barres produits par tranche de 5 */}
-              <button
-                onClick={() => preparePbList(scanPicking)}
-                disabled={pbLoading}
-                style={{ width: "100%", padding: "12px 0", background: C.white, color: C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 12, fontSize: 13.5, fontWeight: 700, cursor: pbLoading ? "wait" : "pointer", fontFamily: "inherit", marginBottom: 12 }}>
-                {pbLoading ? "Chargement…" : "🏷️ Codes-barres produits (1 étiq. / 5 unités)"}
-              </button>
-
-              {/* Panneau de prévisualisation codes-barres */}
+              {/* Panneau de prévisualisation codes-barres (pour le colis sélectionné) */}
               {pbOpen && (
                 <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 12, boxShadow: C.shadow }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>Codes-barres à imprimer</div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>Codes-barres — {pbPkgName || "colis"}</div>
                     <button onClick={() => setPbOpen(false)} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: C.textMuted, padding: 4 }}>✕</button>
                   </div>
                   {pbLoading ? (
