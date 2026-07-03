@@ -8744,9 +8744,13 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const preparePbList = async (picking: any, pkg: any) => {
     setPbLoading(true); setPbRows([]); setPbOpen(true); setPbPkgName(pkg?.name || "");
     try {
-      // Lignes de mouvement de CE colis uniquement (result_package_id = pkg.id)
+      // Lignes de CE colis ET de CE picking uniquement. Sans le filtre picking_id,
+      // un flux multi-étapes (prépa + expédition) référence le même colis dans
+      // plusieurs pickings → les quantités seraient comptées en double.
+      const pickIds: number[] = picking._groupIds || [picking.id];
       const mls = await odoo.searchRead(session, "stock.move.line",
-        [["result_package_id", "=", pkg.id]], ["product_id", "qty_done", "reserved_uom_qty"], 20000);
+        [["result_package_id", "=", pkg.id], ["picking_id", "in", pickIds]],
+        ["product_id", "qty_done", "reserved_uom_qty"], 20000);
       const qtyByProd: Record<number, number> = {};
       for (const ml of mls) {
         const pid = Array.isArray(ml.product_id) ? ml.product_id[0] : null;
