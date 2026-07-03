@@ -8689,6 +8689,12 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const [scanLoading, setScanLoading] = useState(false);
   const scanInputRef = useRef<HTMLInputElement>(null);
   const [printingPdf, setPrintingPdf] = useState(false);
+  // ── Codes-barres produits par tranche de 5 (packing list) ──
+  interface PbRow { productId: number; ref: string; name: string; barcode: string; qty: number; labels: number; }
+  const [pbRows, setPbRows] = useState<PbRow[]>([]);
+  const [pbOpen, setPbOpen] = useState(false);
+  const [pbLoading, setPbLoading] = useState(false);
+  const [pbPrinting, setPbPrinting] = useState(false);
   const [pdfRaw, setPdfRaw] = useState<{ bytes: Uint8Array; fileName: string; numPages: number } | null>(null);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [pdfPage, setPdfPage] = useState(0);                           // page affichée (0-based)
@@ -8731,6 +8737,61 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
       setScanAtts(att);
     } catch (e: any) { onToast("❌ " + e.message); }
     setScanLoading(false);
+  };
+
+  // ── Prépare la liste des codes-barres produits (1 étiquette / 5 unités) ──
+  const preparePbList = async (picking: any) => {
+    setPbLoading(true); setPbRows([]); setPbOpen(true);
+    try {
+      const ids: number[] = picking._groupIds || [picking.id];
+      // Lignes de mouvement → quantité par produit (qté préparée, sinon réservée)
+      const mls = await odoo.searchRead(session, "stock.move.line",
+        [["picking_id", "in", ids]], ["product_id", "qty_done", "reserved_uom_qty"], 20000);
+      const qtyByProd: Record<number, number> = {};
+      for (const ml of mls) {
+        const pid = Array.isArray(ml.product_id) ? ml.product_id[0] : null;
+        if (!pid) continue;
+        const q = (ml.qty_done || 0) > 0 ? ml.qty_done : (ml.reserved_uom_qty || 0);
+        qtyByProd[pid] = (qtyByProd[pid] || 0) + q;
+      }
+      const prodIds = Object.keys(qtyByProd).map(Number);
+      if (!prodIds.length) { setPbRows([]); setPbLoading(false); return; }
+      const prods = await odoo.searchRead(session, "product.product",
+        [["id", "in", prodIds]], ["id", "default_code", "barcode", "name"], prodIds.length);
+      const rows: PbRow[] = prods.map((p: any) => {
+        const qty = Math.round(qtyByProd[p.id] || 0);
+        return {
+          productId: p.id,
+          ref: p.default_code || "",
+          name: p.name || "",
+          barcode: p.barcode || p.default_code || "",
+          qty,
+          labels: Math.ceil(qty / 5), // 1 étiquette par tranche de 5 unités
+        };
+      }).sort((a: PbRow, b: PbRow) => (a.ref || a.name).localeCompare(b.ref || b.name));
+      setPbRows(rows);
+    } catch (e: any) { onToast("❌ " + e.message); setPbOpen(false); }
+    setPbLoading(false);
+  };
+
+  // ── Imprime les codes-barres produits (même imprimante/spec que l'étiquette produit) ──
+  const printPbList = async () => {
+    const cfg = pn.getLabelTypeConfig("product");
+    const printerId = cfg.printerId || pn.getSavedPrinterId();
+    if (!printerId) { onToast("❌ Aucune imprimante configurée pour les produits"); return; }
+    setPbPrinting(true);
+    let ok = 0, err = 0, skipped = 0;
+    for (const r of pbRows) {
+      if (r.labels <= 0) continue;
+      if (!r.barcode) { skipped++; continue; }
+      try {
+        const res = await pn.printProductLabel(printerId, r.name || r.ref, r.barcode, r.ref, r.labels);
+        if (res.success) ok += r.labels; else err++;
+      } catch { err++; }
+    }
+    setPbPrinting(false);
+    onToast(err ? `⚠️ ${ok} étiquette(s) OK, ${err} erreur(s)` : `✅ ${ok} étiquette(s) envoyée(s)${skipped ? ` · ${skipped} sans code-barres` : ""}`);
+    if (!err) { setPbOpen(false); }
   };
 
   const getCrop = (pageIdx: number) => pdfCropPerPage[pageIdx] ?? PDF_CROP_DEFAULT;
@@ -9285,6 +9346,55 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
                   style={{ width: "100%", padding: "13px 0", background: printingAllPL[scanPicking.id] ? C.border : "#16a34a", color: "#fff", border: "none", borderRadius: 12, fontSize: 14, fontWeight: 800, cursor: printingAllPL[scanPicking.id] ? "not-allowed" : "pointer", fontFamily: "inherit", marginBottom: 12, opacity: printingAllPL[scanPicking.id] ? 0.7 : 1 }}>
                   {printingAllPL[scanPicking.id] ? "Impression en cours…" : `🖨 Imprimer les ${scanPkgs.length} packing lists`}
                 </button>
+              )}
+
+              {/* Bouton : codes-barres produits par tranche de 5 */}
+              <button
+                onClick={() => preparePbList(scanPicking)}
+                disabled={pbLoading}
+                style={{ width: "100%", padding: "12px 0", background: C.white, color: C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 12, fontSize: 13.5, fontWeight: 700, cursor: pbLoading ? "wait" : "pointer", fontFamily: "inherit", marginBottom: 12 }}>
+                {pbLoading ? "Chargement…" : "🏷️ Codes-barres produits (1 étiq. / 5 unités)"}
+              </button>
+
+              {/* Panneau de prévisualisation codes-barres */}
+              {pbOpen && (
+                <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 12, boxShadow: C.shadow }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>Codes-barres à imprimer</div>
+                    <button onClick={() => setPbOpen(false)} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: C.textMuted, padding: 4 }}>✕</button>
+                  </div>
+                  {pbLoading ? (
+                    <div style={{ textAlign: "center", color: C.textMuted, fontSize: 13, padding: "16px 0" }}>Chargement des produits…</div>
+                  ) : pbRows.length === 0 ? (
+                    <div style={{ textAlign: "center", color: C.textMuted, fontSize: 13, padding: "16px 0", fontStyle: "italic" }}>Aucun produit sur cette commande</div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8 }}>1 étiquette par tranche de 5 unités — ajuste le nombre si besoin.</div>
+                      {pbRows.map((r, i) => (
+                        <div key={r.productId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: i < pbRows.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{r.ref ? `${r.ref} · ` : ""}{r.name}</div>
+                            <div style={{ fontSize: 11, color: r.barcode ? C.textMuted : C.red }}>{r.barcode ? `${r.qty} unités · CB ${r.barcode}` : `${r.qty} unités · ⚠ pas de code-barres`}</div>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                            <button onClick={() => setPbRows(prev => prev.map((x, j) => j === i ? { ...x, labels: Math.max(0, x.labels - 1) } : x))}
+                              style={{ width: 30, height: 30, borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, fontSize: 16, cursor: "pointer", color: C.red }}>−</button>
+                            <span style={{ minWidth: 26, textAlign: "center", fontSize: 14, fontWeight: 800, color: C.text }}>{r.labels}</span>
+                            <button onClick={() => setPbRows(prev => prev.map((x, j) => j === i ? { ...x, labels: x.labels + 1 } : x))}
+                              style={{ width: 30, height: 30, borderRadius: 6, border: `1px solid ${C.border}`, background: C.white, fontSize: 16, cursor: "pointer", color: C.blue }}>+</button>
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
+                        <span style={{ fontSize: 12.5, color: C.textMuted }}>Total : <strong style={{ color: C.text }}>{pbRows.reduce((s, r) => s + (r.barcode ? r.labels : 0), 0)}</strong> étiquette(s)</span>
+                        <button onClick={printPbList} disabled={pbPrinting || pbRows.every(r => !r.barcode || r.labels <= 0)}
+                          style={{ padding: "10px 18px", background: pbPrinting ? C.border : "#16a34a", color: "#fff", border: "none", borderRadius: 10, fontSize: 13.5, fontWeight: 800, cursor: pbPrinting ? "wait" : "pointer", fontFamily: "inherit" }}>
+                          {pbPrinting ? "Impression…" : "🖨 Imprimer"}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
 
               {/* Liste des colis */}
