@@ -3176,6 +3176,13 @@ export default function Page() {
               </button>
             )}
           </div>
+          {session && odoo.isAdmin(session) && (
+            <button onClick={toggleAdminMode} title="Affiche/masque les roues ⚙️ de paramétrage des champs Odoo dans chaque fonction"
+              style={{ margin: "20px auto 0", display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", borderRadius: 999, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700, border: "none", color: "#fff", background: adminMode ? "#7c3aed" : "#1a1a2e" }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+              {adminMode ? "Mode admin activé — masquer les ⚙️" : "Mode admin"}
+            </button>
+          )}
         </>}
 
         {/* ===== HOME (desktop — refonte) ===== */}
@@ -3399,6 +3406,15 @@ export default function Page() {
                   )}
                 </div>
               </div>
+              {session && odoo.isAdmin(session) && (
+                <div style={{ display: "flex", justifyContent: "center", marginTop: 28 }}>
+                  <button onClick={toggleAdminMode} title="Affiche/masque les roues ⚙️ de paramétrage des champs Odoo dans chaque fonction"
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 20px", borderRadius: 999, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700, border: "none", color: "#fff", background: adminMode ? "#7c3aed" : "#1a1a2e" }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+                    {adminMode ? "Mode admin activé — masquer les ⚙️" : "Mode admin"}
+                  </button>
+                </div>
+              )}
             </div>
           );
         })()}
@@ -3849,28 +3865,6 @@ export default function Page() {
         )}
        </div>
       </main>
-
-      {/* ── Bouton flottant « Mode admin » (bas de l'écran) ──
-           Visible uniquement pour les admins, hors écran de login. Affiche/masque
-           les roues crantées ⚙️ de paramétrage des champs Odoo dans les fonctions. ── */}
-      {session && odoo.isAdmin(session) && (
-        <button
-          onClick={toggleAdminMode}
-          title="Affiche/masque les roues crantées ⚙️ de paramétrage des champs Odoo dans chaque fonction"
-          style={{
-            position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", zIndex: 900,
-            display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", borderRadius: 999,
-            cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700,
-            border: "none", color: "#fff",
-            background: adminMode ? "#7c3aed" : "#1a1a2e",
-            boxShadow: adminMode ? "0 6px 20px -4px rgba(124,58,237,.5)" : "0 6px 20px -6px rgba(0,0,0,.4)",
-            transition: "all .15s",
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-          {adminMode ? "Mode admin activé — masquer" : "Mode admin"}
-        </button>
-      )}
 
       {/* ── Control Center — ancien panneau flottant (PDA/tablette ≥1024 tactile uniquement) ── */}
       {screen === "home" && session && !isDesktopUI && (
