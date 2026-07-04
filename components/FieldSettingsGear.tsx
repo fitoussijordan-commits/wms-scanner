@@ -70,11 +70,14 @@ export default function FieldSettingsGear({ session, onToast, screen, keys, size
             style={{ background: "#fff", width: "100%", maxWidth: 640, maxHeight: "88vh", overflowY: "auto", borderRadius: "18px 18px 0 0", padding: "18px 16px 32px", fontFamily: "'DM Sans', sans-serif", boxShadow: "0 -8px 40px rgba(0,0,0,0.2)" }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-              <div style={{ fontSize: 17, fontWeight: 800, color: "#1a1a2e", flex: 1 }}>⚙️ Champs Odoo de cet écran</div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: "#1a1a2e", flex: 1 }}>
+                Champs Odoo utilisés ici
+                {resolvedKeys.length > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed", background: "#f3e8ff", padding: "2px 8px", borderRadius: 99, marginLeft: 8 }}>{resolvedKeys.length}</span>}
+              </div>
               <button onClick={() => setOpen(false)} style={{ background: "#f8fafc", border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", fontSize: 18, color: "#6b7280" }}>×</button>
             </div>
             <div style={{ fontSize: 12.5, color: "#6b7280", marginBottom: 14, lineHeight: 1.5 }}>
-              Remappe le nom technique d'un champ si Odoo l'a renommé. Modifie, teste, puis enregistre. Partagé avec tous les postes.
+              Voici les champs Odoo que <b>cette fonction</b> utilise. Si Odoo en a renommé un, corrige son nom technique ici (bouton Scan pour voir les champs dispo), teste, puis enregistre. Partagé avec tous les postes.
             </div>
             {resolvedKeys.length ? (
               <FieldMapEditor

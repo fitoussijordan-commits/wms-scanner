@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import * as odoo from "@/lib/odoo";
+import FieldSettingsGear from "@/components/FieldSettingsGear";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -342,6 +343,7 @@ export default function SupplierImportScreen({
           <div style={S.headerTitle}>Import fournisseur WALA</div>
           <div style={S.headerSub}>Packing list → Odoo automatique</div>
         </div>
+        <FieldSettingsGear session={session} onToast={onToast} screen="supplierImport" />
       </div>
 
       {/* Steps indicator */}
