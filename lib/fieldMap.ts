@@ -298,7 +298,90 @@ export function fieldsForScreen(screen: string): FieldKey[] {
   });
 }
 
-/** Liste des modèles Odoo distincts (pour grouper l'admin). */
-export function listModels(): string[] {
+/** Liste des modèles Odoo distincts référencés par les champs (info). */
+export function listFieldModels(): string[] {
   return Array.from(new Set(Object.values(FIELD_DEFS).map((d) => (d as FieldDef).model))).sort();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// REGISTRE DES MODÈLES ODOO
+// ────────────────────────────────────────────────────────────────────────────
+// Même principe que les champs, mais pour les MODÈLES (product.product, etc.).
+// Le code utilise M("MODEL_PRODUCT") au lieu du littéral "product.product".
+// Si Odoo 19 renomme un modèle, on change sa valeur dans l'admin — pas le code.
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface ModelDef {
+  /** Nom technique Odoo par défaut (ex. "product.product"). */
+  default: string;
+  /** Libellé lisible (FR). */
+  label: string;
+  hint?: string;
+}
+
+export const MODEL_DEFS = {
+  MODEL_PRODUCT:            { default: "product.product",       label: "Produit (variante)" },
+  MODEL_PRODUCT_TEMPLATE:  { default: "product.template",       label: "Modèle de produit" },
+  MODEL_PRODUCT_SUPPLIER:  { default: "product.supplierinfo",   label: "Info fournisseur produit" },
+  MODEL_PRODUCT_PRICELIST: { default: "product.pricelist",      label: "Liste de prix" },
+  MODEL_PRODUCT_PACKAGING: { default: "product.packaging",      label: "Conditionnement produit" },
+  MODEL_PICKING:           { default: "stock.picking",          label: "Transfert (picking)" },
+  MODEL_PICKING_TYPE:      { default: "stock.picking.type",     label: "Type d'opération" },
+  MODEL_MOVE:              { default: "stock.move",             label: "Mouvement de stock" },
+  MODEL_MOVE_LINE:         { default: "stock.move.line",        label: "Ligne de mouvement" },
+  MODEL_QUANT:             { default: "stock.quant",            label: "Quant (stock physique)" },
+  MODEL_QUANT_PACKAGE:     { default: "stock.quant.package",    label: "Colis" },
+  MODEL_PACKAGE_LEVEL:     { default: "stock.package.level",    label: "Niveau de colis" },
+  MODEL_LOT:               { default: "stock.lot",              label: "Lot / numéro de série", hint: "⚠️ Était 'stock.production.lot' avant Odoo 16." },
+  MODEL_LOCATION:          { default: "stock.location",         label: "Emplacement" },
+  MODEL_IMMEDIATE_TRANSFER:{ default: "stock.immediate.transfer", label: "Transfert immédiat", hint: "⚠️ Supprimé dans les versions récentes d'Odoo." },
+  MODEL_BACKORDER_CONFIRM: { default: "stock.backorder.confirmation", label: "Confirmation de reliquat" },
+  MODEL_INVENTORY_ADJ_NAME:{ default: "stock.inventory.adjustment.name", label: "Nom d'ajustement d'inventaire" },
+  MODEL_SALE_ORDER:        { default: "sale.order",             label: "Commande de vente" },
+  MODEL_PURCHASE_ORDER:    { default: "purchase.order",         label: "Commande d'achat" },
+  MODEL_PARTNER:           { default: "res.partner",            label: "Partenaire (client/fournisseur)" },
+  MODEL_PARTNER_CATEGORY:  { default: "res.partner.category",   label: "Catégorie de partenaire" },
+  MODEL_USERS:             { default: "res.users",              label: "Utilisateurs" },
+  MODEL_COUNTRY:           { default: "res.country",            label: "Pays" },
+  MODEL_UOM:               { default: "uom.uom",                label: "Unité de mesure" },
+  MODEL_CRM_TAG:           { default: "crm.tag",                label: "Étiquette CRM" },
+  MODEL_ATTACHMENT:        { default: "ir.attachment",          label: "Pièce jointe" },
+  MODEL_CONFIG_PARAM:      { default: "ir.config_parameter",    label: "Paramètre système" },
+  MODEL_ACTIONS_REPORT:    { default: "ir.actions.report",      label: "Rapport" },
+  MODEL_REPORT_PICKING:    { default: "stock.report_picking",   label: "Rapport de picking" },
+  MODEL_TNT_SHIPPING:      { default: "tnt.shipping.service",   label: "Service d'expédition TNT" },
+} as const satisfies Record<string, ModelDef>;
+
+export type ModelKey = keyof typeof MODEL_DEFS;
+
+let _modelOverrides: Partial<Record<ModelKey, string>> = {};
+
+export function setModelOverrides(overrides: Record<string, string> | null | undefined): void {
+  const clean: Partial<Record<ModelKey, string>> = {};
+  if (overrides) {
+    for (const [k, v] of Object.entries(overrides)) {
+      if (k in MODEL_DEFS && typeof v === "string" && v.trim()) clean[k as ModelKey] = v.trim();
+    }
+  }
+  _modelOverrides = clean;
+}
+
+export function getModelOverrides(): Partial<Record<ModelKey, string>> {
+  return { ..._modelOverrides };
+}
+
+/** M("MODEL_PRODUCT") → nom technique de modèle Odoo effectif. */
+export function M(key: ModelKey): string {
+  return _modelOverrides[key] ?? MODEL_DEFS[key].default;
+}
+
+export function isModelOverridden(key: ModelKey): boolean {
+  return _modelOverrides[key] !== undefined && _modelOverrides[key] !== MODEL_DEFS[key].default;
+}
+
+/** Tous les modèles avec def + valeur effective (pour l'UI admin). */
+export function listModels(): Array<{ key: ModelKey; def: ModelDef; effective: string; overridden: boolean }> {
+  return (Object.keys(MODEL_DEFS) as ModelKey[])
+    .map((key) => ({ key, def: MODEL_DEFS[key] as ModelDef, effective: M(key), overridden: isModelOverridden(key) }))
+    .sort((a, b) => a.def.label.localeCompare(b.def.label));
 }

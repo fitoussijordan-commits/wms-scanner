@@ -9,6 +9,7 @@ import * as sbase from "@/lib/supabase";
 import * as fieldMap from "@/lib/fieldMap";
 import { useAdminMode } from "@/lib/adminMode";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
+import GlobalFieldGear from "@/components/GlobalFieldGear";
 import AdminScreen, { ALL_TOOLS } from "@/components/AdminScreen";
 import * as pn from "@/lib/printnode";
 
@@ -1505,10 +1506,11 @@ export default function Page() {
       // ⚠️ Charger le mapping des champs Odoo AVANT tout appel Odoo, pour que
       // F("...") renvoie les bons noms techniques dès la restauration de session.
       try {
-        const overrides = await sbase.loadFieldOverrides();
-        fieldMap.setFieldOverrides(overrides);
+        const [fo, mo] = await Promise.all([sbase.loadFieldOverrides(), sbase.loadModelOverrides()]);
+        fieldMap.setFieldOverrides(fo);
+        fieldMap.setModelOverrides(mo);
       } catch (e) {
-        console.warn("Chargement du mapping de champs échoué, valeurs par défaut utilisées.", e);
+        console.warn("Chargement du mapping Odoo échoué, valeurs par défaut utilisées.", e);
       }
       const s = loadSess();
       if (s) { setSession(s); setScreen("home"); setHistory(loadHistory()); odoo.getLocations(s).then(setLocations).catch(() => { clearSess(); setScreen("login"); }); }
@@ -2893,6 +2895,13 @@ export default function Page() {
   return (
     <Shell toast={toast} flash={scanFlash} desktop={isDesktopUI}>
       {!isDesktopUI && <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} />}
+
+      {/* ── Roue universelle (mode admin) : paramétrage champs + modèles, accessible partout ── */}
+      {session && odoo.isAdmin(session) && (
+        <div style={{ position: "fixed", top: isDesktopUI ? 16 : 68, right: 14, zIndex: 800 }}>
+          <GlobalFieldGear session={session} onToast={showToast} />
+        </div>
+      )}
 
       {/* ── Sidebar desktop (refonte) ── */}
       {isDesktopUI && session && (() => {

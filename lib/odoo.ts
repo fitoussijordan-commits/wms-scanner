@@ -1,5 +1,5 @@
 // lib/odoo.ts
-import { F } from "@/lib/fieldMap";
+import { F, M } from "@/lib/fieldMap";
 
 export interface OdooConfig { url: string; db: string; }
 export interface OdooSession { uid: number; name: string; login: string; sessionId: string; config: OdooConfig; }
@@ -14,7 +14,7 @@ export function isAdmin(session: OdooSession): boolean {
 export async function suggestPartners(session: OdooSession, q: string): Promise<{ id: number; name: string; ref: string }[]> {
   const t = q.trim();
   if (t.length < 2) return [];
-  const rows = await searchRead(session, "res.partner",
+  const rows = await searchRead(session, M("MODEL_PARTNER"),
     ["|", ["name", "ilike", t], ["ref", "ilike", t]],
     ["id", "name", "ref"], 12, "name");
   return rows.map((r: any) => ({ id: r.id, name: r.name || "", ref: r.ref || "" }));
@@ -24,7 +24,7 @@ export async function suggestPartners(session: OdooSession, q: string): Promise<
 export async function suggestProducts(session: OdooSession, q: string): Promise<{ id: number; name: string; ref: string }[]> {
   const t = q.trim();
   if (t.length < 2) return [];
-  const rows = await searchRead(session, "product.product",
+  const rows = await searchRead(session, M("MODEL_PRODUCT"),
     ["|", "|", ["default_code", "ilike", t], ["barcode", "ilike", t], ["name", "ilike", t]],
     ["id", "name", "default_code"], 12, "default_code");
   return rows.map((r: any) => ({ id: r.id, name: r.name || "", ref: r.default_code || "" }));
@@ -52,22 +52,22 @@ export async function searchClientProductSales(
 
   // 1. Partenaire : id précis si fourni, sinon recherche par nom/réf.
   const partners = partnerId
-    ? await searchRead(session, "res.partner", [["id", "=", partnerId]], ["id", "name"], 1)
-    : await searchRead(session, "res.partner", ["|", ["name", "ilike", cq], ["ref", "=", cq]], ["id", "name"], 20);
+    ? await searchRead(session, M("MODEL_PARTNER"), [["id", "=", partnerId]], ["id", "name"], 1)
+    : await searchRead(session, M("MODEL_PARTNER"), ["|", ["name", "ilike", cq], ["ref", "=", cq]], ["id", "name"], 20);
   if (!partners.length) return { partner: "", product: "", sales: [] };
   const partnerIds = partners.map((p: any) => p.id);
 
   // 2. Produit : id précis si fourni, sinon recherche par réf/EAN/nom.
   const prods = productId
-    ? await searchRead(session, "product.product", [["id", "=", productId]], ["id", "name", "default_code"], 1)
-    : await searchRead(session, "product.product",
+    ? await searchRead(session, M("MODEL_PRODUCT"), [["id", "=", productId]], ["id", "name", "default_code"], 1)
+    : await searchRead(session, M("MODEL_PRODUCT"),
         ["|", "|", ["default_code", "=", pq], ["barcode", "=", pq], ["name", "ilike", pq]],
         ["id", "name", "default_code"], 10);
   if (!prods.length) return { partner: partners[0].name, product: "", sales: [] };
   const productIds = prods.map((p: any) => p.id);
 
   // 3. Livraisons sortantes VALIDÉES de ces clients (OUT done).
-  const picks = await searchRead(session, "stock.picking",
+  const picks = await searchRead(session, M("MODEL_PICKING"),
     [["partner_id", "in", partnerIds], ["picking_type_code", "=", "outgoing"], ["state", "=", "done"]],
     ["id", "name", "date_done", "origin", "sale_id"], 1000, "date_done desc");
   if (!picks.length) return { partner: partners[0].name, product: prods[0].name, sales: [] };
@@ -75,7 +75,7 @@ export async function searchClientProductSales(
   for (const p of picks) pickById[p.id] = p;
 
   // 4. Lignes de mouvement de CE produit dans ces livraisons (qté faite > 0).
-  const mls = await searchRead(session, "stock.move.line",
+  const mls = await searchRead(session, M("MODEL_MOVE_LINE"),
     [["picking_id", "in", picks.map((p: any) => p.id)], ["product_id", "in", productIds], ["qty_done", ">", 0]],
     ["picking_id", "qty_done", "lot_id"], 5000);
 
@@ -108,7 +108,7 @@ export async function searchClientProductSales(
 
 // Liste des utilisateurs actifs Odoo (pour le panneau Administration des droits).
 export async function getActiveUsers(session: OdooSession): Promise<{ id: number; name: string; login: string }[]> {
-  const users = await searchRead(session, "res.users",
+  const users = await searchRead(session, M("MODEL_USERS"),
     [["active", "=", true], ["share", "=", false]],
     ["id", "name", "login"], 500, "name");
   return users
@@ -195,7 +195,7 @@ export async function callMethod(session: OdooSession, model: string, method: st
 
 export async function getInventoryFields(session: OdooSession): Promise<string[]> {
   const fields = await call(session, "/web/dataset/call_kw", {
-    model: "stock.quant", method: "fields_get", args: [], kwargs: { attributes: ["string", "type"] }
+    model: M("MODEL_QUANT"), method: "fields_get", args: [], kwargs: { attributes: ["string", "type"] }
   });
   return Object.keys(fields || {}).filter((k: string) => k.includes("inventor") || k.includes("reason") || k.includes("adjustment"));
 }
@@ -230,47 +230,47 @@ export async function smartScan(session: OdooSession, code: string): Promise<Sca
   const upper = trimmed.toUpperCase();
 
   // 1. Location by barcode (exact then case-insensitive)
-  const locs = await searchRead(session, "stock.location", [["barcode", "=", trimmed]], ["id", "name", "complete_name", "barcode"], 1);
+  const locs = await searchRead(session, M("MODEL_LOCATION"), [["barcode", "=", trimmed]], ["id", "name", "complete_name", "barcode"], 1);
   if (locs.length) return { type: "location", data: locs[0] };
   if (upper !== trimmed) {
-    const locsU = await searchRead(session, "stock.location", [["barcode", "=", upper]], ["id", "name", "complete_name", "barcode"], 1);
+    const locsU = await searchRead(session, M("MODEL_LOCATION"), [["barcode", "=", upper]], ["id", "name", "complete_name", "barcode"], 1);
     if (locsU.length) return { type: "location", data: locsU[0] };
   }
-  const locsI = await searchRead(session, "stock.location", [["barcode", "ilike", trimmed]], ["id", "name", "complete_name", "barcode"], 1);
+  const locsI = await searchRead(session, M("MODEL_LOCATION"), [["barcode", "ilike", trimmed]], ["id", "name", "complete_name", "barcode"], 1);
   if (locsI.length) return { type: "location", data: locsI[0] };
 
   // 2. Product by barcode (exact — EAN codes are numeric, case doesn't matter)
-  const byBC = await searchRead(session, "product.product", [["barcode", "=", trimmed]], PRODUCT_FIELDS, 1);
+  const byBC = await searchRead(session, M("MODEL_PRODUCT"), [["barcode", "=", trimmed]], PRODUCT_FIELDS, 1);
   if (byBC.length) return { type: "product", data: byBC[0] };
 
   // 3. Product by reference — exact, then uppercase, then ilike
-  const byRef = await searchRead(session, "product.product", [["default_code", "=", trimmed]], PRODUCT_FIELDS, 1);
+  const byRef = await searchRead(session, M("MODEL_PRODUCT"), [["default_code", "=", trimmed]], PRODUCT_FIELDS, 1);
   if (byRef.length) return { type: "product", data: byRef[0] };
   if (upper !== trimmed) {
-    const byRefU = await searchRead(session, "product.product", [["default_code", "=", upper]], PRODUCT_FIELDS, 1);
+    const byRefU = await searchRead(session, M("MODEL_PRODUCT"), [["default_code", "=", upper]], PRODUCT_FIELDS, 1);
     if (byRefU.length) return { type: "product", data: byRefU[0] };
   }
-  const byRefI = await searchRead(session, "product.product", [["default_code", "=ilike", trimmed]], PRODUCT_FIELDS, 1);
+  const byRefI = await searchRead(session, M("MODEL_PRODUCT"), [["default_code", "=ilike", trimmed]], PRODUCT_FIELDS, 1);
   if (byRefI.length) return { type: "product", data: byRefI[0] };
 
   // 4. Lot — exact, then uppercase, then ilike
   const LOT_FIELDS = ["id", "name", "product_id", "expiration_date", "use_date", "removal_date"];
-  let lots = await searchRead(session, "stock.lot", [["name", "=", trimmed]], LOT_FIELDS, 1);
-  if (!lots.length && upper !== trimmed) lots = await searchRead(session, "stock.lot", [["name", "=", upper]], LOT_FIELDS, 1);
-  if (!lots.length) lots = await searchRead(session, "stock.lot", [["name", "ilike", trimmed]], LOT_FIELDS, 1);
+  let lots = await searchRead(session, M("MODEL_LOT"), [["name", "=", trimmed]], LOT_FIELDS, 1);
+  if (!lots.length && upper !== trimmed) lots = await searchRead(session, M("MODEL_LOT"), [["name", "=", upper]], LOT_FIELDS, 1);
+  if (!lots.length) lots = await searchRead(session, M("MODEL_LOT"), [["name", "ilike", trimmed]], LOT_FIELDS, 1);
   if (lots.length) {
-    let prod = await searchRead(session, "product.product", [["id", "=", lots[0].product_id[0]]], PRODUCT_FIELDS, 1);
+    let prod = await searchRead(session, M("MODEL_PRODUCT"), [["id", "=", lots[0].product_id[0]]], PRODUCT_FIELDS, 1);
     // Fallback: archived product
-    if (!prod.length) prod = await searchRead(session, "product.product", [["id", "=", lots[0].product_id[0]], ["active", "=", false]], PRODUCT_FIELDS, 1);
+    if (!prod.length) prod = await searchRead(session, M("MODEL_PRODUCT"), [["id", "=", lots[0].product_id[0]], ["active", "=", false]], PRODUCT_FIELDS, 1);
     return { type: "lot", data: { lot: lots[0], product: prod[0] || null } };
   }
 
   // 5. Fallback: archived product by barcode
-  const archivedBC = await searchRead(session, "product.product", [["barcode", "=", trimmed], ["active", "=", false]], PRODUCT_FIELDS, 1);
+  const archivedBC = await searchRead(session, M("MODEL_PRODUCT"), [["barcode", "=", trimmed], ["active", "=", false]], PRODUCT_FIELDS, 1);
   if (archivedBC.length) return { type: "product", data: archivedBC[0] };
 
   // 6. Fallback: archived product by reference (case-insensitive)
-  let archivedRef = await searchRead(session, "product.product", [["default_code", "=ilike", trimmed], ["active", "=", false]], PRODUCT_FIELDS, 1);
+  let archivedRef = await searchRead(session, M("MODEL_PRODUCT"), [["default_code", "=ilike", trimmed], ["active", "=", false]], PRODUCT_FIELDS, 1);
   if (archivedRef.length) return { type: "product", data: archivedRef[0] };
 
   return { type: "not_found", code: trimmed };
@@ -293,22 +293,22 @@ export async function globalSearch(session: OdooSession, query: string): Promise
   // Fire all searches in parallel — limits kept small to reduce Odoo response time
   const [locs, productsByRefOrName, productsByBarcode, lots, supplierInfos] = await Promise.all([
     // Locations by complete_name (internal + transit)
-    searchRead(session, "stock.location",
+    searchRead(session, M("MODEL_LOCATION"),
       [["complete_name", "ilike", trimmed], ["usage", "in", ["internal", "transit"]]],
       ["id", "name", "complete_name", "barcode", "usage"], 20),
     // Products by internal ref OR name
-    searchRead(session, "product.product",
+    searchRead(session, M("MODEL_PRODUCT"),
       ["|", ["default_code", "ilike", trimmed], ["name", "ilike", trimmed]],
       PRODUCT_FIELDS, 50),
     // Products by barcode (exact — only if query looks like a barcode)
-    trimmed.length >= 6 ? searchRead(session, "product.product",
+    trimmed.length >= 6 ? searchRead(session, M("MODEL_PRODUCT"),
       [["barcode", "=", trimmed]], PRODUCT_FIELDS, 5) : Promise.resolve([]),
     // Lots by name
-    searchRead(session, "stock.lot",
+    searchRead(session, M("MODEL_LOT"),
       [["name", "ilike", trimmed]],
       ["id", "name", "product_id", "expiration_date"], 20),
     // Supplier refs
-    searchRead(session, "product.supplierinfo",
+    searchRead(session, M("MODEL_PRODUCT_SUPPLIER"),
       [["product_code", "ilike", trimmed]],
       ["id", "product_code", "product_id", "product_tmpl_id"], 30),
   ]);
@@ -342,7 +342,7 @@ export async function globalSearch(session: OdooSession, query: string): Promise
     .map((si: any) => si.product_tmpl_id[0]);
   let tmplProducts: any[] = [];
   if (tmplIds.length > 0) {
-    tmplProducts = await searchRead(session, "product.product",
+    tmplProducts = await searchRead(session, M("MODEL_PRODUCT"),
       [["product_tmpl_id", "in", tmplIds]],
       [...PRODUCT_FIELDS, "product_tmpl_id"],   // ← include product_tmpl_id for matching
       tmplIds.length * 3);
@@ -383,7 +383,7 @@ export async function globalSearch(session: OdooSession, query: string): Promise
   }
 
   if (newSupplierIds.size > 0) {
-    const newProds = await searchRead(session, "product.product",
+    const newProds = await searchRead(session, M("MODEL_PRODUCT"),
       [["id", "in", Array.from(newSupplierIds)]], PRODUCT_FIELDS, newSupplierIds.size);
     for (const p of newProds) {
       seenProductIds.add(p.id);
@@ -406,7 +406,7 @@ export async function globalSearch(session: OdooSession, query: string): Promise
 // All stock for a product across all internal locations
 export async function getAllStockForProduct(session: OdooSession, productId: number) {
   const quants = await searchRead(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     [["product_id", "=", productId], ["quantity", "!=", 0], ["location_id.usage", "=", "internal"]],
     ["location_id", "lot_id", "quantity", "reserved_quantity"],
     500, "location_id"
@@ -415,7 +415,7 @@ export async function getAllStockForProduct(session: OdooSession, productId: num
   // Enrich with lot expiration dates
   const lotIds = Array.from(new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0])));
   if (lotIds.length > 0) {
-    const lots = await searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "name", "expiration_date", "use_date", "removal_date"], lotIds.length);
+    const lots = await searchRead(session, M("MODEL_LOT"), [["id", "in", lotIds]], ["id", "name", "expiration_date", "use_date", "removal_date"], lotIds.length);
     const lotMap: Record<number, any> = {};
     for (const l of lots) lotMap[l.id] = l;
     for (const q of quants) {
@@ -435,7 +435,7 @@ export async function getAllStockForProduct(session: OdooSession, productId: num
 // Stock for a specific lot across internal locations
 export async function getStockForLot(session: OdooSession, lotId: number, productId: number) {
   return searchRead(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     [["lot_id", "=", lotId], ["product_id", "=", productId], ["quantity", "!=", 0], ["location_id.usage", "=", "internal"]],
     ["location_id", "lot_id", "quantity", "reserved_quantity"],
     200, "location_id"
@@ -445,7 +445,7 @@ export async function getStockForLot(session: OdooSession, lotId: number, produc
 // Stock at a specific location (for transfer mode)
 export async function getStockAtLocation(session: OdooSession, productId: number, locationId: number) {
   return searchRead(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     [["product_id", "=", productId], ["location_id", "=", locationId]],
     ["quantity", "lot_id", "reserved_quantity"]
   );
@@ -454,7 +454,7 @@ export async function getStockAtLocation(session: OdooSession, productId: number
 // All products at a location
 export async function getProductsAtLocation(session: OdooSession, locationId: number) {
   const quants = await searchRead(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     [["location_id", "=", locationId], ["quantity", "!=", 0]],
     ["id", "product_id", "location_id", "lot_id", "quantity", "reserved_quantity", "inventory_quantity"],
     500, "product_id"
@@ -462,7 +462,7 @@ export async function getProductsAtLocation(session: OdooSession, locationId: nu
   // Enrich with lot expiration dates
   const lotIds = Array.from(new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0])));
   if (lotIds.length > 0) {
-    const lots = await searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "name", "expiration_date", "use_date", "removal_date"], lotIds.length);
+    const lots = await searchRead(session, M("MODEL_LOT"), [["id", "in", lotIds]], ["id", "name", "expiration_date", "use_date", "removal_date"], lotIds.length);
     const lotMap: Record<number, any> = {};
     for (const l of lots) lotMap[l.id] = l;
     for (const q of quants) {
@@ -478,7 +478,7 @@ export async function getProductsAtLocation(session: OdooSession, locationId: nu
   // Enrich with product barcode and default_code
   const productIds = Array.from(new Set(quants.map((q: any) => q.product_id[0])));
   if (productIds.length > 0) {
-    const products = await searchRead(session, "product.product", [["id", "in", productIds]], ["id", "barcode", "default_code"], productIds.length);
+    const products = await searchRead(session, M("MODEL_PRODUCT"), [["id", "in", productIds]], ["id", "barcode", "default_code"], productIds.length);
     const prodMap: Record<number, any> = {};
     for (const p of products) prodMap[p.id] = p;
     for (const q of quants) {
@@ -493,7 +493,7 @@ export async function getProductsAtLocation(session: OdooSession, locationId: nu
 }
 
 export async function getLocations(session: OdooSession) {
-  return searchRead(session, "stock.location", [["usage", "in", ["internal", "transit"]]], ["id", "name", "complete_name", "barcode", "usage", "location_id"], 2000, "complete_name");
+  return searchRead(session, M("MODEL_LOCATION"), [["usage", "in", ["internal", "transit"]]], ["id", "name", "complete_name", "barcode", "usage", "location_id"], 2000, "complete_name");
 }
 
 // ============================================
@@ -512,7 +512,7 @@ export async function createLocation(session: OdooSession, loc: NewLocation): Pr
     usage: loc.usage || "internal",
   };
   if (loc.barcode && loc.barcode.trim()) vals.barcode = loc.barcode.trim();
-  const id = await create(session, "stock.location", vals);
+  const id = await create(session, M("MODEL_LOCATION"), vals);
   return id as number;
 }
 
@@ -520,7 +520,7 @@ export async function createLocation(session: OdooSession, loc: NewLocation): Pr
 export async function locationBarcodeExists(session: OdooSession, barcode: string): Promise<boolean> {
   const b = barcode.trim();
   if (!b) return false;
-  const found = await searchRead(session, "stock.location", [["barcode", "=", b]], ["id"], 1);
+  const found = await searchRead(session, M("MODEL_LOCATION"), [["barcode", "=", b]], ["id"], 1);
   return found.length > 0;
 }
 
@@ -528,7 +528,7 @@ export async function locationBarcodeExists(session: OdooSession, barcode: strin
 // RENAME LOCATION
 // ============================================
 export async function renameLocation(session: OdooSession, locationId: number, newName: string) {
-  return write(session, "stock.location", [locationId], { name: newName });
+  return write(session, M("MODEL_LOCATION"), [locationId], { name: newName });
 }
 
 // ============================================
@@ -550,17 +550,17 @@ async function _resolveWaitingIds(session: OdooSession) {
   // Résolution picking type PICK + outgoing + tag "Transmise" en parallèle
   const [pickTypesResult, outTypesResult, transmiseTagsResult] = await Promise.all([
     // Picking type PICK (cascade 3 essais regroupés)
-    searchRead(session, "stock.picking.type", [["code", "=", "internal"], ["name", "ilike", "pick"]], ["id"], 10)
+    searchRead(session, M("MODEL_PICKING_TYPE"), [["code", "=", "internal"], ["name", "ilike", "pick"]], ["id"], 10)
       .then(async (t: any[]) => {
         if (t.length) return t;
-        const t2 = await searchRead(session, "stock.picking.type", [["sequence_code", "=", "PICK"]], ["id"], 10);
+        const t2 = await searchRead(session, M("MODEL_PICKING_TYPE"), [["sequence_code", "=", "PICK"]], ["id"], 10);
         if (t2.length) return t2;
-        return searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+        return searchRead(session, M("MODEL_PICKING_TYPE"), [["code", "=", "outgoing"]], ["id"], 10);
       }),
     // Picking type OUT (pour l'enrichissement date)
-    searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10),
+    searchRead(session, M("MODEL_PICKING_TYPE"), [["code", "=", "outgoing"]], ["id"], 10),
     // Tag "Transmise"
-    searchRead(session, "crm.tag", [["name", "ilike", "transmise"]], ["id"], 10),
+    searchRead(session, M("MODEL_CRM_TAG"), [["name", "ilike", "transmise"]], ["id"], 10),
   ]);
 
   const result = {
@@ -590,7 +590,7 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
   }
 
   const pickings = await searchRead(
-    session, "stock.picking",
+    session, M("MODEL_PICKING"),
     domain,
     PICKING_FIELDS(),
     200,
@@ -601,7 +601,7 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
   const groupIds = Array.from(new Set(pickings.map((p: any) => p.group_id?.[0]).filter(Boolean)));
   if (groupIds.length > 0 && outTypeIds.length > 0) {
     const outPickings = await searchRead(
-      session, "stock.picking",
+      session, M("MODEL_PICKING"),
       [["group_id", "in", groupIds], ["picking_type_id", "in", outTypeIds]],
       ["id", "group_id", "scheduled_date", "date_deadline", "origin"],
       500
@@ -612,7 +612,7 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
     const soNames = Array.from(new Set(outPickings.map((op: any) => op.origin).filter(Boolean)));
     const salesMap: Record<string, any> = {};
     if (soNames.length > 0) {
-      const sales = await searchRead(session, "sale.order",
+      const sales = await searchRead(session, M("MODEL_SALE_ORDER"),
         [["name", "in", soNames]], ["id", "name", "commitment_date", "expected_date"], soNames.length);
       for (const s of sales) salesMap[s.name] = s;
     }
@@ -659,7 +659,7 @@ export async function getWaitingPickingsLight(session: OdooSession): Promise<{ i
   }
 
   const pickings = await searchRead(
-    session, "stock.picking",
+    session, M("MODEL_PICKING"),
     domain,
     ["id", "name", "scheduled_date", "date_deadline", F("SHIPPING_DATE"), "origin"],
     200
@@ -680,16 +680,16 @@ export async function checkAvailabilityAndGetResult(
   session: OdooSession,
   pickingId: number
 ): Promise<{ state: string; missingLines: any[] }> {
-  await callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
+  await callMethod(session, M("MODEL_PICKING"), "action_assign", [[pickingId]]);
 
-  const [picking] = await searchRead(session, "stock.picking",
+  const [picking] = await searchRead(session, M("MODEL_PICKING"),
     [["id", "=", pickingId]], ["state"], 1);
   const state = picking?.state || "confirmed";
 
   // Toujours vérifier les manquants — même si Odoo retourne "assigned",
   // il peut y avoir des lignes avec stock insuffisant (stock négatif, erreur Odoo…).
   // On compare la demande (product_uom_qty) à ce qui est vraiment réservé (reserved_availability).
-  const moves = await searchRead(session, "stock.move",
+  const moves = await searchRead(session, M("MODEL_MOVE"),
     [["picking_id", "=", pickingId], ["state", "!=", "cancel"]],
     ["product_id", "product_uom_qty", "reserved_availability"], 200);
   const missingLines = moves.filter((m: any) =>
@@ -716,16 +716,16 @@ export async function checkAvailabilityAndGetResult(
 export async function getPickingReportList(session: OdooSession): Promise<{ id: number; name: string; report_name: string }[]> {
   // Passer lang: fr_FR pour obtenir les noms traduits (ex: "Bon de préparation simplifié 2")
   return call(session, "/web/dataset/call_kw", {
-    model: "ir.actions.report",
+    model: M("MODEL_ACTIONS_REPORT"),
     method: "search_read",
-    args: [[["model", "=", "stock.picking"], ["report_type", "ilike", "qweb"]]],
+    args: [[["model", "=", M("MODEL_PICKING")], ["report_type", "ilike", "qweb"]]],
     kwargs: { fields: ["id", "name", "report_name"], limit: 50, order: "name asc", context: { lang: "fr_FR" } },
   });
 }
 
 const PREP_REPORT_KEY = "wms_prep_report_name";
 export function getSavedPrepReportName(): string {
-  try { return localStorage.getItem(PREP_REPORT_KEY) || "stock.report_picking"; } catch { return "stock.report_picking"; }
+  try { return localStorage.getItem(PREP_REPORT_KEY) || M("MODEL_REPORT_PICKING"); } catch { return M("MODEL_REPORT_PICKING"); }
 }
 export function savePrepReportName(reportName: string): void {
   try { localStorage.setItem(PREP_REPORT_KEY, reportName); } catch {}
@@ -833,7 +833,7 @@ export async function findSiblingPickingsForPartner(
   const { pickTypeIds } = await _resolveWaitingIds(session);
   if (!pickTypeIds.length) return [];
   const recs = await searchRead(
-    session, "stock.picking",
+    session, M("MODEL_PICKING"),
     [
       ["partner_id", "=", partnerId],
       ["picking_type_id", "in", pickTypeIds],
@@ -857,20 +857,20 @@ export async function findSiblingPickingsForPartner(
 // Get pick-type pickings in confirmed/assigned state (preparation)
 export async function getOutgoingPickings(session: OdooSession) {
   // Find pick picking type(s) — preparation before delivery
-  const types = await searchRead(session, "stock.picking.type", [["code", "=", "internal"], ["name", "ilike", "pick"]], ["id", "name"], 10);
+  const types = await searchRead(session, M("MODEL_PICKING_TYPE"), [["code", "=", "internal"], ["name", "ilike", "pick"]], ["id", "name"], 10);
   let typeIds = types.map((t: any) => t.id);
   if (!typeIds.length) {
-    const types2 = await searchRead(session, "stock.picking.type", [["sequence_code", "=", "PICK"]], ["id"], 10);
+    const types2 = await searchRead(session, M("MODEL_PICKING_TYPE"), [["sequence_code", "=", "PICK"]], ["id"], 10);
     typeIds = types2.map((t: any) => t.id);
   }
   if (!typeIds.length) {
-    const types3 = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+    const types3 = await searchRead(session, M("MODEL_PICKING_TYPE"), [["code", "=", "outgoing"]], ["id"], 10);
     typeIds = types3.map((t: any) => t.id);
   }
   if (!typeIds.length) return [];
 
   const pickings = await searchRead(
-    session, "stock.picking",
+    session, M("MODEL_PICKING"),
     [
       ["picking_type_id", "in", typeIds],
       ["state", "=", "assigned"],
@@ -884,11 +884,11 @@ export async function getOutgoingPickings(session: OdooSession) {
   const groupIds = Array.from(new Set(pickings.map((p: any) => p.group_id?.[0]).filter(Boolean)));
   if (groupIds.length > 0) {
     // Find outgoing pickings with same group_id
-    const outTypes = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+    const outTypes = await searchRead(session, M("MODEL_PICKING_TYPE"), [["code", "=", "outgoing"]], ["id"], 10);
     const outTypeIds = outTypes.map((t: any) => t.id);
     if (outTypeIds.length > 0) {
       const outPickings = await searchRead(
-        session, "stock.picking",
+        session, M("MODEL_PICKING"),
         [["group_id", "in", groupIds], ["picking_type_id", "in", outTypeIds]],
         ["id", "group_id", "scheduled_date", "date_deadline", "origin"],
         500
@@ -903,7 +903,7 @@ export async function getOutgoingPickings(session: OdooSession) {
       const salesMap: Record<string, any> = {};
       if (soNames.length > 0) {
         const sales = await searchRead(
-          session, "sale.order",
+          session, M("MODEL_SALE_ORDER"),
           [["name", "in", soNames]],
           ["id", "name", "commitment_date", "expected_date"],
           soNames.length
@@ -931,7 +931,7 @@ export async function getOutgoingPickings(session: OdooSession) {
   )) as number[];
   let excludeTagIds: number[] = [];
   if (tagIds.length > 0) {
-    const tags = await searchRead(session, "crm.tag", [["id", "in", tagIds]], ["id", "name"], tagIds.length);
+    const tags = await searchRead(session, M("MODEL_CRM_TAG"), [["id", "in", tagIds]], ["id", "name"], tagIds.length);
     excludeTagIds = tags.filter((t: any) => t.name?.toLowerCase().includes("en attente")).map((t: any) => t.id);
   }
   const filteredPickings = excludeTagIds.length > 0
@@ -960,7 +960,7 @@ export async function getOutgoingPickings(session: OdooSession) {
 // Get move lines for a picking (what needs to be prepared)
 export async function getPickingMoveLines(session: OdooSession, pickingId: number) {
   return searchRead(
-    session, "stock.move.line",
+    session, M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId]],
     ["id", "product_id", "lot_id", "location_id", "location_dest_id", "qty_done", "reserved_uom_qty", "picking_id", "move_id", "product_uom_id"],
     200,
@@ -979,7 +979,7 @@ export async function getPickingsProgress(
   for (const id of pickingIds) out[id] = { done: 0, total: 0, doneLines: 0, totalLines: 0 };
 
   const lines = await searchRead(
-    session, "stock.move.line",
+    session, M("MODEL_MOVE_LINE"),
     [["picking_id", "in", pickingIds], ["reserved_uom_qty", ">", 0]],
     ["picking_id", "qty_done", "reserved_uom_qty"],
     5000
@@ -1004,7 +1004,7 @@ export async function createDeviationMoveLine(session: OdooSession, params: {
   moveId: number; pickingId: number; productId: number; productUomId: number;
   lotId: number; locationId: number; locationDestId: number;
 }): Promise<number> {
-  return create(session, "stock.move.line", {
+  return create(session, M("MODEL_MOVE_LINE"), {
     move_id: params.moveId,
     picking_id: params.pickingId,
     product_id: params.productId,
@@ -1020,7 +1020,7 @@ export async function createDeviationMoveLine(session: OdooSession, params: {
 // Get stock.moves for a picking (demand info)
 export async function getPickingMoves(session: OdooSession, pickingId: number) {
   return searchRead(
-    session, "stock.move",
+    session, M("MODEL_MOVE"),
     [["picking_id", "=", pickingId]],
     ["id", "product_id", "product_uom_qty", "quantity_done", "product_uom", "state", "location_id", "location_dest_id", "move_line_ids"],
     200,
@@ -1030,14 +1030,14 @@ export async function getPickingMoves(session: OdooSession, pickingId: number) {
 
 // Check availability (action_assign)
 export async function checkAvailability(session: OdooSession, pickingId: number) {
-  return callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
+  return callMethod(session, M("MODEL_PICKING"), "action_assign", [[pickingId]]);
 }
 
 // Set qty_done on a move line
 export async function setMoveLineQtyDone(session: OdooSession, moveLineId: number, qtyDone: number, lotId?: number | null) {
   const vals: any = { qty_done: qtyDone };
   if (lotId) vals.lot_id = lotId;
-  return write(session, "stock.move.line", [moveLineId], vals);
+  return write(session, M("MODEL_MOVE_LINE"), [moveLineId], vals);
 }
 
 // Auto-fill all move lines qty_done = reserved_uom_qty
@@ -1045,7 +1045,7 @@ export async function autoFillPicking(session: OdooSession, pickingId: number) {
   const moveLines = await getPickingMoveLines(session, pickingId);
   for (const ml of moveLines) {
     if ((!ml.qty_done || ml.qty_done === 0) && ml.reserved_uom_qty > 0) {
-      await write(session, "stock.move.line", [ml.id], { qty_done: ml.reserved_uom_qty });
+      await write(session, M("MODEL_MOVE_LINE"), [ml.id], { qty_done: ml.reserved_uom_qty });
     }
   }
   return moveLines.length;
@@ -1066,11 +1066,11 @@ export async function createInternalTransfer(
   destLocationId: number,
   lines: { productId: number; productName: string; qty: number; uomId: number; lotId?: number | null }[]
 ) {
-  const pickingTypes = await searchRead(session, "stock.picking.type", [["code", "=", "internal"]], ["id"], 1);
+  const pickingTypes = await searchRead(session, M("MODEL_PICKING_TYPE"), [["code", "=", "internal"]], ["id"], 1);
   if (!pickingTypes.length) throw new Error("Aucun type d'opération interne trouvé");
 
   // Create picking + moves
-  const pickingId = await create(session, "stock.picking", {
+  const pickingId = await create(session, M("MODEL_PICKING"), {
     picking_type_id: pickingTypes[0].id,
     location_id: sourceLocationId,
     location_dest_id: destLocationId,
@@ -1085,20 +1085,20 @@ export async function createInternalTransfer(
   });
 
   // Confirm moves (state: draft → confirmed)
-  await callMethod(session, "stock.picking", "action_confirm", [[pickingId]]);
+  await callMethod(session, M("MODEL_PICKING"), "action_confirm", [[pickingId]]);
 
   // Odoo auto-creates move lines after action_confirm (splits by lot/location from available stock).
   // Delete them all — we'll create the correct ones manually with explicit source + lot.
-  const autoMoveLines = await searchRead(session, "stock.move.line",
+  const autoMoveLines = await searchRead(session, M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId]],
     ["id"], 500
   );
   if (autoMoveLines.length) {
-    await callMethod(session, "stock.move.line", "unlink", [autoMoveLines.map((ml: any) => ml.id)]);
+    await callMethod(session, M("MODEL_MOVE_LINE"), "unlink", [autoMoveLines.map((ml: any) => ml.id)]);
   }
 
   // Get moves (one per product, or multiple if same product appears twice with different lots)
-  const moves = await searchRead(session, "stock.move",
+  const moves = await searchRead(session, M("MODEL_MOVE"),
     [["picking_id", "=", pickingId]],
     ["id", "product_id", "product_uom"],
     200
@@ -1134,7 +1134,7 @@ export async function createInternalTransfer(
     };
     if (line.lotId) mlData.lot_id = line.lotId;
 
-    await create(session, "stock.move.line", mlData);
+    await create(session, M("MODEL_MOVE_LINE"), mlData);
   }
 
   return pickingId;
@@ -1150,11 +1150,11 @@ export async function createMultiDestTransfer(
   fallbackDestLocationId: number,
   lines: { productId: number; productName: string; qty: number; uomId: number; lotId?: number | null; destLocationId: number }[]
 ): Promise<number> {
-  const pickingTypes = await searchRead(session, "stock.picking.type", [["code", "=", "internal"]], ["id"], 1);
+  const pickingTypes = await searchRead(session, M("MODEL_PICKING_TYPE"), [["code", "=", "internal"]], ["id"], 1);
   if (!pickingTypes.length) throw new Error("Aucun type d'opération interne trouvé");
 
   // Un seul picking — location_dest_id = fallback (écrasé au niveau move/move_line)
-  const pickingId = await create(session, "stock.picking", {
+  const pickingId = await create(session, M("MODEL_PICKING"), {
     picking_type_id: pickingTypes[0].id,
     location_id: sourceLocationId,
     location_dest_id: fallbackDestLocationId,
@@ -1168,17 +1168,17 @@ export async function createMultiDestTransfer(
     }]),
   });
 
-  await callMethod(session, "stock.picking", "action_confirm", [[pickingId]]);
+  await callMethod(session, M("MODEL_PICKING"), "action_confirm", [[pickingId]]);
 
   // Supprimer les lignes auto-créées par Odoo (mauvaises sources/lots)
-  const autoMoveLines = await searchRead(session, "stock.move.line",
+  const autoMoveLines = await searchRead(session, M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId]], ["id"], 500);
   if (autoMoveLines.length) {
-    await callMethod(session, "stock.move.line", "unlink", [autoMoveLines.map((ml: any) => ml.id)]);
+    await callMethod(session, M("MODEL_MOVE_LINE"), "unlink", [autoMoveLines.map((ml: any) => ml.id)]);
   }
 
   // Récupérer les moves créés (un par ligne, dans l'ordre d'insertion)
-  const moves = await searchRead(session, "stock.move",
+  const moves = await searchRead(session, M("MODEL_MOVE"),
     [["picking_id", "=", pickingId]],
     ["id", "product_id", "product_uom", "location_dest_id"],
     200
@@ -1212,7 +1212,7 @@ export async function createMultiDestTransfer(
       reserved_uom_qty: 0,
     };
     if (line.lotId) mlData.lot_id = line.lotId;
-    await create(session, "stock.move.line", mlData);
+    await create(session, M("MODEL_MOVE_LINE"), mlData);
   }
 
   return pickingId;
@@ -1224,7 +1224,7 @@ export async function createMultiDestTransfer(
 
 /** OUT pickings en état "assigned" prêts à emballer (stock disponible en Sortie) */
 export async function getPackablePickings(session: OdooSession): Promise<any[]> {
-  return searchRead(session, "stock.picking",
+  return searchRead(session, M("MODEL_PICKING"),
     [["picking_type_code", "=", "outgoing"], ["state", "=", "assigned"]],
     ["id", "name", "state", "origin", F("CLIENT_ORDER"), "partner_id", "scheduled_date",
      "date_deadline", "move_ids_without_package", "carrier_id"],
@@ -1234,10 +1234,10 @@ export async function getPackablePickings(session: OdooSession): Promise<any[]> 
 
 /** Trouve le OUT picking lié à un PICK picking via group_id */
 export async function findOutPickingFromPick(session: OdooSession, pickId: number): Promise<any | null> {
-  const [pick] = await searchRead(session, "stock.picking", [["id", "=", pickId]], ["group_id"], 1);
+  const [pick] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", pickId]], ["group_id"], 1);
   if (!pick?.group_id) return null;
   const groupId = Array.isArray(pick.group_id) ? pick.group_id[0] : pick.group_id;
-  const outs = await searchRead(session, "stock.picking",
+  const outs = await searchRead(session, M("MODEL_PICKING"),
     [["group_id", "=", groupId], ["picking_type_code", "=", "outgoing"],
      ["state", "in", ["assigned", "confirmed", "waiting", "partially_available"]]],
     ["id", "name", "state", "origin", "partner_id", "scheduled_date", "date_deadline",
@@ -1263,12 +1263,12 @@ export async function packAndShipOut(
   // 1. Snapshot + pickInfo + action_assign + move lines — tout en parallèle
   //    Le picking est déjà "assigned" (c'est ainsi qu'on l'a trouvé), action_assign est quasi no-op
   const [before, pickInfo, , moveLines] = await Promise.all([
-    searchRead(session, "ir.attachment",
-      [["res_model", "=", "stock.picking"], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
+    searchRead(session, M("MODEL_ATTACHMENT"),
+      [["res_model", "=", M("MODEL_PICKING")], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
       ["id"], 100),
-    searchRead(session, "stock.picking", [["id", "=", outPickingId]], ["name", "carrier_id"], 1),
-    callMethod(session, "stock.picking", "action_assign", [[outPickingId]]).catch(() => null),
-    searchRead(session, "stock.move.line",
+    searchRead(session, M("MODEL_PICKING"), [["id", "=", outPickingId]], ["name", "carrier_id"], 1),
+    callMethod(session, M("MODEL_PICKING"), "action_assign", [[outPickingId]]).catch(() => null),
+    searchRead(session, M("MODEL_MOVE_LINE"),
       [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
       ["id", "reserved_uom_qty"], 500),
   ]);
@@ -1281,13 +1281,13 @@ export async function packAndShipOut(
   const totalWeight = packageWeights.reduce((s, w) => s + w, 0);
   const packageIds = await Promise.all(
     packageWeights.map(() =>
-      create(session, "stock.quant.package", {}) as Promise<number>
+      create(session, M("MODEL_QUANT_PACKAGE"), {}) as Promise<number>
     )
   );
   // Écriture explicite du poids sur chaque colis
   await Promise.all(
     packageIds.map((pkgId, i) =>
-      write(session, "stock.quant.package", [pkgId], { shipping_weight: packageWeights[i] }).catch(() => null)
+      write(session, M("MODEL_QUANT_PACKAGE"), [pkgId], { shipping_weight: packageWeights[i] }).catch(() => null)
     )
   );
 
@@ -1306,7 +1306,7 @@ export async function packAndShipOut(
       byQty[q].push(ml.id);
     }
     for (const [qtyStr, ids] of Object.entries(byQty)) {
-      tasks.push(write(session, "stock.move.line", ids, { qty_done: parseFloat(qtyStr) }));
+      tasks.push(write(session, M("MODEL_MOVE_LINE"), ids, { qty_done: parseFloat(qtyStr) }));
     }
   }
 
@@ -1321,7 +1321,7 @@ export async function packAndShipOut(
       mlsByPkg[pkgId].push(moveLines[i].id);
     }
     for (const [pkgId, ids] of Object.entries(mlsByPkg)) {
-      tasks.push(write(session, "stock.move.line", ids, { result_package_id: Number(pkgId) }));
+      tasks.push(write(session, M("MODEL_MOVE_LINE"), ids, { result_package_id: Number(pkgId) }));
     }
   }
 
@@ -1329,7 +1329,7 @@ export async function packAndShipOut(
   const assignedCount = Math.min(moveLines.length, packageIds.length);
   for (let i = assignedCount; i < packageIds.length; i++) {
     tasks.push(
-      create(session, "stock.package.level", {
+      create(session, M("MODEL_PACKAGE_LEVEL"), {
         package_id: packageIds[i], picking_id: outPickingId, is_done: true,
       }).catch(() => null)
     );
@@ -1337,12 +1337,12 @@ export async function packAndShipOut(
 
   // 8. Mettre à jour nb colis + poids total sur le picking
   tasks.push(
-    write(session, "stock.picking", [outPickingId], {
+    write(session, M("MODEL_PICKING"), [outPickingId], {
       number_of_packages: nPackages,
       shipping_weight: totalWeight,
     }).catch(() =>
       // number_of_packages peut ne pas exister — fallback poids seul
-      write(session, "stock.picking", [outPickingId], { shipping_weight: totalWeight }).catch(() => null)
+      write(session, M("MODEL_PICKING"), [outPickingId], { shipping_weight: totalWeight }).catch(() => null)
     )
   );
 
@@ -1355,8 +1355,8 @@ export async function packAndShipOut(
   const pollLabels = async (maxMs: number): Promise<any[]> => {
     const deadline = Date.now() + maxMs;
     while (Date.now() < deadline) {
-      const atts = await searchRead(session, "ir.attachment",
-        [["res_model", "=", "stock.picking"], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
+      const atts = await searchRead(session, M("MODEL_ATTACHMENT"),
+        [["res_model", "=", M("MODEL_PICKING")], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
         ["id", "name", "datas", "create_date"], 100);
       const fresh = atts.filter((a: any) => !existingIds.has(a.id));
       if (fresh.length > 0) return fresh;
@@ -1386,7 +1386,7 @@ export async function packAndShipOut(
     // → la fonction retourne tout de suite avec labelsPending=true
     // → le caller poll via fetchLabelAttachments() séparément
     (async () => {
-      try { await callMethod(session, "stock.picking", "send_to_shipper", [[outPickingId]]); } catch {}
+      try { await callMethod(session, M("MODEL_PICKING"), "send_to_shipper", [[outPickingId]]); } catch {}
     })();
   }
 
@@ -1413,12 +1413,12 @@ export async function validateSatellitePicking(
   pickingId: number,
   printOptions?: { blPrinterId?: number; blReportName?: string; overlayDate?: string }
 ): Promise<{ name: string; blPrinted: boolean; blError?: string }> {
-  const [info] = await searchRead(session, "stock.picking", [["id", "=", pickingId]], ["name"], 1);
+  const [info] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", pickingId]], ["name"], 1);
   const pickingName = info?.name || `OUT-${pickingId}`;
 
-  await callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
+  await callMethod(session, M("MODEL_PICKING"), "action_assign", [[pickingId]]);
 
-  const moveLines = await searchRead(session, "stock.move.line",
+  const moveLines = await searchRead(session, M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId], ["state", "not in", ["done", "cancel"]]],
     ["id", "reserved_uom_qty"], 500);
 
@@ -1432,7 +1432,7 @@ export async function validateSatellitePicking(
     }
     await Promise.all(
       Object.entries(byQty).map(([qtyStr, ids]) =>
-        write(session, "stock.move.line", ids, { qty_done: parseFloat(qtyStr) })
+        write(session, M("MODEL_MOVE_LINE"), ids, { qty_done: parseFloat(qtyStr) })
       )
     );
   }
@@ -1466,7 +1466,7 @@ export async function searchDoneOutPickings(session: OdooSession, query: string)
       ["carrier_tracking_ref", "ilike", trimmed],
     );
   }
-  return searchRead(session, "stock.picking",
+  return searchRead(session, M("MODEL_PICKING"),
     domain,
     ["id", "name", "origin", "partner_id", "carrier_id", "carrier_tracking_ref", "date_done", "state"],
     50, "date_done desc"
@@ -1484,7 +1484,7 @@ export async function searchPickingByCommande(session: OdooSession, ref: string)
       ["origin", "=", trimmed],      // correspondance exacte d'abord
       ["name", "=", trimmed],
   ];
-  let results = await searchRead(session, "stock.picking",
+  let results = await searchRead(session, M("MODEL_PICKING"),
     domain,
     ["id", "name", "origin", "partner_id", "carrier_id", "carrier_tracking_ref", "date_done", "state"],
     20, "date_done desc"
@@ -1498,7 +1498,7 @@ export async function searchPickingByCommande(session: OdooSession, ref: string)
         ["origin", "ilike", trimmed],
         ["name", "ilike", trimmed],
     ];
-    results = await searchRead(session, "stock.picking",
+    results = await searchRead(session, M("MODEL_PICKING"),
       domain2,
       ["id", "name", "origin", "partner_id", "carrier_id", "carrier_tracking_ref", "date_done", "state"],
       20, "date_done desc"
@@ -1509,8 +1509,8 @@ export async function searchPickingByCommande(session: OdooSession, ref: string)
 
 // Récupère les pièces jointes PDF d'un picking (labels transporteur)
 export async function getPickingAttachments(session: OdooSession, pickingId: number): Promise<any[]> {
-  return searchRead(session, "ir.attachment",
-    [["res_model", "=", "stock.picking"], ["res_id", "=", pickingId], ["mimetype", "ilike", "pdf"]],
+  return searchRead(session, M("MODEL_ATTACHMENT"),
+    [["res_model", "=", M("MODEL_PICKING")], ["res_id", "=", pickingId], ["mimetype", "ilike", "pdf"]],
     ["id", "name", "datas", "mimetype", "create_date"],
     20
   );
@@ -1518,11 +1518,11 @@ export async function getPickingAttachments(session: OdooSession, pickingId: num
 
 // Re-déclenche l'envoi au transporteur (peut fonctionner si le picking est toujours accessible)
 export async function resendToShipper(session: OdooSession, pickingId: number): Promise<void> {
-  await callMethod(session, "stock.picking", "send_to_shipper", [[pickingId]]);
+  await callMethod(session, M("MODEL_PICKING"), "send_to_shipper", [[pickingId]]);
 }
 
 export async function validatePicking(session: OdooSession, pickingId: number) {
-  const result = await callMethod(session, "stock.picking", "button_validate", [[pickingId]]);
+  const result = await callMethod(session, M("MODEL_PICKING"), "button_validate", [[pickingId]]);
 
   // Handle Odoo wizards
   if (result && typeof result === "object" && result.res_model) {
@@ -1530,13 +1530,13 @@ export async function validatePicking(session: OdooSession, pickingId: number) {
     const wizardId = result.res_id;
     const ctx = result.context || {};
 
-    if (wizardModel === "stock.immediate.transfer") {
+    if (wizardModel === M("MODEL_IMMEDIATE_TRANSFER")) {
       await call(session, "/web/dataset/call_kw", {
-        model: "stock.immediate.transfer", method: "process", args: [[wizardId]], kwargs: { context: ctx },
+        model: M("MODEL_IMMEDIATE_TRANSFER"), method: "process", args: [[wizardId]], kwargs: { context: ctx },
       });
-    } else if (wizardModel === "stock.backorder.confirmation") {
+    } else if (wizardModel === M("MODEL_BACKORDER_CONFIRM")) {
       await call(session, "/web/dataset/call_kw", {
-        model: "stock.backorder.confirmation", method: "process", args: [[wizardId]], kwargs: { context: ctx },
+        model: M("MODEL_BACKORDER_CONFIRM"), method: "process", args: [[wizardId]], kwargs: { context: ctx },
       });
     }
   }
@@ -1547,21 +1547,21 @@ export async function validatePicking(session: OdooSession, pickingId: number) {
 // Comme validatePicking mais REFUSE de créer un reliquat.
 // Lève une erreur avec la liste des articles manquants si Odoo veut un backorder.
 export async function validatePickingStrict(session: OdooSession, pickingId: number): Promise<void> {
-  const result = await callMethod(session, "stock.picking", "button_validate", [[pickingId]]);
+  const result = await callMethod(session, M("MODEL_PICKING"), "button_validate", [[pickingId]]);
 
   if (result && typeof result === "object" && result.res_model) {
     const wizardModel = result.res_model;
     const wizardId = result.res_id;
     const ctx = result.context || {};
 
-    if (wizardModel === "stock.immediate.transfer") {
+    if (wizardModel === M("MODEL_IMMEDIATE_TRANSFER")) {
       // Qtés non renseignées → OK, on force avec les qtés réservées
       await call(session, "/web/dataset/call_kw", {
-        model: "stock.immediate.transfer", method: "process", args: [[wizardId]], kwargs: { context: ctx },
+        model: M("MODEL_IMMEDIATE_TRANSFER"), method: "process", args: [[wizardId]], kwargs: { context: ctx },
       });
-    } else if (wizardModel === "stock.backorder.confirmation") {
+    } else if (wizardModel === M("MODEL_BACKORDER_CONFIRM")) {
       // Récupérer les lignes incomplètes pour afficher un message utile
-      const missing = await searchRead(session, "stock.move.line",
+      const missing = await searchRead(session, M("MODEL_MOVE_LINE"),
         [["picking_id", "=", pickingId], ["state", "not in", ["done", "cancel"]]],
         ["product_id", "qty_done", "reserved_uom_qty"], 10
       );
@@ -1584,7 +1584,7 @@ export async function matchSupplierRefs(session: OdooSession, supplierRefs: stri
   if (!supplierRefs.length) return {};
 
   const supplierInfos = await searchRead(
-    session, "product.supplierinfo",
+    session, M("MODEL_PRODUCT_SUPPLIER"),
     [["product_code", "in", supplierRefs]],
     ["id", "product_code", "product_id", "product_tmpl_id"],
     supplierRefs.length * 2
@@ -1607,7 +1607,7 @@ export async function matchSupplierRefs(session: OdooSession, supplierRefs: stri
   if (tmplOnlyRefs.length > 0) {
     const tmplIds = tmplOnlyRefs.map(([_, v]) => v.product_tmpl_id);
     const products = await searchRead(
-      session, "product.product",
+      session, M("MODEL_PRODUCT"),
       [["product_tmpl_id", "in", tmplIds]],
       ["id", "name", "product_tmpl_id", "default_code", "barcode"],
       tmplIds.length * 2
@@ -1627,7 +1627,7 @@ export async function matchSupplierRefs(session: OdooSession, supplierRefs: stri
   // Enrich product info
   if (productIds.size > 0) {
     const products = await searchRead(
-      session, "product.product",
+      session, M("MODEL_PRODUCT"),
       [["id", "in", Array.from(productIds)]],
       ["id", "name", "default_code", "barcode"],
       productIds.size
@@ -1686,7 +1686,7 @@ export async function matchEshopSkus(
 
   // ── Stratégie 1 : référence fournisseur ──────────────────────────────────
   const supplierInfos = await searchRead(
-    session, "product.supplierinfo",
+    session, M("MODEL_PRODUCT_SUPPLIER"),
     [["product_code", "in", skus]],
     ["id", "product_code", "product_id", "product_tmpl_id"],
     skus.length * 3
@@ -1711,7 +1711,7 @@ export async function matchEshopSkus(
   // Résoudre les template → product.product
   if (tmplIds.length > 0) {
     const variants = await searchRead(
-      session, "product.product",
+      session, M("MODEL_PRODUCT"),
       [["product_tmpl_id", "in", tmplIds]],
       ["id", "name", "product_tmpl_id", "default_code", "barcode"],
       tmplIds.length * 3
@@ -1727,7 +1727,7 @@ export async function matchEshopSkus(
   const needsEnrich = Object.entries(result).filter(([_, v]) => v.match_method === "supplier_ref" && !v.default_code && !v.barcode);
   if (needsEnrich.length > 0) {
     const ids = needsEnrich.map(([_, v]) => v.product_id);
-    const products = await searchRead(session, "product.product", [["id", "in", ids]], ["id", "name", "default_code", "barcode"], ids.length);
+    const products = await searchRead(session, M("MODEL_PRODUCT"), [["id", "in", ids]], ["id", "name", "default_code", "barcode"], ids.length);
     const pMap: Record<number, any> = {};
     for (const p of products) pMap[p.id] = p;
     for (const [sku, val] of needsEnrich) {
@@ -1742,7 +1742,7 @@ export async function matchEshopSkus(
   // Si la réf fournisseur n'a rien donné, on tente la réf interne Odoo.
   const remainingForRef = Array.from(remaining);
   const byDefaultCode = await searchRead(
-    session, "product.product",
+    session, M("MODEL_PRODUCT"),
     [["default_code", "in", remainingForRef]],
     ["id", "name", "default_code", "barcode"],
     remainingForRef.length
@@ -1757,7 +1757,7 @@ export async function matchEshopSkus(
   // ── Stratégie 2 : EAN / barcode ──────────────────────────────────────────
   const remainingArr = Array.from(remaining);
   const byBarcode = await searchRead(
-    session, "product.product",
+    session, M("MODEL_PRODUCT"),
     [["barcode", "in", remainingArr]],
     ["id", "name", "default_code", "barcode"],
     remainingArr.length
@@ -1776,22 +1776,22 @@ export async function matchEshopSkus(
     if (!s) continue;
     // a) réf fournisseur (product.supplierinfo.product_code) en =ilike
     const si = await searchRead(
-      session, "product.supplierinfo",
+      session, M("MODEL_PRODUCT_SUPPLIER"),
       [["product_code", "=ilike", s]],
       ["product_id", "product_tmpl_id"], 1
     );
     let prod: any = null;
     if (si.length && si[0].product_id) {
       const pid = si[0].product_id[0];
-      const ps = await searchRead(session, "product.product", [["id", "=", pid]], ["id", "name", "default_code", "barcode"], 1);
+      const ps = await searchRead(session, M("MODEL_PRODUCT"), [["id", "=", pid]], ["id", "name", "default_code", "barcode"], 1);
       if (ps.length) prod = ps[0];
     } else if (si.length && si[0].product_tmpl_id) {
-      const ps = await searchRead(session, "product.product", [["product_tmpl_id", "=", si[0].product_tmpl_id[0]]], ["id", "name", "default_code", "barcode"], 1);
+      const ps = await searchRead(session, M("MODEL_PRODUCT"), [["product_tmpl_id", "=", si[0].product_tmpl_id[0]]], ["id", "name", "default_code", "barcode"], 1);
       if (ps.length) prod = ps[0];
     }
     // b) sinon réf Odoo (default_code) en =ilike, actifs ou archivés
     if (!prod) {
-      const ps = await searchRead(session, "product.product", [["default_code", "=ilike", s], ["active", "in", [true, false]]], ["id", "name", "default_code", "barcode"], 1);
+      const ps = await searchRead(session, M("MODEL_PRODUCT"), [["default_code", "=ilike", s], ["active", "in", [true, false]]], ["id", "name", "default_code", "barcode"], 1);
       if (ps.length) prod = ps[0];
     }
     if (prod) addMatch(sku, prod, "ref");
@@ -1806,7 +1806,7 @@ export async function matchEshopSkus(
     const fragment = sku.replace(/[-_]/g, " ").replace(/\s+/g, " ").trim();
     if (fragment.length < 3) continue;
     const found = await searchRead(
-      session, "product.product",
+      session, M("MODEL_PRODUCT"),
       [["name", "ilike", fragment], ["active", "in", [true, false]]],
       ["id", "name", "default_code", "barcode"],
       1
@@ -1832,7 +1832,7 @@ export async function matchEshopSkus(
 
     // a) réf fournisseur sur le code nettoyé
     const sInfos = await searchRead(
-      session, "product.supplierinfo",
+      session, M("MODEL_PRODUCT_SUPPLIER"),
       [["product_code", "in", cleans]],
       ["id", "product_code", "product_id", "product_tmpl_id"],
       cleans.length * 3
@@ -1852,7 +1852,7 @@ export async function matchEshopSkus(
     }
     if (lrTmplIds.length > 0) {
       const variants = await searchRead(
-        session, "product.product",
+        session, M("MODEL_PRODUCT"),
         [["product_tmpl_id", "in", lrTmplIds]],
         ["id", "name", "product_tmpl_id", "default_code", "barcode"],
         lrTmplIds.length * 3
@@ -1868,7 +1868,7 @@ export async function matchEshopSkus(
     const lrNeedsEnrich = lrSkus.filter(s => result[s] && !result[s].default_code && !result[s].barcode);
     if (lrNeedsEnrich.length > 0) {
       const ids = lrNeedsEnrich.map(s => result[s].product_id);
-      const products = await searchRead(session, "product.product", [["id", "in", ids]], ["id", "name", "default_code", "barcode"], ids.length);
+      const products = await searchRead(session, M("MODEL_PRODUCT"), [["id", "in", ids]], ["id", "name", "default_code", "barcode"], ids.length);
       const pMap: Record<number, any> = {};
       for (const p of products) pMap[p.id] = p;
       for (const s of lrNeedsEnrich) {
@@ -1883,13 +1883,13 @@ export async function matchEshopSkus(
       const clean = sku.trim().replace(/^LR/i, "");
       if (!clean) continue;
       let found = await searchRead(
-        session, "product.product",
+        session, M("MODEL_PRODUCT"),
         [["default_code", "=ilike", clean], ["active", "in", [true, false]]],
         ["id", "name", "default_code", "barcode"], 1
       );
       if (!found.length) {
         found = await searchRead(
-          session, "product.product",
+          session, M("MODEL_PRODUCT"),
           [["barcode", "=", clean]],
           ["id", "name", "default_code", "barcode"], 1
         );
@@ -1919,7 +1919,7 @@ export async function matchEshopSkus(
 export async function debugSaleOrderFields(session: OdooSession, orderName: string): Promise<any> {
   const out: any = { order: orderName };
   try {
-    const fields = await callMethod(session, "sale.order", "fields_get", [], { attributes: ["string", "type"] });
+    const fields = await callMethod(session, M("MODEL_SALE_ORDER"), "fields_get", [], { attributes: ["string", "type"] });
     const keys = Object.keys(fields || {});
     // champs dont le nom OU le libellé évoque "facture/invoice/force"
     out.matching = keys
@@ -1927,7 +1927,7 @@ export async function debugSaleOrderFields(session: OdooSession, orderName: stri
       .map(k => ({ field: k, string: fields[k]?.string, type: fields[k]?.type }));
     // valeur actuelle sur la commande si on la trouve
     try {
-      const so = await searchRead(session, "sale.order", [["name", "=", orderName.trim()]], ["id", "name", ...out.matching.map((m: any) => m.field)], 1);
+      const so = await searchRead(session, M("MODEL_SALE_ORDER"), [["name", "=", orderName.trim()]], ["id", "name", ...out.matching.map((m: any) => m.field)], 1);
       out.current = so[0] || null;
     } catch (e: any) { out.currentError = e.message; }
   } catch (e: any) { out.error = e.message; }
@@ -1937,27 +1937,27 @@ export async function debugSaleOrderFields(session: OdooSession, orderName: stri
 export async function debugTntService(session: OdooSession, pickingName: string): Promise<any> {
   const out: any = { picking: pickingName };
   try {
-    const picks = await searchRead(session, "stock.picking", [["name", "=", pickingName.trim().toUpperCase()]], ["id", "name", "carrier_id"], 1);
+    const picks = await searchRead(session, M("MODEL_PICKING"), [["name", "=", pickingName.trim().toUpperCase()]], ["id", "name", "carrier_id"], 1);
     if (!picks.length) return { error: "OUT introuvable" };
     const pick = picks[0];
     out.pickingId = pick.id;
     out.carrier = pick.carrier_id;
     // champs du modèle tnt.shipping.service
     try {
-      const fields = await callMethod(session, "tnt.shipping.service", "fields_get", [], { attributes: ["string", "type", "relation"] });
+      const fields = await callMethod(session, M("MODEL_TNT_SHIPPING"), "fields_get", [], { attributes: ["string", "type", "relation"] });
       out.serviceFields = Object.keys(fields || {});
       out.serviceFieldsDetail = fields;
     } catch (e: any) { out.serviceFieldsError = e.message; }
     // enregistrements liés à ce picking (on tente plusieurs noms de champ de lien)
     for (const f of ["picking_id", "stock_picking_id", "delivery_id"]) {
       try {
-        const recs = await searchRead(session, "tnt.shipping.service", [[f, "=", pick.id]], ["id", "display_name", "service_code", "service_label", "due_date"], 20);
+        const recs = await searchRead(session, M("MODEL_TNT_SHIPPING"), [[f, "=", pick.id]], ["id", "display_name", "service_code", "service_label", "due_date"], 20);
         if (recs.length) { out.linkedVia = f; out.services = recs; break; }
       } catch {}
     }
     // si rien trouvé, on prend juste un échantillon du modèle
     if (!out.services) {
-      try { out.sample = await searchRead(session, "tnt.shipping.service", [], ["id", "display_name", "service_code", "service_label"], 10); } catch (e: any) { out.sampleError = e.message; }
+      try { out.sample = await searchRead(session, M("MODEL_TNT_SHIPPING"), [], ["id", "display_name", "service_code", "service_label"], 10); } catch (e: any) { out.sampleError = e.message; }
     }
   } catch (e: any) { out.error = e.message; }
   return out;
@@ -1972,7 +1972,7 @@ export async function applyTntService(
   try {
     // 1) Récupérer les services TNT liés à ce picking.
     const recs = await searchRead(
-      session, "tnt.shipping.service",
+      session, M("MODEL_TNT_SHIPPING"),
       [["picking_id", "=", pickingId]],
       ["id", "service_code", "service_label", "display_name"], 50
     );
@@ -1986,7 +1986,7 @@ export async function applyTntService(
     if (!target) return { ok: false, reason: "service-not-found" };
 
     // 3) Appeler set_service sur cet enregistrement.
-    await callMethod(session, "tnt.shipping.service", "set_service", [[target.id]]);
+    await callMethod(session, M("MODEL_TNT_SHIPPING"), "set_service", [[target.id]]);
     return { ok: true, serviceId: target.id };
   } catch (e: any) {
     return { ok: false, reason: e?.message || "error" };
@@ -2006,7 +2006,7 @@ export async function applyTntServiceWithRetry(
   // On essaie plusieurs noms de méthode possibles selon le module TNT installé.
   const genMethods = ["get_service", "get_services", "action_get_service", "compute_tnt_services", "get_tnt_services"];
   for (const m of genMethods) {
-    try { await callMethod(session, "stock.picking", m, [[pickingId]]); break; }
+    try { await callMethod(session, M("MODEL_PICKING"), m, [[pickingId]]); break; }
     catch {}
   }
   // Réessais (le calcul peut prendre un instant).
@@ -2028,14 +2028,14 @@ export async function getOutPickingLines(
   if (!names.length) return { lines: [], foundPickings: [], missing: [] };
 
   // 1) Trouver les pickings par nom.
-  const picks = await searchRead(session, "stock.picking", [["name", "in", names]], ["id", "name"], names.length * 2);
+  const picks = await searchRead(session, M("MODEL_PICKING"), [["name", "in", names]], ["id", "name"], names.length * 2);
   const foundPickings = picks.map((p: any) => p.name);
   const missing = names.filter(n => !foundPickings.includes(n));
   if (!picks.length) return { lines: [], foundPickings: [], missing: names };
 
   // 2) Mouvements de ces pickings → produit + qté demandée (product_uom_qty).
   const pickIds = picks.map((p: any) => p.id);
-  const moves = await searchRead(session, "stock.move",
+  const moves = await searchRead(session, M("MODEL_MOVE"),
     [["picking_id", "in", pickIds], ["product_uom_qty", ">", 0]],
     ["product_id", "product_uom_qty"], 5000);
 
@@ -2049,7 +2049,7 @@ export async function getOutPickingLines(
   if (!productIds.length) return { lines: [], foundPickings, missing };
 
   // 3) Réf/nom + emplacement (le plus rempli).
-  const prods = await searchRead(session, "product.product", [["id", "in", productIds]], ["id", "default_code", "name"], productIds.length);
+  const prods = await searchRead(session, M("MODEL_PRODUCT"), [["id", "in", productIds]], ["id", "default_code", "name"], productIds.length);
   const prodMap: Record<number, { ref: string; name: string }> = {};
   for (const p of prods) prodMap[p.id] = { ref: p.default_code || "", name: p.name || "" };
   const locMap = await getProductLocations(session, productIds) as Record<number, any>;
@@ -2070,7 +2070,7 @@ export async function getProductLocations(session: OdooSession, productIds: numb
   if (!productIds.length) return {};
 
   const quants = await searchRead(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     [["product_id", "in", productIds], ["quantity", ">", 0], ["location_id.usage", "=", "internal"]],
     ["product_id", "location_id", "quantity"],
     2000,
@@ -2106,17 +2106,17 @@ export async function savePreparedOrders(session: OdooSession, orderNumbers: str
     b64 += String.fromCharCode(...Array.from(bytes.slice(i, i + 8192)));
   b64 = btoa(b64);
   const fileName = "eshop_prepared_orders.json";
-  const existing = await searchRead(session, "ir.attachment", [["name", "=", fileName]], ["id"], 1);
+  const existing = await searchRead(session, M("MODEL_ATTACHMENT"), [["name", "=", fileName]], ["id"], 1);
   if (existing.length > 0) {
-    await write(session, "ir.attachment", [existing[0].id], { datas: b64 });
+    await write(session, M("MODEL_ATTACHMENT"), [existing[0].id], { datas: b64 });
   } else {
-    await create(session, "ir.attachment", { name: fileName, type: "binary", datas: b64, mimetype: "application/json", public: true });
+    await create(session, M("MODEL_ATTACHMENT"), { name: fileName, type: "binary", datas: b64, mimetype: "application/json", public: true });
   }
 }
 
 export async function loadPreparedOrders(session: OdooSession): Promise<string[]> {
   const today = new Date().toISOString().split("T")[0];
-  const attachments = await searchRead(session, "ir.attachment", [["name", "=", "eshop_prepared_orders.json"]], ["datas"], 1);
+  const attachments = await searchRead(session, M("MODEL_ATTACHMENT"), [["name", "=", "eshop_prepared_orders.json"]], ["datas"], 1);
   if (!attachments.length || !attachments[0].datas) return [];
   const binary = atob(attachments[0].datas);
   const bytes = new Uint8Array(binary.length);
@@ -2138,17 +2138,17 @@ export async function saveRangedState(session: OdooSession, packingName: string,
   for (let i = 0; i < bytes.length; i += 8192)
     b64 += String.fromCharCode(...Array.from(bytes.slice(i, i + 8192)));
   b64 = btoa(b64);
-  const existing = await searchRead(session, "ir.attachment", [["name", "=", fileName]], ["id"], 1);
+  const existing = await searchRead(session, M("MODEL_ATTACHMENT"), [["name", "=", fileName]], ["id"], 1);
   if (existing.length > 0) {
-    await write(session, "ir.attachment", [existing[0].id], { datas: b64 });
+    await write(session, M("MODEL_ATTACHMENT"), [existing[0].id], { datas: b64 });
   } else {
-    await create(session, "ir.attachment", { name: fileName, type: "binary", datas: b64, mimetype: "application/json", public: true });
+    await create(session, M("MODEL_ATTACHMENT"), { name: fileName, type: "binary", datas: b64, mimetype: "application/json", public: true });
   }
 }
 
 export async function loadRangedState(session: OdooSession, packingName: string): Promise<string[]> {
   const fileName = `arrivage_ranged_${packingName}.json`;
-  const attachments = await searchRead(session, "ir.attachment", [["name", "=", fileName]], ["datas"], 1);
+  const attachments = await searchRead(session, M("MODEL_ATTACHMENT"), [["name", "=", fileName]], ["datas"], 1);
   if (!attachments.length || !attachments[0].datas) return [];
   try {
     const binary = atob(attachments[0].datas);
@@ -2161,8 +2161,8 @@ export async function loadRangedState(session: OdooSession, packingName: string)
 
 export async function deleteRangedState(session: OdooSession, packingName: string): Promise<void> {
   const fileName = `arrivage_ranged_${packingName}.json`;
-  const existing = await searchRead(session, "ir.attachment", [["name", "=", fileName]], ["id"], 1);
-  if (existing.length) await callMethod(session, "ir.attachment", "unlink", [[existing[0].id]]);
+  const existing = await searchRead(session, M("MODEL_ATTACHMENT"), [["name", "=", fileName]], ["id"], 1);
+  if (existing.length) await callMethod(session, M("MODEL_ATTACHMENT"), "unlink", [[existing[0].id]]);
 }
 
 // ESHOP CHARIOT SKUS — shared list via ir.attachment
@@ -2177,16 +2177,16 @@ export async function saveChariotSkus(session: OdooSession, skus: string[]) {
   }
   b64 = btoa(b64);
   const fileName = "eshop_chariot_skus.json";
-  const existing = await searchRead(session, "ir.attachment", [["name", "=", fileName]], ["id"], 1);
+  const existing = await searchRead(session, M("MODEL_ATTACHMENT"), [["name", "=", fileName]], ["id"], 1);
   if (existing.length > 0) {
-    await write(session, "ir.attachment", [existing[0].id], { datas: b64 });
+    await write(session, M("MODEL_ATTACHMENT"), [existing[0].id], { datas: b64 });
     return;
   }
-  await create(session, "ir.attachment", { name: fileName, type: "binary", datas: b64, mimetype: "application/json", public: true });
+  await create(session, M("MODEL_ATTACHMENT"), { name: fileName, type: "binary", datas: b64, mimetype: "application/json", public: true });
 }
 
 export async function loadChariotSkus(session: OdooSession): Promise<string[]> {
-  const attachments = await searchRead(session, "ir.attachment", [["name", "=", "eshop_chariot_skus.json"]], ["datas"], 1);
+  const attachments = await searchRead(session, M("MODEL_ATTACHMENT"), [["name", "=", "eshop_chariot_skus.json"]], ["datas"], 1);
   if (!attachments.length || !attachments[0].datas) return [];
   const binary = atob(attachments[0].datas);
   const bytes = new Uint8Array(binary.length);
@@ -2217,14 +2217,14 @@ export async function savePackingList(session: OdooSession, name: string, data: 
   const fileName = `packing_${name}.json`;
 
   // Check if one already exists with same name
-  const existing = await searchRead(session, "ir.attachment", [["name", "=", fileName]], ["id"], 1);
+  const existing = await searchRead(session, M("MODEL_ATTACHMENT"), [["name", "=", fileName]], ["id"], 1);
   if (existing.length > 0) {
-    await write(session, "ir.attachment", [existing[0].id], { datas: b64 });
+    await write(session, M("MODEL_ATTACHMENT"), [existing[0].id], { datas: b64 });
     return existing[0].id;
   }
 
   // Create new — no res_model/res_id to avoid permission issues
-  return create(session, "ir.attachment", {
+  return create(session, M("MODEL_ATTACHMENT"), {
     name: fileName,
     type: "binary",
     datas: b64,
@@ -2236,7 +2236,7 @@ export async function savePackingList(session: OdooSession, name: string, data: 
 export async function loadPackingList(session: OdooSession, name: string) {
   const fileName = `packing_${name}.json`;
   const attachments = await searchRead(
-    session, "ir.attachment",
+    session, M("MODEL_ATTACHMENT"),
     [["name", "=", fileName]],
     ["id", "name", "datas", "write_date"],
     1, "write_date desc"
@@ -2253,7 +2253,7 @@ export async function loadPackingList(session: OdooSession, name: string) {
 
 export async function listPackingLists(session: OdooSession) {
   return searchRead(
-    session, "ir.attachment",
+    session, M("MODEL_ATTACHMENT"),
     [["name", "ilike", "packing_"], ["name", "ilike", ".json"]],
     ["id", "name", "write_date", "create_date"],
     50, "write_date desc"
@@ -2261,7 +2261,7 @@ export async function listPackingLists(session: OdooSession) {
 }
 
 export async function deletePackingList(session: OdooSession, attachmentId: number) {
-  return callMethod(session, "ir.attachment", "unlink", [[attachmentId]]);
+  return callMethod(session, M("MODEL_ATTACHMENT"), "unlink", [[attachmentId]]);
 }
 
 // ============================================
@@ -2271,7 +2271,7 @@ export async function deletePackingList(session: OdooSession, attachmentId: numb
 // Get all stock.quant ids for a product (with optional lot filter)
 export async function getQuantsForProduct(session: OdooSession, productId: number): Promise<any[]> {
   const quants = await searchRead(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     [["product_id", "=", productId], ["location_id.usage", "=", "internal"]],
     ["id", "location_id", "lot_id", "quantity", "reserved_quantity", "inventory_quantity"],
     500, "location_id"
@@ -2280,7 +2280,7 @@ export async function getQuantsForProduct(session: OdooSession, productId: numbe
   // Enrich lot expiry
   const lotIds = Array.from(new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0]))) as number[];
   if (lotIds.length > 0) {
-    const lots = await searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "name", "expiration_date", "use_date"], lotIds.length);
+    const lots = await searchRead(session, M("MODEL_LOT"), [["id", "in", lotIds]], ["id", "name", "expiration_date", "use_date"], lotIds.length);
     const lotMap: Record<number, any> = {};
     for (const l of lots) lotMap[l.id] = l;
     for (const q of quants) {
@@ -2321,14 +2321,14 @@ export async function getOrderVolumeCm3(
   const ids = Array.from(new Set(lines.map(l => l.productId).filter(Boolean)));
   if (!ids.length) return { totalCm3: 0, missing: [] };
   const prods = await searchRead(
-    session, "product.product",
+    session, M("MODEL_PRODUCT"),
     [["id", "in", ids]],
     ["id", "product_tmpl_id", "volume"], ids.length
   );
   const tmplIds = Array.from(new Set(prods.map((p: any) => p.product_tmpl_id?.[0]).filter(Boolean)));
   const _dimField = F("PRODUCT_DIMENSIONS");
   const tmpls = tmplIds.length
-    ? await searchRead(session, "product.template", [["id", "in", tmplIds]], ["id", _dimField, "volume"], tmplIds.length)
+    ? await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), [["id", "in", tmplIds]], ["id", _dimField, "volume"], tmplIds.length)
     : [];
   const tmplMap: Record<number, any> = {};
   for (const t of tmpls) tmplMap[t.id] = t;
@@ -2376,17 +2376,17 @@ export async function applyInventoryAdjustment(
   reason?: string
 ): Promise<void> {
   // 1. Toujours écrire la quantité sur le quant
-  await write(session, "stock.quant", [quantId], { inventory_quantity: newQty });
+  await write(session, M("MODEL_QUANT"), [quantId], { inventory_quantity: newQty });
 
   if (reason?.trim()) {
     // 2a. Avec raison : laisser le wizard appliquer ET nommer (ne pas appeler action_apply_inventory)
     // Le wizard stock.inventory.adjustment.name.action_apply() fait les deux en une fois
     try {
-      const wizardId = await create(session, "stock.inventory.adjustment.name", {
+      const wizardId = await create(session, M("MODEL_INVENTORY_ADJ_NAME"), {
         inventory_adjustment_name: reason.trim(),
         quant_ids: [[6, 0, [quantId]]],
       }) as number;
-      await callMethod(session, "stock.inventory.adjustment.name", "action_apply", [[wizardId]]);
+      await callMethod(session, M("MODEL_INVENTORY_ADJ_NAME"), "action_apply", [[wizardId]]);
       return;
     } catch {
       // Si le wizard échoue → fallback sans raison
@@ -2394,7 +2394,7 @@ export async function applyInventoryAdjustment(
   }
 
   // 2b. Sans raison (ou fallback) : appel direct
-  await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
+  await callMethod(session, M("MODEL_QUANT"), "action_apply_inventory", [[quantId]]);
 }
 
 // Applique PLUSIEURS ajustements de quant en UNE SEULE opération.
@@ -2454,17 +2454,17 @@ export async function createInventoryAdjustment(
     inventory_quantity: newQty,
   };
   if (lotId) vals.lot_id = lotId;
-  const quantId = await create(session, "stock.quant", vals) as number;
-  await callMethod(session, "stock.quant", "action_apply_inventory", [[quantId]]);
+  const quantId = await create(session, M("MODEL_QUANT"), vals) as number;
+  await callMethod(session, M("MODEL_QUANT"), "action_apply_inventory", [[quantId]]);
   if (reason?.trim()) {
     try {
       const moves = await searchRead(
-        session, "stock.move",
+        session, M("MODEL_MOVE"),
         [["state", "=", "done"], ["product_id", "=", productId],
          ["|", ["location_id", "=", locationId], ["location_dest_id", "=", locationId]]],
         ["id"], 1, "date desc"
       );
-      if (moves.length) await write(session, "stock.move", [moves[0].id], { reference: reason.trim() });
+      if (moves.length) await write(session, M("MODEL_MOVE"), [moves[0].id], { reference: reason.trim() });
     } catch {}
   }
 }
@@ -2475,7 +2475,7 @@ export async function createInventoryAdjustment(
 // n'apparaissent pas ici alors qu'ils existent (visibles dans Sorties orphelines).
 export async function getNegativeStockQuants(session: OdooSession): Promise<any[]> {
   const quants = await searchRead(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     ["&", ["quantity", "<", 0],
       "|", ["location_id.usage", "=", "internal"],
       "|", ["location_id.usage", "=", "output"], ["location_id.complete_name", "ilike", "sortie"]],
@@ -2498,16 +2498,16 @@ export async function getNegativeStockQuants(session: OdooSession): Promise<any[
 // ============================================
 
 export async function getConfigParam(session: OdooSession, key: string): Promise<string | null> {
-  const res = await searchRead(session, "ir.config_parameter", [["key", "=", key]], ["value"], 1);
+  const res = await searchRead(session, M("MODEL_CONFIG_PARAM"), [["key", "=", key]], ["value"], 1);
   return res.length ? res[0].value : null;
 }
 
 export async function setConfigParam(session: OdooSession, key: string, value: string): Promise<void> {
-  const res = await searchRead(session, "ir.config_parameter", [["key", "=", key]], ["id"], 1);
+  const res = await searchRead(session, M("MODEL_CONFIG_PARAM"), [["key", "=", key]], ["id"], 1);
   if (res.length) {
-    await write(session, "ir.config_parameter", [res[0].id], { value });
+    await write(session, M("MODEL_CONFIG_PARAM"), [res[0].id], { value });
   } else {
-    await create(session, "ir.config_parameter", { key, value });
+    await create(session, M("MODEL_CONFIG_PARAM"), { key, value });
   }
 }
 
@@ -2520,7 +2520,7 @@ export async function putInPack(session: OdooSession, pickingId: number, moveLin
   // Set result_package_id to create a new package for selected lines
   // First call action_put_in_pack on the picking with selected move line ids
   const result = await call(session, "/web/dataset/call_kw", {
-    model: "stock.picking",
+    model: M("MODEL_PICKING"),
     method: "action_put_in_pack",
     args: [[pickingId]],
     kwargs: {
@@ -2537,13 +2537,13 @@ export async function putInPack(session: OdooSession, pickingId: number, moveLin
  */
 export async function createPackage(session: OdooSession): Promise<{ id: number; name: string }> {
   const pkgId = await call(session, "/web/dataset/call_kw", {
-    model: "stock.quant.package",
+    model: M("MODEL_QUANT_PACKAGE"),
     method: "create",
     args: [{}],
     kwargs: {},
   });
   // Read back name (Odoo auto-generates it)
-  const pkgs = await searchRead(session, "stock.quant.package", [["id", "=", pkgId]], ["name"], 1);
+  const pkgs = await searchRead(session, M("MODEL_QUANT_PACKAGE"), [["id", "=", pkgId]], ["name"], 1);
   const name = pkgs[0]?.name || `PACK${pkgId}`;
   return { id: pkgId, name };
 }
@@ -2555,7 +2555,7 @@ export async function createPackage(session: OdooSession): Promise<{ id: number;
 export async function assignLinesToPackage(session: OdooSession, moveLineIds: number[], packageId: number): Promise<void> {
   if (!moveLineIds.length) return;
   await call(session, "/web/dataset/call_kw", {
-    model: "stock.move.line",
+    model: M("MODEL_MOVE_LINE"),
     method: "write",
     args: [moveLineIds, { result_package_id: packageId }],
     kwargs: {},
@@ -2565,7 +2565,7 @@ export async function assignLinesToPackage(session: OdooSession, moveLineIds: nu
 export async function getPickingPackages(session: OdooSession, pickingId: number): Promise<any[]> {
   const lines = await searchRead(
     session,
-    "stock.move.line",
+    M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId], ["result_package_id", "!=", false]],
     ["result_package_id", "product_id", "lot_id", "qty_done", "reserved_uom_qty"],
     200
@@ -2582,7 +2582,7 @@ export async function getPickingPackages(session: OdooSession, pickingId: number
 }
 
 export async function setPackageWeight(session: OdooSession, packageId: number, weight: number) {
-  return write(session, "stock.quant.package", [packageId], { shipping_weight: weight });
+  return write(session, M("MODEL_QUANT_PACKAGE"), [packageId], { shipping_weight: weight });
 }
 
 // ============================================
@@ -2607,14 +2607,14 @@ export async function addPackageAndSendToShipper(
 ): Promise<{ packageId: number; attachments: any[] }> {
   // 1. Snapshot des pièces jointes avant
   const attachmentsBefore = await searchRead(
-    session, "ir.attachment",
-    [["res_model", "=", "stock.picking"], ["res_id", "=", pickingId], ["mimetype", "ilike", "pdf"]],
+    session, M("MODEL_ATTACHMENT"),
+    [["res_model", "=", M("MODEL_PICKING")], ["res_id", "=", pickingId], ["mimetype", "ilike", "pdf"]],
     ["id"], 100
   );
   const existingIds = new Set(attachmentsBefore.map((a: any) => a.id));
 
   // 2. Créer le package avec le poids
-  const packageId = await create(session, "stock.quant.package", {
+  const packageId = await create(session, M("MODEL_QUANT_PACKAGE"), {
     shipping_weight: weightKg,
   }) as number;
 
@@ -2624,19 +2624,19 @@ export async function addPackageAndSendToShipper(
   //    b) Créer aussi un stock.package.level pour les versions Odoo qui le lisent
   try {
     const doneLines = await searchRead(
-      session, "stock.move.line",
+      session, M("MODEL_MOVE_LINE"),
       [["picking_id", "=", pickingId]],
       ["id"],
       500
     );
     if (doneLines.length > 0) {
       const ids = doneLines.map((l: any) => l.id);
-      await write(session, "stock.move.line", ids, { result_package_id: packageId });
+      await write(session, M("MODEL_MOVE_LINE"), ids, { result_package_id: packageId });
     }
   } catch { /* best-effort */ }
 
   try {
-    await create(session, "stock.package.level", {
+    await create(session, M("MODEL_PACKAGE_LEVEL"), {
       package_id: packageId,
       picking_id: pickingId,
       is_done: true,
@@ -2645,7 +2645,7 @@ export async function addPackageAndSendToShipper(
 
   // 4. Incrémenter number_of_packages sur le picking pour TNT
   try {
-    const picking = await searchRead(session, "stock.picking",
+    const picking = await searchRead(session, M("MODEL_PICKING"),
       [["id", "=", pickingId]],
       ["shipping_weight", "number_of_packages"],
       1
@@ -2653,7 +2653,7 @@ export async function addPackageAndSendToShipper(
     if (picking.length > 0) {
       const currentWeight = picking[0].shipping_weight || 0;
       const currentPkgs = picking[0].number_of_packages || 1;
-      await write(session, "stock.picking", [pickingId], {
+      await write(session, M("MODEL_PICKING"), [pickingId], {
         shipping_weight: currentWeight + weightKg,
         number_of_packages: currentPkgs + 1,
       });
@@ -2661,13 +2661,13 @@ export async function addPackageAndSendToShipper(
   } catch {}
 
   // 5. Appeler send_to_shipper
-  await callMethod(session, "stock.picking", "send_to_shipper", [[pickingId]]);
+  await callMethod(session, M("MODEL_PICKING"), "send_to_shipper", [[pickingId]]);
 
   // 6. Attendre puis récupérer les nouvelles pièces jointes
   await new Promise(resolve => setTimeout(resolve, 2000));
   const attachmentsAfter = await searchRead(
-    session, "ir.attachment",
-    [["res_model", "=", "stock.picking"], ["res_id", "=", pickingId], ["mimetype", "ilike", "pdf"]],
+    session, M("MODEL_ATTACHMENT"),
+    [["res_model", "=", M("MODEL_PICKING")], ["res_id", "=", pickingId], ["mimetype", "ilike", "pdf"]],
     ["id", "name", "datas", "create_date"],
     100
   );
@@ -2695,7 +2695,7 @@ export async function matchWalaArticles(
   // C'est le champ que l'utilisateur tient à jour. La réf custom est figée → ne jamais la privilégier.
   {
     const sis = await searchRead(
-      session, "product.supplierinfo",
+      session, M("MODEL_PRODUCT_SUPPLIER"),
       [["product_code", "in", articleCodes]],
       ["id", "product_code", "product_id", "product_tmpl_id"],
       0
@@ -2710,7 +2710,7 @@ export async function matchWalaArticles(
     const tmplById: Record<number, any> = {};
     if (tmplIds.size) {
       const tmpls = await searchRead(
-        session, "product.template",
+        session, M("MODEL_PRODUCT_TEMPLATE"),
         [["id", "in", Array.from(tmplIds)]],
         ["id", "name", "default_code", "uom_id", "product_variant_ids"], 0
       );
@@ -2720,7 +2720,7 @@ export async function matchWalaArticles(
     const variantToTmpl: Record<number, any> = {};
     if (orphanVariantIds.size) {
       const prods = await searchRead(
-        session, "product.product",
+        session, M("MODEL_PRODUCT"),
         [["id", "in", Array.from(orphanVariantIds)]],
         ["id", "name", "default_code", "uom_id", "product_tmpl_id"], 0
       );
@@ -2759,7 +2759,7 @@ export async function matchWalaArticles(
     try {
       const _supCodeField = F("SUPPLIER_PRODUCT_CODE");
       const templates = await searchRead(
-        session, "product.template",
+        session, M("MODEL_PRODUCT_TEMPLATE"),
         [[_supCodeField, "in", remaining]],
         ["id", "name", "default_code", _supCodeField, "product_variant_ids", "uom_id"],
         0
@@ -2787,7 +2787,7 @@ export async function matchWalaArticles(
 /** Récupère l'ID Odoo du fournisseur WALA */
 export async function getWalaPartnerId(session: OdooSession): Promise<number> {
   const partners = await searchRead(
-    session, "res.partner",
+    session, M("MODEL_PARTNER"),
     [["name", "=", "WALA Heilmittel GmbH"]],
     ["id", "name"], 1
   );
@@ -2849,17 +2849,17 @@ export async function createAndConfirmPO(
   };
   if (options.partnerRef) poValues.partner_ref = options.partnerRef;
 
-  const poId = await create(session, "purchase.order", poValues);
+  const poId = await create(session, M("MODEL_PURCHASE_ORDER"), poValues);
 
-  const poRecords = await searchRead(session, "purchase.order", [["id", "=", poId]], ["id", "name"], 1);
+  const poRecords = await searchRead(session, M("MODEL_PURCHASE_ORDER"), [["id", "=", poId]], ["id", "name"], 1);
   const poName = poRecords[0]?.name || `PO-${poId}`;
 
   // Confirmer le bon de commande
-  await callMethod(session, "purchase.order", "button_confirm", [[poId]]);
+  await callMethod(session, M("MODEL_PURCHASE_ORDER"), "button_confirm", [[poId]]);
 
   // Récupérer la réception générée
   const pickings = await searchRead(
-    session, "stock.picking",
+    session, M("MODEL_PICKING"),
     [["purchase_id", "=", poId]],
     ["id", "name", "location_id", "location_dest_id"],
     5
@@ -2880,10 +2880,10 @@ export async function createAndConfirmPO(
 /** Annule puis supprime un bon de commande (rollback en cas d'échec d'import) */
 export async function cancelAndDeletePO(session: OdooSession, poId: number): Promise<void> {
   try {
-    await callMethod(session, "purchase.order", "button_cancel", [[poId]]);
+    await callMethod(session, M("MODEL_PURCHASE_ORDER"), "button_cancel", [[poId]]);
   } catch {} // ignore si déjà annulé
   try {
-    await unlink(session, "purchase.order", [poId]);
+    await unlink(session, M("MODEL_PURCHASE_ORDER"), [poId]);
   } catch {} // ignore si non supprimable
 }
 
@@ -2895,7 +2895,7 @@ export async function getOrCreateLot(
   expiryDate: string
 ): Promise<{ id: number; existed: boolean }> {
   const existing = await searchRead(
-    session, "stock.lot",
+    session, M("MODEL_LOT"),
     [["name", "=", lotName], ["product_id", "=", productId]],
     ["id", "name"], 1
   );
@@ -2904,7 +2904,7 @@ export async function getOrCreateLot(
   const values: any = { name: lotName, product_id: productId, company_id: 1 };
   if (expiryDate) values.expiration_date = expiryDate + " 00:00:00";
 
-  const id = await create(session, "stock.lot", values);
+  const id = await create(session, M("MODEL_LOT"), values);
   return { id, existed: false };
 }
 
@@ -2938,13 +2938,13 @@ export async function setReceptionLots(
 
   // Récupérer les mouvements et lignes de mouvement existants
   const moves = await searchRead(
-    session, "stock.move",
+    session, M("MODEL_MOVE"),
     [["picking_id", "=", pickingId]],
     ["id", "product_id", "product_qty", "product_uom"],
     0
   );
   const moveLines = await searchRead(
-    session, "stock.move.line",
+    session, M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId]],
     ["id", "product_id", "qty_done", "lot_id", "move_id", "product_uom_id"],
     0
@@ -2985,7 +2985,7 @@ export async function setReceptionLots(
         vals.lot_id = line.lotId;
         vals.lot_name = line.lotName;
       }
-      await write(session, "stock.move.line", [ml.id], vals);
+      await write(session, M("MODEL_MOVE_LINE"), [ml.id], vals);
     } else {
       // Pas de move.line dispo : on crée une nouvelle ligne SUR LE MOVE DU MÊME PRODUIT.
       const move = moveByProduct[line.productId];
@@ -3008,7 +3008,7 @@ export async function setReceptionLots(
         vals.lot_id = line.lotId;
         vals.lot_name = line.lotName;
       }
-      await create(session, "stock.move.line", vals);
+      await create(session, M("MODEL_MOVE_LINE"), vals);
     }
   }
 
@@ -3044,7 +3044,7 @@ export async function getDlvStockLots(session: OdooSession): Promise<{
 }[]> {
   // 1. Quants internes avec lot, quantité positive
   const quants: any[] = await searchRead(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     [["location_id.usage", "=", "internal"], ["lot_id", "!=", false], ["quantity", ">", 0]],
     ["product_id", "lot_id", "quantity", "reserved_quantity"],
     5000
@@ -3054,7 +3054,7 @@ export async function getDlvStockLots(session: OdooSession): Promise<{
   // 2. Lots → dates d'expiration
   const lotIds = Array.from(new Set(quants.map((q: any) => q.lot_id[0]))) as number[];
   const lots: any[] = await searchRead(
-    session, "stock.lot",
+    session, M("MODEL_LOT"),
     [["id", "in", lotIds]],
     ["id", "name", "expiration_date", "use_date", "removal_date"],
     lotIds.length
@@ -3072,7 +3072,7 @@ export async function getDlvStockLots(session: OdooSession): Promise<{
   // 4. Produits → ref + nom
   const productIds = Array.from(new Set(withDlv.map((q: any) => q.product_id[0]))) as number[];
   const products: any[] = await searchRead(
-    session, "product.product",
+    session, M("MODEL_PRODUCT"),
     [["id", "in", productIds]],
     ["id", "default_code", "name"],
     productIds.length
@@ -3141,7 +3141,7 @@ export async function analyzeFefo(
   ];
   if (productId) outDomain.push(["product_id", "=", productId]);
   const outLines: any[] = await searchReadAll(
-    session, "stock.move.line", outDomain,
+    session, M("MODEL_MOVE_LINE"), outDomain,
     ["product_id", "lot_id", "qty_done", "date", "reference", "origin"], "date asc"
   );
   if (!outLines.length) return { anomalies: [], nbSorties: 0, nbProduits: 0 };
@@ -3149,12 +3149,12 @@ export async function analyzeFefo(
   const productIds = Array.from(new Set(outLines.map((l: any) => l.product_id[0]))) as number[];
 
   // 2) Produits → ref/nom.
-  const products = await searchRead(session, "product.product", [["id", "in", productIds]], ["id", "default_code", "name"], productIds.length);
+  const products = await searchRead(session, M("MODEL_PRODUCT"), [["id", "in", productIds]], ["id", "default_code", "name"], productIds.length);
   const prodMap: Record<number, { ref: string; name: string }> = {};
   for (const p of products) prodMap[p.id] = { ref: p.default_code || "", name: p.name || "" };
 
   // 3) Lots de ces produits → DLUO.
-  const allLots = await searchReadAll(session, "stock.lot", [["product_id", "in", productIds]], ["id", "name", "product_id", "expiration_date", "use_date", "removal_date"]);
+  const allLots = await searchReadAll(session, M("MODEL_LOT"), [["product_id", "in", productIds]], ["id", "name", "product_id", "expiration_date", "use_date", "removal_date"]);
   const lotMap: Record<number, { name: string; dluo: string; productId: number }> = {};
   for (const l of allLots) {
     const dluo = l.expiration_date || l.use_date || l.removal_date || "";
@@ -3164,7 +3164,7 @@ export async function analyzeFefo(
   // 3bis) Stock ACTUEL par lot (emplacements internes) → pour ne signaler que les
   //       anomalies où il reste encore du stock du lot plus ancien AUJOURD'HUI.
   const curQuants = await searchReadAll(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     [["product_id", "in", productIds], ["location_id.usage", "=", "internal"], ["lot_id", "!=", false], ["quantity", ">", 0]],
     ["lot_id", "quantity"]
   );
@@ -3178,7 +3178,7 @@ export async function analyzeFefo(
   //    le stock par lot dans le temps. On regarde l'impact sur le stock INTERNE :
   //    +qty quand ça ENTRE en interne, -qty quand ça SORT de l'interne.
   const moveLines: any[] = await searchReadAll(
-    session, "stock.move.line",
+    session, M("MODEL_MOVE_LINE"),
     [["state", "=", "done"], ["product_id", "in", productIds], ["lot_id", "!=", false], ["date", "<=", endDT]],
     ["product_id", "lot_id", "qty_done", "date", "location_id", "location_usage", "location_dest_id", "location_dest_usage"],
     "date asc"
@@ -3189,7 +3189,7 @@ export async function analyzeFefo(
     if (Array.isArray(m.location_id)) locIds.add(m.location_id[0]);
     if (Array.isArray(m.location_dest_id)) locIds.add(m.location_dest_id[0]);
   }
-  const locs = await searchRead(session, "stock.location", [["id", "in", Array.from(locIds)]], ["id", "usage"], locIds.size || 1);
+  const locs = await searchRead(session, M("MODEL_LOCATION"), [["id", "in", Array.from(locIds)]], ["id", "usage"], locIds.size || 1);
   const locUsage: Record<number, string> = {};
   for (const l of locs) locUsage[l.id] = l.usage;
 
@@ -3287,7 +3287,7 @@ export async function getMonthlyConsumptionFromOdoo(
 
   // 1. Mouvements de stock done, vers emplacement client
   const moves: any[] = await searchRead(
-    session, "stock.move",
+    session, M("MODEL_MOVE"),
     [
       ["state", "=", "done"],
       ["location_dest_id.usage", "=", "customer"],
@@ -3301,7 +3301,7 @@ export async function getMonthlyConsumptionFromOdoo(
   // 2. Produits → ref + nom
   const productIds = Array.from(new Set(moves.map((m: any) => m.product_id[0]))) as number[];
   const products: any[] = await searchRead(
-    session, "product.product",
+    session, M("MODEL_PRODUCT"),
     [["id", "in", productIds]],
     ["id", "default_code", "name"],
     productIds.length
@@ -3340,7 +3340,7 @@ export async function getProductStockDetail(session: OdooSession, productId: num
 }[]> {
   // Quants internes pour ce produit
   const quants: any[] = await searchRead(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     [["product_id", "=", productId], ["location_id.usage", "=", "internal"], ["quantity", ">", 0]],
     ["location_id", "lot_id", "quantity", "reserved_quantity"],
     500
@@ -3352,7 +3352,7 @@ export async function getProductStockDetail(session: OdooSession, productId: num
   const lotMap: Record<number, { name: string; dlvDate: string | null }> = {};
   if (lotIds.length) {
     const lots: any[] = await searchRead(
-      session, "stock.lot",
+      session, M("MODEL_LOT"),
       [["id", "in", lotIds]],
       ["id", "name", "expiration_date", "use_date"],
       lotIds.length
@@ -3367,7 +3367,7 @@ export async function getProductStockDetail(session: OdooSession, productId: num
   const locMap: Record<number, string> = {};
   if (locIds.length) {
     const locs: any[] = await searchRead(
-      session, "stock.location",
+      session, M("MODEL_LOCATION"),
       [["id", "in", locIds]],
       ["id", "complete_name"],
       locIds.length
@@ -3397,7 +3397,7 @@ export async function getProductStockDetail(session: OdooSession, productId: num
 /** Tous les default_code qui commencent par le préfixe donné (pour anti-doublon + prochain seq) */
 export async function getProductsByCodePrefix(session: OdooSession, prefix: string): Promise<string[]> {
   const products = await searchRead(
-    session, "product.template",
+    session, M("MODEL_PRODUCT_TEMPLATE"),
     [["default_code", "=like", `${prefix}%`]],
     ["default_code"],
     200
@@ -3407,7 +3407,7 @@ export async function getProductsByCodePrefix(session: OdooSession, prefix: stri
 
 /** Unités de mesure disponibles dans Odoo */
 export async function getUoMs(session: OdooSession): Promise<{ id: number; name: string }[]> {
-  const uoms = await searchRead(session, "uom.uom", [["active", "=", true]], ["id", "name"], 100);
+  const uoms = await searchRead(session, M("MODEL_UOM"), [["active", "=", true]], ["id", "name"], 100);
   return (uoms || []).map((u: any) => ({ id: u.id, name: u.name }));
 }
 
@@ -3434,7 +3434,7 @@ export async function createProductTemplate(session: OdooSession, data: {
   };
   if (data.barcode) vals.barcode = data.barcode;
   if (data.weight) vals.weight = data.weight;
-  return create(session, "product.template", vals);
+  return create(session, M("MODEL_PRODUCT_TEMPLATE"), vals);
 }
 
 /** Recherche des produits par liste de références (default_code) ou mots-clés.
@@ -3447,7 +3447,7 @@ export async function searchProductsForThreshold(
   if (!refs.length) return [];
   // Chercher par code exact d'abord, puis fallback nom contient
   const byCode = await searchRead(
-    session, "product.template",
+    session, M("MODEL_PRODUCT_TEMPLATE"),
     [["default_code", "in", refs]],
     ["id", "default_code", "name", "temp_min_quantity"],
     500
@@ -3458,7 +3458,7 @@ export async function searchProductsForThreshold(
   if (notFound.length > 0) {
     // Cherche par nom partiel pour les refs non trouvées par code
     const domain: any[] = ["|", ...notFound.flatMap(r => [["name", "ilike", r], ["default_code", "ilike", r]])];
-    byName = await searchRead(session, "product.template", domain, ["id", "default_code", "name", "temp_min_quantity"], 200);
+    byName = await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), domain, ["id", "default_code", "name", "temp_min_quantity"], 200);
   }
   const all = [...(byCode || []), ...(byName || [])];
   // Déduplication par id
@@ -3480,7 +3480,7 @@ export async function searchProductsByQuery(
 ): Promise<{ id: number; default_code: string; name: string; temp_min_quantity: number }[]> {
   if (!query.trim()) return [];
   const domain: any[] = ["|", ["default_code", "ilike", query], ["name", "ilike", query]];
-  const res = await searchRead(session, "product.template", domain, ["id", "default_code", "name", "temp_min_quantity"], limit);
+  const res = await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), domain, ["id", "default_code", "name", "temp_min_quantity"], limit);
   return (res || []).map((p: any) => ({
     id: p.id,
     default_code: p.default_code || "",
@@ -3516,7 +3516,7 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
   // 0. Trouver explicitement les emplacements "output" / "Sortie"
   //    → usage="output" OU nom contient "sortie" (certains Odoo ont usage="internal" sur WH/Sortie)
   const outputLocs: any[] = await searchRead(
-    session, "stock.location",
+    session, M("MODEL_LOCATION"),
     ["|", ["usage", "=", "output"], ["complete_name", "ilike", "sortie"]],
     ["id", "complete_name", "usage"],
     100
@@ -3526,7 +3526,7 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
 
   // 1. Tous les quants dans ces emplacements avec qty > 0
   const quants: any[] = await searchRead(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     [["location_id", "in", outputLocIds], ["quantity", ">", 0]],
     ["id", "product_id", "location_id", "lot_id", "quantity", "reserved_quantity"],
     2000
@@ -3536,7 +3536,7 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
   // 2. Pickings actifs (assigned/waiting/confirmed) depuis ces emplacements
   const quantLocIds = Array.from(new Set(quants.map((q: any) => q.location_id[0]))) as number[];
   const activePicking: any[] = await searchRead(
-    session, "stock.picking",
+    session, M("MODEL_PICKING"),
     [["state", "in", ["assigned", "waiting", "confirmed"]], ["location_id", "in", quantLocIds]],
     ["id", "name", "state", "location_id", "scheduled_date"],
     500
@@ -3548,7 +3548,7 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
   const coveredQty: Record<CoveredKey, number> = {};
   if (activePicking.length) {
     const moveLines: any[] = await searchRead(
-      session, "stock.move.line",
+      session, M("MODEL_MOVE_LINE"),
       [["picking_id", "in", Array.from(activePickingIds)], ["state", "not in", ["done", "cancel"]]],
       ["product_id", "lot_id", "location_id", "reserved_uom_qty"],
       5000
@@ -3562,7 +3562,7 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
   // 4. Enrichir produits
   const productIds = Array.from(new Set(quants.map((q: any) => q.product_id[0]))) as number[];
   const products: any[] = await searchRead(
-    session, "product.product",
+    session, M("MODEL_PRODUCT"),
     [["id", "in", productIds]],
     ["id", "default_code", "name"],
     productIds.length
@@ -3574,7 +3574,7 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
   const lotIds = Array.from(new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0]))) as number[];
   const lotMap: Record<number, string> = {};
   if (lotIds.length) {
-    const lots: any[] = await searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "name"], lotIds.length);
+    const lots: any[] = await searchRead(session, M("MODEL_LOT"), [["id", "in", lotIds]], ["id", "name"], lotIds.length);
     for (const l of lots) lotMap[l.id] = l.name;
   }
 
@@ -3617,8 +3617,8 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
 /** Annule une liste de stock.move orphelins (passe à state=cancel + libère réservation) */
 export async function cancelOrphanMoves(session: OdooSession, moveIds: number[]): Promise<void> {
   if (!moveIds.length) return;
-  await write(session, "stock.move", moveIds, { state: "draft" });
-  await write(session, "stock.move", moveIds, { state: "cancel" });
+  await write(session, M("MODEL_MOVE"), moveIds, { state: "draft" });
+  await write(session, M("MODEL_MOVE"), moveIds, { state: "cancel" });
 }
 
 /**
@@ -3636,8 +3636,8 @@ export async function applyOrphanCorrections(
   // Appliquer une par une pour éviter les conflits de lots
   for (const c of toApply) {
     const newQty = Math.max(0, c.currentQty - c.correctionQty);
-    await write(session, "stock.quant", [c.quantId], { inventory_quantity: newQty });
-    await callMethod(session, "stock.quant", "action_apply_inventory", [[c.quantId]]);
+    await write(session, M("MODEL_QUANT"), [c.quantId], { inventory_quantity: newQty });
+    await callMethod(session, M("MODEL_QUANT"), "action_apply_inventory", [[c.quantId]]);
   }
 }
 
@@ -3646,7 +3646,7 @@ export async function bulkUpdateMinQuantity(
   updates: { id: number; value: number }[]
 ): Promise<void> {
   await Promise.all(
-    updates.map(u => write(session, "product.template", [u.id], { temp_min_quantity: u.value }))
+    updates.map(u => write(session, M("MODEL_PRODUCT_TEMPLATE"), [u.id], { temp_min_quantity: u.value }))
   );
 }
 
@@ -3676,7 +3676,7 @@ export interface CarrierSaleOrder {
  */
 async function discoverJoinedField(session: OdooSession): Promise<{ name: string; type: string } | null> {
   try {
-    const fg = await callMethod(session, "sale.order", "fields_get", [], { attributes: ["string", "type", "relation"] });
+    const fg = await callMethod(session, M("MODEL_SALE_ORDER"), "fields_get", [], { attributes: ["string", "type", "relation"] });
     const norm = (s: string) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
     for (const [name, def] of Object.entries<any>(fg)) {
       const label = norm(def?.string);
@@ -3751,7 +3751,7 @@ export async function fetchCarrierSaleOrders(
       const domain: any[] = [["name", "in", chunk]];
       if (useDate && dateStart) domain.push(["date_order", ">=", `${dateStart} 00:00:00`]);
       if (useDate && dateEnd) domain.push(["date_order", "<=", `${dateEnd} 23:59:59`]);
-      const rows = await searchRead(session, "sale.order", domain, fields, 0, "date_order desc");
+      const rows = await searchRead(session, M("MODEL_SALE_ORDER"), domain, fields, 0, "date_order desc");
       for (const r of rows) res.push(toRow(r));
     }
     return res;
@@ -3803,7 +3803,7 @@ export async function fetchCarrierSaleOrders(
       const amtByName = new Map<string, { ht: number; ttc: number }>();
       const idToName = new Map<number, string>();
       const readJoined = async (domain: any[]) => {
-        const rows = await searchRead(session, "sale.order", domain, ["id", "name", "amount_untaxed", "amount_total"], 0, "");
+        const rows = await searchRead(session, M("MODEL_SALE_ORDER"), domain, ["id", "name", "amount_untaxed", "amount_total"], 0, "");
         for (const r of rows) { amtByName.set(r.name, { ht: r.amount_untaxed || 0, ttc: r.amount_total || 0 }); idToName.set(r.id, r.name); }
       };
       const idList = Array.from(joinedIds);
@@ -3845,7 +3845,7 @@ export async function fetchCarrierSaleOrders(
     if (shipIds.length) {
       const partById = new Map<number, { cp: string; ville: string }>();
       for (let i = 0; i < shipIds.length; i += 200) {
-        const rows = await searchRead(session, "res.partner", [["id", "in", shipIds.slice(i, i + 200)]], ["id", "zip", "city"], 0, "");
+        const rows = await searchRead(session, M("MODEL_PARTNER"), [["id", "in", shipIds.slice(i, i + 200)]], ["id", "zip", "city"], 0, "");
         for (const p of rows) partById.set(p.id, { cp: p.zip || "", ville: p.city || "" });
       }
       for (const [ref, o] of Array.from(byRef.entries())) {
@@ -3866,7 +3866,7 @@ export async function fetchCarrierSaleOrders(
     if (partnerIds.length) {
       const refById = new Map<number, string>();
       for (let i = 0; i < partnerIds.length; i += 200) {
-        const rows = await searchRead(session, "res.partner", [["id", "in", partnerIds.slice(i, i + 200)]], ["id", "ref"], 0, "");
+        const rows = await searchRead(session, M("MODEL_PARTNER"), [["id", "in", partnerIds.slice(i, i + 200)]], ["id", "ref"], 0, "");
         for (const p of rows) if (p.ref) refById.set(p.id, p.ref);
       }
       for (const [orderRef, o] of Array.from(byRef.entries())) {
@@ -3936,7 +3936,7 @@ export async function fetchBmvByNameDate(
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
 
   // Charge les commandes confirmées de la fenêtre, avec partenaire + date.
-  const rows = await searchRead(session, "sale.order",
+  const rows = await searchRead(session, M("MODEL_SALE_ORDER"),
     [["state", "in", ["sale", "done"]],
      ["date_order", ">=", `${fmt(minD)} 00:00:00`],
      ["date_order", "<=", `${fmt(maxD)} 23:59:59`]],
@@ -4003,7 +4003,7 @@ export interface ProductQuickEditData {
 }
 
 export async function getProductQuickEdit(session: OdooSession, productId: number): Promise<ProductQuickEditData> {
-  const prods = await searchRead(session, "product.product",
+  const prods = await searchRead(session, M("MODEL_PRODUCT"),
     [["id", "=", productId]],
     ["id", "name", "default_code", "barcode", "sale_ok", "weight", "volume", "product_tmpl_id", "active"], 1);
   const prod = prods[0];
@@ -4019,7 +4019,7 @@ export async function getProductQuickEdit(session: OdooSession, productId: numbe
   const dimLabels: Record<string, string> = {};
   const dims: Record<string, number> = {};
   try {
-    const fg = await callMethod(session, "product.template", "fields_get",
+    const fg = await callMethod(session, M("MODEL_PRODUCT_TEMPLATE"), "fields_get",
       [["x_dimensions", "product_length", "product_width", "product_height"]], { attributes: ["string", "type"] });
     const found = fg || {};
     if (found.x_dimensions) {
@@ -4030,7 +4030,7 @@ export async function getProductQuickEdit(session: OdooSession, productId: numbe
     for (const f of dimFields) dimLabels[f] = (found[f]?.string as string) || f;
     const toRead = [...(dimTextField ? [dimTextField] : []), ...dimFields];
     if (toRead.length) {
-      const tmpls = await searchRead(session, "product.template", [["id", "=", tmplId]], toRead, 1);
+      const tmpls = await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), [["id", "=", tmplId]], toRead, 1);
       if (tmpls[0]) {
         if (dimTextField) dimText = tmpls[0][dimTextField] || "";
         for (const f of dimFields) dims[f] = tmpls[0][f] || 0;
@@ -4039,7 +4039,7 @@ export async function getProductQuickEdit(session: OdooSession, productId: numbe
   } catch { dimFields = []; dimTextField = null; }
 
   // Lignes fournisseur (variante OU template)
-  const suppliers = await searchRead(session, "product.supplierinfo",
+  const suppliers = await searchRead(session, M("MODEL_PRODUCT_SUPPLIER"),
     ["|", ["product_id", "=", productId], "&", ["product_id", "=", false], ["product_tmpl_id", "=", tmplId]],
     ["id", "partner_id", "product_code", "product_name"], 10);
 
@@ -4061,7 +4061,7 @@ export async function saveProductQuickEdit(session: OdooSession, params: {
 
   // EAN → product.product (false pour effacer)
   if (barcode !== undefined) {
-    await write(session, "product.product", [productId], { barcode: barcode.trim() || false });
+    await write(session, M("MODEL_PRODUCT"), [productId], { barcode: barcode.trim() || false });
   }
 
   // Vendable / poids / volume / dimensions → product.template
@@ -4071,12 +4071,12 @@ export async function saveProductQuickEdit(session: OdooSession, params: {
   if (volume !== undefined && !isNaN(volume)) tmplVals.volume = volume;
   if (dimTextField && dimText !== undefined) tmplVals[dimTextField] = dimText.trim() || false;
   if (dims) for (const [k, v] of Object.entries(dims)) { if (!isNaN(v)) tmplVals[k] = v; }
-  if (Object.keys(tmplVals).length) await write(session, "product.template", [tmplId], tmplVals);
+  if (Object.keys(tmplVals).length) await write(session, M("MODEL_PRODUCT_TEMPLATE"), [tmplId], tmplVals);
 
   // Réf fournisseur → product.supplierinfo
   if (supplierCodes?.length) {
     await Promise.all(supplierCodes.map(s =>
-      write(session, "product.supplierinfo", [s.id], { product_code: s.product_code.trim() || false })
+      write(session, M("MODEL_PRODUCT_SUPPLIER"), [s.id], { product_code: s.product_code.trim() || false })
     ));
   }
   return true;
@@ -4096,7 +4096,7 @@ export async function getPackagingQtyForProducts(
   if (!productIds.length) return out;
   try {
     const packs = await searchRead(
-      session, "product.packaging",
+      session, M("MODEL_PRODUCT_PACKAGING"),
       [["product_id", "in", productIds], ["qty", ">", 0]],
       ["product_id", "qty"],
       1000
@@ -4119,14 +4119,14 @@ export async function findLocationsByName(session: OdooSession, query: string): 
   if (!q) return [];
   // exact barcode d'abord
   const byBc = await searchRead(
-    session, "stock.location",
+    session, M("MODEL_LOCATION"),
     [["barcode", "=", q], ["usage", "=", "internal"]],
     ["id", "name", "complete_name", "barcode"], 5
   );
   if (byBc.length) return byBc;
   // sinon recherche par nom complet (ilike) — utile pour "Allée A", "A-", etc.
   return searchRead(
-    session, "stock.location",
+    session, M("MODEL_LOCATION"),
     ["|", ["complete_name", "ilike", q], ["name", "ilike", q], ["usage", "=", "internal"]],
     ["id", "name", "complete_name", "barcode"], 50, "complete_name"
   );
@@ -4144,7 +4144,7 @@ export async function getInventoryTheoretical(
   const productIds = Array.from(new Set(keys.map(k => k.productId)));
   // On récupère tous les quants internes des produits concernés en une requête
   const quants = await searchRead(
-    session, "stock.quant",
+    session, M("MODEL_QUANT"),
     [["product_id", "in", productIds], ["location_id.usage", "=", "internal"]],
     ["id", "product_id", "lot_id", "location_id", "quantity"],
     2000
@@ -4236,24 +4236,24 @@ export async function createEshopQuotation(
   // Étiquettes (crm.tag) : "import eShop" + "Transmise" — trouvées ou créées
   try {
     const findOrCreateTag = async (name: string): Promise<number | null> => {
-      const t = await searchRead(session, "crm.tag", [["name", "=", name]], ["id"], 1);
+      const t = await searchRead(session, M("MODEL_CRM_TAG"), [["name", "=", name]], ["id"], 1);
       if (t.length) return t[0].id;
-      return await create(session, "crm.tag", { name }) as number;
+      return await create(session, M("MODEL_CRM_TAG"), { name }) as number;
     };
     const tagIds = (await Promise.all([findOrCreateTag("import eShop"), findOrCreateTag("Transmise")]))
       .filter((x): x is number => typeof x === "number");
     if (tagIds.length) vals.tag_ids = [[6, 0, tagIds]];
   } catch {}
 
-  const id = await create(session, "sale.order", vals) as number;
+  const id = await create(session, M("MODEL_SALE_ORDER"), vals) as number;
 
   // Confirme la commande → génère le bon de préparation (stock.picking)
   if (confirm) {
-    try { await callMethod(session, "sale.order", "action_confirm", [[id]]); }
+    try { await callMethod(session, M("MODEL_SALE_ORDER"), "action_confirm", [[id]]); }
     catch (e) { /* en cas d'échec, la commande reste en devis (non bloquant) */ }
   }
 
-  const recs = await searchRead(session, "sale.order", [["id", "=", id]], ["id", "name"], 1);
+  const recs = await searchRead(session, M("MODEL_SALE_ORDER"), [["id", "=", id]], ["id", "name"], 1);
   return { id, name: recs[0]?.name || String(id) };
 }
 
@@ -4266,7 +4266,7 @@ export async function validateOrderPickings(
 ): Promise<{ validated: string[]; failed: { name: string; error: string }[] }> {
   const out: { validated: string[]; failed: { name: string; error: string }[] } = { validated: [], failed: [] };
   // Pickings non terminés de la commande.
-  const picks = await searchRead(session, "stock.picking",
+  const picks = await searchRead(session, M("MODEL_PICKING"),
     [["sale_id", "=", orderId], ["state", "not in", ["done", "cancel"]]],
     ["id", "name", "picking_type_code", "state"], 20);
   if (!picks.length) return out;
@@ -4277,15 +4277,15 @@ export async function validateOrderPickings(
   for (const p of picks) {
     try {
       // 1. Réserver le stock.
-      try { await callMethod(session, "stock.picking", "action_assign", [[p.id]]); } catch {}
+      try { await callMethod(session, M("MODEL_PICKING"), "action_assign", [[p.id]]); } catch {}
       // 2. Remplir qty_done = réservé sur chaque ligne (sinon validation = reliquat).
-      const mls = await searchRead(session, "stock.move.line",
+      const mls = await searchRead(session, M("MODEL_MOVE_LINE"),
         [["picking_id", "=", p.id], ["state", "not in", ["done", "cancel"]]],
         ["id", "reserved_uom_qty", "qty_done"], 500);
       for (const ml of mls) {
         const want = ml.reserved_uom_qty || 0;
         if (want > 0 && (ml.qty_done || 0) < want) {
-          try { await write(session, "stock.move.line", [ml.id], { qty_done: want }); } catch {}
+          try { await write(session, M("MODEL_MOVE_LINE"), [ml.id], { qty_done: want }); } catch {}
         }
       }
       // 3. Valider en mode STRICT : si Odoo veut un reliquat (stock insuffisant),
@@ -4360,27 +4360,27 @@ export async function createMarketplaceClient(session: OdooSession, c: Marketpla
   // Étiquette client (res.partner.category_id, many2many) — trouve ou crée le tag.
   if (c.tag) {
     try {
-      let t = await searchRead(session, "res.partner.category", [["name", "=", c.tag]], ["id"], 1);
-      const tagId = t.length ? t[0].id : await create(session, "res.partner.category", { name: c.tag }) as number;
+      let t = await searchRead(session, M("MODEL_PARTNER_CATEGORY"), [["name", "=", c.tag]], ["id"], 1);
+      const tagId = t.length ? t[0].id : await create(session, M("MODEL_PARTNER_CATEGORY"), { name: c.tag }) as number;
       if (tagId) vals.category_id = [[6, 0, [tagId]]];
     } catch {}
   }
   // Liste de prix client (property_product_pricelist) — par nom (EN/US), tolérant.
   if (c.pricelistName) {
     try {
-      let pl = await searchRead(session, "product.pricelist", [["name", "=", c.pricelistName]], ["id"], 1);
-      if (!pl.length) pl = await searchRead(session, "product.pricelist", [["name", "ilike", c.pricelistName]], ["id"], 1);
+      let pl = await searchRead(session, M("MODEL_PRODUCT_PRICELIST"), [["name", "=", c.pricelistName]], ["id"], 1);
+      if (!pl.length) pl = await searchRead(session, M("MODEL_PRODUCT_PRICELIST"), [["name", "ilike", c.pricelistName]], ["id"], 1);
       if (pl.length) vals.property_product_pricelist = pl[0].id;
     } catch {}
   }
   // Pays via code ISO2
   if (c.countryCode) {
     try {
-      const co = await searchRead(session, "res.country", [["code", "=", c.countryCode.toUpperCase()]], ["id"], 1);
+      const co = await searchRead(session, M("MODEL_COUNTRY"), [["code", "=", c.countryCode.toUpperCase()]], ["id"], 1);
       if (co.length) vals.country_id = co[0].id;
     } catch {}
   }
-  return await create(session, "res.partner", vals) as number;
+  return await create(session, M("MODEL_PARTNER"), vals) as number;
 }
 
 // Crée une commande de vente marketplace pour un client donné.
@@ -4408,8 +4408,8 @@ export async function createMarketplaceOrder(
   let pricelistId: number | null = null;
   if (opts.pricelistName) {
     try {
-      let pl = await searchRead(session, "product.pricelist", [["name", "=", opts.pricelistName]], ["id"], 1);
-      if (!pl.length) pl = await searchRead(session, "product.pricelist", [["name", "ilike", opts.pricelistName]], ["id"], 1);
+      let pl = await searchRead(session, M("MODEL_PRODUCT_PRICELIST"), [["name", "=", opts.pricelistName]], ["id"], 1);
+      if (!pl.length) pl = await searchRead(session, M("MODEL_PRODUCT_PRICELIST"), [["name", "ilike", opts.pricelistName]], ["id"], 1);
       if (pl.length) { pricelistId = pl[0].id; vals.pricelist_id = pricelistId; }
     } catch {}
   }
@@ -4424,46 +4424,46 @@ export async function createMarketplaceOrder(
   // Étiquette (crm.tag)
   if (opts.tag) {
     try {
-      const t = await searchRead(session, "crm.tag", [["name", "=", opts.tag]], ["id"], 1);
-      const tagId = t.length ? t[0].id : await create(session, "crm.tag", { name: opts.tag }) as number;
+      const t = await searchRead(session, M("MODEL_CRM_TAG"), [["name", "=", opts.tag]], ["id"], 1);
+      const tagId = t.length ? t[0].id : await create(session, M("MODEL_CRM_TAG"), { name: opts.tag }) as number;
       if (tagId) vals.tag_ids = [[6, 0, [tagId]]];
     } catch {}
   }
 
-  const id = await create(session, "sale.order", vals) as number;
+  const id = await create(session, M("MODEL_SALE_ORDER"), vals) as number;
 
   // "Forcer le statut à 'Entièrement facturé'" (champ custom force_invoiced d'un module
   // externe) → empêche la génération de facture à la validation du OUT. Write protégé :
   // si le champ n'existe pas (module absent), on n'interrompt pas l'import.
   if (opts.forceInvoiced) {
-    try { await write(session, "sale.order", [id], { force_invoiced: true }); } catch {}
+    try { await write(session, M("MODEL_SALE_ORDER"), [id], { force_invoiced: true }); } catch {}
   }
 
   // La pricelist est READONLY une fois la commande confirmée (state=sale).
   // On la (ré)impose donc TANT QU'ON EST EN BROUILLON, puis on recalcule les prix.
   if (pricelistId) {
     try {
-      await write(session, "sale.order", [id], { pricelist_id: pricelistId });
-      try { await callMethod(session, "sale.order", "action_update_prices", [[id]]); }
-      catch { try { await callMethod(session, "sale.order", "update_prices", [[id]]); } catch {} }
+      await write(session, M("MODEL_SALE_ORDER"), [id], { pricelist_id: pricelistId });
+      try { await callMethod(session, M("MODEL_SALE_ORDER"), "action_update_prices", [[id]]); }
+      catch { try { await callMethod(session, M("MODEL_SALE_ORDER"), "update_prices", [[id]]); } catch {} }
     } catch {}
   }
 
   let tntResult: { ok: boolean; reason?: string; serviceId?: number } | undefined;
   if (opts.confirm) {
     try {
-      await callMethod(session, "sale.order", "action_confirm", [[id]]);
+      await callMethod(session, M("MODEL_SALE_ORDER"), "action_confirm", [[id]]);
       // pickings générés par la confirmation (sortie TNT)
       let outPickIds: number[] = [];
       try {
-        const picks = await searchRead(session, "stock.picking",
+        const picks = await searchRead(session, M("MODEL_PICKING"),
           [["sale_id", "=", id], ["picking_type_code", "=", "outgoing"], ["state", "not in", ["done", "cancel"]]],
           ["id"], 10);
         outPickIds = picks.map((p: any) => p.id);
       } catch {}
       // réservation du stock
       if (opts.assign) {
-        for (const pid of outPickIds) { try { await callMethod(session, "stock.picking", "action_assign", [[pid]]); } catch {} }
+        for (const pid of outPickIds) { try { await callMethod(session, M("MODEL_PICKING"), "action_assign", [[pid]]); } catch {} }
       }
       // service TNT par défaut (ex: "JE") sur le OUT
       if (opts.tntService && outPickIds.length) {
@@ -4473,19 +4473,19 @@ export async function createMarketplaceOrder(
     } catch {}
   }
 
-  const recs = await searchRead(session, "sale.order", [["id", "=", id]], ["id", "name"], 1);
+  const recs = await searchRead(session, M("MODEL_SALE_ORDER"), [["id", "=", id]], ["id", "name"], 1);
   return { id, name: recs[0]?.name || String(id), tnt: tntResult };
 }
 
 // Stock disponible (quantity - reserved) par référence interne Odoo. Pour la synchro Shopware.
 export async function getStockByRef(session: OdooSession, ref: string): Promise<{ productId: number; name: string; available: number } | null> {
-  const prods = await searchRead(session, "product.product",
+  const prods = await searchRead(session, M("MODEL_PRODUCT"),
     ["|", ["default_code", "=", ref], ["barcode", "=", ref]],
     ["id", "name", "default_code", "qty_available"], 1);
   if (!prods.length) return null;
   const p = prods[0];
   // qty_available = stock physique ; on retire le réservé via les quants internes
-  const quants = await searchRead(session, "stock.quant",
+  const quants = await searchRead(session, M("MODEL_QUANT"),
     [["product_id", "=", p.id], ["location_id.usage", "=", "internal"]],
     ["quantity", "reserved_quantity"], 200);
   const available = quants.reduce((s: number, q: any) => s + ((q.quantity || 0) - (q.reserved_quantity || 0)), 0);
@@ -4498,7 +4498,7 @@ export async function getAvailableStockBatch(session: OdooSession, productIds: n
   if (!productIds.length) return out;
   for (const id of productIds) out[id] = 0;
   // Une seule requête quants pour tous les produits internes
-  const quants = await searchRead(session, "stock.quant",
+  const quants = await searchRead(session, M("MODEL_QUANT"),
     [["product_id", "in", productIds], ["location_id.usage", "=", "internal"]],
     ["product_id", "quantity", "reserved_quantity"], 5000);
   for (const q of quants) {
@@ -4516,21 +4516,21 @@ export async function findEshopPartner(session: OdooSession, idOrRef: string): P
   // livraison). On veut LA SOCIÉTÉ. Priorité : nom exact société > ref société > nom exact > ref.
   const fields = ["id", "name"];
   // 1) Nom exact ET société (ex: "eSHOP")
-  let r = await searchRead(session, "res.partner", [["name", "=", q], ["is_company", "=", true]], fields, 1);
+  let r = await searchRead(session, M("MODEL_PARTNER"), [["name", "=", q], ["is_company", "=", true]], fields, 1);
   if (r.length) return { id: r[0].id, name: r[0].name };
   // 2) Réf exacte ET société
-  r = await searchRead(session, "res.partner", [["ref", "=", q], ["is_company", "=", true]], fields, 1);
+  r = await searchRead(session, M("MODEL_PARTNER"), [["ref", "=", q], ["is_company", "=", true]], fields, 1);
   if (r.length) return { id: r[0].id, name: r[0].name };
   // 3) Nom exact (toute fiche)
-  r = await searchRead(session, "res.partner", [["name", "=", q]], fields, 1);
+  r = await searchRead(session, M("MODEL_PARTNER"), [["name", "=", q]], fields, 1);
   if (r.length) return { id: r[0].id, name: r[0].name };
   // 4) Id interne si purement numérique
   if (/^\d+$/.test(q)) {
-    r = await searchRead(session, "res.partner", [["id", "=", Number(q)]], fields, 1);
+    r = await searchRead(session, M("MODEL_PARTNER"), [["id", "=", Number(q)]], fields, 1);
     if (r.length) return { id: r[0].id, name: r[0].name };
   }
   // 5) Réf exacte (dernier recours — peut être ambigu)
-  r = await searchRead(session, "res.partner", [["ref", "=", q]], fields, 1);
+  r = await searchRead(session, M("MODEL_PARTNER"), [["ref", "=", q]], fields, 1);
   if (r.length) return { id: r[0].id, name: r[0].name };
   return null;
 }

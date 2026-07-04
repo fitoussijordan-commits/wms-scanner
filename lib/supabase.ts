@@ -933,3 +933,27 @@ export async function saveFieldOverrides(overrides: Record<string, string>): Pro
   );
   if (error) throw new Error(error.message);
 }
+
+// ══════════════════════════════════════════
+// MAPPING DES MODÈLES ODOO (cf. lib/fieldMap.ts — M())
+// Stocké dans wms_sync_meta / clé "odoo_model_map" = JSON { [ModelKey]: "nom.modele" }
+// ══════════════════════════════════════════
+
+export async function loadModelOverrides(): Promise<Record<string, string>> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "odoo_model_map").single();
+    if (data?.value) {
+      const parsed = JSON.parse(data.value);
+      if (parsed && typeof parsed === "object") return parsed as Record<string, string>;
+    }
+  } catch {}
+  return {};
+}
+
+export async function saveModelOverrides(overrides: Record<string, string>): Promise<void> {
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "odoo_model_map", value: JSON.stringify(overrides), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}

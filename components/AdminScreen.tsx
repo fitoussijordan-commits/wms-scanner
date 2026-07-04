@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import * as odoo from "@/lib/odoo";
 import { loadUserPermissions, saveUserPermission } from "@/lib/supabase";
 import FieldMapEditor from "@/components/FieldMapEditor";
+import ModelMapEditor from "@/components/ModelMapEditor";
 
 const C = {
   bg: "#f8fafc", white: "#ffffff", text: "#1a1a2e", textSec: "#374151",
@@ -50,7 +51,7 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
-  const [tab, setTab] = useState<"perms" | "fields">("perms");
+  const [tab, setTab] = useState<"perms" | "fields" | "models">("perms");
 
   const myLogin = (session.login || "").toLowerCase();
 
@@ -110,7 +111,7 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
         </button>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>Administration</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>{tab === "perms" ? "Droits d'accès aux outils, par utilisateur" : "Mapping des champs Odoo"}</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>{tab === "perms" ? "Droits d'accès aux outils, par utilisateur" : tab === "fields" ? "Mapping des champs Odoo" : "Mapping des modèles Odoo"}</div>
         </div>
         {tab === "perms" && <button onClick={load} title="Recharger" style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", cursor: "pointer", color: C.textSec }}>↻</button>}
       </div>
@@ -118,8 +119,9 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
       {/* ── Onglets ── */}
       <div style={{ display: "flex", gap: 6, marginBottom: 16, background: C.bg, padding: 4, borderRadius: 12 }}>
         {([
-          { k: "perms" as const, label: "👤 Droits d'accès" },
-          { k: "fields" as const, label: "⚙️ Champs Odoo" },
+          { k: "perms" as const, label: "👤 Droits" },
+          { k: "fields" as const, label: "⚙️ Champs" },
+          { k: "models" as const, label: "🗂️ Modèles" },
         ]).map(t => (
           <button key={t.k} onClick={() => setTab(t.k)}
             style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
@@ -132,6 +134,8 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
 
       {tab === "fields" ? (
         <FieldMapEditor session={session} onToast={onToast} />
+      ) : tab === "models" ? (
+        <ModelMapEditor session={session} onToast={onToast} />
       ) : loading ? (
         <div style={{ textAlign: "center", color: C.textMuted, padding: 40 }}>Chargement…</div>
       ) : !selected ? (
