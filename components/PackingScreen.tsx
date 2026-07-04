@@ -61,6 +61,7 @@ import * as odoo from "@/lib/odoo";
 import * as pn from "@/lib/printnode";
 import type { OdooSession } from "@/lib/odoo";
 import { F } from "@/lib/fieldMap";
+import FieldSettingsGear from "@/components/FieldSettingsGear";
 
 // ── Clés localStorage session-only ───────────────────────────────────────────
 const LS_BL_PRINTER    = "wms_packing_bl_printer";
@@ -704,6 +705,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
               <span style={{ position: "absolute", top: 2, right: 2, width: 6, height: 6, background: C.teal, borderRadius: "50%", border: "1.5px solid #fff" }} />
             )}
           </button>
+          <FieldSettingsGear session={session} onToast={onToast} screen="packing" />
         </div>
 
         {selectedOrigin && (

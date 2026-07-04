@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 import * as odoo from "@/lib/odoo";
+import FieldSettingsGear from "@/components/FieldSettingsGear";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const C = {
@@ -315,6 +316,8 @@ export default function OrderScreen({ session, onBack, onToast, desktop }: Props
         )}
 
   
+        <FieldSettingsGear session={session} onToast={onToast} screen="order" />
+
         <button onClick={() => setShowRules(!showRules)} style={{ width: 36, height: 36, borderRadius: 10, background: showRules ? C.purpleSoft : C.bg, border: `1px solid ${showRules ? C.purple : C.border}`, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>
           ⚙️
         </button>

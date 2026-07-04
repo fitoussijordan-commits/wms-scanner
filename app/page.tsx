@@ -2892,7 +2892,7 @@ export default function Page() {
 
   return (
     <Shell toast={toast} flash={scanFlash} desktop={isDesktopUI}>
-      {!isDesktopUI && <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} adminMode={adminMode} onToggleAdmin={toggleAdminMode} />}
+      {!isDesktopUI && <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} />}
 
       {/* ── Sidebar desktop (refonte) ── */}
       {isDesktopUI && session && (() => {
@@ -3205,17 +3205,7 @@ export default function Page() {
                     {new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · voici l'activité de l'entrepôt
                   </p>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  {session && odoo.isAdmin(session) && (
-                    <button onClick={toggleAdminMode} title="Affiche/masque les roues crantées ⚙️ de paramétrage des champs Odoo"
-                      style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 14px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
-                        border: `1.5px solid ${adminMode ? "#7c3aed" : DK.border}`, background: adminMode ? "#f3e8ff" : "#fff", color: adminMode ? "#7c3aed" : DK.text2 }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-                      {adminMode ? "Mode admin activé" : "Mode admin"}
-                    </button>
-                  )}
-                  <WeatherWidget />
-                </div>
+                <WeatherWidget />
               </div>
 
               {/* KPI strip — aligné sur la même grille 1fr/360px que le contenu en dessous */}
@@ -3860,6 +3850,28 @@ export default function Page() {
        </div>
       </main>
 
+      {/* ── Bouton flottant « Mode admin » (bas de l'écran) ──
+           Visible uniquement pour les admins, hors écran de login. Affiche/masque
+           les roues crantées ⚙️ de paramétrage des champs Odoo dans les fonctions. ── */}
+      {session && odoo.isAdmin(session) && (
+        <button
+          onClick={toggleAdminMode}
+          title="Affiche/masque les roues crantées ⚙️ de paramétrage des champs Odoo dans chaque fonction"
+          style={{
+            position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", zIndex: 900,
+            display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", borderRadius: 999,
+            cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700,
+            border: "none", color: "#fff",
+            background: adminMode ? "#7c3aed" : "#1a1a2e",
+            boxShadow: adminMode ? "0 6px 20px -4px rgba(124,58,237,.5)" : "0 6px 20px -6px rgba(0,0,0,.4)",
+            transition: "all .15s",
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+          {adminMode ? "Mode admin activé — masquer" : "Mode admin"}
+        </button>
+      )}
+
       {/* ── Control Center — ancien panneau flottant (PDA/tablette ≥1024 tactile uniquement) ── */}
       {screen === "home" && session && !isDesktopUI && (
         <div style={{ position: "fixed", top: 60, right: 12, width: 340, display: "none", padding: "14px 0 0 0", maxHeight: "calc(100vh - 72px)", overflowY: "auto" as const }}
@@ -4459,7 +4471,7 @@ function Shell({ children, toast, flash, desktop }: { children: React.ReactNode;
   );
 }
 
-function Header({ name, onLogout, onHome, onSettings, isAdmin, notifCount = 0, onNotifs, adminMode, onToggleAdmin }: { name?: string; onLogout: () => void; onHome: () => void; onSettings: () => void; isAdmin?: boolean; notifCount?: number; onNotifs?: () => void; adminMode?: boolean; onToggleAdmin?: () => void }) {
+function Header({ name, onLogout, onHome, onSettings, isAdmin, notifCount = 0, onNotifs }: { name?: string; onLogout: () => void; onHome: () => void; onSettings: () => void; isAdmin?: boolean; notifCount?: number; onNotifs?: () => void }) {
   return (
     <header style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -4470,12 +4482,6 @@ function Header({ name, onLogout, onHome, onSettings, isAdmin, notifCount = 0, o
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.green, boxShadow: `0 0 6px ${C.green}` }} />
         <span style={{ fontSize: 12, color: C.textSec }}>{name}</span>
-        {isAdmin && onToggleAdmin && (
-          <button onClick={onToggleAdmin} title="Mode admin : affiche/masque les roues ⚙️ de paramétrage des champs" aria-label="Mode admin"
-            style={{ ...iconBtn, background: adminMode ? "#f3e8ff" : "transparent", border: adminMode ? "1.5px solid #7c3aed" : "1.5px solid transparent" }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={adminMode ? "#7c3aed" : C.textSec} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-          </button>
-        )}
         {onNotifs && (
           <button onClick={onNotifs} style={{ ...iconBtn, position: "relative" }} title="Notifications du jour" aria-label="Notifications">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="1.8"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
