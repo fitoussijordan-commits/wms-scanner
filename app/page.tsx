@@ -8,7 +8,6 @@ import { createNotification, loadTodayNotifications, type WmsNotification, getCa
 import * as sbase from "@/lib/supabase";
 import * as fieldMap from "@/lib/fieldMap";
 import { useAdminMode } from "@/lib/adminMode";
-import FieldSettingsGear from "@/components/FieldSettingsGear";
 import GlobalFieldGear from "@/components/GlobalFieldGear";
 import AdminScreen, { ALL_TOOLS } from "@/components/AdminScreen";
 import * as pn from "@/lib/printnode";
@@ -9774,8 +9773,6 @@ function WaitingOrdersScreen({
           <button onClick={load} disabled={loading} className="dk-tool" style={{ background: "#fff", border: `1px solid ${D.border}`, borderRadius: 11, padding: "9px 16px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: D.t2, fontFamily: "inherit", boxShadow: "0 1px 2px rgba(15,23,42,.04)", flexShrink: 0 }}>
             {loading ? "…" : "↻ Actualiser"}
           </button>
-          {/* Roue crantée : visible seulement en mode admin. Édite SHIPPING_DATE + ORDER_TAGS. */}
-          <FieldSettingsGear session={session} onToast={(m) => onToast(m)} screen="waitingOrders" onSaved={load} />
         </div>
 
         {/* Bandeau stats */}
