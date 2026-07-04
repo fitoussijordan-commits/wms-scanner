@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, Fragment as Fragment2 } from "react";
 import * as odoo from "@/lib/odoo";
+import FieldSettingsGear from "@/components/FieldSettingsGear";
 import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, type EshopMappingOverrides } from "@/lib/supabase";
 import { writeHeaders } from "@/lib/writeToken";
 
@@ -30,7 +31,8 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
         <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
-        <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>E-shop</div>
+        <div style={{ fontSize: 17, fontWeight: 700, color: C.text, flex: 1 }}>E-shop</div>
+        <FieldSettingsGear session={session} onToast={onToast} screen="eshopSorties" />
       </div>
       <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
         {([["sorties", "Sorties du jour"], ["stock", "Synchro stock"], ["audit", "Audit catalogue"]] as const).map(([k, lbl]) => (

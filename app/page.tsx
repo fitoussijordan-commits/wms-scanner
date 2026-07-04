@@ -9205,7 +9205,8 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-        <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>Réimprimer étiquettes</div>
+        <div style={{ fontSize: 17, fontWeight: 700, color: C.text, flex: 1 }}>Réimprimer étiquettes</div>
+        {session && odoo.isAdmin(session) && <FieldSettingsGear session={session} onToast={onToast} screen="reprintLabel" />}
       </div>
 
       {/* ── Onglets ── */}

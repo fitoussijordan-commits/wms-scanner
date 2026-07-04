@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import * as odoo from "@/lib/odoo";
+import FieldSettingsGear from "@/components/FieldSettingsGear";
 
 // ─── Données de codification (extraites du fichier Excel _Listes) ─────────────
 
@@ -134,7 +135,8 @@ export default function ArticleCreatorScreen({ session, onBack, onToast, initial
         <button style={S.backBtn} onClick={onBack}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-        <p style={S.title}>Gestion articles</p>
+        <p style={{ ...S.title, flex: 1 }}>Gestion articles</p>
+        <FieldSettingsGear session={session} onToast={onToast} screen="productImport" />
       </div>
 
       {/* Onglets */}
