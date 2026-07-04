@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { AdminModeProvider } from "@/lib/adminMode";
 
 export const metadata: Metadata = {
   title: "WMS Scanner",
@@ -66,7 +67,7 @@ export default function RootLayout({
           overscrollBehavior: "none",
         }}
       >
-        {children}
+        <AdminModeProvider>{children}</AdminModeProvider>
       </body>
     </html>
   );

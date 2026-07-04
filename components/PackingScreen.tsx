@@ -60,6 +60,7 @@ function useScannerListener(onScan: (code: string) => void, enabled: boolean) {
 import * as odoo from "@/lib/odoo";
 import * as pn from "@/lib/printnode";
 import type { OdooSession } from "@/lib/odoo";
+import { F } from "@/lib/fieldMap";
 
 // ── Clés localStorage session-only ───────────────────────────────────────────
 const LS_BL_PRINTER    = "wms_packing_bl_printer";
@@ -227,7 +228,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         id:          p.id,
         name:        p.name,
         origin:      p.origin || "",
-        cdeClient:   Array.isArray(p.x_studio_cde_client) ? p.x_studio_cde_client[1] : (p.x_studio_cde_client || ""),
+        cdeClient:   Array.isArray(p[F("CLIENT_ORDER")]) ? p[F("CLIENT_ORDER")][1] : (p[F("CLIENT_ORDER")] || ""),
         partnerName: p.partner_id ? p.partner_id[1] : "",
         partnerId:   p.partner_id ? p.partner_id[0] : 0,
         carrierId:   p.carrier_id ? p.carrier_id[1] : "",
@@ -305,12 +306,12 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
              ["picking_type_code", "=", "outgoing"],
              ["state", "=", "assigned"],
              ["id", "!=", pickingId]],
-            ["id", "name", "origin", "x_studio_cde_client"], 20);
+            ["id", "name", "origin", F("CLIENT_ORDER")], 20);
           const mapped: GroupedPicking[] = siblings.map((s: any) => ({
             id:        s.id,
             name:      s.name,
             origin:    s.origin || "",
-            cdeClient: Array.isArray(s.x_studio_cde_client) ? s.x_studio_cde_client[1] : (s.x_studio_cde_client || ""),
+            cdeClient: Array.isArray(s[F("CLIENT_ORDER")]) ? s[F("CLIENT_ORDER")][1] : (s[F("CLIENT_ORDER")] || ""),
           }));
           setGroupedPickings(mapped);
           setSelectedGroupIds(mapped.map(s => s.id)); // tous cochés par défaut
@@ -384,7 +385,8 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
 
     // 3. Recherche Odoo directe
     const STATE_FILTER = ["assigned", "partially_available", "confirmed", "waiting"];
-    const FIELDS = ["id", "name", "origin", "x_studio_cde_client", "partner_id", "carrier_id",
+    const _cdeField = F("CLIENT_ORDER");
+    const FIELDS = ["id", "name", "origin", _cdeField, "partner_id", "carrier_id",
                     "move_ids_without_package", "date_deadline", "scheduled_date"];
     try {
       // 3a. OUT direct (nom, origin, cdeClient ilike)
@@ -392,7 +394,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         [["picking_type_code", "=", "outgoing"], ["state", "in", STATE_FILTER],
          "|", "|", "|",
            ["name", "=", trimmed], ["origin", "=", trimmed],
-           ["origin", "ilike", trimmed], ["x_studio_cde_client", "ilike", trimmed]],
+           ["origin", "ilike", trimmed], [_cdeField, "ilike", trimmed]],
         FIELDS, 20);
 
       // 3b. Recherche par sale.order (deux étapes — dot-notation instable sur champ Studio)
@@ -403,7 +405,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           if (soList.length) {
             results = await odoo.searchRead(session, "stock.picking",
               [["picking_type_code", "=", "outgoing"],
-               ["x_studio_cde_client", "=", soList[0].id],
+               [_cdeField, "=", soList[0].id],
                ["state", "in", STATE_FILTER]],
               FIELDS, 10);
           }
@@ -415,7 +417,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         const loose: any[] = await odoo.searchRead(session, "stock.picking",
           [["state", "in", STATE_FILTER],
            "|", "|", ["name", "=", trimmed], ["origin", "ilike", trimmed],
-           ["x_studio_cde_client", "ilike", trimmed]],
+           [_cdeField, "ilike", trimmed]],
           FIELDS, 20);
         const outPick = loose.find((r: any) => /\/OUT\//i.test(r.name || ""));
         results = outPick ? [outPick] : loose;
@@ -424,7 +426,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
       if (results.length) {
         const exact = results.find((r: any) =>
           matchOrigin(r.origin || "", trimmed) ||
-          normalizeCdeClient(r.x_studio_cde_client) === trimmed ||
+          normalizeCdeClient(r[_cdeField]) === trimmed ||
           (r.name || "").toUpperCase() === trimmed
         );
         const outPick = results.find((r: any) => /\/OUT\//i.test(r.name || ""));

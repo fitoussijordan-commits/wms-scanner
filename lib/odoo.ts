@@ -1,4 +1,5 @@
 // lib/odoo.ts
+import { F } from "@/lib/fieldMap";
 
 export interface OdooConfig { url: string; db: string; }
 export interface OdooSession { uid: number; name: string; login: string; sessionId: string; config: OdooConfig; }
@@ -585,13 +586,13 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
     ["state", "in", ["confirmed", "waiting", "partially_available"]],
   ];
   if (transmiseTagIds.length > 0) {
-    domain.push(["x_studio_etiquettes_commande", "in", transmiseTagIds]);
+    domain.push([F("ORDER_TAGS"), "in", transmiseTagIds]);
   }
 
   const pickings = await searchRead(
     session, "stock.picking",
     domain,
-    PICKING_FIELDS,
+    PICKING_FIELDS(),
     200,
     "scheduled_date asc, date_deadline asc, id asc"
   );
@@ -627,10 +628,11 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
   }
 
   for (const p of pickings) {
+    const shipDate = (p as any)[F("SHIPPING_DATE")];
     if (!p.shipping_date) {
-      p.shipping_date = p.x_studio_date_dexpdition_prvue || p.date_deadline || p.scheduled_date || null;
-    } else if (p.x_studio_date_dexpdition_prvue) {
-      p.shipping_date = p.x_studio_date_dexpdition_prvue;
+      p.shipping_date = shipDate || p.date_deadline || p.scheduled_date || null;
+    } else if (shipDate) {
+      p.shipping_date = shipDate;
     }
   }
 
@@ -644,7 +646,7 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
 }
 
 /** Version légère pour le polling — ne récupère que les champs nécessaires à la détection de nouvelles commandes */
-export async function getWaitingPickingsLight(session: OdooSession): Promise<{ id: number; name: string; shipping_date: string | null; scheduled_date: string | null; date_deadline: string | null; x_studio_date_dexpdition_prvue: string | null }[]> {
+export async function getWaitingPickingsLight(session: OdooSession): Promise<{ id: number; name: string; shipping_date: string | null; scheduled_date: string | null; date_deadline: string | null; [key: string]: any }[]> {
   const { pickTypeIds, transmiseTagIds } = await _resolveWaitingIds(session);
   if (!pickTypeIds.length) return [];
 
@@ -653,18 +655,18 @@ export async function getWaitingPickingsLight(session: OdooSession): Promise<{ i
     ["state", "in", ["confirmed", "waiting", "partially_available"]],
   ];
   if (transmiseTagIds.length > 0) {
-    domain.push(["x_studio_etiquettes_commande", "in", transmiseTagIds]);
+    domain.push([F("ORDER_TAGS"), "in", transmiseTagIds]);
   }
 
   const pickings = await searchRead(
     session, "stock.picking",
     domain,
-    ["id", "name", "scheduled_date", "date_deadline", "x_studio_date_dexpdition_prvue", "origin"],
+    ["id", "name", "scheduled_date", "date_deadline", F("SHIPPING_DATE"), "origin"],
     200
   );
 
   for (const p of pickings) {
-    p.shipping_date = p.x_studio_date_dexpdition_prvue || p.date_deadline || p.scheduled_date || null;
+    p.shipping_date = (p as any)[F("SHIPPING_DATE")] || p.date_deadline || p.scheduled_date || null;
   }
 
   return pickings;
@@ -808,11 +810,14 @@ export async function printPickingReportDirect(
 // PREPARATION — Outgoing pickings
 // ============================================
 
-const PICKING_FIELDS = [
+// ⚠️ Fonction (et non constante) : les champs custom sont résolus au runtime
+// via F(...), après chargement du mapping Odoo. Une constante figée au chargement
+// du module capturerait les valeurs par défaut avant l'application des overrides.
+const PICKING_FIELDS = () => [
   "id", "name", "state", "scheduled_date", "date_deadline", "date",
   "partner_id", "origin", "picking_type_id", "group_id",
   "move_ids_without_package", "location_id", "location_dest_id",
-  "x_studio_date_dexpdition_prvue", "x_studio_etiquettes_commande", "carrier_id",
+  F("SHIPPING_DATE"), F("ORDER_TAGS"), "carrier_id",
   "user_id",
 ];
 
@@ -870,7 +875,7 @@ export async function getOutgoingPickings(session: OdooSession) {
       ["picking_type_id", "in", typeIds],
       ["state", "=", "assigned"],
     ],
-    PICKING_FIELDS,
+    PICKING_FIELDS(),
     200,
     "date_deadline asc, scheduled_date asc, id asc"
   );
@@ -919,9 +924,10 @@ export async function getOutgoingPickings(session: OdooSession) {
     }
   }
 
-  // Filter out pickings tagged "En attente" via x_studio_etiquettes_commande
+  // Filter out pickings tagged "En attente" via le champ tags de commande
+  const _tagField = F("ORDER_TAGS");
   const tagIds = Array.from(new Set(
-    pickings.flatMap((p: any) => p.x_studio_etiquettes_commande || [])
+    pickings.flatMap((p: any) => p[_tagField] || [])
   )) as number[];
   let excludeTagIds: number[] = [];
   if (tagIds.length > 0) {
@@ -930,14 +936,15 @@ export async function getOutgoingPickings(session: OdooSession) {
   }
   const filteredPickings = excludeTagIds.length > 0
     ? pickings.filter((p: any) => {
-        const pTags: number[] = p.x_studio_etiquettes_commande || [];
+        const pTags: number[] = p[_tagField] || [];
         return !pTags.some((tid: number) => excludeTagIds.includes(tid));
       })
     : pickings;
 
-  // Use x_studio_date_dexpdition_prvue as primary date if available
+  // Utilise la date d'expédition prévue (champ custom) comme date primaire si présente
+  const _shipField = F("SHIPPING_DATE");
   for (const p of filteredPickings) {
-    if (p.x_studio_date_dexpdition_prvue) p.shipping_date = p.x_studio_date_dexpdition_prvue;
+    if (p[_shipField]) p.shipping_date = p[_shipField];
   }
 
   // Sort by shipping_date asc, no date → end
@@ -1219,7 +1226,7 @@ export async function createMultiDestTransfer(
 export async function getPackablePickings(session: OdooSession): Promise<any[]> {
   return searchRead(session, "stock.picking",
     [["picking_type_code", "=", "outgoing"], ["state", "=", "assigned"]],
-    ["id", "name", "state", "origin", "x_studio_cde_client", "partner_id", "scheduled_date",
+    ["id", "name", "state", "origin", F("CLIENT_ORDER"), "partner_id", "scheduled_date",
      "date_deadline", "move_ids_without_package", "carrier_id"],
     200, "date_deadline asc, scheduled_date asc, id asc"
   );
@@ -2319,15 +2326,16 @@ export async function getOrderVolumeCm3(
     ["id", "product_tmpl_id", "volume"], ids.length
   );
   const tmplIds = Array.from(new Set(prods.map((p: any) => p.product_tmpl_id?.[0]).filter(Boolean)));
+  const _dimField = F("PRODUCT_DIMENSIONS");
   const tmpls = tmplIds.length
-    ? await searchRead(session, "product.template", [["id", "in", tmplIds]], ["id", "x_dimensions", "volume"], tmplIds.length)
+    ? await searchRead(session, "product.template", [["id", "in", tmplIds]], ["id", _dimField, "volume"], tmplIds.length)
     : [];
   const tmplMap: Record<number, any> = {};
   for (const t of tmpls) tmplMap[t.id] = t;
   const volByProduct: Record<number, number> = {};
   for (const p of prods) {
     const t = tmplMap[p.product_tmpl_id?.[0]];
-    let cm3 = parseDimsToCm3(t?.x_dimensions || "");
+    let cm3 = parseDimsToCm3(t?.[_dimField] || "");
     if (!cm3) {
       const m3 = parseFloat(String(t?.volume ?? p.volume ?? 0));
       if (m3 > 0) cm3 = m3 * 1_000_000; // m³ → cm³
@@ -2749,14 +2757,15 @@ export async function matchWalaArticles(
   const remaining = articleCodes.filter(c => !(String(c).trim() in map));
   if (remaining.length) {
     try {
+      const _supCodeField = F("SUPPLIER_PRODUCT_CODE");
       const templates = await searchRead(
         session, "product.template",
-        [["x_studio_code_produit_fournisseur", "in", remaining]],
-        ["id", "name", "default_code", "x_studio_code_produit_fournisseur", "product_variant_ids", "uom_id"],
+        [[_supCodeField, "in", remaining]],
+        ["id", "name", "default_code", _supCodeField, "product_variant_ids", "uom_id"],
         0
       );
       for (const t of templates) {
-        const code = String(t.x_studio_code_produit_fournisseur || "").trim();
+        const code = String(t[_supCodeField] || "").trim();
         const productId = Array.isArray(t.product_variant_ids) ? t.product_variant_ids[0] : null;
         if (code && productId && !map[code]) {
           map[code] = {
@@ -4220,7 +4229,7 @@ export async function createEshopQuotation(
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
     const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    vals.x_studio_date_dexpdition_prvue = today; // champ "date" → YYYY-MM-DD
+    vals[F("SHIPPING_DATE")] = today; // champ "date" → YYYY-MM-DD
     vals.commitment_date = `${today} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   } catch {}
 
@@ -4409,7 +4418,7 @@ export async function createMarketplaceOrder(
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
     const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    vals.x_studio_date_dexpdition_prvue = today; // champ "date" → YYYY-MM-DD
+    vals[F("SHIPPING_DATE")] = today; // champ "date" → YYYY-MM-DD
     vals.commitment_date = `${today} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   } catch {}
   // Étiquette (crm.tag)

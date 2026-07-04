@@ -906,3 +906,30 @@ export async function saveAvgMonthlyBulk(input: { odoo_ref: string; avg_monthly:
     }
   }
 }
+
+// ══════════════════════════════════════════
+// MAPPING DES CHAMPS ODOO (paramétrage sans code — cf. lib/fieldMap.ts)
+// Stocké dans wms_sync_meta / clé "odoo_field_map" = JSON { [FieldKey]: "nom_technique" }
+// Seuls les champs RÉELLEMENT modifiés (≠ défaut) sont enregistrés.
+// ══════════════════════════════════════════
+
+/** Charge les overrides de champs Odoo (map cléLogique → nom technique). */
+export async function loadFieldOverrides(): Promise<Record<string, string>> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "odoo_field_map").single();
+    if (data?.value) {
+      const parsed = JSON.parse(data.value);
+      if (parsed && typeof parsed === "object") return parsed as Record<string, string>;
+    }
+  } catch {}
+  return {};
+}
+
+/** Enregistre l'intégralité des overrides (écrase). Passer {} pour tout réinitialiser. */
+export async function saveFieldOverrides(overrides: Record<string, string>): Promise<void> {
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "odoo_field_map", value: JSON.stringify(overrides), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}

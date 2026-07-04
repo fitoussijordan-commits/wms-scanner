@@ -6,6 +6,9 @@ import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByN
 import type { WmsPickingSlot } from "@/lib/supabase-palettes";
 import { createNotification, loadTodayNotifications, type WmsNotification, getCartonsConfig, saveCartonsConfig } from "@/lib/supabase";
 import * as sbase from "@/lib/supabase";
+import * as fieldMap from "@/lib/fieldMap";
+import { useAdminMode } from "@/lib/adminMode";
+import FieldSettingsGear from "@/components/FieldSettingsGear";
 import AdminScreen, { ALL_TOOLS } from "@/components/AdminScreen";
 import * as pn from "@/lib/printnode";
 
@@ -1122,6 +1125,9 @@ export default function Page() {
 
   const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager" | "imparfaite" | "fefo" | "admin">("login");
 
+  // ── Mode admin : contrôle l'affichage des roues crantées ⚙️ de paramétrage des champs ──
+  const { adminMode, toggleAdminMode } = useAdminMode();
+
   // ── UI desktop (refonte) : ≥1024px ET non tactile — le PDA garde l'UI actuelle ──
   const [isDesktopUI, setIsDesktopUI] = useState(false);
   // ── Édition rapide fiche produit (desktop + admin uniquement) ──
@@ -1495,8 +1501,18 @@ export default function Page() {
 
   // Init
   useEffect(() => {
-    const s = loadSess();
-    if (s) { setSession(s); setScreen("home"); setHistory(loadHistory()); odoo.getLocations(s).then(setLocations).catch(() => { clearSess(); setScreen("login"); }); }
+    (async () => {
+      // ⚠️ Charger le mapping des champs Odoo AVANT tout appel Odoo, pour que
+      // F("...") renvoie les bons noms techniques dès la restauration de session.
+      try {
+        const overrides = await sbase.loadFieldOverrides();
+        fieldMap.setFieldOverrides(overrides);
+      } catch (e) {
+        console.warn("Chargement du mapping de champs échoué, valeurs par défaut utilisées.", e);
+      }
+      const s = loadSess();
+      if (s) { setSession(s); setScreen("home"); setHistory(loadHistory()); odoo.getLocations(s).then(setLocations).catch(() => { clearSess(); setScreen("login"); }); }
+    })();
   }, []);
 
   const login = async (url: string, db: string, user: string, pw: string) => {
@@ -2876,7 +2892,7 @@ export default function Page() {
 
   return (
     <Shell toast={toast} flash={scanFlash} desktop={isDesktopUI}>
-      {!isDesktopUI && <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} />}
+      {!isDesktopUI && <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} adminMode={adminMode} onToggleAdmin={toggleAdminMode} />}
 
       {/* ── Sidebar desktop (refonte) ── */}
       {isDesktopUI && session && (() => {
@@ -3189,7 +3205,17 @@ export default function Page() {
                     {new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · voici l'activité de l'entrepôt
                   </p>
                 </div>
-                <WeatherWidget />
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  {session && odoo.isAdmin(session) && (
+                    <button onClick={toggleAdminMode} title="Affiche/masque les roues crantées ⚙️ de paramétrage des champs Odoo"
+                      style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 14px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
+                        border: `1.5px solid ${adminMode ? "#7c3aed" : DK.border}`, background: adminMode ? "#f3e8ff" : "#fff", color: adminMode ? "#7c3aed" : DK.text2 }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+                      {adminMode ? "Mode admin activé" : "Mode admin"}
+                    </button>
+                  )}
+                  <WeatherWidget />
+                </div>
               </div>
 
               {/* KPI strip — aligné sur la même grille 1fr/360px que le contenu en dessous */}
@@ -4433,7 +4459,7 @@ function Shell({ children, toast, flash, desktop }: { children: React.ReactNode;
   );
 }
 
-function Header({ name, onLogout, onHome, onSettings, isAdmin, notifCount = 0, onNotifs }: { name?: string; onLogout: () => void; onHome: () => void; onSettings: () => void; isAdmin?: boolean; notifCount?: number; onNotifs?: () => void }) {
+function Header({ name, onLogout, onHome, onSettings, isAdmin, notifCount = 0, onNotifs, adminMode, onToggleAdmin }: { name?: string; onLogout: () => void; onHome: () => void; onSettings: () => void; isAdmin?: boolean; notifCount?: number; onNotifs?: () => void; adminMode?: boolean; onToggleAdmin?: () => void }) {
   return (
     <header style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -4444,6 +4470,12 @@ function Header({ name, onLogout, onHome, onSettings, isAdmin, notifCount = 0, o
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.green, boxShadow: `0 0 6px ${C.green}` }} />
         <span style={{ fontSize: 12, color: C.textSec }}>{name}</span>
+        {isAdmin && onToggleAdmin && (
+          <button onClick={onToggleAdmin} title="Mode admin : affiche/masque les roues ⚙️ de paramétrage des champs" aria-label="Mode admin"
+            style={{ ...iconBtn, background: adminMode ? "#f3e8ff" : "transparent", border: adminMode ? "1.5px solid #7c3aed" : "1.5px solid transparent" }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={adminMode ? "#7c3aed" : C.textSec} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+          </button>
+        )}
         {onNotifs && (
           <button onClick={onNotifs} style={{ ...iconBtn, position: "relative" }} title="Notifications du jour" aria-label="Notifications">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="1.8"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
@@ -9733,6 +9765,8 @@ function WaitingOrdersScreen({
           <button onClick={load} disabled={loading} className="dk-tool" style={{ background: "#fff", border: `1px solid ${D.border}`, borderRadius: 11, padding: "9px 16px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: D.t2, fontFamily: "inherit", boxShadow: "0 1px 2px rgba(15,23,42,.04)", flexShrink: 0 }}>
             {loading ? "…" : "↻ Actualiser"}
           </button>
+          {/* Roue crantée : visible seulement en mode admin. Édite SHIPPING_DATE + ORDER_TAGS. */}
+          <FieldSettingsGear session={session} onToast={(m) => onToast(m)} screen="waitingOrders" onSaved={load} />
         </div>
 
         {/* Bandeau stats */}
