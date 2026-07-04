@@ -7918,10 +7918,11 @@ function ProductImportScreen({ session, onBack, onToast, desktop }: { session: a
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
           </button>
         )}
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontSize: desktop ? 21 : 18, fontWeight: 700, letterSpacing: desktop ? -0.4 : 0, color: desktop ? "#0f172a" : C.text }}>Gestion articles</div>
           <div style={{ fontSize: desktop ? 13 : 12, color: desktop ? "#64748b" : C.textMuted, marginTop: desktop ? 3 : 0 }}>{fileName || (desktop ? "Import Excel, création, seuils d'alerte et stock non vendable" : "")}</div>
         </div>
+        {session && odoo.isAdmin(session) && <FieldSettingsGear session={session} onToast={onToast} screen="productImport" />}
       </div>
 
       {/* Tab bar */}
@@ -10105,6 +10106,7 @@ function NegativeStockScreen({ session, onBack, onToast, onGoToInventory }: { se
         <button onClick={load} style={{ marginLeft: "auto", background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, color: C.textMuted }}>
           ↺ Refresh
         </button>
+        <FieldSettingsGear session={session} onToast={onToast} screen="negativeStock" />
       </div>
 
       {error && <Alert type="error">{error}</Alert>}
