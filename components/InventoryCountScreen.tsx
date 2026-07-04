@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import * as odoo from "@/lib/odoo";
+import FieldSettingsGear from "@/components/FieldSettingsGear";
 import {
   WmsInventoryEntry, WmsInventorySession,
   loadInventorySessions, createInventorySession, updateInventoryEntries,
@@ -36,7 +37,7 @@ const ZONE_R = ["R1", "R2", "R3", "R4", "R5", "R6", "R7"];
 // ════════════════════════════════════════════════════════════════
 //  VUE 1 — liste des sessions d'inventaire
 // ════════════════════════════════════════════════════════════════
-function SessionList({ onBack, onToast, onOpen }: Props & { onOpen: (s: WmsInventorySession) => void }) {
+function SessionList({ session, onBack, onToast, onOpen }: Props & { onOpen: (s: WmsInventorySession) => void }) {
   const [sessions, setSessions] = useState<WmsInventorySession[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState("");
@@ -86,10 +87,11 @@ function SessionList({ onBack, onToast, onOpen }: Props & { onOpen: (s: WmsInven
         <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Inventaire tournant</div>
           <div style={{ fontSize: 12, color: C.textMuted }}>Comptage, matching Odoo & corrections</div>
         </div>
+        <FieldSettingsGear session={session} onToast={onToast} screen="inventoryCount" />
       </div>
 
       {/* Nouvelle session */}

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import * as odoo from "@/lib/odoo";
+import FieldSettingsGear from "@/components/FieldSettingsGear";
 import { sb, WmsScanEntry, WmsScanSession, loadScanSessions, createScanSession, updateScanSessionEntries, deleteScanSession,
   WmsPrepLine, WmsPrepList, loadPrepLists, createPrepList, updatePrepEntries, deletePrepList } from "@/lib/supabase";
 
@@ -82,6 +83,7 @@ function SessionListView({ session, onBack, onToast, onOpen, onPrepMode }: Props
           <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Scan libre</div>
           <div style={{ fontSize: 12, color: C.textMuted }}>Sessions de scan cross-device</div>
         </div>
+        <FieldSettingsGear session={session} onToast={onToast} screen="freeScan" />
       </div>
       <ScanTabBar active="scan" onScan={() => {}} onPrep={onPrepMode} />
 

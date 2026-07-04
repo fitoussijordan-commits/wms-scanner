@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from "react";
 import * as odoo from "@/lib/odoo";
 import { PutawayTab } from "@/components/ArticleCreatorScreen";
+import FieldSettingsGear from "@/components/FieldSettingsGear";
 
 const C = {
   bg: "#f8fafc", white: "#ffffff", text: "#1a1a2e", textSec: "#374151",
@@ -188,10 +189,11 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
         <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
         </button>
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Gestion emplacements</div>
           <div style={{ fontSize: 12, color: C.textMuted }}>Emplacements + stratégie de rangement</div>
         </div>
+        <FieldSettingsGear session={session} onToast={onToast} screen="locationManager" />
       </div>
       {TabBar}
       {tab === "putaway" && <PutawayTab session={session} onToast={onToast} />}

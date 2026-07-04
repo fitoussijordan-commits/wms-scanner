@@ -3422,6 +3422,11 @@ export default function Page() {
 
         {/* ===== TRANSFER ===== */}
         {screen === "transfer" && <>
+          {session && odoo.isAdmin(session) && (
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+              <FieldSettingsGear session={session} onToast={showToast} screen="transfer" />
+            </div>
+          )}
           {/* Mode toggle */}
           <div style={{ display: "flex", background: C.bg, borderRadius: 10, padding: 3, marginBottom: 16 }}>
             {(["classic", "quick"] as const).map(m => (
@@ -3686,6 +3691,7 @@ export default function Page() {
             loading={loading}
             error={error}
             session={session}
+            onToast={showToast}
             onRegisterScanHandler={(fn: ((c: string) => void) | null) => { multiPickScanRef.current = fn; }}
             multiScanList={multiScanList}
             setMultiScanList={setMultiScanList}
@@ -8415,10 +8421,11 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
         <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-        <div>
+        <div style={{ flex: 1 }}>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Arrivage</h2>
           <p style={{ fontSize: 12, color: C.textMuted }}>Importer une packing list WALA</p>
         </div>
+        <FieldSettingsGear session={session} onToast={onToast} screen="arrival" />
       </div>
 
       {step === "list" && (
@@ -11999,7 +12006,7 @@ function SettingsScreen({ onBack, session, isDark, onToggleDark }: { onBack: () 
 // ============================================
 // PREPARATION LIST SCREEN
 // ============================================
-function PrepListScreen({ pickings, loading, error, onOpen, onOpenCollab, onOpenGroup, onScanPicking, onCheckAvail, onRefresh, onPrintBL, progressCache, session, onRegisterScanHandler, multiScanList, setMultiScanList }: any) {
+function PrepListScreen({ pickings, loading, error, onOpen, onOpenCollab, onOpenGroup, onScanPicking, onCheckAvail, onRefresh, onPrintBL, progressCache, session, onToast, onRegisterScanHandler, multiScanList, setMultiScanList }: any) {
   const [scanCode, setScanCode] = useState("");
   const [prepTab, setPrepTab] = useState<"list" | "multiscan" | "groups">("list");
 
@@ -12177,9 +12184,12 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenCollab, onOpen
           <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Préparation</h2>
           <p style={{ fontSize: 12, color: C.textMuted }}>{pickings.length} commande(s) prête(s)</p>
         </div>
-        <button onClick={onRefresh} disabled={loading} style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button onClick={onRefresh} disabled={loading} style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+          </button>
+          {session && odoo.isAdmin(session) && <FieldSettingsGear session={session} onToast={onToast} screen="prep" />}
+        </div>
       </div>
 
       {/* Onglets */}
