@@ -897,6 +897,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           <button onClick={loadList} disabled={loadingList} style={{ background: C.blueSoft, border: "none", cursor: "pointer", padding: "8px 12px", borderRadius: 10, color: C.blue }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
           </button>
+          <FieldSettingsGear session={session} onToast={onToast} screen="packing" />
         </div>
       </div>
 
