@@ -11674,7 +11674,7 @@ function EshopChariotSkus({ session }: { session: any }) {
 }
 
 function SettingsScreen({ onBack, session, isDark, onToggleDark }: { onBack: () => void; session: any; isDark: boolean; onToggleDark: (v: boolean) => void }) {
-  const [settingsTab, setSettingsTab] = useState<"printers" | "notifs" | "appearance" | "eshop">("printers");
+  const [settingsTab, setSettingsTab] = useState<"printers" | "notifs" | "eshop">("printers");
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   const [loadingP, setLoadingP] = useState(false);
   const [msg, setMsg] = useState("");
@@ -11820,7 +11820,6 @@ function SettingsScreen({ onBack, session, isDark, onToggleDark }: { onBack: () 
         {TAB_BTN("printers", "🖨", "Imprimantes")}
         {TAB_BTN("notifs", "🔔", "Notifications")}
         {TAB_BTN("eshop", "🛒", "E-shop")}
-        {TAB_BTN("appearance", "🎨", "Apparence")}
       </div>
 
       {msg && (
@@ -11987,28 +11986,6 @@ function SettingsScreen({ onBack, session, isDark, onToggleDark }: { onBack: () 
               <Toggle val={val} onChange={onChange} />
             </div>
           ))}
-        </Section>
-      )}
-
-      {/* ── TAB: APPARENCE ── */}
-      {settingsTab === "appearance" && (
-        <Section>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 12 }}>Thème</div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}`, marginBottom: 8 }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Mode sombre</div>
-              <div style={{ fontSize: 11, color: C.textMuted }}>Interface foncée pour travailler en lumière réduite</div>
-            </div>
-            <Toggle val={isDark} onChange={onToggleDark} />
-          </div>
-          {/* Preview swatches */}
-          <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
-            {[C.blue, C.green, C.orange, C.red, C.text, C.border].map((col, i) => (
-              <div key={i} style={{ width: 28, height: 28, borderRadius: 6, background: col, border: `1px solid ${C.border}` }} />
-            ))}
-          </div>
-          <div style={{ marginTop: 8, fontSize: 11, color: C.textMuted }}>Palette active — {isDark ? "Mode sombre" : "Mode clair"}</div>
-
         </Section>
       )}
 
