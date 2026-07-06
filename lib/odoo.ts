@@ -268,10 +268,38 @@ export async function diagnosePickingShipping(
     saleInfo = so[0] || null;
   }
 
+  // 3. Adresse de livraison (partner_shipping) : le module met parfois le point relais
+  //    comme une adresse dédiée (nom = point relais). On lit le partner de livraison.
+  let deliveryPartner: any = null;
+  const shipId = Array.isArray(pick.partner_id) ? pick.partner_id[0] : pick.partner_id;
+  if (shipId) {
+    const pf = await call(session, "/web/dataset/call_kw", {
+      model: "res.partner", method: "fields_get", args: [], kwargs: { attributes: ["string", "type"] },
+    });
+    const pcand = Object.keys(pf || {}).filter((k) => rx.test(k) || rx.test(String((pf as any)[k]?.string || "")));
+    const base = ["id", "name", "street", "street2", "zip", "city", "type"];
+    const pp = await searchRead(session, "res.partner", [["id", "=", shipId]], Array.from(new Set([...base, ...pcand])), 1);
+    deliveryPartner = pp[0] || null;
+  }
+
+  // 4. Modèles SendCloud dédiés : lister ceux qui existent et leurs champs "point".
+  const scModels: Record<string, string[]> = {};
+  for (const m of ["sendcloud.service.point", "sendcloud.shipping.product", "sale.order.line"]) {
+    try {
+      const f = await call(session, "/web/dataset/call_kw", {
+        model: m, method: "fields_get", args: [], kwargs: { attributes: ["string"] },
+      });
+      const keys = Object.keys(f || {}).filter((k) => rx.test(k) || rx.test(String((f as any)[k]?.string || "")));
+      if (keys.length) scModels[m] = keys;
+    } catch { /* modèle inexistant */ }
+  }
+
   return {
     picking: pick,
     pickingCandidateFields: pickCandidateFields,
     saleOrder: saleInfo,
+    deliveryPartner,
+    sendcloudModels: scModels,
   };
 }
 
