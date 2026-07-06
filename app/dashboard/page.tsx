@@ -569,6 +569,19 @@ export default function Dashboard() {
     }
     setSpLoading(false);
   };
+  // ── Diagnostic (lecture seule) : champs SendCloud/point relais sur les modèles Odoo ──
+  const [odooFieldsLoading, setOdooFieldsLoading] = useState(false);
+  const [odooFields, setOdooFields] = useState<Record<string, any[]> | null>(null);
+  const diagnoseOdooShipping = async () => {
+    if (!session) { setOdooFields({ "(erreur)": [{ name: "pas de session Odoo", label: "", type: "" }] }); return; }
+    setOdooFieldsLoading(true); setOdooFields(null);
+    try {
+      setOdooFields(await odoo.diagnoseShippingFields(session));
+    } catch (e: any) {
+      setOdooFields({ "(erreur)": [{ name: e?.message || "erreur", label: "", type: "" }] });
+    }
+    setOdooFieldsLoading(false);
+  };
 
   // ─── Analyse transporteurs ───────────────────────────────────────────────
   interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; options?: number; total: number; coutReel?: number; mois?: string }
@@ -6303,6 +6316,35 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                       </div>
                     </>
                   )}
+                </div>
+              )}
+            </div>
+
+            {/* ══ DIAGNOSTIC champs SendCloud / point relais dans ODOO ══ */}
+            <div style={{ marginTop: 16, padding: 16, borderRadius: 14, background: "var(--bg-raised)", border: "1px dashed var(--border)" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>🧩 Diagnostic Odoo — champs livraison / point relais</div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12, lineHeight: 1.5 }}>
+                Liste les champs liés à SendCloud, transporteur et point relais sur tes modèles Odoo (stock.picking, delivery.carrier, sale.order…). Sert à savoir où injecter le point relais Mondial Relay. Lecture seule.
+              </div>
+              <button className="wms-btn wms-btn-primary" onClick={diagnoseOdooShipping} disabled={odooFieldsLoading}>
+                {odooFieldsLoading ? <Spinner /> : "🧩"} Scanner les champs Odoo
+              </button>
+              {odooFields && (
+                <div style={{ marginTop: 14 }}>
+                  {Object.entries(odooFields).map(([model, fields]) => (
+                    <div key={model} style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700, color: "#7c3aed", marginBottom: 4, fontFamily: "monospace" }}>{model}</div>
+                      <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+                        {(fields as any[]).map((f, i) => (
+                          <div key={i} style={{ padding: "6px 10px", borderBottom: "1px solid var(--border)", fontSize: 11.5, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                            <span style={{ fontFamily: "monospace", fontWeight: 700, minWidth: 200 }}>{f.name}</span>
+                            <span style={{ color: "var(--text-muted)" }}>{f.label}</span>
+                            <span style={{ marginLeft: "auto", fontFamily: "monospace", color: "#0891b2" }}>{f.type}{f.relation ? `→${f.relation}` : ""}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

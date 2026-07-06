@@ -200,6 +200,40 @@ export async function getInventoryFields(session: OdooSession): Promise<string[]
   return Object.keys(fields || {}).filter((k: string) => k.includes("inventor") || k.includes("reason") || k.includes("adjustment"));
 }
 
+/**
+ * DIAGNOSTIC (lecture seule) : liste les champs liés à SendCloud / point relais
+ * sur les modèles de livraison Odoo, pour trouver comment le module SendCloud
+ * stocke le transporteur et le point relais Mondial Relay.
+ * Renvoie, par modèle, les champs dont le nom OU le libellé évoque sendcloud /
+ * service point / relais / carrier.
+ */
+export async function diagnoseShippingFields(
+  session: OdooSession
+): Promise<Record<string, { name: string; label: string; type: string; relation?: string }[]>> {
+  const models = ["stock.picking", "delivery.carrier", "sale.order", "res.partner", "stock.quant.package"];
+  const rx = /sendcloud|service.?point|point.?relais|relais|relay|pickup|carrier|shipping|mondial/i;
+  const out: Record<string, { name: string; label: string; type: string; relation?: string }[]> = {};
+  for (const model of models) {
+    try {
+      const fields = await call(session, "/web/dataset/call_kw", {
+        model, method: "fields_get", args: [], kwargs: { attributes: ["string", "type", "relation"] },
+      });
+      const hits: { name: string; label: string; type: string; relation?: string }[] = [];
+      for (const [name, meta] of Object.entries(fields || {})) {
+        const m: any = meta;
+        const label = String(m?.string || "");
+        if (rx.test(name) || rx.test(label)) {
+          hits.push({ name, label, type: m?.type || "", relation: m?.relation || undefined });
+        }
+      }
+      if (hits.length) out[model] = hits.sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e: any) {
+      out[model] = [{ name: "(erreur)", label: e?.message || String(e), type: "" }];
+    }
+  }
+  return out;
+}
+
 export async function create(session: OdooSession, model: string, values: any) {
   return call(session, "/web/dataset/call_kw", { model, method: "create", args: [values], kwargs: {} });
 }
