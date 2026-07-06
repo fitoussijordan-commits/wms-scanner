@@ -235,9 +235,10 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
       const trackKey = Object.keys(sample).find(k => /tracking|suivi/i.test(k)) || "TRACKING";
       const LINK_KEY = "Lien suivi TNT"; // 2e colonne = URL de suivi
 
-      // Construit le lien de suivi TNT à partir du numéro (format tnt.com/express standard).
+      // Construit le lien de suivi TNT à partir du numéro (bon de transport).
+      // Format tnt.fr public (celui qui fonctionne) : numéro dans le paramètre bonTransport.
       const tntLink = (num: string) =>
-        num ? `https://www.tnt.com/express/fr_fr/site/suivi.html?searchType=con&cons=${encodeURIComponent(num)}` : "";
+        num ? `https://www.tnt.fr/public/suivi_colis/recherche/visubontransport.do?bonTransport=${encodeURIComponent(num)}&bonTransportTemp=&radiochoixrecherche=BT&radiochoixtypeexpedition=NAT&refInterneInt=` : "";
 
       // Remplir chaque ligne : colonne numéro + colonne lien
       let filled = 0;
