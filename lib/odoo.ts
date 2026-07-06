@@ -3524,40 +3524,17 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
   if (!outputLocs.length) return [];
   const outputLocIds = outputLocs.map((l: any) => l.id as number);
 
-  // 1. Tous les quants dans ces emplacements avec qty > 0
+  // 1. Quants dans ces emplacements avec qty > 0 ET sans réservation.
+  //    Définition « sortie orpheline » = stock en Sortie SANS commande associée
+  //    = quant dont reserved_quantity = 0 (rien n'est réservé dessus).
+  //    On filtre directement côté Odoo pour ne remonter que les non-réservés.
   const quants: any[] = await searchRead(
     session, M("MODEL_QUANT"),
-    [["location_id", "in", outputLocIds], ["quantity", ">", 0]],
+    [["location_id", "in", outputLocIds], ["quantity", ">", 0], ["reserved_quantity", "=", 0]],
     ["id", "product_id", "location_id", "lot_id", "quantity", "reserved_quantity"],
     2000
   );
   if (!quants.length) return [];
-
-  // 2. Pickings actifs (assigned/waiting/confirmed) depuis ces emplacements
-  const quantLocIds = Array.from(new Set(quants.map((q: any) => q.location_id[0]))) as number[];
-  const activePicking: any[] = await searchRead(
-    session, M("MODEL_PICKING"),
-    [["state", "in", ["assigned", "waiting", "confirmed"]], ["location_id", "in", quantLocIds]],
-    ["id", "name", "state", "location_id", "scheduled_date"],
-    500
-  );
-  const activePickingIds = new Set(activePicking.map((p: any) => p.id));
-
-  // 3. Move.lines actifs depuis ces pickings → produit+lot couverts
-  type CoveredKey = string;
-  const coveredQty: Record<CoveredKey, number> = {};
-  if (activePicking.length) {
-    const moveLines: any[] = await searchRead(
-      session, M("MODEL_MOVE_LINE"),
-      [["picking_id", "in", Array.from(activePickingIds)], ["state", "not in", ["done", "cancel"]]],
-      ["product_id", "lot_id", "location_id", "reserved_uom_qty"],
-      5000
-    );
-    for (const l of moveLines) {
-      const k = `${l.product_id[0]}_${l.location_id[0]}_${l.lot_id ? l.lot_id[0] : 0}`;
-      coveredQty[k] = (coveredQty[k] || 0) + (l.reserved_uom_qty || 0);
-    }
-  }
 
   // 4. Enrichir produits
   const productIds = Array.from(new Set(quants.map((q: any) => q.product_id[0]))) as number[];
@@ -3586,10 +3563,9 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
   }[] = [];
 
   for (const q of quants) {
-    const k = `${q.product_id[0]}_${q.location_id[0]}_${q.lot_id ? q.lot_id[0] : 0}`;
-    const covered = coveredQty[k] || 0;
-    const uncovered = Math.max(0, q.quantity - covered);
-    if (uncovered <= 0) continue; // entièrement couvert par un picking actif
+    // reserved_quantity = 0 garanti par le domaine → toute la quantité est orpheline.
+    const uncovered = q.quantity;
+    if (uncovered <= 0) continue;
     const prod = prodMap[q.product_id[0]];
     result.push({
       id: q.id,
@@ -3599,14 +3575,14 @@ export async function getOrphanMoves(session: OdooSession): Promise<{
       name: prod?.name || q.product_id[1] || "",
       lotName: q.lot_id ? (lotMap[q.lot_id[0]] || q.lot_id[1] || "") : "",
       qty: q.quantity,
-      reservedQty: q.reserved_quantity || 0,
+      reservedQty: 0,
       uncoveredQty: uncovered,
       state: "stranded",
       date: "",
       locationName: Array.isArray(q.location_id) ? q.location_id[1] : "",
       locationDestName: "",
       pickingState: "",
-      reason: covered > 0 ? `${Math.round(covered)} couverts / ${Math.round(uncovered)} sans livraison` : "Aucune livraison active",
+      reason: "Aucune réservation (stock en sortie sans commande)",
     });
   }
 
