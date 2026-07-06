@@ -234,6 +234,47 @@ export async function diagnoseShippingFields(
   return out;
 }
 
+/**
+ * DIAGNOSTIC (lecture seule) : lit un picking par son nom (ex "WH/OUT/39062") et
+ * renvoie la valeur de tous ses champs liés à SendCloud / carrier / point relais,
+ * + les mêmes infos sur le sale.order lié. Permet de voir EXACTEMENT ce qui est
+ * rempli (et ce qui manque) sur une livraison Mondial Relay qui a échoué.
+ */
+export async function diagnosePickingShipping(
+  session: OdooSession, pickingName: string
+): Promise<any> {
+  // 1. Champs "livraison" existants sur stock.picking
+  const pickFields = await call(session, "/web/dataset/call_kw", {
+    model: "stock.picking", method: "fields_get", args: [], kwargs: { attributes: ["string", "type"] },
+  });
+  const rx = /sendcloud|service.?point|point.?relais|relais|relay|pickup|carrier/i;
+  const pickCandidateFields = Object.keys(pickFields || {}).filter((k) => rx.test(k) || rx.test(String((pickFields as any)[k]?.string || "")));
+  const baseFields = ["id", "name", "state", "sale_id", "origin", "partner_id"];
+  const allPickFields = Array.from(new Set([...baseFields, ...pickCandidateFields]));
+
+  const picks = await searchRead(session, "stock.picking", [["name", "=", pickingName.trim()]], allPickFields, 1);
+  if (!picks.length) return { error: `Picking "${pickingName}" introuvable` };
+  const pick = picks[0];
+
+  // 2. sale.order lié : champs sendcloud/relais
+  let saleInfo: any = null;
+  const saleId = Array.isArray(pick.sale_id) ? pick.sale_id[0] : pick.sale_id;
+  if (saleId) {
+    const saleFields = await call(session, "/web/dataset/call_kw", {
+      model: "sale.order", method: "fields_get", args: [], kwargs: { attributes: ["string", "type"] },
+    });
+    const saleCand = Object.keys(saleFields || {}).filter((k) => rx.test(k) || rx.test(String((saleFields as any)[k]?.string || "")));
+    const so = await searchRead(session, "sale.order", [["id", "=", saleId]], Array.from(new Set(["id", "name", ...saleCand])), 1);
+    saleInfo = so[0] || null;
+  }
+
+  return {
+    picking: pick,
+    pickingCandidateFields: pickCandidateFields,
+    saleOrder: saleInfo,
+  };
+}
+
 export async function create(session: OdooSession, model: string, values: any) {
   return call(session, "/web/dataset/call_kw", { model, method: "create", args: [values], kwargs: {} });
 }

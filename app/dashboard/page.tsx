@@ -582,6 +582,20 @@ export default function Dashboard() {
     }
     setOdooFieldsLoading(false);
   };
+  // ── Diagnostic d'UN picking précis (WH/OUT/xxxxx) : voir ce qui est rempli / manquant ──
+  const [pickName, setPickName] = useState("");
+  const [pickDiagLoading, setPickDiagLoading] = useState(false);
+  const [pickDiag, setPickDiag] = useState<any>(null);
+  const diagnosePicking = async () => {
+    if (!session || !pickName.trim()) return;
+    setPickDiagLoading(true); setPickDiag(null);
+    try {
+      setPickDiag(await odoo.diagnosePickingShipping(session, pickName.trim()));
+    } catch (e: any) {
+      setPickDiag({ error: e?.message || "erreur" });
+    }
+    setPickDiagLoading(false);
+  };
 
   // ─── Analyse transporteurs ───────────────────────────────────────────────
   interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; options?: number; total: number; coutReel?: number; mois?: string }
@@ -6345,6 +6359,43 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+
+            {/* ══ DIAGNOSTIC d'UN picking (voir ce qui est rempli sur une livraison MR) ══ */}
+            <div style={{ marginTop: 16, padding: 16, borderRadius: 14, background: "var(--bg-raised)", border: "1px dashed var(--border)" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>🔬 Inspecter une livraison (WH/OUT/…)</div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12, lineHeight: 1.5 }}>
+                Lit tous les champs SendCloud / carrier / point relais d'un bon de livraison précis (+ la commande liée). Sert à voir ce qui manque quand SendCloud réclame un point relais. Lecture seule.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                <div style={{ flex: "1 1 200px" }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Nom du bon de livraison</label>
+                  <input value={pickName} onChange={(e) => setPickName(e.target.value)} placeholder="WH/OUT/39062"
+                    style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+                </div>
+                <button className="wms-btn wms-btn-primary" onClick={diagnosePicking} disabled={pickDiagLoading || !pickName.trim()}>
+                  {pickDiagLoading ? <Spinner /> : "🔬"} Inspecter
+                </button>
+              </div>
+              {pickDiag && (
+                <div style={{ marginTop: 14 }}>
+                  {pickDiag.error ? (
+                    <div style={{ padding: "10px 14px", borderRadius: 10, background: "#fef2f2", border: "1px solid #fecaca", color: "#dc2626", fontSize: 12.5 }}>⚠ {pickDiag.error}</div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed", marginBottom: 4, fontFamily: "monospace" }}>stock.picking</div>
+                      <pre style={{ margin: 0, padding: 12, background: "#0f172a", color: "#e2e8f0", borderRadius: 8, fontSize: 11, overflowX: "auto", lineHeight: 1.5 }}>{JSON.stringify(pickDiag.picking, null, 2)}</pre>
+                      <div style={{ fontSize: 11.5, color: "var(--text-muted)", margin: "6px 0" }}>Champs point relais candidats : {(pickDiag.pickingCandidateFields || []).join(", ") || "aucun"}</div>
+                      {pickDiag.saleOrder && (
+                        <>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed", margin: "10px 0 4px", fontFamily: "monospace" }}>sale.order lié</div>
+                          <pre style={{ margin: 0, padding: 12, background: "#0f172a", color: "#e2e8f0", borderRadius: 8, fontSize: 11, overflowX: "auto", lineHeight: 1.5 }}>{JSON.stringify(pickDiag.saleOrder, null, 2)}</pre>
+                        </>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
             </div>
