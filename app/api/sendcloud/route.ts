@@ -781,66 +781,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(results);
     }
 
-    // ── DIAGNOSTIC point relais : cherche les points relais SendCloud autour d'un CP ──
-    // Non destructif (lecture seule). Sert à vérifier si le code du fichier (ex 35699)
-    // correspond bien à un point relais Mondial Relay retourné par SendCloud, et sous
-    // quel format (pour ensuite router l'étiquette vers le bon point).
-    // Usage : GET /api/sendcloud?action=sp_search&postal=75004&carrier=mondial_relay&code=35699
-    if (action === "sp_search") {
-      const postal = searchParams.get("postal") || "";
-      const country = (searchParams.get("country") || "FR").toUpperCase();
-      const carrier = searchParams.get("carrier") || "mondial_relay";
-      const wanted = (searchParams.get("code") || "").trim(); // code MR du fichier (optionnel)
-      const radius = searchParams.get("radius") || "20000";   // large pour ne rien rater
-      if (!postal) return NextResponse.json({ error: "postal requis (code postal)" }, { status: 400 });
-
-      const url = `https://servicepoints.sendcloud.sc/api/v2/service-points?country=${country}`
-        + `&address=${encodeURIComponent(postal)}&radius=${radius}&carrier=${encodeURIComponent(carrier)}`;
-
-      let raw: any;
-      try {
-        raw = await scJson(url, auth);
-      } catch (e: any) {
-        // Renvoie l'erreur brute pour diagnostiquer (contrat MR non activé, service points off…)
-        return NextResponse.json({ ok: false, url, error: e.message }, { status: 200 });
-      }
-
-      const list: any[] = Array.isArray(raw) ? raw : (raw?.service_points || raw?.results || raw?.data || []);
-      // On expose les champs utiles pour repérer le code du fichier.
-      const points = list.map((sp: any) => ({
-        id: sp.id,                                   // ← ID SendCloud (à mettre dans to_service_point)
-        code: sp.code,                               // ← code point relais (à comparer avec le fichier)
-        carrier_code: sp.carrier_code ?? sp.extra_data?.carrier_code ?? null,
-        name: sp.name,
-        street: sp.street,
-        house_number: sp.house_number,
-        postal_code: sp.postal_code,
-        city: sp.city,
-        carrier: sp.carrier,
-      }));
-
-      // Si un code est fourni, on tente de le retrouver (comparaison souple).
-      let match: any = null;
-      if (wanted) {
-        const norm = (s: any) => String(s ?? "").replace(/^0+/, "").replace(/[^0-9a-z]/gi, "").toLowerCase();
-        const w = norm(wanted);
-        match = points.find((p) =>
-          norm(p.code) === w || norm(p.carrier_code) === w ||
-          norm(p.code).endsWith(w) || norm(p.carrier_code).endsWith(w)
-        ) || null;
-      }
-
-      return NextResponse.json({
-        ok: true,
-        query: { postal, country, carrier, wanted, radius },
-        count: points.length,
-        matchFound: !!match,
-        match,                    // le point qui correspond au code du fichier (ou null)
-        points: points.slice(0, 30), // aperçu
-      });
-    }
-
-    return NextResponse.json({ error: "Actions: parcels, label, debug, sp_search" }, { status: 400 });
+    return NextResponse.json({ error: "Actions: parcels, label, debug" }, { status: 400 });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
