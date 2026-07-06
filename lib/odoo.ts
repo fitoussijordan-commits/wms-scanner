@@ -4423,7 +4423,7 @@ export async function createMarketplaceOrder(
   session: OdooSession,
   partnerId: number,
   lines: MarketplaceLine[],
-  opts: { origin?: string; confirm?: boolean; assign?: boolean; tag?: string; price0?: boolean; pricelistName?: string; tntService?: string; forceInvoiced?: boolean } = {}
+  opts: { origin?: string; confirm?: boolean; assign?: boolean; tag?: string; tags?: string[]; price0?: boolean; pricelistName?: string; tntService?: string; forceInvoiced?: boolean } = {}
 ): Promise<{ id: number; name: string; tnt?: { ok: boolean; reason?: string; serviceId?: number } }> {
   const vals: any = {
     partner_id: partnerId,
@@ -4454,12 +4454,17 @@ export async function createMarketplaceOrder(
     vals[F("SHIPPING_DATE")] = today; // champ "date" → YYYY-MM-DD
     vals.commitment_date = `${today} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   } catch {}
-  // Étiquette (crm.tag)
-  if (opts.tag) {
+  // Étiquettes (crm.tag) : accepte un tag unique (opts.tag) OU plusieurs (opts.tags).
+  const wantedTags = Array.from(new Set([...(opts.tags || []), ...(opts.tag ? [opts.tag] : [])].filter(Boolean)));
+  if (wantedTags.length) {
     try {
-      const t = await searchRead(session, M("MODEL_CRM_TAG"), [["name", "=", opts.tag]], ["id"], 1);
-      const tagId = t.length ? t[0].id : await create(session, M("MODEL_CRM_TAG"), { name: opts.tag }) as number;
-      if (tagId) vals.tag_ids = [[6, 0, [tagId]]];
+      const findOrCreateTag = async (name: string): Promise<number | null> => {
+        const t = await searchRead(session, M("MODEL_CRM_TAG"), [["name", "=", name]], ["id"], 1);
+        if (t.length) return t[0].id;
+        return await create(session, M("MODEL_CRM_TAG"), { name }) as number;
+      };
+      const tagIds = (await Promise.all(wantedTags.map(findOrCreateTag))).filter((x): x is number => typeof x === "number");
+      if (tagIds.length) vals.tag_ids = [[6, 0, tagIds]];
     } catch {}
   }
 
