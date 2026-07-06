@@ -200,6 +200,63 @@ export async function getInventoryFields(session: OdooSession): Promise<string[]
   return Object.keys(fields || {}).filter((k: string) => k.includes("inventor") || k.includes("reason") || k.includes("adjustment"));
 }
 
+/**
+ * Récupère le numéro de suivi (carrier_tracking_ref) des commandes Imparfaite.
+ * Entrée : liste des réfs de commande du fichier (ex ["289116777", ...]).
+ * Chaîne : réf → sale.order (origin "Imparfaite <ref>") → picking OUT lié → carrier_tracking_ref.
+ * Sortie : map { ref: tracking } (tracking = "" si pas encore expédié / pas trouvé).
+ */
+export async function getImparfaiteTrackings(
+  session: OdooSession, refs: string[]
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const clean = Array.from(new Set(refs.map(r => String(r).replace(/^#/, "").trim()).filter(Boolean)));
+  if (!clean.length) return out;
+
+  // 1. Retrouver les commandes de vente par origine "Imparfaite <ref>".
+  //    On fait un OR de "origin ilike %ref%" pour couvrir "Imparfaite #ref" / "Imparfaite ref".
+  const domain: any[] = [];
+  for (let i = 0; i < clean.length - 1; i++) domain.push("|");
+  for (const r of clean) domain.push(["origin", "ilike", r]);
+
+  const orders = await searchReadAll(
+    session, M("MODEL_SALE_ORDER"), domain, ["id", "name", "origin"], ""
+  );
+  if (!orders.length) return out;
+
+  // Map origin → ref fichier (pour rattacher chaque commande à sa réf)
+  const orderIdToRef: Record<number, string> = {};
+  for (const o of orders) {
+    const org = String(o.origin || "");
+    const hit = clean.find(r => org.includes(r));
+    if (hit) orderIdToRef[o.id] = hit;
+  }
+  const orderIds = orders.map((o: any) => o.id);
+
+  // 2. Pickings OUT liés à ces commandes (via sale_id), avec le tracking.
+  const picks = await searchReadAll(
+    session, M("MODEL_PICKING"),
+    [["sale_id", "in", orderIds], ["picking_type_code", "=", "outgoing"]],
+    ["id", "sale_id", "carrier_tracking_ref", "state", "date_done"], ""
+  );
+
+  // 3. Pour chaque réf, prendre le tracking du OUT le plus récent qui en a un.
+  const byRef: Record<string, { tracking: string; date: string }[]> = {};
+  for (const p of picks) {
+    const soId = Array.isArray(p.sale_id) ? p.sale_id[0] : p.sale_id;
+    const ref = orderIdToRef[soId];
+    if (!ref) continue;
+    (byRef[ref] ||= []).push({ tracking: String(p.carrier_tracking_ref || ""), date: String(p.date_done || "") });
+  }
+  for (const ref of clean) {
+    const list = byRef[ref] || [];
+    // priorité : un tracking non vide, le plus récent
+    const withTrack = list.filter(x => x.tracking).sort((a, b) => (a.date < b.date ? 1 : -1));
+    out[ref] = withTrack.length ? withTrack[0].tracking : "";
+  }
+  return out;
+}
+
 export async function create(session: OdooSession, model: string, values: any) {
   return call(session, "/web/dataset/call_kw", { model, method: "create", args: [values], kwargs: {} });
 }

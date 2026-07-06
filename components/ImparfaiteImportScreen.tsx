@@ -64,6 +64,9 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
   const [fixQuery, setFixQuery] = useState("");
   const [fixResults, setFixResults] = useState<any[]>([]);
   const [results, setResults] = useState<{ ref: string; ok: boolean; msg: string }[]>([]);
+  // Fichier brut conservé pour le ré-export avec la colonne TRACKING remplie.
+  const [rawRows, setRawRows] = useState<any[]>([]);
+  const [trackingBusy, setTrackingBusy] = useState(false);
 
   const handleFile = async (file: File) => {
     setError(""); setFileName(file.name);
@@ -74,6 +77,7 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const raw: any[] = XLSX.utils.sheet_to_json(sheet);
       if (!raw.length) { setError("Fichier vide ou format non reconnu"); return; }
+      setRawRows(raw); // conservé pour le ré-export TRACKING
 
       const lines: RawLine[] = raw.map(r => ({
         orderRef: String(pick(r, ["Référence de commande", "reference commande", "order"]) ?? "").trim(),
@@ -187,7 +191,45 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
     onToast(`${ok}/${res.length} commande(s) importée(s)`, ok === res.length ? "success" : "error");
   };
 
-  const reset = () => { setStep("upload"); setGroups([]); setResults([]); setFileName(""); setError(""); };
+  // ── Récupère les trackings dans Odoo et ré-exporte le fichier avec la colonne remplie ──
+  const exportWithTrackings = async () => {
+    if (!rawRows.length) { onToast("Charge d'abord le fichier", "info"); return; }
+    setTrackingBusy(true);
+    try {
+      // Réfs du fichier (colonne "Référence de commande")
+      const refs = Array.from(new Set(rawRows
+        .map(r => String(pick(r, ["Référence de commande", "reference commande", "order"]) ?? "").replace(/^#/, "").trim())
+        .filter(Boolean)));
+      const map = await odoo.getImparfaiteTrackings(session, refs);
+
+      // Nom exact de la colonne tracking dans le fichier (sinon "TRACKING")
+      const sample = rawRows[0] || {};
+      const trackKey = Object.keys(sample).find(k => /tracking|suivi/i.test(k)) || "TRACKING";
+
+      // Remplir chaque ligne avec le tracking de sa réf
+      let filled = 0;
+      const rows = rawRows.map(r => {
+        const ref = String(pick(r, ["Référence de commande", "reference commande", "order"]) ?? "").replace(/^#/, "").trim();
+        const tr = ref ? (map[ref] || "") : "";
+        if (tr) filled++;
+        return { ...r, [trackKey]: tr };
+      });
+
+      // Ré-export xlsx
+      const XLSX = await loadXLSX();
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Imparfaite");
+      const date = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, `imparfaite_trackings_${date}.xlsx`);
+      onToast(`✓ ${filled}/${rows.length} ligne(s) avec tracking`, filled ? "success" : "info");
+    } catch (e: any) {
+      onToast("Erreur récupération trackings : " + (e?.message || e), "error");
+    }
+    setTrackingBusy(false);
+  };
+
+  const reset = () => { setStep("upload"); setGroups([]); setResults([]); setFileName(""); setError(""); setRawRows([]); };
 
   // ── Rendu ──
   return (
@@ -239,6 +281,9 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
             {groups.some(g => g.alreadyImported) && <span style={chip(C.orangeSoft, C.orange)}>{groups.filter(g => g.alreadyImported).length} déjà importée(s)</span>}
             <div style={{ flex: 1 }} />
             <button onClick={reset} style={btn(C.white, C.textSec, C.border)}>Changer de fichier</button>
+            <button onClick={exportWithTrackings} disabled={trackingBusy} style={btn(C.blueSoft, C.blue, C.blue)}>
+              {trackingBusy ? "Récupération…" : "📥 Récupérer les trackings"}
+            </button>
             <button onClick={runImport} disabled={!importable.length} style={btn(importable.length ? C.green : C.border, "#fff")}>Importer ({importable.length})</button>
           </div>
 
