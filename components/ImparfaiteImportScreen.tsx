@@ -54,6 +54,21 @@ function pick(row: any, keys: string[], exclude: string[] = []): any {
   return found ? row[found] : null;
 }
 
+// Normalise un téléphone FR pour Odoo : indicatif +33 / 33 en tête → 0.
+// "33686420877" → "0686420877" ; "+33 6 86 42 08 77" → "0686420877".
+// Les numéros non-FR (autre indicatif) sont laissés tels quels (juste nettoyés).
+function normalizePhoneFR(raw: string): string {
+  if (!raw) return "";
+  let s = String(raw).trim();
+  // enlève espaces, points, tirets, parenthèses (garde + et chiffres)
+  s = s.replace(/[\s.\-()]/g, "");
+  if (s.startsWith("+33")) return "0" + s.slice(3);
+  if (s.startsWith("0033")) return "0" + s.slice(4);
+  // "33XXXXXXXXX" (11 chiffres commençant par 33) → 0 + le reste (9 chiffres)
+  if (/^33\d{9}$/.test(s)) return "0" + s.slice(2);
+  return s;
+}
+
 export default function ImparfaiteImportScreen({ session, onBack, onToast }: Props) {
   const [step, setStep] = useState<"upload" | "preview" | "importing" | "done">("upload");
   const [fileName, setFileName] = useState("");
@@ -90,7 +105,7 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
         name: String(pick(r, ["Nom"], ["article"]) ?? "").trim(),
         company: String(pick(r, ["Société", "societe"]) ?? "").trim(),
         email: String(pick(r, ["Email"]) ?? "").trim(),
-        phone: String(pick(r, ["Téléphone", "telephone"]) ?? "").trim(),
+        phone: normalizePhoneFR(String(pick(r, ["Téléphone", "telephone"]) ?? "")),
         addr1: String(pick(r, ["Adresse Ligne 1", "adresse ligne1"]) ?? "").trim(),
         addr2: String(pick(r, ["Adresse Ligne 2", "adresse ligne2"]) ?? "").trim(),
         addr3: String(pick(r, ["Complément d'Adresse", "complement"]) ?? "").trim(),
@@ -218,14 +233,19 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
       // Nom exact de la colonne tracking dans le fichier (sinon "TRACKING")
       const sample = rawRows[0] || {};
       const trackKey = Object.keys(sample).find(k => /tracking|suivi/i.test(k)) || "TRACKING";
+      const LINK_KEY = "Lien suivi TNT"; // 2e colonne = URL de suivi
 
-      // Remplir chaque ligne avec le tracking de sa réf
+      // Construit le lien de suivi TNT à partir du numéro (format tnt.com/express standard).
+      const tntLink = (num: string) =>
+        num ? `https://www.tnt.com/express/fr_fr/site/suivi.html?searchType=con&cons=${encodeURIComponent(num)}` : "";
+
+      // Remplir chaque ligne : colonne numéro + colonne lien
       let filled = 0;
       const rows = rawRows.map(r => {
         const ref = String(pick(r, ["Référence de commande", "reference commande", "order"]) ?? "").replace(/^#/, "").trim();
         const tr = ref ? (map[ref] || "") : "";
         if (tr) filled++;
-        return { ...r, [trackKey]: tr };
+        return { ...r, [trackKey]: tr, [LINK_KEY]: tntLink(tr) };
       });
 
       // Ré-export xlsx
