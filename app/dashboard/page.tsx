@@ -553,6 +553,22 @@ export default function Dashboard() {
   const [etqCreating, setEtqCreating] = useState(false);
   const [etqError, setEtqError] = useState("");
   const [etqResult, setEtqResult] = useState<{ pdfUrl: string; tracking: string; orderNumber: string } | null>(null);
+  // ── Diagnostic point relais Mondial Relay (recherche par code postal + code MR) ──
+  const [spPostal, setSpPostal] = useState("");
+  const [spCode, setSpCode] = useState("");
+  const [spLoading, setSpLoading] = useState(false);
+  const [spResult, setSpResult] = useState<any>(null);
+  const searchServicePoint = async () => {
+    setSpLoading(true); setSpResult(null);
+    try {
+      const res = await fetch(`/api/sendcloud?action=sp_search&postal=${encodeURIComponent(spPostal)}&carrier=mondial_relay&code=${encodeURIComponent(spCode)}`);
+      const data = await res.json();
+      setSpResult(data);
+    } catch (e: any) {
+      setSpResult({ ok: false, error: e?.message || "Erreur réseau" });
+    }
+    setSpLoading(false);
+  };
 
   // ─── Analyse transporteurs ───────────────────────────────────────────────
   interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; options?: number; total: number; coutReel?: number; mois?: string }
@@ -6231,6 +6247,65 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                 <iframe src={etqResult.pdfUrl} title="Étiquette" style={{ width: "100%", height: 500, border: "1px solid var(--border)", borderRadius: 10, background: "#fff" }} />
               </div>
             )}
+
+            {/* ══ DIAGNOSTIC POINT RELAIS MONDIAL RELAY ══ */}
+            <div style={{ marginTop: 24, padding: 16, borderRadius: 14, background: "var(--bg-raised)", border: "1px dashed var(--border)" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>🔎 Diagnostic point relais (Mondial Relay)</div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12, lineHeight: 1.5 }}>
+                Teste si le code point relais d'un fichier (ex. <code>35699</code>) correspond bien à un point SendCloud. Saisis le code postal du client + le code du fichier.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                <div style={{ flex: "1 1 120px" }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Code postal</label>
+                  <input value={spPostal} onChange={(e) => setSpPostal(e.target.value)} placeholder="75004"
+                    style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+                </div>
+                <div style={{ flex: "1 1 120px" }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Code point relais (fichier)</label>
+                  <input value={spCode} onChange={(e) => setSpCode(e.target.value)} placeholder="35699"
+                    style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+                </div>
+                <button className="wms-btn wms-btn-primary" onClick={searchServicePoint} disabled={spLoading || !spPostal}>
+                  {spLoading ? <Spinner /> : "🔎"} Chercher
+                </button>
+              </div>
+
+              {spResult && (
+                <div style={{ marginTop: 14 }}>
+                  {spResult.ok === false && (
+                    <div style={{ padding: "10px 14px", borderRadius: 10, background: "#fef2f2", border: "1px solid #fecaca", color: "#dc2626", fontSize: 12.5 }}>
+                      ⚠ {spResult.error || "Erreur"}<br />
+                      <span style={{ color: "#991b1b", fontSize: 11 }}>Si l'erreur parle de "service point support not activated" ou de contrat : Mondial Relay n'est pas activé dans ton compte SendCloud.</span>
+                    </div>
+                  )}
+                  {spResult.ok && (
+                    <>
+                      <div style={{ fontSize: 12.5, marginBottom: 8, color: "var(--text-muted)" }}>
+                        {spResult.count} point(s) trouvé(s) autour de {spResult.query?.postal}.
+                        {spResult.matchFound
+                          ? <span style={{ color: "#16a34a", fontWeight: 700 }}> ✓ Code {spResult.query?.wanted} retrouvé !</span>
+                          : (spResult.query?.wanted ? <span style={{ color: "#d97706", fontWeight: 700 }}> ✕ Code {spResult.query?.wanted} PAS retrouvé dans la liste.</span> : null)}
+                      </div>
+                      {spResult.match && (
+                        <div style={{ padding: "10px 14px", borderRadius: 10, background: "#f0fdf4", border: "1px solid #86efac", fontSize: 12.5, marginBottom: 10 }}>
+                          <strong>Point correspondant :</strong> ID SendCloud <code>{spResult.match.id}</code> · code <code>{spResult.match.code}</code> · {spResult.match.name} — {spResult.match.street} {spResult.match.house_number}, {spResult.match.postal_code} {spResult.match.city}
+                        </div>
+                      )}
+                      <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 10 }}>
+                        {(spResult.points || []).map((p: any, i: number) => (
+                          <div key={i} style={{ padding: "8px 12px", borderBottom: "1px solid var(--border)", fontSize: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                            <span style={{ fontFamily: "monospace", fontWeight: 700, minWidth: 90 }}>id:{p.id}</span>
+                            <span style={{ fontFamily: "monospace", color: "#7c3aed" }}>code:{p.code}</span>
+                            {p.carrier_code && <span style={{ fontFamily: "monospace", color: "#0891b2" }}>cc:{p.carrier_code}</span>}
+                            <span style={{ color: "var(--text-muted)" }}>{p.name} — {p.postal_code} {p.city}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
