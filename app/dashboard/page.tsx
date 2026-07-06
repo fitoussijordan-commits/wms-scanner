@@ -6431,6 +6431,18 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                           <pre style={{ margin: 0, padding: 12, background: "#0f172a", color: "#e2e8f0", borderRadius: 8, fontSize: 11, overflowX: "auto", lineHeight: 1.5 }}>{JSON.stringify(pickDiag.saleOrder, null, 2)}</pre>
                         </>
                       )}
+                      {pickDiag.deliveryPartner && (
+                        <>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "#16a34a", margin: "10px 0 4px", fontFamily: "monospace" }}>Adresse de livraison (res.partner)</div>
+                          <pre style={{ margin: 0, padding: 12, background: "#0f172a", color: "#e2e8f0", borderRadius: 8, fontSize: 11, overflowX: "auto", lineHeight: 1.5 }}>{JSON.stringify(pickDiag.deliveryPartner, null, 2)}</pre>
+                        </>
+                      )}
+                      {pickDiag.sendcloudModels && Object.keys(pickDiag.sendcloudModels).length > 0 && (
+                        <>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "#d97706", margin: "10px 0 4px", fontFamily: "monospace" }}>Modèles SendCloud détectés</div>
+                          <pre style={{ margin: 0, padding: 12, background: "#0f172a", color: "#e2e8f0", borderRadius: 8, fontSize: 11, overflowX: "auto", lineHeight: 1.5 }}>{JSON.stringify(pickDiag.sendcloudModels, null, 2)}</pre>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
