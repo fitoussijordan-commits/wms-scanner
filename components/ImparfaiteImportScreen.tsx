@@ -67,6 +67,7 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
   // Fichier brut conservé pour le ré-export avec la colonne TRACKING remplie.
   const [rawRows, setRawRows] = useState<any[]>([]);
   const [trackingBusy, setTrackingBusy] = useState(false);
+  const [progress, setProgress] = useState({ done: 0, total: 0 }); // progression import
 
   const handleFile = async (file: File) => {
     setError(""); setFileName(file.name);
@@ -153,38 +154,50 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
     if (!importable.length) { onToast("Rien à importer", "info"); return; }
     if (!confirm(`Importer ${importable.length} commande(s) ? (crée un nouveau client + une commande confirmée par réf)`)) return;
     setStep("importing");
-    const res: { ref: string; ok: boolean; msg: string }[] = [];
-    for (const g of importable) {
+    setProgress({ done: 0, total: importable.length });
+
+    // Traite UNE commande (même logique qu'avant, extraite pour la parallélisation).
+    const importOne = async (g: typeof importable[number]): Promise<{ ref: string; ok: boolean; msg: string }> => {
       try {
         const lines = g.items.filter(it => it.matched).map(it => ({ productId: it.productId, qty: it.qty, name: it.articleName }));
-        if (!lines.length) { res.push({ ref: g.ref, ok: false, msg: "aucune ligne mappée" }); continue; }
-        // 1) nouveau client (toujours) — numéro client = réf commande, type de compte = Imparfaite
+        if (!lines.length) return { ref: g.ref, ok: false, msg: "aucune ligne mappée" };
+        // 1) nouveau client
         const partnerId = await odoo.createMarketplaceClient(session, {
           name: g.client.name || g.client.company || "Client Imparfaite",
-          // Référence = "Imparfaite" + n° de commande (sans le #), ex: Imparfaite289110776
           ref: `Imparfaite${g.ref.replace(/^#/, "")}`,
           email: g.client.email, phone: g.client.phone, company: g.client.company,
           street: g.client.addr1, street2: [g.client.addr2, g.client.addr3].filter(Boolean).join(" "),
           zip: g.client.zip, city: g.client.city, countryCode: g.client.country,
           typeCompteName: "Imparfaite",
-          isCompany: true,                    // Société (pas Individu)
-          tag: "Imparfaite",                  // étiquette client
-          pricelistName: "WALAOFFERT_2023",   // liste de prix (nom EN/US = WALAOFFERT_2026 fr)
+          isCompany: true,
+          tag: "Imparfaite",
+          pricelistName: "WALAOFFERT_2023",
         });
-        // 2) commande confirmée + réservée, vendeur vide, pricelist offert, tag Imparfaite
+        // 2) commande confirmée + réservée
         const order = await odoo.createMarketplaceOrder(session, partnerId, lines, {
           origin: `Imparfaite ${g.ref}`, confirm: true, assign: true, price0: true,
           pricelistName: "WALAOFFERT_2023", tags: ["Imparfaite", "Transmise"],
-          tntService: "JE",       // service TNT "13:00 Express - Essentiel Flexibilité" sur le OUT
-          forceInvoiced: true,    // "Forcer le statut à 'Entièrement facturé'" (pas de facture à la validation du OUT)
+          tntService: "JE",
+          forceInvoiced: true,
         });
         await markImparfaiteProcessed([g.ref], order.name).catch(() => {});
         const tntMsg = order.tnt ? (order.tnt.ok ? " · TNT JE ✓" : ` · TNT ⚠ (${order.tnt.reason})`) : "";
-        res.push({ ref: g.ref, ok: true, msg: order.name + tntMsg });
+        return { ref: g.ref, ok: true, msg: order.name + tntMsg };
       } catch (e: any) {
-        res.push({ ref: g.ref, ok: false, msg: e?.message || "erreur" });
+        return { ref: g.ref, ok: false, msg: e?.message || "erreur" };
       }
+    };
+
+    // Exécution PAR LOTS DE 4 en parallèle (≈ 4x plus rapide, charge Odoo maîtrisée).
+    const BATCH = 4;
+    const res: { ref: string; ok: boolean; msg: string }[] = [];
+    for (let i = 0; i < importable.length; i += BATCH) {
+      const chunk = importable.slice(i, i + BATCH);
+      const chunkRes = await Promise.all(chunk.map(importOne));
+      res.push(...chunkRes);
+      setProgress({ done: res.length, total: importable.length });
     }
+
     setResults(res);
     setStep("done");
     const ok = res.filter(r => r.ok).length;
@@ -350,7 +363,13 @@ export default function ImparfaiteImportScreen({ session, onBack, onToast }: Pro
       {step === "importing" && (
         <div style={{ textAlign: "center", padding: 50, color: C.textMuted }}>
           <div style={{ width: 40, height: 40, border: `3px solid ${C.border}`, borderTopColor: C.blue, borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 14px" }} />
-          Import en cours…
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Import en cours… {progress.done}/{progress.total}</div>
+          {progress.total > 0 && (
+            <div style={{ maxWidth: 280, height: 8, background: C.border, borderRadius: 99, margin: "12px auto 0", overflow: "hidden" }}>
+              <div style={{ width: `${Math.round((progress.done / progress.total) * 100)}%`, height: "100%", background: C.blue, transition: "width .3s" }} />
+            </div>
+          )}
+          <div style={{ fontSize: 12, marginTop: 8 }}>Traitement par lots de 4 en parallèle</div>
         </div>
       )}
 
