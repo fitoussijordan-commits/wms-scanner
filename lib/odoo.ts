@@ -275,6 +275,27 @@ export async function diagnosePickingShipping(
   };
 }
 
+/**
+ * TEST (écriture) : écrit pickup_number (code point relais) sur un picking, par son nom.
+ * Sert à valider que le module SendCloud Odoo transmet bien ce champ dans to_service_point
+ * à la validation du OUT. N'affecte que le picking ciblé.
+ */
+export async function setPickupNumberByName(
+  session: OdooSession, pickingName: string, pickupNumber: string
+): Promise<{ ok: boolean; pickingId?: number; msg: string }> {
+  const picks = await searchRead(session, "stock.picking", [["name", "=", pickingName.trim()]], ["id", "name", "pickup_number", "carrier_id"], 1);
+  if (!picks.length) return { ok: false, msg: `Picking "${pickingName}" introuvable` };
+  const pid = picks[0].id;
+  try {
+    await write(session, "stock.picking", [pid], { pickup_number: pickupNumber });
+    // Relire pour confirmer
+    const after = await searchRead(session, "stock.picking", [["id", "=", pid]], ["pickup_number"], 1);
+    return { ok: true, pickingId: pid, msg: `pickup_number écrit = "${after[0]?.pickup_number}"` };
+  } catch (e: any) {
+    return { ok: false, pickingId: pid, msg: e?.message || "erreur write" };
+  }
+}
+
 export async function create(session: OdooSession, model: string, values: any) {
   return call(session, "/web/dataset/call_kw", { model, method: "create", args: [values], kwargs: {} });
 }

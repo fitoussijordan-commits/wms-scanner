@@ -596,6 +596,21 @@ export default function Dashboard() {
     }
     setPickDiagLoading(false);
   };
+  // ── TEST : écrire pickup_number (code point relais) sur le picking ──
+  const [pickupCode, setPickupCode] = useState("35699");
+  const [pickupWriting, setPickupWriting] = useState(false);
+  const [pickupWriteMsg, setPickupWriteMsg] = useState<{ ok: boolean; msg: string } | null>(null);
+  const writePickupNumber = async () => {
+    if (!session || !pickName.trim() || !pickupCode.trim()) return;
+    setPickupWriting(true); setPickupWriteMsg(null);
+    try {
+      const r = await odoo.setPickupNumberByName(session, pickName.trim(), pickupCode.trim());
+      setPickupWriteMsg({ ok: r.ok, msg: r.msg });
+    } catch (e: any) {
+      setPickupWriteMsg({ ok: false, msg: e?.message || "erreur" });
+    }
+    setPickupWriting(false);
+  };
 
   // ─── Analyse transporteurs ───────────────────────────────────────────────
   interface CarrierLigne { ref: string; date: string; zone: string; tracking: string; weight: number; transport: number; options?: number; total: number; coutReel?: number; mois?: string }
@@ -6379,6 +6394,28 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                   {pickDiagLoading ? <Spinner /> : "🔬"} Inspecter
                 </button>
               </div>
+
+              {/* Test : écrire pickup_number sur ce picking */}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+                <div style={{ flex: "1 1 140px" }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Code point relais → pickup_number</label>
+                  <input value={pickupCode} onChange={(e) => setPickupCode(e.target.value)} placeholder="35699"
+                    style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, background: "var(--bg-raised)", color: "var(--text-primary)" }} />
+                </div>
+                <button className="wms-btn" onClick={writePickupNumber} disabled={pickupWriting || !pickName.trim() || !pickupCode.trim()}
+                  style={{ background: "#7c3aed", color: "#fff", border: "none" }}>
+                  {pickupWriting ? <Spinner /> : "✍️"} Écrire pickup_number
+                </button>
+              </div>
+              {pickupWriteMsg && (
+                <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, fontSize: 12.5,
+                  background: pickupWriteMsg.ok ? "#f0fdf4" : "#fef2f2",
+                  border: `1px solid ${pickupWriteMsg.ok ? "#86efac" : "#fecaca"}`,
+                  color: pickupWriteMsg.ok ? "#166534" : "#dc2626" }}>
+                  {pickupWriteMsg.ok ? "✓ " : "⚠ "}{pickupWriteMsg.msg}
+                  {pickupWriteMsg.ok && <span> — reviens dans Odoo, revalide le OUT et regarde si l'étiquette sort.</span>}
+                </div>
+              )}
               {pickDiag && (
                 <div style={{ marginTop: 14 }}>
                   {pickDiag.error ? (
