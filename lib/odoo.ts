@@ -3462,6 +3462,14 @@ export async function getProductsByCodePrefix(session: OdooSession, prefix: stri
   return (products || []).map((p: any) => p.default_code as string).filter(Boolean);
 }
 
+/** true si un default_code (référence interne) existe déjà sur un produit. */
+export async function productCodeExists(session: OdooSession, code: string): Promise<boolean> {
+  const c = code.trim();
+  if (!c) return false;
+  const found = await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), [["default_code", "=", c]], ["id"], 1);
+  return (found || []).length > 0;
+}
+
 /** Unités de mesure disponibles dans Odoo */
 export async function getUoMs(session: OdooSession): Promise<{ id: number; name: string }[]> {
   const uoms = await searchRead(session, M("MODEL_UOM"), [["active", "=", true]], ["id", "name"], 100);
@@ -3478,6 +3486,10 @@ export async function createProductTemplate(session: OdooSession, data: {
   weight?: number;
   sale_ok?: boolean;
   purchase_ok?: boolean;
+  list_price?: number;      // prix de vente
+  standard_price?: number;  // prix d'achat / coût
+  supplierId?: number;      // fournisseur (res.partner)
+  supplierRef?: string;     // référence produit chez le fournisseur
 }): Promise<number> {
   const vals: any = {
     name: data.name,
@@ -3491,6 +3503,15 @@ export async function createProductTemplate(session: OdooSession, data: {
   };
   if (data.barcode) vals.barcode = data.barcode;
   if (data.weight) vals.weight = data.weight;
+  if (data.list_price != null) vals.list_price = data.list_price;
+  if (data.standard_price != null) vals.standard_price = data.standard_price;
+  // Fournisseur → ligne product.supplierinfo créée en même temps (one2many seller_ids).
+  if (data.supplierId) {
+    const si: any = { partner_id: data.supplierId };
+    if (data.supplierRef) si.product_code = data.supplierRef;   // Référence Fournisseur
+    if (data.standard_price != null) si.price = data.standard_price; // Prix (achat) sur la ligne fournisseur
+    vals.seller_ids = [[0, 0, si]];
+  }
   return create(session, M("MODEL_PRODUCT_TEMPLATE"), vals);
 }
 

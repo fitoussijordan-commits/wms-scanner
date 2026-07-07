@@ -188,12 +188,28 @@ export function CreationTab({ session, onToast }: { session: odoo.OdooSession; o
   const [loadingCodes,  setLoadingCodes]  = useState(false);
   const [creating,      setCreating]      = useState(false);
   const [created,       setCreated]       = useState<{ id: number; code: string; name: string } | null>(null);
+  // Nouveaux champs
+  const [prixVente,   setPrixVente]   = useState("");
+  const [prixAchat,   setPrixAchat]   = useState("");
+  const [supplierRef, setSupplierRef] = useState("");
+  const [supplierQuery, setSupplierQuery] = useState("");
+  const [supplier,    setSupplier]    = useState<{ id: number; name: string } | null>(null);
+  const [supplierSugg, setSupplierSugg] = useState<{ id: number; name: string; ref: string }[]>([]);
+  const [supplierOpen, setSupplierOpen] = useState(false);
+  // Code éditable : null = auto (généré), sinon override manuel
+  const [codeOverride, setCodeOverride] = useState<string | null>(null);
+  const [checkingCode, setCheckingCode] = useState(false);
+  const [overrideTaken, setOverrideTaken] = useState<boolean | null>(null); // true = déjà pris
 
   const availableSFs = SOUS_FAMILLES[famCode] || [];
   const prefix  = buildPrefix(catCode, famCode, sfCode);
   const nextSeq = computeNextSeq(existingCodes, prefix);
-  const generatedCode = `${prefix}${String(nextSeq).padStart(2, "0")}`;
-  const isAvailable = !existingCodes.includes(generatedCode);
+  const autoCode = `${prefix}${String(nextSeq).padStart(2, "0")}`;
+  // Code effectif : override manuel si présent, sinon auto.
+  const generatedCode = codeOverride != null ? codeOverride : autoCode;
+  const isAvailable = codeOverride != null
+    ? (overrideTaken === false && generatedCode.trim().length > 0)
+    : !existingCodes.includes(generatedCode);
 
   useEffect(() => {
     odoo.getUoMs(session).then(list => {
@@ -223,23 +239,56 @@ export function CreationTab({ session, onToast }: { session: odoo.OdooSession; o
     if (sfs.length) setSfCode(sfs[0].code);
   }, [famCode]);
 
+  // Vérifie la disponibilité d'un code saisi manuellement (debounce 400ms).
+  useEffect(() => {
+    if (codeOverride == null) { setOverrideTaken(null); return; }
+    const code = codeOverride.trim();
+    if (!code) { setOverrideTaken(null); return; }
+    setCheckingCode(true);
+    const t = setTimeout(async () => {
+      try {
+        const exists = await odoo.productCodeExists(session, code);
+        setOverrideTaken(exists);
+      } catch { setOverrideTaken(null); }
+      finally { setCheckingCode(false); }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [codeOverride, session]);
+
+  // Autocomplétion fournisseur (debounce 300ms).
+  useEffect(() => {
+    const q = supplierQuery.trim();
+    if (q.length < 2 || supplier) { setSupplierSugg([]); return; }
+    const t = setTimeout(async () => {
+      try { setSupplierSugg(await odoo.suggestPartners(session, q)); } catch { setSupplierSugg([]); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [supplierQuery, supplier, session]);
+
   const handleCreate = async () => {
     if (!designation.trim()) { onToast("Désignation requise", "error"); return; }
     if (!uomId) { onToast("Unité de mesure requise", "error"); return; }
     if (!isAvailable) { onToast("Code non disponible", "error"); return; }
     setCreating(true);
     try {
+      const num = (s: string) => { const v = parseFloat(s.replace(",", ".")); return isNaN(v) ? undefined : v; };
       const id = await odoo.createProductTemplate(session, {
         name: designation.trim(),
-        default_code: generatedCode,
+        default_code: generatedCode.trim(),
         barcode: barcode.trim() || undefined,
         uom_id: uomId,
         tracking,
         weight: weight ? parseFloat(weight) : undefined,
+        list_price: num(prixVente),
+        standard_price: num(prixAchat),
+        supplierId: supplier?.id,
+        supplierRef: supplierRef.trim() || undefined,
       });
-      setCreated({ id, code: generatedCode, name: designation.trim() });
-      onToast(`Article ${generatedCode} créé dans Odoo ✓`, "success");
+      setCreated({ id, code: generatedCode.trim(), name: designation.trim() });
+      onToast(`Article ${generatedCode.trim()} créé dans Odoo ✓`, "success");
       setDesignation(""); setBarcode(""); setWeight("");
+      setPrixVente(""); setPrixAchat(""); setSupplierRef("");
+      setSupplier(null); setSupplierQuery(""); setCodeOverride(null);
       loadCodes();
     } catch (e: any) {
       onToast(`Erreur : ${e.message}`, "error");
@@ -255,12 +304,29 @@ export function CreationTab({ session, onToast }: { session: odoo.OdooSession; o
   return (
     <div style={S.body}>
       <div style={{ ...S.codeBox, background: isAvailable ? "#f0fdf4" : "#fff7ed", border: `1.5px solid ${isAvailable ? "#bbf7d0" : "#fed7aa"}` }}>
-        <div>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Code généré</div>
-          <div style={{ ...S.codeTxt, color: isAvailable ? "#166534" : "#9a3412" }}>{loadingCodes ? "…" : generatedCode}</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+            {codeOverride == null ? "Code généré" : "Code (modifié)"}
+            <button onClick={() => setCodeOverride(codeOverride == null ? autoCode : null)}
+              style={{ background: "none", border: "none", color: "#2563eb", cursor: "pointer", fontSize: 10, fontWeight: 700, textTransform: "none", padding: 0 }}>
+              {codeOverride == null ? "✏️ modifier" : "↺ auto"}
+            </button>
+          </div>
+          {codeOverride == null ? (
+            <div style={{ ...S.codeTxt, color: isAvailable ? "#166534" : "#9a3412" }}>{loadingCodes ? "…" : generatedCode}</div>
+          ) : (
+            <input
+              autoFocus
+              value={codeOverride}
+              onChange={e => setCodeOverride(e.target.value.toUpperCase())}
+              style={{ ...S.codeTxt, color: isAvailable ? "#166534" : "#9a3412", background: "#fff", border: "1px solid #d1d5db", borderRadius: 6, padding: "2px 8px", width: "100%", boxSizing: "border-box", fontFamily: "monospace" }}
+            />
+          )}
           <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{catLabel} · {famLabel} · {sfLabel}</div>
         </div>
-        <span style={S.badge(isAvailable)}>{isAvailable ? "✅ Disponible" : "❌ Doublon"}</span>
+        <span style={S.badge(isAvailable)}>
+          {codeOverride != null && checkingCode ? "…vérif" : isAvailable ? "✅ Disponible" : "❌ Doublon"}
+        </span>
       </div>
 
       {created && (
@@ -325,6 +391,52 @@ export function CreationTab({ session, onToast }: { session: odoo.OdooSession; o
           <div style={S.field}>
             <label style={S.label}>Poids (kg, optionnel)</label>
             <input style={S.input} placeholder="ex: 0.150" type="number" step="0.001" value={weight} onChange={e => setWeight(e.target.value)} />
+          </div>
+          <div style={S.row}>
+            <div style={S.field}>
+              <label style={S.label}>Prix de vente (€)</label>
+              <input style={S.input} placeholder="ex: 12.90" value={prixVente} onChange={e => setPrixVente(e.target.value)} />
+            </div>
+            <div style={S.field}>
+              <label style={S.label}>Prix d'achat (€)</label>
+              <input style={S.input} placeholder="ex: 0.95" value={prixAchat} onChange={e => setPrixAchat(e.target.value)} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Achats : fournisseur + référence fournisseur ── */}
+      <div style={S.card}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 12 }}>Achats (optionnel)</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ ...S.field, position: "relative" }}>
+            <label style={S.label}>Fournisseur</label>
+            {supplier ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", background: "#eff6ff", border: "1.5px solid #bfdbfe", borderRadius: 8 }}>
+                <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: "#1e40af" }}>{supplier.name}</span>
+                <button onClick={() => { setSupplier(null); setSupplierQuery(""); }} style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer", fontSize: 16 }}>×</button>
+              </div>
+            ) : (
+              <>
+                <input style={S.input} placeholder="Rechercher un fournisseur…" value={supplierQuery}
+                  onChange={e => { setSupplierQuery(e.target.value); setSupplierOpen(true); }}
+                  onFocus={() => setSupplierOpen(true)} />
+                {supplierOpen && supplierSugg.length > 0 && (
+                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, marginTop: 2, maxHeight: 200, overflowY: "auto", boxShadow: "0 8px 24px -8px rgba(0,0,0,.18)" }}>
+                    {supplierSugg.map(s => (
+                      <button key={s.id} onClick={() => { setSupplier({ id: s.id, name: s.name }); setSupplierOpen(false); setSupplierSugg([]); }}
+                        style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", border: "none", borderBottom: "1px solid #f3f4f6", background: "#fff", cursor: "pointer", fontSize: 13 }}>
+                        {s.name}{s.ref ? <span style={{ color: "#9ca3af" }}> · {s.ref}</span> : ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          <div style={S.field}>
+            <label style={S.label}>Référence fournisseur</label>
+            <input style={S.input} placeholder="code produit chez le fournisseur" value={supplierRef} onChange={e => setSupplierRef(e.target.value)} />
           </div>
         </div>
       </div>
