@@ -3476,6 +3476,22 @@ export async function getUoMs(session: OdooSession): Promise<{ id: number; name:
   return (uoms || []).map((u: any) => ({ id: u.id, name: u.name }));
 }
 
+/** Catégories produit (Famille = categ_id → product.category). */
+export async function getProductCategories(session: OdooSession): Promise<{ id: number; name: string }[]> {
+  const cats = await searchRead(session, "product.category", [], ["id", "complete_name", "name"], 500);
+  return (cats || []).map((c: any) => ({ id: c.id, name: c.complete_name || c.name })).sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name));
+}
+
+/** Types de produit custom (x_type_de_produit_id → modèle x_type_de_produit). */
+export async function getProductTypes(session: OdooSession): Promise<{ id: number; name: string }[]> {
+  try {
+    const types = await searchRead(session, "x_type_de_produit", [], ["id", "display_name"], 500);
+    return (types || []).map((t: any) => ({ id: t.id, name: t.display_name || String(t.id) })).sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name));
+  } catch {
+    return []; // modèle absent → on ignore ce champ
+  }
+}
+
 /** Crée un product.template dans Odoo et retourne l'ID créé */
 export async function createProductTemplate(session: OdooSession, data: {
   name: string;
@@ -3490,6 +3506,8 @@ export async function createProductTemplate(session: OdooSession, data: {
   standard_price?: number;  // prix d'achat / coût
   supplierId?: number;      // fournisseur (res.partner)
   supplierRef?: string;     // référence produit chez le fournisseur
+  categId?: number;         // Famille (categ_id → product.category)
+  typeProduitId?: number;   // Type de produit (x_type_de_produit_id)
 }): Promise<number> {
   const vals: any = {
     name: data.name,
@@ -3505,6 +3523,8 @@ export async function createProductTemplate(session: OdooSession, data: {
   if (data.weight) vals.weight = data.weight;
   if (data.list_price != null) vals.list_price = data.list_price;
   if (data.standard_price != null) vals.standard_price = data.standard_price;
+  if (data.categId) vals.categ_id = data.categId;                       // Famille
+  if (data.typeProduitId) vals.x_type_de_produit_id = data.typeProduitId; // Type de produit (custom)
   // Fournisseur → ligne product.supplierinfo créée en même temps (one2many seller_ids).
   if (data.supplierId) {
     const si: any = { partner_id: data.supplierId };

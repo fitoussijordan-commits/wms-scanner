@@ -200,6 +200,12 @@ export function CreationTab({ session, onToast }: { session: odoo.OdooSession; o
   const [codeOverride, setCodeOverride] = useState<string | null>(null);
   const [checkingCode, setCheckingCode] = useState(false);
   const [overrideTaken, setOverrideTaken] = useState<boolean | null>(null); // true = déjà pris
+  // Famille (categ_id) + Type de produit (x_type_de_produit_id) : chargés depuis Odoo, auto-sélectionnés par nom.
+  const [odooCats, setOdooCats] = useState<{ id: number; name: string }[]>([]);
+  const [odooTypes, setOdooTypes] = useState<{ id: number; name: string }[]>([]);
+  const [categId, setCategId] = useState<number | null>(null);
+  const [typeProduitId, setTypeProduitId] = useState<number | null>(null);
+  const [catTouched, setCatTouched] = useState(false); // l'utilisateur a-t-il modifié manuellement ?
 
   const availableSFs = SOUS_FAMILLES[famCode] || [];
   const prefix  = buildPrefix(catCode, famCode, sfCode);
@@ -218,7 +224,20 @@ export function CreationTab({ session, onToast }: { session: odoo.OdooSession; o
       if (pce) setUomId(pce.id);
       else if (list.length) setUomId(list[0].id);
     }).catch(() => {});
+    // Familles (product.category) + Types de produit (x_type_de_produit)
+    odoo.getProductCategories(session).then(setOdooCats).catch(() => {});
+    odoo.getProductTypes(session).then(setOdooTypes).catch(() => {});
   }, [session]);
+
+  // Auto-sélection de la Famille Odoo selon la famille choisie dans la codification
+  // (match par nom, tant que l'utilisateur n'a pas modifié manuellement).
+  useEffect(() => {
+    if (catTouched || !odooCats.length) return;
+    const label = (FAMILLES.find(f => f.code === famCode)?.label || "").toLowerCase();
+    if (!label) return;
+    const hit = odooCats.find(c => c.name.toLowerCase().includes(label));
+    if (hit) setCategId(hit.id);
+  }, [famCode, odooCats, catTouched]);
 
   const loadCodes = useCallback(async () => {
     setLoadingCodes(true);
@@ -283,12 +302,15 @@ export function CreationTab({ session, onToast }: { session: odoo.OdooSession; o
         standard_price: num(prixAchat),
         supplierId: supplier?.id,
         supplierRef: supplierRef.trim() || undefined,
+        categId: categId ?? undefined,
+        typeProduitId: typeProduitId ?? undefined,
       });
       setCreated({ id, code: generatedCode.trim(), name: designation.trim() });
       onToast(`Article ${generatedCode.trim()} créé dans Odoo ✓`, "success");
       setDesignation(""); setBarcode(""); setWeight("");
       setPrixVente(""); setPrixAchat(""); setSupplierRef("");
       setSupplier(null); setSupplierQuery(""); setCodeOverride(null);
+      setCatTouched(false); setTypeProduitId(null);
       loadCodes();
     } catch (e: any) {
       onToast(`Erreur : ${e.message}`, "error");
@@ -385,6 +407,22 @@ export function CreationTab({ session, onToast }: { session: odoo.OdooSession; o
                 <option value="lot">Par lot</option>
                 <option value="serial">Par N° série</option>
                 <option value="none">Sans suivi</option>
+              </select>
+            </div>
+          </div>
+          <div style={S.row}>
+            <div style={S.field}>
+              <label style={S.label}>Famille (Odoo) {categId && !catTouched && <span style={{ color: "#16a34a", fontSize: 10 }}>· auto</span>}</label>
+              <select style={S.select} value={categId ?? ""} onChange={e => { setCategId(e.target.value ? Number(e.target.value) : null); setCatTouched(true); }}>
+                <option value="">— choisir —</option>
+                {odooCats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div style={S.field}>
+              <label style={S.label}>Type de produit (Odoo)</label>
+              <select style={S.select} value={typeProduitId ?? ""} onChange={e => setTypeProduitId(e.target.value ? Number(e.target.value) : null)}>
+                <option value="">— choisir —</option>
+                {odooTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             </div>
           </div>
