@@ -602,6 +602,9 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a"); a.href = url; a.download = `planning_vs_commande_${YEAR}_complet.xlsx`; a.click();
       URL.revokeObjectURL(url);
+    } catch (e: any) {
+      console.error("Export complet échoué :", e);
+      alert("Export échoué : " + (e?.message || e));
     } finally {
       setExportingFull(false);
     }
