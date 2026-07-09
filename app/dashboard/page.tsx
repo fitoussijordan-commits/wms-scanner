@@ -4127,14 +4127,28 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         </div>
       </header>
 
-      {/* TABS */}
-      <nav style={{ background: "var(--bg-raised)", borderBottom: "1px solid var(--border)", padding: "0 28px", display: "flex", gap: 2, overflowX: "auto" }} className="wms-scrollbar">
-        {TABS.map((t) => <button key={t.key} className="wms-tab" data-active={tab === t.key} onClick={() => setTab(t.key)}><span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>{t.icon} {t.label}</span></button>)}
-      </nav>
+      {/* LAYOUT : sidebar verticale + contenu */}
+      <div style={{ display: "flex", alignItems: "flex-start" }}>
 
+        {/* SIDEBAR gauche */}
+        <nav style={{ width: 210, flexShrink: 0, background: "var(--bg-raised)", borderRight: "1px solid var(--border)", padding: "16px 10px", display: "flex", flexDirection: "column", gap: 2, position: "sticky", top: 56, height: "calc(100vh - 56px)", overflowY: "auto" }} className="wms-scrollbar">
+          {TABS.map((t) => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              style={{
+                display: "flex", alignItems: "center", gap: 10, textAlign: "left", width: "100%",
+                padding: "9px 12px", borderRadius: 9, border: "none", cursor: "pointer",
+                fontFamily: "inherit", fontSize: 13, fontWeight: tab === t.key ? 700 : 500,
+                background: tab === t.key ? "var(--accent-soft)" : "transparent",
+                color: tab === t.key ? "var(--accent)" : "var(--text-secondary)",
+              }}>
+              <span style={{ display: "inline-flex", flexShrink: 0 }}>{t.icon}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.label}</span>
+            </button>
+          ))}
+        </nav>
 
       {/* CONTENT */}
-      <main style={{ maxWidth: tab === "dlv" || tab === "stock-monitor" ? "100%" : 1260, margin: "0 auto", padding: "28px 28px 60px" }}>
+      <main style={{ flex: 1, minWidth: 0, maxWidth: tab === "dlv" || tab === "stock-monitor" ? "100%" : 1260, margin: "0 auto", padding: "28px 28px 60px" }}>
         {supaError && <div style={{ background: "var(--warning-soft)", border: "1px solid var(--warning-border)", borderRadius: 12, padding: "10px 16px", fontSize: 13, color: "var(--warning)", marginBottom: 12 }}>⚠ {supaError} — mode dégradé localStorage</div>}
         {error && <div style={{ background: "var(--danger-soft)", border: "1px solid var(--danger-border)", borderRadius: 12, padding: "14px 18px", fontSize: 14, color: "var(--danger)", marginBottom: 24, display: "flex", alignItems: "center", gap: 10, animation: "fadeIn .3s ease both" }}>{I.alert}<span style={{ flex: 1 }}>{error}</span><button onClick={() => setError("")} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer", fontSize: 18, padding: 4 }}>×</button></div>}
 
@@ -6443,10 +6457,11 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         {/* ══════════════════ PLANNING VS COMMANDE ══════════════════ */}
         {tab === "planning-cmd" && (
           <div style={{ padding: "20px 0" }}>
-            <PlanningVsCommande />
+            <PlanningVsCommande session={session} />
           </div>
         )}
       </main>
+      </div>
     </div>
   );
 }

@@ -10,6 +10,7 @@
 // Réception : SOMME des quantités par article (plusieurs lots par article).
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useMemo } from "react";
+import * as odoo from "@/lib/odoo";
 
 async function loadXLSX(): Promise<any> {
   if ((window as any).XLSX) return (window as any).XLSX;
@@ -67,8 +68,9 @@ const C = {
 
 const MONTHS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 
-export default function PlanningVsCommande() {
+export default function PlanningVsCommande({ session }: { session: odoo.OdooSession | null }) {
   const [month, setMonth] = useState<string>(MONTHS[new Date().getMonth()]);
+  const [matching, setMatching] = useState(false);
   const [order, setOrder] = useState<SourceFile | null>(null);
   const [reception, setReception] = useState<SourceFile | null>(null);
   const [orderMap, setOrderMap] = useState({ article: "", qty: "", price: "", name: "" });
@@ -96,10 +98,11 @@ export default function PlanningVsCommande() {
     setComputed(null);
   };
 
-  const compute = () => {
+  const compute = async () => {
     if (!order) return;
     setBusy(true);
     try {
+      // Réception : SOMME par article (plusieurs lots).
       const recByArticle: Record<string, number> = {};
       if (reception && recMap.article && recMap.qty) {
         for (const r of reception.rows) {
@@ -108,19 +111,44 @@ export default function PlanningVsCommande() {
           recByArticle[art] = (recByArticle[art] || 0) + toNum(r[recMap.qty]);
         }
       }
-      const out = order.rows
+
+      const base = order.rows
         .filter((r) => String(r[orderMap.article] ?? "").trim())
         .map((r) => {
           const article = String(r[orderMap.article]).trim();
           const orderQty = toNum(r[orderMap.qty]);
           const price = orderMap.price ? toNum(r[orderMap.price]) : 0;
-          const name = orderMap.name ? String(r[orderMap.name] ?? "") : "";
+          const nameSrc = orderMap.name ? String(r[orderMap.name] ?? "") : "";
           const received = recByArticle[article] ?? 0;
           const ruptQty = received - orderQty;
           const ruptEuro = ruptQty * price;
           const budgetOrder = orderQty * price;
-          return { article, name, orderQty, price, budgetOrder, received, ruptQty, ruptEuro };
+          return { article, nameSrc, orderQty, price, budgetOrder, received, ruptQty, ruptEuro };
         });
+
+      // Matching Odoo : code fournisseur Wala (article) → Ref FR (default_code) + désignation Odoo.
+      let odooMap: Record<string, { defaultCode: string; name: string }> = {};
+      if (session) {
+        setMatching(true);
+        try {
+          const codes = Array.from(new Set(base.map((b) => b.article)));
+          const m = await odoo.matchWalaArticles(session, codes);
+          for (const [code, v] of Object.entries(m)) {
+            odooMap[code] = { defaultCode: (v as any).defaultCode || "", name: (v as any).name || "" };
+          }
+        } catch { /* si le matching échoue, on garde les données brutes */ }
+        setMatching(false);
+      }
+
+      const out = base.map((b) => {
+        const od = odooMap[b.article];
+        return {
+          ...b,
+          refFR: od?.defaultCode || "",                // Référence interne Odoo
+          name: od?.name || "",                        // désignation ODOO uniquement (pas de fallback allemand)
+          matched: !!od?.defaultCode,
+        };
+      });
       setComputed(out);
     } finally {
       setBusy(false);
@@ -142,7 +170,7 @@ export default function PlanningVsCommande() {
     if (!computed) return;
     const XLSX = await loadXLSX();
     const data = computed.map((r) => ({
-      "Article No.": r.article, "Désignation": r.name, "Order Qty.": r.orderQty,
+      "Ref FR": r.refFR, "Article No.": r.article, "Désignation": r.name, "Order Qty.": r.orderQty,
       "Prix commande": r.price, "Budget commande": Math.round(r.budgetOrder * 100) / 100,
       "Réception finale": r.received, "Rupture Allemagne Qté": r.ruptQty,
       "Rupture Allemagne €": Math.round(r.ruptEuro * 100) / 100,
@@ -212,7 +240,7 @@ export default function PlanningVsCommande() {
       <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
         <button onClick={compute} disabled={!order || !orderMap.article || !orderMap.qty || busy}
           style={{ padding: "10px 18px", background: (order && orderMap.article && orderMap.qty) ? C.blue : C.border, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
-          {busy ? "Calcul…" : "🧮 Calculer le mois"}
+          {matching ? "Matching Odoo…" : busy ? "Calcul…" : "🧮 Calculer le mois"}
         </button>
         {computed && (
           <button onClick={exportXlsx} style={{ padding: "10px 18px", background: C.green, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
@@ -244,15 +272,16 @@ export default function PlanningVsCommande() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ position: "sticky", top: 0, background: C.bg }}>
                 <tr>
-                  {["Article No.", "Désignation", "Commandé", "Reçu", "Rupture Qté", "Rupture €"].map((h) => (
-                    <th key={h} style={{ textAlign: h === "Désignation" ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: C.muted, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                  {["Ref FR", "Article No.", "Désignation", "Commandé", "Reçu", "Rupture Qté", "Rupture €"].map((h) => (
+                    <th key={h} style={{ textAlign: h === "Désignation" ? "left" : (h === "Ref FR" || h === "Article No.") ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: C.muted, borderBottom: `1px solid ${C.border}` }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {computed.map((r, i) => (
                   <tr key={i} style={{ borderBottom: `1px solid ${C.bg}` }}>
-                    <td style={{ padding: "6px 12px", fontFamily: "monospace" }}>{r.article}</td>
+                    <td style={{ padding: "6px 12px", fontFamily: "monospace", fontWeight: 700, color: r.matched ? C.text : C.red }}>{r.refFR || "—"}</td>
+                    <td style={{ padding: "6px 12px", fontFamily: "monospace", color: C.muted }}>{r.article}</td>
                     <td style={{ padding: "6px 12px", color: C.muted, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.orderQty}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.received}</td>
