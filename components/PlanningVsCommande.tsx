@@ -132,7 +132,15 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   const [savedMonths, setSavedMonths] = useState<PlanningMonth[]>([]);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => { loadPlanningSynthese(YEAR).then(setSavedMonths).catch(() => {}); }, [YEAR]);
+  const [allDetails, setAllDetails] = useState<Record<string, any[]>>({}); // mois → lignes détaillées
+  const reloadAll = async () => {
+    const months = await loadPlanningSynthese(YEAR);
+    setSavedMonths(months);
+    const det: Record<string, any[]> = {};
+    await Promise.all(months.map(async (m) => { det[m.month] = await loadPlanningDetail(YEAR, m.month); }));
+    setAllDetails(det);
+  };
+  useEffect(() => { reloadAll().catch(() => {}); /* eslint-disable-next-line */ }, [YEAR]);
 
   const saveMonth = async () => {
     if (!totals) return;
@@ -147,7 +155,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       await savePlanningMonth(YEAR, m);
       // Sauvegarde AUSSI le détail complet du mois (pour l'export fichier complet).
       if (computed) await savePlanningDetail(YEAR, month, computed);
-      setSavedMonths(await loadPlanningSynthese(YEAR));
+      await reloadAll();
     } catch { /* silencieux */ }
     setSaving(false);
   };
@@ -395,6 +403,55 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     return t;
   }, [computed]);
 
+  // Mois disponibles (enregistrés), dans l'ordre calendaire.
+  const availMonths = useMemo(() => MONTHS.filter(m => (allDetails[m] || []).length > 0), [allDetails]);
+
+  // Accuracy d'un ensemble de lignes (formule Sissi + pénalité). null si pas de budget Sissi.
+  const accOf = (rows: any[]): number | null => {
+    let num = 0, den = 0;
+    for (const r of rows) { if (r.budgetFinal > 0) { num += Math.max(0, r.budgetFinal - Math.abs(r.orderQty - r.budgetFinal)); den += r.budgetFinal; } }
+    return den > 0 ? num / den : null;
+  };
+
+  // MATRICE Best Sellers × mois : accuracy par produit et par mois + ligne "25 réfs".
+  const bestSellersMatrix = useMemo(() => {
+    const rows = BEST_SELLERS.map(b => {
+      const cells: Record<string, number | null> = {};
+      for (const m of availMonths) {
+        const line = (allDetails[m] || []).find((r: any) => String(r.refFR).trim() === b.ref);
+        cells[m] = line ? accOf([line]) : null;
+      }
+      const name = availMonths.map(m => (allDetails[m] || []).find((r: any) => String(r.refFR).trim() === b.ref)?.name).find(Boolean) || "";
+      return { ref: b.ref, gamme: b.gamme, name, cells };
+    });
+    // Ligne total "25 réfs" : accuracy globale des best sellers par mois.
+    const totals: Record<string, number | null> = {};
+    const refset = new Set(BEST_SELLERS.map(b => b.ref));
+    for (const m of availMonths) totals[m] = accOf((allDetails[m] || []).filter((r: any) => refset.has(String(r.refFR).trim())));
+    return { rows, totals };
+  }, [allDetails, availMonths]);
+
+  // MATRICE gamme × mois : accuracy par gamme Odoo et par mois + cumul YTD + total.
+  const gammeMatrix = useMemo(() => {
+    // Toutes les gammes rencontrées.
+    const gammes = new Set<string>();
+    for (const m of availMonths) for (const r of (allDetails[m] || [])) gammes.add(r.gammeOdoo || "Autres");
+    const rows = Array.from(gammes).sort().map(g => {
+      const cells: Record<string, number | null> = {};
+      const ytdRows: any[] = [];
+      for (const m of availMonths) {
+        const gr = (allDetails[m] || []).filter((r: any) => (r.gammeOdoo || "Autres") === g);
+        cells[m] = accOf(gr);
+        ytdRows.push(...gr);
+      }
+      return { gamme: g, cells, ytd: accOf(ytdRows) };
+    });
+    const totals: Record<string, number | null> = {};
+    for (const m of availMonths) totals[m] = accOf(allDetails[m] || []);
+    const ytdAll = accOf(availMonths.flatMap(m => allDetails[m] || []));
+    return { rows, totals, ytdAll };
+  }, [allDetails, availMonths]);
+
   // Top produits = lignes calculées dont la Ref FR est dans la liste Best Sellers (en dur).
   // Ordonnés selon l'ordre de la liste, avec la gamme attachée.
   const topProducts = useMemo(() => {
@@ -496,6 +553,37 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
           if (Number(row.getCell("rq").value) < 0) row.getCell("rq").font = { bold: true, color: { argb: redT } };
         }
       }
+
+      // ── Onglets matrices annuelles (Best Sellers × mois, Gamme × mois) ──
+      const pctFill = (v: number | null) => v == null ? null : v >= 0.8 ? "FFDCFCE7" : v >= 0.5 ? "FFFEF9C3" : "FFFEE2E2";
+      const buildMatrix = (title: string, firstColHdr: string, dataRows: { label: string; extra?: string; cells: Record<string, number | null>; ytd?: number | null }[], totalRow: { label: string; cells: Record<string, number | null>; ytd?: number | null }, withYtd: boolean, withExtra: boolean) => {
+        const w = wb.addWorksheet(title);
+        const cols: any[] = [{ header: firstColHdr, key: "c0", width: 34 }];
+        if (withExtra) cols.push({ header: "Gamme", key: "gx", width: 18 });
+        for (const m of orderedMonths2) cols.push({ header: m.slice(0, 3), key: m, width: 9 });
+        if (withYtd) cols.push({ header: "Cumul YTD", key: "ytd", width: 11 });
+        w.columns = cols;
+        const addStyledRow = (label: string, extra: string | undefined, cells: Record<string, number | null>, ytd: number | null | undefined, bold: boolean) => {
+          const rd: any = { c0: label }; if (withExtra) rd.gx = extra || "";
+          for (const m of orderedMonths2) rd[m] = cells[m] == null ? null : cells[m];
+          if (withYtd) rd.ytd = ytd == null ? null : ytd;
+          const row = w.addRow(rd);
+          for (const m of orderedMonths2) { const c = row.getCell(m); c.numFmt = pct; c.alignment = { horizontal: "center" }; const bg = pctFill(cells[m]); if (bg) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } }; if (bold) c.font = { bold: true }; }
+          if (withYtd) { const c = row.getCell("ytd"); c.numFmt = pct; c.alignment = { horizontal: "center" }; const bg = pctFill(ytd ?? null); if (bg) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } }; c.font = { bold: true }; }
+          if (bold) row.getCell("c0").font = { bold: true };
+          row.eachCell((c: any) => c.border = allB);
+        };
+        for (const r of dataRows) addStyledRow(r.label, r.extra, r.cells, r.ytd, false);
+        addStyledRow(totalRow.label, undefined, totalRow.cells, totalRow.ytd, true);
+        styleHead(w, dark);
+      };
+      const orderedMonths2 = availMonths;
+      buildMatrix("Acc. 25 Best Sellers", "Produit",
+        bestSellersMatrix.rows.map(r => ({ label: r.name || r.ref, extra: r.gamme, cells: r.cells })),
+        { label: "25 références", cells: bestSellersMatrix.totals }, false, true);
+      buildMatrix("Acc. par gamme (an)", "Gamme",
+        gammeMatrix.rows.map(r => ({ label: r.gamme, cells: r.cells, ytd: r.ytd })),
+        { label: "TOTAL", cells: gammeMatrix.totals, ytd: gammeMatrix.ytdAll }, true, false);
 
       const buf = await wb.xlsx.writeBuffer();
       const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
@@ -863,7 +951,74 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         </div>
       )}
 
-      {/* ── Accuracy par gamme ── */}
+      {/* ══ SUIVI ANNUEL — Accuracy 25 Best Sellers × mois ══ */}
+      {availMonths.length > 0 && (() => {
+        const cellBg = (v: number | null) => v == null ? "transparent" : v >= 0.8 ? "#dcfce7" : v >= 0.5 ? "#fef9c3" : "#fee2e2";
+        const fmt = (v: number | null) => v == null ? "—" : Math.round(v * 100) + "%";
+        return (
+          <>
+            <div style={{ marginTop: 24 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 8 }}>⭐ Accuracy 25 Best Sellers — suivi {YEAR}</div>
+              <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "auto" }}>
+                <table style={{ borderCollapse: "collapse", fontSize: 11.5, minWidth: "100%" }}>
+                  <thead style={{ background: "#1e293b" }}>
+                    <tr>
+                      <th style={{ textAlign: "left", padding: "8px 10px", color: "#fff", position: "sticky", left: 0, background: "#1e293b", whiteSpace: "nowrap" }}>Produit</th>
+                      <th style={{ textAlign: "left", padding: "8px 10px", color: "#fff" }}>Gamme</th>
+                      {availMonths.map(m => <th key={m} style={{ padding: "8px 10px", color: "#fff", whiteSpace: "nowrap" }}>{m.slice(0,3)}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bestSellersMatrix.rows.map((row, i) => (
+                      <tr key={i}>
+                        <td style={{ padding: "5px 10px", position: "sticky", left: 0, background: "#fff", whiteSpace: "nowrap", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }}>{row.name || row.ref}</td>
+                        <td style={{ padding: "5px 10px", color: C.muted }}>{row.gamme}</td>
+                        {availMonths.map(m => <td key={m} style={{ padding: "5px 10px", textAlign: "center", background: cellBg(row.cells[m]), fontWeight: 600 }}>{fmt(row.cells[m])}</td>)}
+                      </tr>
+                    ))}
+                    <tr style={{ borderTop: `2px solid #1e293b` }}>
+                      <td style={{ padding: "6px 10px", fontWeight: 800, position: "sticky", left: 0, background: "#eff6ff" }}>25 références</td>
+                      <td style={{ background: "#eff6ff" }} />
+                      {availMonths.map(m => <td key={m} style={{ padding: "6px 10px", textAlign: "center", fontWeight: 800, background: cellBg(bestSellersMatrix.totals[m]) }}>{fmt(bestSellersMatrix.totals[m])}</td>)}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 24 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 8 }}>📊 Accuracy par gamme — suivi {YEAR}</div>
+              <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "auto" }}>
+                <table style={{ borderCollapse: "collapse", fontSize: 11.5, minWidth: "100%" }}>
+                  <thead style={{ background: "#1e293b" }}>
+                    <tr>
+                      <th style={{ textAlign: "left", padding: "8px 10px", color: "#fff", position: "sticky", left: 0, background: "#1e293b" }}>Gamme</th>
+                      {availMonths.map(m => <th key={m} style={{ padding: "8px 10px", color: "#fff", whiteSpace: "nowrap" }}>{m.slice(0,3)}</th>)}
+                      <th style={{ padding: "8px 10px", color: "#fff" }}>Cumul YTD</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {gammeMatrix.rows.map((row, i) => (
+                      <tr key={i}>
+                        <td style={{ padding: "5px 10px", fontWeight: 700, position: "sticky", left: 0, background: "#fff" }}>{row.gamme}</td>
+                        {availMonths.map(m => <td key={m} style={{ padding: "5px 10px", textAlign: "center", background: cellBg(row.cells[m]) }}>{fmt(row.cells[m])}</td>)}
+                        <td style={{ padding: "5px 10px", textAlign: "center", fontWeight: 800, background: cellBg(row.ytd) }}>{fmt(row.ytd)}</td>
+                      </tr>
+                    ))}
+                    <tr style={{ borderTop: `2px solid #1e293b` }}>
+                      <td style={{ padding: "6px 10px", fontWeight: 800, position: "sticky", left: 0, background: "#eff6ff" }}>TOTAL</td>
+                      {availMonths.map(m => <td key={m} style={{ padding: "6px 10px", textAlign: "center", fontWeight: 800, background: cellBg(gammeMatrix.totals[m]) }}>{fmt(gammeMatrix.totals[m])}</td>)}
+                      <td style={{ padding: "6px 10px", textAlign: "center", fontWeight: 800, background: cellBg(gammeMatrix.ytdAll) }}>{fmt(gammeMatrix.ytdAll)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        );
+      })()}
+
+      {/* ── Accuracy par gamme (mois courant) ── */}
       {accuracyByGamme.length > 0 && (
         <div style={{ marginTop: 24 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 8 }}>📊 Accuracy par gamme — {month}</div>
