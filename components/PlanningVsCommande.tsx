@@ -408,7 +408,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       // 1) Onglet Synthèse (tous les mois stockés).
       const wsS = wb.addWorksheet(`Synthèse ${YEAR}`);
       wsS.columns = [
-        { header: "MOIS", key: "m", width: 14 }, { header: "PLANIF SISSI", key: "sissi", width: 13 },
+        { header: "MOIS", key: "m", width: 14 }, { header: "PLANIF JORDAN", key: "jordan", width: 14 }, { header: "PLANIF SISSI", key: "sissi", width: 13 },
         { header: "COMMANDÉ", key: "ord", width: 12 }, { header: "REÇU", key: "rec", width: 12 },
         { header: "BUDGET SISSI €", key: "bse", width: 16 }, { header: "BUDGET CMD €", key: "bce", width: 15 },
         { header: "VAR BUDGET €", key: "var", width: 15 }, { header: "RUPTURE ALL €", key: "rupt", width: 15 },
@@ -418,7 +418,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       for (const m of orderedMonths) {
         const s = savedMonths.find(x => x.month === m)!;
         const varEur = s.varBudgetEur ?? (s.budgetOrder - (s.budgetSissiEur ?? 0));
-        wsS.addRow({ m, sissi: Math.round(s.budgetSissi ?? 0), ord: Math.round(s.order), rec: Math.round(s.received),
+        wsS.addRow({ m, jordan: Math.round(s.forecast ?? 0), sissi: Math.round(s.budgetSissi ?? 0), ord: Math.round(s.order), rec: Math.round(s.received),
           bse: Math.round(s.budgetSissiEur ?? 0), bce: Math.round(s.budgetOrder), var: Math.round(varEur), rupt: Math.round(s.ruptEuro), acc: s.accuracy });
       }
       styleHead(wsS, accent);
@@ -774,7 +774,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ background: C.blueSoft }}>
                 <tr>
-                  {["Mois", "Planif Sissi", "Commandé", "Reçu", "Budget Sissi €", "Budget cmd €", "Var budget €", "Rupture All. €", "Accuracy"].map((h) => (
+                  {["Mois", "Planif Jordan", "Planif Sissi", "Commandé", "Reçu", "Budget Sissi €", "Budget cmd €", "Var budget €", "Rupture All. €", "Accuracy"].map((h) => (
                     <th key={h} style={{ textAlign: h === "Mois" ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: C.blue, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -786,6 +786,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
                   return (
                     <tr key={m} style={{ borderBottom: `1px solid ${C.bg}` }}>
                       <td style={{ padding: "6px 12px", fontWeight: 700 }}>{m}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "right", color: C.muted }}>{Math.round(s.forecast ?? 0).toLocaleString("fr-FR")}</td>
                       <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.budgetSissi ?? 0).toLocaleString("fr-FR")}</td>
                       <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.order).toLocaleString("fr-FR")}</td>
                       <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.received).toLocaleString("fr-FR")}</td>
