@@ -394,8 +394,9 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     if (!computed) return null;
     const t = { order: 0, received: 0, budgetOrder: 0, ruptQty: 0, ruptEuro: 0, nbNonCmd: 0,
       forecast: 0, budgetFinal: 0, budgetForecastEur: 0, budgetFinEur: 0, accuracy: 0 };
-    // Accuracy globale vs Sissi, avec pénalité dépassement :
-    // SOMME(F - |D - F|) / SOMME(F), planchée à 0. (F = Budget Sissi)
+    // Accuracy globale du mois = SUM(MIN(Commandé, Planifié Sissi)) / SUM(Planifié Sissi),
+    // sur TOUTES les réfs (pondéré par les quantités). = formule fichier (cellule S384).
+    // L'accuracy PAR LIGNE, elle, est MIN(D,F)/F réf par réf (voir plus haut).
     let sumNum = 0, sumF = 0;
     for (const r of computed) {
       t.order += r.orderQty; t.received += r.received; t.budgetOrder += r.budgetOrder;
