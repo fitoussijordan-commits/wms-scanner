@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "rea
 import * as odoo from "@/lib/odoo";
 import * as supa from "@/lib/supabase";
 import type { WmsPendingOrder } from "@/lib/supabase";
+import PlanningVsCommande from "@/components/PlanningVsCommande";
 
 // Noms des départements français (métropole + DOM) pour le ranking transport
 const FR_DEPTS: Record<string, string> = {
@@ -293,6 +294,7 @@ const TABS = [
   { key: "reception", label: "Réception", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg> },
   { key: "etiquette", label: "Étiquette Sendcloud", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg> },
   { key: "ventes-client", label: "Ventes client/produit", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> },
+  { key: "planning-cmd", label: "Planning vs Commande", icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg> },
 ] as const;
 
 // ─── CATALOGUE — définition des colonnes disponibles ────────────────────────
@@ -6435,6 +6437,13 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                 )}
               </>
             )}
+          </div>
+        )}
+
+        {/* ══════════════════ PLANNING VS COMMANDE ══════════════════ */}
+        {tab === "planning-cmd" && (
+          <div style={{ padding: "20px 0" }}>
+            <PlanningVsCommande />
           </div>
         )}
       </main>
