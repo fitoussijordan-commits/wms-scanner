@@ -326,7 +326,10 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
           accuracy, accLabel,
         };
       });
-      setComputed(out);
+      // Ne garde que les lignes avec DE L'ACTIVITÉ : au moins une valeur > 0
+      // (commandé, forecast Jordan, budget Sissi ou reçu). Sinon = catalogue à 0 → masqué.
+      const outFiltered = out.filter((r) => r.orderQty > 0 || r.forecastJ > 0 || r.budgetFinal > 0 || r.received > 0);
+      setComputed(outFiltered);
     } finally {
       setBusy(false);
     }
