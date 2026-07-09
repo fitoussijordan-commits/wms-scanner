@@ -42,7 +42,15 @@ function parseSheet(wb: any, sheetName: string): { headers: string[]; rows: any[
     const nonEmpty = arr[i].filter((c: any) => String(c).trim()).length;
     if (nonEmpty >= 3) { headerIdx = i; break; }
   }
-  const headers = (arr[headerIdx] || []).map((h: any, i: number) => String(h).trim() || `Col${i + 1}`);
+  // En-têtes RENDUS UNIQUES : les fichiers ont des colonnes homonymes (ex. "J" pour
+  // janvier, juin ET juillet). Sans ça, les colonnes s'écraseraient dans l'objet ligne
+  // et le <select> confondrait les doublons. On suffixe les doublons : "J", "J (2)", "J (3)".
+  const seen: Record<string, number> = {};
+  const headers = (arr[headerIdx] || []).map((h: any, i: number) => {
+    let base = String(h).trim() || `Col${i + 1}`;
+    seen[base] = (seen[base] || 0) + 1;
+    return seen[base] > 1 ? `${base} (${seen[base]})` : base;
+  });
   const rows = arr.slice(headerIdx + 1).map((r) => {
     const o: any = {};
     headers.forEach((h: string, i: number) => { o[h] = r[i]; });
@@ -145,13 +153,13 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   // On repère la SÉQUENCE de 12 colonnes dont l'en-tête est une initiale de mois, et on prend la idx-ième.
   const guessMonthCol = (headers: string[], monthName: string): string => {
     const idx = MONTHS.indexOf(monthName); // 0..11
-    // Colonnes = initiale d'UN caractère parmi JFMASOND (les vraies colonnes-mois).
-    const monthCols = headers.filter(h => /^[JFMASOND]$/i.test(String(h).trim()));
-    if (monthCols.length >= 12) return monthCols[idx];                       // 12 initiales → idx-ième
+    // Colonnes-mois = initiale JFMASOND, éventuellement suffixée " (n)" par parseSheet
+    // (ex. "J", "M (2)", "J (2)", "J (3)"). On les récupère DANS L'ORDRE et on prend la idx-ième.
+    const monthCols = headers.filter(h => /^[JFMASOND](\s*\(\d+\))?$/i.test(String(h).trim()));
+    if (monthCols.length >= 12) return monthCols[idx];
     // Sinon : nom complet du mois en en-tête (ex "Juillet").
     const exact = headers.find(h => String(h).trim().toLowerCase() === monthName.toLowerCase());
     if (exact) return exact;
-    // Dernier recours : abréviation 3 lettres qui commence par le mois.
     const abbr = headers.find(h => String(h).trim().toLowerCase().startsWith(monthName.toLowerCase().slice(0, 3)));
     return abbr || (monthCols[idx] || "");
   };
