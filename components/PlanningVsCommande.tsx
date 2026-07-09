@@ -503,30 +503,70 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         w.views = [{ state: "frozen", ySplit: 1 }];
       };
 
-      // 1) Onglet Synthèse (tous les mois stockés).
-      const wsS = wb.addWorksheet(`Synthèse ${YEAR}`);
-      wsS.columns = [
-        { header: "MOIS", key: "m", width: 14 }, { header: "PLANIF JORDAN", key: "jordan", width: 14 }, { header: "PLANIF SISSI", key: "sissi", width: 13 },
-        { header: "COMMANDÉ", key: "ord", width: 12 }, { header: "REÇU", key: "rec", width: 12 },
-        { header: "BUDGET SISSI €", key: "bse", width: 16 }, { header: "BUDGET CMD €", key: "bce", width: 15 },
-        { header: "VAR BUDGET €", key: "var", width: 15 }, { header: "RUPTURE ALL €", key: "rupt", width: 15 },
-        { header: "ACCURACY %", key: "acc", width: 12 },
-      ];
       const orderedMonths = MONTHS.filter(mo => savedMonths.some(s => s.month === mo));
+      const pctFill = (v: number | null) => v == null ? null : v >= 0.8 ? "FFDCFCE7" : v >= 0.5 ? "FFFEF9C3" : "FFFEE2E2";
+
+      // ═══ UN SEUL ONGLET "SYNTHÈSE" contenant les 3 tableaux empilés ═══
+      const wsS = wb.addWorksheet(`Synthèse ${YEAR}`);
+      // Style d'une ligne d'en-tête (bloc) sur une plage.
+      const headerRow = (rowIdx: number, values: string[], argb: string) => {
+        const row = wsS.getRow(rowIdx);
+        values.forEach((v, i) => { const c = row.getCell(i + 1); c.value = v; c.fill = { type: "pattern", pattern: "solid", fgColor: { argb } }; c.font = { bold: true, color: { argb: white }, size: 11 }; c.alignment = { horizontal: "center" }; c.border = allB; });
+        row.height = 20;
+      };
+      let r = 1;
+
+      // ── Bloc 1 : Synthèse mensuelle ──
+      wsS.getCell(r, 1).value = `SYNTHÈSE ${YEAR}`; wsS.getCell(r, 1).font = { bold: true, size: 14 }; r += 1;
+      const synHdr = ["MOIS","PLANIF JORDAN","PLANIF SISSI","COMMANDÉ","REÇU","BUDGET SISSI €","BUDGET CMD €","VAR BUDGET €","RUPTURE ALL €","ACCURACY %"];
+      headerRow(r, synHdr, accent); const synHeadRow = r; r += 1;
       for (const m of orderedMonths) {
         const s = savedMonths.find(x => x.month === m)!;
         const varEur = s.varBudgetEur ?? (s.budgetOrder - (s.budgetSissiEur ?? 0));
-        wsS.addRow({ m, jordan: Math.round(s.forecast ?? 0), sissi: Math.round(s.budgetSissi ?? 0), ord: Math.round(s.order), rec: Math.round(s.received),
-          bse: Math.round(s.budgetSissiEur ?? 0), bce: Math.round(s.budgetOrder), var: Math.round(varEur), rupt: Math.round(s.ruptEuro), acc: s.accuracy });
+        const vals = [m, Math.round(s.forecast ?? 0), Math.round(s.budgetSissi ?? 0), Math.round(s.order), Math.round(s.received),
+          Math.round(s.budgetSissiEur ?? 0), Math.round(s.budgetOrder), Math.round(varEur), Math.round(s.ruptEuro), s.accuracy];
+        const row = wsS.getRow(r);
+        vals.forEach((v, i) => { const c = row.getCell(i + 1); c.value = v as any; c.border = allB; });
+        [6,7,8,9].forEach(ci => row.getCell(ci).numFmt = eur);
+        row.getCell(10).numFmt = pct;
+        if ((r - synHeadRow) % 2 === 0) row.eachCell((c: any) => { if (!c.fill) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } }; });
+        r += 1;
       }
-      styleHead(wsS, accent);
-      for (let i = 2; i <= wsS.rowCount; i++) {
-        const row = wsS.getRow(i);
-        if (i % 2 === 0) row.eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } }; });
-        row.eachCell((c: any) => { c.border = allB; });
-        ["bse","bce","var","rupt"].forEach(k => row.getCell(k).numFmt = eur);
-        row.getCell("acc").numFmt = pct;
-      }
+      // largeurs
+      [14,14,13,12,12,16,15,15,15,12].forEach((w, i) => { wsS.getColumn(i + 1).width = Math.max(wsS.getColumn(i + 1).width || 0, w); });
+      r += 2; // saut
+
+      // ── Bloc 2 : Accuracy 25 Best Sellers × mois ──
+      wsS.getCell(r, 1).value = `ACCURACY — 25 BEST SELLERS`; wsS.getCell(r, 1).font = { bold: true, size: 13 }; r += 1;
+      const bsHdr = ["Produit", "Gamme", ...availMonths.map(m => m.slice(0, 3))];
+      headerRow(r, bsHdr, dark); r += 1;
+      const writeMatrixRow = (label: string, extra: string | null, cells: Record<string, number | null>, ytd: number | null | undefined, bold: boolean) => {
+        const row = wsS.getRow(r);
+        row.getCell(1).value = label; row.getCell(1).border = allB; if (bold) row.getCell(1).font = { bold: true };
+        let col = 2;
+        if (extra !== null) { row.getCell(col).value = extra; row.getCell(col).border = allB; col++; }
+        for (const m of availMonths) { const c = row.getCell(col); c.value = cells[m] == null ? null : cells[m] as any; c.numFmt = pct; c.alignment = { horizontal: "center" }; c.border = allB; const bg = pctFill(cells[m]); if (bg) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } }; if (bold) c.font = { bold: true }; col++; }
+        if (ytd !== undefined) { const c = row.getCell(col); c.value = ytd == null ? null : ytd as any; c.numFmt = pct; c.alignment = { horizontal: "center" }; c.border = allB; const bg = pctFill(ytd ?? null); if (bg) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } }; c.font = { bold: true }; }
+        r += 1;
+      };
+      for (const bs of bestSellersMatrix.rows) writeMatrixRow(bs.name || bs.ref, bs.gamme, bs.cells, undefined, false);
+      writeMatrixRow("25 références", "", bestSellersMatrix.totals, undefined, true);
+      r += 2;
+
+      // ── Bloc 3 : Accuracy par gamme × mois + Cumul YTD ──
+      wsS.getCell(r, 1).value = `ACCURACY PAR GAMME`; wsS.getCell(r, 1).font = { bold: true, size: 13 }; r += 1;
+      const gHdr = ["Gamme", ...availMonths.map(m => m.slice(0, 3)), "Cumul YTD"];
+      headerRow(r, gHdr, dark); r += 1;
+      const writeGammeRow = (label: string, cells: Record<string, number | null>, ytd: number | null, bold: boolean) => {
+        const row = wsS.getRow(r);
+        row.getCell(1).value = label; row.getCell(1).border = allB; if (bold) row.getCell(1).font = { bold: true };
+        let col = 2;
+        for (const m of availMonths) { const c = row.getCell(col); c.value = cells[m] == null ? null : cells[m] as any; c.numFmt = pct; c.alignment = { horizontal: "center" }; c.border = allB; const bg = pctFill(cells[m]); if (bg) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } }; if (bold) c.font = { bold: true }; col++; }
+        const cy = row.getCell(col); cy.value = ytd == null ? null : ytd as any; cy.numFmt = pct; cy.alignment = { horizontal: "center" }; cy.border = allB; const bgy = pctFill(ytd); if (bgy) cy.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bgy } }; cy.font = { bold: true };
+        r += 1;
+      };
+      for (const g of gammeMatrix.rows) writeGammeRow(g.gamme, g.cells, g.ytd, false);
+      writeGammeRow("TOTAL", gammeMatrix.totals, gammeMatrix.ytdAll, true);
 
       // 2) Un onglet détail par mois (depuis le détail stocké).
       for (const m of orderedMonths) {
@@ -556,37 +596,6 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
           if (Number(row.getCell("rq").value) < 0) row.getCell("rq").font = { bold: true, color: { argb: redT } };
         }
       }
-
-      // ── Onglets matrices annuelles (Best Sellers × mois, Gamme × mois) ──
-      const pctFill = (v: number | null) => v == null ? null : v >= 0.8 ? "FFDCFCE7" : v >= 0.5 ? "FFFEF9C3" : "FFFEE2E2";
-      const buildMatrix = (title: string, firstColHdr: string, dataRows: { label: string; extra?: string; cells: Record<string, number | null>; ytd?: number | null }[], totalRow: { label: string; cells: Record<string, number | null>; ytd?: number | null }, withYtd: boolean, withExtra: boolean) => {
-        const w = wb.addWorksheet(title);
-        const cols: any[] = [{ header: firstColHdr, key: "c0", width: 34 }];
-        if (withExtra) cols.push({ header: "Gamme", key: "gx", width: 18 });
-        for (const m of orderedMonths2) cols.push({ header: m.slice(0, 3), key: m, width: 9 });
-        if (withYtd) cols.push({ header: "Cumul YTD", key: "ytd", width: 11 });
-        w.columns = cols;
-        const addStyledRow = (label: string, extra: string | undefined, cells: Record<string, number | null>, ytd: number | null | undefined, bold: boolean) => {
-          const rd: any = { c0: label }; if (withExtra) rd.gx = extra || "";
-          for (const m of orderedMonths2) rd[m] = cells[m] == null ? null : cells[m];
-          if (withYtd) rd.ytd = ytd == null ? null : ytd;
-          const row = w.addRow(rd);
-          for (const m of orderedMonths2) { const c = row.getCell(m); c.numFmt = pct; c.alignment = { horizontal: "center" }; const bg = pctFill(cells[m]); if (bg) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } }; if (bold) c.font = { bold: true }; }
-          if (withYtd) { const c = row.getCell("ytd"); c.numFmt = pct; c.alignment = { horizontal: "center" }; const bg = pctFill(ytd ?? null); if (bg) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } }; c.font = { bold: true }; }
-          if (bold) row.getCell("c0").font = { bold: true };
-          row.eachCell((c: any) => c.border = allB);
-        };
-        for (const r of dataRows) addStyledRow(r.label, r.extra, r.cells, r.ytd, false);
-        addStyledRow(totalRow.label, undefined, totalRow.cells, totalRow.ytd, true);
-        styleHead(w, dark);
-      };
-      const orderedMonths2 = availMonths;
-      buildMatrix("Acc. 25 Best Sellers", "Produit",
-        bestSellersMatrix.rows.map(r => ({ label: r.name || r.ref, extra: r.gamme, cells: r.cells })),
-        { label: "25 références", cells: bestSellersMatrix.totals }, false, true);
-      buildMatrix("Acc. par gamme (an)", "Gamme",
-        gammeMatrix.rows.map(r => ({ label: r.gamme, cells: r.cells, ytd: r.ytd })),
-        { label: "TOTAL", cells: gammeMatrix.totals, ytd: gammeMatrix.ytdAll }, true, false);
 
       const buf = await wb.xlsx.writeBuffer();
       const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
