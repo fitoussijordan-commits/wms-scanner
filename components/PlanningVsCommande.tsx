@@ -11,7 +11,7 @@
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useMemo, useEffect } from "react";
 import * as odoo from "@/lib/odoo";
-import { loadPlanningSynthese, savePlanningMonth, type PlanningMonth } from "@/lib/supabase";
+import { loadPlanningSynthese, savePlanningMonth, savePlanningDetail, loadPlanningDetail, type PlanningMonth } from "@/lib/supabase";
 
 async function loadXLSX(): Promise<any> {
   if ((window as any).XLSX) return (window as any).XLSX;
@@ -144,6 +144,8 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         varBudgetQty: totals.order - totals.budgetFinal, varBudgetEur: totals.budgetOrder - totals.budgetFinEur,
       };
       await savePlanningMonth(YEAR, m);
+      // Sauvegarde AUSSI le détail complet du mois (pour l'export fichier complet).
+      if (computed) await savePlanningDetail(YEAR, month, computed);
       setSavedMonths(await loadPlanningSynthese(YEAR));
     } catch { /* silencieux */ }
     setSaving(false);
@@ -382,6 +384,88 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       .map(([gamme, v]) => ({ gamme, forecast: v.forecast, order: v.order, received: v.received, sissi: v.sumF, accuracy: v.sumF > 0 ? v.sumNum / v.sumF : 0, nb: v.nb }))
       .sort((a, b) => b.order - a.order);
   }, [computed]);
+
+  const [exportingFull, setExportingFull] = useState(false);
+
+  // Export du FICHIER COMPLET : 1 onglet Synthèse globale + 1 onglet détail par mois stocké.
+  const exportFullFile = async () => {
+    if (!savedMonths.length) return;
+    setExportingFull(true);
+    try {
+      const ExcelJS = (await import("exceljs")).default;
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "WMS Scanner"; wb.created = new Date();
+      const white = "FFFFFFFF", accent = "FF2563EB", dark = "FF1E293B", zebra = "FFEFF6FF", zebra2 = "FFF1F5F9", border = "FFE2E8F0", redT = "FFB91C1C";
+      const thin = { style: "thin" as const, color: { argb: border } };
+      const allB = { top: thin, left: thin, bottom: thin, right: thin };
+      const eur = '#,##0 €', pct = '0 %';
+      const styleHead = (w: any, argb: string) => {
+        const h = w.getRow(1); h.height = 22;
+        h.eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb } }; c.font = { bold: true, color: { argb: white }, size: 11 }; c.alignment = { vertical: "middle", horizontal: "center" }; c.border = allB; });
+        w.views = [{ state: "frozen", ySplit: 1 }];
+      };
+
+      // 1) Onglet Synthèse (tous les mois stockés).
+      const wsS = wb.addWorksheet(`Synthèse ${YEAR}`);
+      wsS.columns = [
+        { header: "MOIS", key: "m", width: 14 }, { header: "PLANIF SISSI", key: "sissi", width: 13 },
+        { header: "COMMANDÉ", key: "ord", width: 12 }, { header: "REÇU", key: "rec", width: 12 },
+        { header: "BUDGET SISSI €", key: "bse", width: 16 }, { header: "BUDGET CMD €", key: "bce", width: 15 },
+        { header: "VAR BUDGET €", key: "var", width: 15 }, { header: "RUPTURE ALL €", key: "rupt", width: 15 },
+        { header: "ACCURACY %", key: "acc", width: 12 },
+      ];
+      const orderedMonths = MONTHS.filter(mo => savedMonths.some(s => s.month === mo));
+      for (const m of orderedMonths) {
+        const s = savedMonths.find(x => x.month === m)!;
+        const varEur = s.varBudgetEur ?? (s.budgetOrder - (s.budgetSissiEur ?? 0));
+        wsS.addRow({ m, sissi: Math.round(s.budgetSissi ?? 0), ord: Math.round(s.order), rec: Math.round(s.received),
+          bse: Math.round(s.budgetSissiEur ?? 0), bce: Math.round(s.budgetOrder), var: Math.round(varEur), rupt: Math.round(s.ruptEuro), acc: s.accuracy });
+      }
+      styleHead(wsS, accent);
+      for (let i = 2; i <= wsS.rowCount; i++) {
+        const row = wsS.getRow(i);
+        if (i % 2 === 0) row.eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } }; });
+        row.eachCell((c: any) => { c.border = allB; });
+        ["bse","bce","var","rupt"].forEach(k => row.getCell(k).numFmt = eur);
+        row.getCell("acc").numFmt = pct;
+      }
+
+      // 2) Un onglet détail par mois (depuis le détail stocké).
+      for (const m of orderedMonths) {
+        const rows = await loadPlanningDetail(YEAR, m);
+        if (!rows.length) continue;
+        const w = wb.addWorksheet(m.slice(0, 3) + " " + String(YEAR).slice(2));
+        w.columns = [
+          { header: "Ref FR", key: "ref", width: 12 }, { header: "Article No.", key: "art", width: 13 },
+          { header: "Désignation", key: "name", width: 40 }, { header: "Forecast", key: "fc", width: 10 },
+          { header: "Commandé", key: "ord", width: 10 }, { header: "Reçu", key: "rec", width: 10 },
+          { header: "Prix", key: "price", width: 9 }, { header: "Budget cmd", key: "bud", width: 14 },
+          { header: "Rupture Qté", key: "rq", width: 11 }, { header: "Rupture €", key: "re", width: 12 },
+          { header: "Accuracy", key: "acc", width: 12 },
+        ];
+        for (const r of rows) {
+          w.addRow({ ref: r.refFR, art: r.article, name: r.name, fc: Math.round(r.forecastJ || 0), ord: r.orderQty, rec: r.received,
+            price: r.price, bud: Math.round((r.budgetOrder || 0) * 100) / 100, rq: r.ruptQty, re: Math.round((r.ruptEuro || 0) * 100) / 100, acc: r.accLabel });
+        }
+        styleHead(w, dark);
+        for (let i = 2; i <= w.rowCount; i++) {
+          const row = w.getRow(i);
+          if (i % 2 === 0) row.eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra2 } }; });
+          row.eachCell((c: any) => { c.border = allB; });
+          ["price","bud","re"].forEach(k => row.getCell(k).numFmt = eur);
+          if (Number(row.getCell("rq").value) < 0) row.getCell("rq").font = { bold: true, color: { argb: redT } };
+        }
+      }
+
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = `planning_vs_commande_${YEAR}_complet.xlsx`; a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportingFull(false);
+    }
+  };
 
   const exportXlsx = async () => {
     if (!computed || !totals) return;
@@ -677,7 +761,13 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       {/* ── Synthèse annuelle (mois stockés Supabase) ── */}
       {savedMonths.length > 0 && (
         <div style={{ marginTop: 24 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 8 }}>Synthèse {YEAR}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Synthèse {YEAR}</div>
+            <button onClick={exportFullFile} disabled={exportingFull}
+              style={{ padding: "7px 14px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>
+              {exportingFull ? "Génération…" : "📦 Exporter le fichier complet"}
+            </button>
+          </div>
           <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ background: C.blueSoft }}>

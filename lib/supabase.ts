@@ -999,3 +999,21 @@ export async function savePlanningMonth(year: number, m: PlanningMonth): Promise
   );
   if (error) throw new Error(error.message);
 }
+
+// ── DÉTAIL d'un mois (toutes les lignes calculées) — pour l'export fichier complet.
+// Clé "planning_detail_<année>_<mois>" = JSON des lignes.
+export async function savePlanningDetail(year: number, month: string, rows: any[]): Promise<void> {
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: `planning_detail_${year}_${month}`, value: JSON.stringify(rows), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}
+
+export async function loadPlanningDetail(year: number, month: string): Promise<any[]> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", `planning_detail_${year}_${month}`).single();
+    if (data?.value) return JSON.parse(data.value);
+  } catch {}
+  return [];
+}
