@@ -432,7 +432,9 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
 
       // 2) Un onglet détail par mois (depuis le détail stocké).
       for (const m of orderedMonths) {
-        const rows = await loadPlanningDetail(YEAR, m);
+        // Détail depuis Supabase ; si vide ET c'est le mois calculé à l'écran → on prend `computed`.
+        let rows = await loadPlanningDetail(YEAR, m);
+        if (!rows.length && m === month && computed) rows = computed;
         if (!rows.length) continue;
         const w = wb.addWorksheet(m.slice(0, 3) + " " + String(YEAR).slice(2));
         w.columns = [
