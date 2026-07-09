@@ -245,16 +245,17 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         const E = lookForecast(fjIdx, refFR, b.article);       // forecast Jordan
         const F = lookForecast(fsIdx, refFR, b.article);       // budget Sissi (planning final)
         const price = b.price;
-        // Accuracy = min(D,F)/F cappé à 100% (formule du fichier). "—" si F=0.
-        const accRaw = F > 0 ? Math.min(D, F) / F : null;
+        // Accuracy = min(Commandé, Forecast Jordan) / Forecast Jordan, cappé à 100%.
+        // Dénominateur = E (Planning Jordan). "—" si E=0. (Sissi = comparaison à part.)
+        const accRaw = E > 0 ? Math.min(D, E) / E : null;
         const accuracy = accRaw == null ? null : Math.min(accRaw, 1);
-        // Emoji comme le fichier : ⬇️ si D<F, ⚠️ si reçu<commandé (rupture), 🔵 si D>F, ✅ si =.
+        // Emoji : ⬇️ si D<E, ⚠️ si reçu<commandé (rupture), 🔵 si D>E, ✅ si =.
         let accLabel = "—";
-        if (F > 0) {
-          const pct = Math.round((D / F) * 100);
-          if (D < F) accLabel = `⬇️ ${pct}%`;
+        if (E > 0) {
+          const pct = Math.round((D / E) * 100);
+          if (D < E) accLabel = `⬇️ ${pct}%`;
           else if (b.received < D) accLabel = `⚠️ ${pct}% (rupture)`;
-          else if (D > F) accLabel = `🔵 ${pct}%`;
+          else if (D > E) accLabel = `🔵 ${pct}%`;
           else accLabel = "✅ 100%";
         }
         return {
@@ -276,17 +277,17 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     if (!computed) return null;
     const t = { order: 0, received: 0, budgetOrder: 0, ruptQty: 0, ruptEuro: 0, nbNonCmd: 0,
       forecast: 0, budgetFinal: 0, budgetForecastEur: 0, budgetFinEur: 0, accuracy: 0 };
-    // Accuracy globale = SOMME(min(D,F)) / SOMME(F)  (pondérée, comme la synthèse du fichier).
-    let sumMinDF = 0, sumF = 0;
+    // Accuracy globale = SOMME(min(Commandé, Forecast Jordan)) / SOMME(Forecast Jordan).
+    let sumMinDE = 0, sumE = 0;
     for (const r of computed) {
       t.order += r.orderQty; t.received += r.received; t.budgetOrder += r.budgetOrder;
       t.ruptQty += r.ruptQty; t.ruptEuro += r.ruptEuro;
       t.forecast += r.forecastJ; t.budgetFinal += r.budgetFinal;
       t.budgetForecastEur += r.budgetForecast; t.budgetFinEur += r.budgetFin;
       if (r.orderQty === 0) t.nbNonCmd++;
-      if (r.budgetFinal > 0) { sumMinDF += Math.min(r.orderQty, r.budgetFinal); sumF += r.budgetFinal; }
+      if (r.forecastJ > 0) { sumMinDE += Math.min(r.orderQty, r.forecastJ); sumE += r.forecastJ; }
     }
-    t.accuracy = sumF > 0 ? sumMinDF / sumF : 0;
+    t.accuracy = sumE > 0 ? sumMinDE / sumE : 0;
     return t;
   }, [computed]);
 
@@ -492,7 +493,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             ["Reçu", Math.round(totals.received).toLocaleString("fr-FR")],
             ["Budget commande €", Math.round(totals.budgetOrder).toLocaleString("fr-FR")],
             ["Rupture All. €", Math.round(totals.ruptEuro).toLocaleString("fr-FR")],
-            ["Accuracy", totals.budgetFinal > 0 ? Math.round(totals.accuracy * 100) + "%" : "—"],
+            ["Accuracy", totals.forecast > 0 ? Math.round(totals.accuracy * 100) + "%" : "—"],
             ["Réfs non commandées", totals.nbNonCmd],
           ].map(([label, val]) => (
             <div key={label as string} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", minWidth: 120 }}>
