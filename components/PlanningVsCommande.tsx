@@ -83,6 +83,12 @@ const C = {
 };
 
 const MONTHS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+// Abréviations UNIQUES (Juin=Jun, Juillet=Jul, Mars=Mar, Mai=Mai) pour éviter les collisions.
+const MONTH_ABBR: Record<string, string> = {
+  "Janvier": "Jan", "Février": "Fév", "Mars": "Mar", "Avril": "Avr", "Mai": "Mai", "Juin": "Jun",
+  "Juillet": "Jul", "Août": "Aoû", "Septembre": "Sep", "Octobre": "Oct", "Novembre": "Nov", "Décembre": "Déc",
+};
+const mAbbr = (m: string) => MONTH_ABBR[m] || m.slice(0, 3);
 
 // Liste Best Sellers (Ref FR + Gamme) — top produits à suivre. Modifiable ici si besoin.
 const BEST_SELLERS: { ref: string; gamme: string }[] = [
@@ -538,7 +544,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
 
       // ── Bloc 2 : Accuracy 25 Best Sellers × mois ──
       wsS.getCell(r, 1).value = `ACCURACY — 25 BEST SELLERS`; wsS.getCell(r, 1).font = { bold: true, size: 13 }; r += 1;
-      const bsHdr = ["Produit", "Gamme", ...availMonths.map(m => m.slice(0, 3))];
+      const bsHdr = ["Produit", "Gamme", ...availMonths.map(m => mAbbr(m))];
       headerRow(r, bsHdr, dark); r += 1;
       const writeMatrixRow = (label: string, extra: string | null, cells: Record<string, number | null>, ytd: number | null | undefined, bold: boolean) => {
         const row = wsS.getRow(r);
@@ -555,7 +561,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
 
       // ── Bloc 3 : Accuracy par gamme × mois + Cumul YTD ──
       wsS.getCell(r, 1).value = `ACCURACY PAR GAMME`; wsS.getCell(r, 1).font = { bold: true, size: 13 }; r += 1;
-      const gHdr = ["Gamme", ...availMonths.map(m => m.slice(0, 3)), "Cumul YTD"];
+      const gHdr = ["Gamme", ...availMonths.map(m => mAbbr(m)), "Cumul YTD"];
       headerRow(r, gHdr, dark); r += 1;
       const writeGammeRow = (label: string, cells: Record<string, number | null>, ytd: number | null, bold: boolean) => {
         const row = wsS.getRow(r);
@@ -574,7 +580,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         let rows = await loadPlanningDetail(YEAR, m);
         if (!rows.length && m === month && computed) rows = computed;
         if (!rows.length) continue;
-        const w = wb.addWorksheet(m.slice(0, 3) + " " + String(YEAR).slice(2));
+        const w = wb.addWorksheet(`${m} ${String(YEAR).slice(2)}`.slice(0, 31));
         w.columns = [
           { header: "Ref FR", key: "ref", width: 12 }, { header: "Article No.", key: "art", width: 13 },
           { header: "Désignation", key: "name", width: 40 }, { header: "Forecast", key: "fc", width: 10 },
@@ -980,7 +986,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
                     <tr>
                       <th style={{ textAlign: "left", padding: "8px 10px", color: "#fff", position: "sticky", left: 0, background: "#1e293b", whiteSpace: "nowrap" }}>Produit</th>
                       <th style={{ textAlign: "left", padding: "8px 10px", color: "#fff" }}>Gamme</th>
-                      {availMonths.map(m => <th key={m} style={{ padding: "8px 10px", color: "#fff", whiteSpace: "nowrap" }}>{m.slice(0,3)}</th>)}
+                      {availMonths.map(m => <th key={m} style={{ padding: "8px 10px", color: "#fff", whiteSpace: "nowrap" }}>{mAbbr(m)}</th>)}
                     </tr>
                   </thead>
                   <tbody>
@@ -1008,7 +1014,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
                   <thead style={{ background: "#1e293b" }}>
                     <tr>
                       <th style={{ textAlign: "left", padding: "8px 10px", color: "#fff", position: "sticky", left: 0, background: "#1e293b" }}>Gamme</th>
-                      {availMonths.map(m => <th key={m} style={{ padding: "8px 10px", color: "#fff", whiteSpace: "nowrap" }}>{m.slice(0,3)}</th>)}
+                      {availMonths.map(m => <th key={m} style={{ padding: "8px 10px", color: "#fff", whiteSpace: "nowrap" }}>{mAbbr(m)}</th>)}
                       <th style={{ padding: "8px 10px", color: "#fff" }}>Cumul YTD</th>
                     </tr>
                   </thead>
