@@ -141,19 +141,28 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     setSaving(false);
   };
 
-  // Devine la colonne du mois : en-tête = initiale du mois (J/F/M/A...) ou nom complet.
+  // Devine la colonne du mois. Les fichiers ont 12 colonnes-mois en initiales (J F M A M J J A S O N D).
+  // On repère la SÉQUENCE de 12 colonnes dont l'en-tête est une initiale de mois, et on prend la idx-ième.
   const guessMonthCol = (headers: string[], monthName: string): string => {
     const idx = MONTHS.indexOf(monthName); // 0..11
-    const initiales = ["J","F","M","A","M","J","J","A","S","O","N","D"];
-    const want = initiales[idx];
-    // Cherche une colonne dont l'en-tête == initiale (en comptant les doublons J/M/A).
-    // On récupère toutes les colonnes mois candidates, dans l'ordre, et on prend la idx-ième.
-    const monthCols = headers.filter(h => /^[JFMASOND]$/i.test(String(h).trim()) || MONTHS.some(m => String(h).toLowerCase().startsWith(m.toLowerCase().slice(0,3))));
-    if (monthCols.length >= 12) return monthCols[idx];        // 12 colonnes mois → prend la idx-ième
+    // Colonnes = initiale d'UN caractère parmi JFMASOND (les vraies colonnes-mois).
+    const monthCols = headers.filter(h => /^[JFMASOND]$/i.test(String(h).trim()));
+    if (monthCols.length >= 12) return monthCols[idx];                       // 12 initiales → idx-ième
+    // Sinon : nom complet du mois en en-tête (ex "Juillet").
     const exact = headers.find(h => String(h).trim().toLowerCase() === monthName.toLowerCase());
     if (exact) return exact;
-    return "";
+    // Dernier recours : abréviation 3 lettres qui commence par le mois.
+    const abbr = headers.find(h => String(h).trim().toLowerCase().startsWith(monthName.toLowerCase().slice(0, 3)));
+    return abbr || (monthCols[idx] || "");
   };
+
+  // Quand on change de MOIS : recalcule la colonne-mois des forecasts déjà chargés.
+  useEffect(() => {
+    if (forecastJ) setFjMap(m => ({ ...m, monthCol: guessMonthCol(forecastJ.headers, month) }));
+    if (forecastS) setFsMap(m => ({ ...m, monthCol: guessMonthCol(forecastS.headers, month) }));
+    setComputed(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [month]);
 
   // Applique le mapping auto d'une source selon son type, sur les en-têtes donnés.
   const autoMap = (kind: "order" | "reception" | "j" | "s", headers: string[]) => {
