@@ -76,6 +76,35 @@ const C = {
 
 const MONTHS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 
+// Liste Best Sellers (Ref FR + Gamme) — top produits à suivre. Modifiable ici si besoin.
+const BEST_SELLERS: { ref: string; gamme: string }[] = [
+  { ref: "1010101", gamme: "Visage" },
+  { ref: "1010310", gamme: "Visage" },
+  { ref: "1010359", gamme: "Visage" },
+  { ref: "1010302", gamme: "Visage" },
+  { ref: "1010601", gamme: "Visage" },
+  { ref: "1010201", gamme: "Visage" },
+  { ref: "1010102", gamme: "Visage" },
+  { ref: "1010377", gamme: "Visage" },
+  { ref: "1030704", gamme: "Corps" },
+  { ref: "1030301", gamme: "Corps" },
+  { ref: "1030703", gamme: "Corps" },
+  { ref: "1020720", gamme: "Régénérant Visage" },
+  { ref: "1010306", gamme: "Visage" },
+  { ref: "1020301", gamme: "Régénérant Visage" },
+  { ref: "1010305", gamme: "Visage" },
+  { ref: "1020202", gamme: "Régénérant Visage" },
+  { ref: "1050403", gamme: "Med" },
+  { ref: "1010116", gamme: "Visage" },
+  { ref: "1010353", gamme: "Visage" },
+  { ref: "1010501", gamme: "Visage" },
+  { ref: "1020718", gamme: "Régénérant Visage" },
+  { ref: "1010202", gamme: "Visage" },
+  { ref: "1010360", gamme: "Visage" },
+  { ref: "1050406", gamme: "Med" },
+  { ref: "1010209", gamme: "Visage" },
+];
+
 export default function PlanningVsCommande({ session }: { session: odoo.OdooSession | null }) {
   const [month, setMonth] = useState<string>(MONTHS[new Date().getMonth()]);
   const [matching, setMatching] = useState(false);
@@ -83,8 +112,6 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   const [reception, setReception] = useState<SourceFile | null>(null);
   const [forecastJ, setForecastJ] = useState<SourceFile | null>(null);
   const [forecastS, setForecastS] = useState<SourceFile | null>(null);
-  const [bestSellers, setBestSellers] = useState<SourceFile | null>(null);
-  const [bsMap, setBsMap] = useState({ ref: "" });
   const [orderMap, setOrderMap] = useState({ article: "", qty: "", price: "", name: "" });
   const [recMap, setRecMap] = useState({ article: "", qty: "" });
   // Forecast : clé Ref FR (ou code Wala) + colonne du mois choisi.
@@ -129,7 +156,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   };
 
   // Applique le mapping auto d'une source selon son type, sur les en-têtes donnés.
-  const autoMap = (kind: "order" | "reception" | "j" | "s" | "bs", headers: string[]) => {
+  const autoMap = (kind: "order" | "reception" | "j" | "s", headers: string[]) => {
     if (kind === "order") setOrderMap({
       article: guessCol(headers, ["Article No.", "Article-No.", "ArticleNo", "articleno"]),
       qty: guessCol(headers, ["Order Qty.", "Order Qty", "OrderQty", "quantité commandée", "qty"]),
@@ -142,41 +169,38 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     });
     else if (kind === "j") setFjMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "default_code"]), monthCol: guessMonthCol(headers, month) });
     else if (kind === "s") setFsMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "default_code"]), monthCol: guessMonthCol(headers, month) });
-    else if (kind === "bs") setBsMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "Ref", "default_code"]) || headers[0] || "" });
   };
 
   // Choisit automatiquement la meilleure feuille selon le type (nom d'onglet).
-  const pickBestSheet = (kind: "order" | "reception" | "j" | "s" | "bs", sheets: string[]): string => {
+  const pickBestSheet = (kind: "order" | "reception" | "j" | "s", sheets: string[]): string => {
     const rx: Record<string, RegExp> = {
       j: /pr[ée]vision|jordan|forecast/i,
       s: /budget|sissi|planning budget/i,
       reception: /rg|wala|r[ée]ception|sheet/i,
       order: /order|commande|tabelle/i,
-      bs: /best.?seller|top|meilleur/i,
     };
     return sheets.find(s => rx[kind].test(s)) || sheets[0];
   };
 
-  const setSourceFromWb = (kind: "order" | "reception" | "j" | "s" | "bs", name: string, wb: any, sheets: string[], sheet: string) => {
+  const setSourceFromWb = (kind: "order" | "reception" | "j" | "s", name: string, wb: any, sheets: string[], sheet: string) => {
     const { headers, rows } = parseSheet(wb, sheet);
     const sf: SourceFile = { name, headers, rows, wb, sheets, sheet };
     if (kind === "order") setOrder(sf);
     else if (kind === "reception") setReception(sf);
     else if (kind === "j") setForecastJ(sf);
-    else if (kind === "s") setForecastS(sf);
-    else setBestSellers(sf);
+    else setForecastS(sf);
     autoMap(kind, headers);
     setComputed(null);
   };
 
-  const onDropAny = async (kind: "order" | "reception" | "j" | "s" | "bs", file: File) => {
+  const onDropAny = async (kind: "order" | "reception" | "j" | "s", file: File) => {
     const { wb, sheets } = await readWorkbook(file);
     const best = pickBestSheet(kind, sheets);
     setSourceFromWb(kind, file.name, wb, sheets, best);
   };
 
   // Changer d'onglet sur une source déjà chargée (menu déroulant).
-  const changeSheet = (kind: "order" | "reception" | "j" | "s" | "bs", src: SourceFile, sheet: string) => {
+  const changeSheet = (kind: "order" | "reception" | "j" | "s", src: SourceFile, sheet: string) => {
     if (!src.wb) return;
     setSourceFromWb(kind, src.name, src.wb, src.sheets || [], sheet);
   };
@@ -309,12 +333,33 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     return t;
   }, [computed]);
 
-  // Top produits = lignes calculées dont la Ref FR est dans le fichier Best Sellers.
+  // Top produits = lignes calculées dont la Ref FR est dans la liste Best Sellers (en dur).
+  // Ordonnés selon l'ordre de la liste, avec la gamme attachée.
   const topProducts = useMemo(() => {
-    if (!computed || !bestSellers || !bsMap.ref) return [];
-    const wanted = new Set(bestSellers.rows.map(r => String(r[bsMap.ref] ?? "").trim()).filter(Boolean));
-    return computed.filter(r => r.refFR && wanted.has(String(r.refFR).trim()));
-  }, [computed, bestSellers, bsMap]);
+    if (!computed) return [] as any[];
+    const info = new Map(BEST_SELLERS.map((b, i) => [b.ref, { i, gamme: b.gamme }]));
+    return computed
+      .filter(r => r.refFR && info.has(String(r.refFR).trim()))
+      .map(r => ({ ...r, gamme: info.get(String(r.refFR).trim())!.gamme }))
+      .sort((a, b) => info.get(String(a.refFR).trim())!.i - info.get(String(b.refFR).trim())!.i);
+  }, [computed]);
+
+  // Accuracy PAR GAMME : sur TOUTES les lignes calculées, regroupées par gamme
+  // (gamme via la table Best Sellers ; les produits hors liste vont dans "Autres").
+  const accuracyByGamme = useMemo(() => {
+    if (!computed) return [] as { gamme: string; forecast: number; order: number; received: number; accuracy: number; nb: number }[];
+    const gammeByRef = new Map(BEST_SELLERS.map(b => [b.ref, b.gamme]));
+    const acc: Record<string, { forecast: number; order: number; received: number; sumMinDE: number; sumE: number; nb: number }> = {};
+    for (const r of computed) {
+      const g = gammeByRef.get(String(r.refFR).trim()) || "Autres";
+      (acc[g] ||= { forecast: 0, order: 0, received: 0, sumMinDE: 0, sumE: 0, nb: 0 });
+      acc[g].forecast += r.forecastJ; acc[g].order += r.orderQty; acc[g].received += r.received; acc[g].nb++;
+      if (r.forecastJ > 0) { acc[g].sumMinDE += Math.min(r.orderQty, r.forecastJ); acc[g].sumE += r.forecastJ; }
+    }
+    return Object.entries(acc)
+      .map(([gamme, v]) => ({ gamme, forecast: v.forecast, order: v.order, received: v.received, accuracy: v.sumE > 0 ? v.sumMinDE / v.sumE : 0, nb: v.nb }))
+      .sort((a, b) => b.order - a.order);
+  }, [computed]);
 
   const exportXlsx = async () => {
     if (!computed || !totals) return;
@@ -408,6 +453,54 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       row.getCell("bud").numFmt = eur; row.getCell("rupt").numFmt = eur; row.getCell("acc").numFmt = pct;
     }
 
+    // Helper : style d'en-tête + zebra + bordures pour un onglet.
+    const styleSheet = (w: any, headerArgb: string, zebraArgb: string) => {
+      const hh = w.getRow(1); hh.height = 22;
+      hh.eachCell((c: any) => {
+        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: headerArgb } };
+        c.font = { bold: true, color: { argb: CL.white }, size: 11 };
+        c.alignment = { vertical: "middle", horizontal: "center" }; c.border = allB;
+      });
+      w.views = [{ state: "frozen", ySplit: 1 }];
+      for (let i = 2; i <= w.rowCount; i++) {
+        const row = w.getRow(i);
+        if (i % 2 === 0) row.eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebraArgb } }; });
+        row.eachCell((c: any) => { c.border = allB; });
+      }
+    };
+
+    // ── Onglet ACCURACY PAR GAMME ──
+    const wsG = wb.addWorksheet("Accuracy par gamme");
+    wsG.columns = [
+      { header: "GAMME", key: "g", width: 22 },
+      { header: "NB RÉFS", key: "nb", width: 10 },
+      { header: "FORECAST", key: "fc", width: 12 },
+      { header: "COMMANDÉ", key: "ord", width: 12 },
+      { header: "REÇU", key: "rec", width: 12 },
+      { header: "ACCURACY %", key: "acc", width: 13 },
+    ];
+    for (const g of accuracyByGamme) {
+      wsG.addRow({ g: g.gamme, nb: g.nb, fc: Math.round(g.forecast), ord: Math.round(g.order), rec: Math.round(g.received), acc: g.forecast > 0 ? g.accuracy : null });
+    }
+    styleSheet(wsG, "FF0891B2", "FFECFEFF");
+    for (let i = 2; i <= wsG.rowCount; i++) wsG.getRow(i).getCell("acc").numFmt = pct;
+
+    // ── Onglet TOP PRODUITS ──
+    const wsT = wb.addWorksheet("Top produits");
+    wsT.columns = [
+      { header: "REF FR", key: "ref", width: 12 },
+      { header: "PRODUIT", key: "name", width: 40 },
+      { header: "GAMME", key: "gamme", width: 20 },
+      { header: "FORECAST", key: "fc", width: 12 },
+      { header: "COMMANDÉ", key: "ord", width: 12 },
+      { header: "REÇU", key: "rec", width: 12 },
+      { header: "ACCURACY", key: "acc", width: 14 },
+    ];
+    for (const r of topProducts) {
+      wsT.addRow({ ref: r.refFR, name: r.name, gamme: r.gamme, fc: Math.round(r.forecastJ), ord: r.orderQty, rec: r.received, acc: r.accLabel });
+    }
+    styleSheet(wsT, "FFB45309", "FFFEF9C3");
+
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     const url = URL.createObjectURL(blob);
@@ -416,7 +509,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     URL.revokeObjectURL(url);
   };
 
-  const DropZone = ({ label, src, kind, onFile, mapUI }: { label: string; src: SourceFile | null; kind: "order" | "reception" | "j" | "s" | "bs"; onFile: (f: File) => void; mapUI: React.ReactNode }) => (
+  const DropZone = ({ label, src, kind, onFile, mapUI }: { label: string; src: SourceFile | null; kind: "order" | "reception" | "j" | "s"; onFile: (f: File) => void; mapUI: React.ReactNode }) => (
     <div style={{ background: C.white, border: `1.5px dashed ${src ? C.green : C.border}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column" }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>{label}</div>
       <label style={{ display: "inline-block", padding: "8px 14px", background: C.blueSoft, color: C.blue, borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
@@ -490,9 +583,6 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <MapSelect label="Ref FR" headers={forecastS.headers} value={fsMap.ref} onChange={(v) => setFsMap({ ...fsMap, ref: v })} />
             <MapSelect label={`Colonne mois (${month})`} headers={forecastS.headers} value={fsMap.monthCol} onChange={(v) => setFsMap({ ...fsMap, monthCol: v })} />
           </>
-        )} />
-        <DropZone label="5. Best Sellers (optionnel)" src={bestSellers} kind="bs" onFile={(f) => onDropAny("bs", f)} mapUI={bestSellers && (
-          <MapSelect label="Ref FR" headers={bestSellers.headers} value={bsMap.ref} onChange={(v) => setBsMap({ ref: v })} />
         )} />
       </div>
 
@@ -599,6 +689,36 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         </div>
       )}
 
+      {/* ── Accuracy par gamme ── */}
+      {accuracyByGamme.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 8 }}>📊 Accuracy par gamme — {month}</div>
+          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead style={{ background: "#ecfeff" }}>
+                <tr>
+                  {["Gamme", "Nb réfs", "Forecast", "Commandé", "Reçu", "Accuracy"].map((h) => (
+                    <th key={h} style={{ textAlign: h === "Gamme" ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: "#0e7490", borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {accuracyByGamme.map((g, i) => (
+                  <tr key={i} style={{ borderBottom: `1px solid ${C.bg}` }}>
+                    <td style={{ padding: "6px 12px", fontWeight: 700 }}>{g.gamme}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", color: C.muted }}>{g.nb}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(g.forecast).toLocaleString("fr-FR")}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(g.order).toLocaleString("fr-FR")}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(g.received).toLocaleString("fr-FR")}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", fontWeight: 700, color: g.forecast > 0 ? C.text : C.muted }}>{g.forecast > 0 ? Math.round(g.accuracy * 100) + "%" : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* ── Top produits (Best Sellers) + leur accuracy pour le mois ── */}
       {topProducts.length > 0 && (
         <div style={{ marginTop: 24 }}>
@@ -607,8 +727,8 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ background: "#fef9c3" }}>
                 <tr>
-                  {["Ref FR", "Désignation", "Forecast", "Commandé", "Reçu", "Accuracy"].map((h) => (
-                    <th key={h} style={{ textAlign: (h === "Ref FR" || h === "Désignation") ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: "#854d0e", borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                  {["Ref FR", "Produit", "Gamme", "Forecast", "Commandé", "Reçu", "Accuracy"].map((h) => (
+                    <th key={h} style={{ textAlign: (h === "Ref FR" || h === "Produit" || h === "Gamme") ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: "#854d0e", borderBottom: `1px solid ${C.border}` }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -616,7 +736,8 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
                 {topProducts.map((r, i) => (
                   <tr key={i} style={{ borderBottom: `1px solid ${C.bg}` }}>
                     <td style={{ padding: "6px 12px", fontFamily: "monospace", fontWeight: 700 }}>{r.refFR}</td>
-                    <td style={{ padding: "6px 12px", color: C.muted, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</td>
+                    <td style={{ padding: "6px 12px", color: C.muted, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</td>
+                    <td style={{ padding: "6px 12px", color: C.muted }}>{r.gamme}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.forecastJ ? Math.round(r.forecastJ).toLocaleString("fr-FR") : "·"}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.orderQty}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.received}</td>
