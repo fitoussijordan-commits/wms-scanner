@@ -487,9 +487,9 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       {totals && (
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
           {[
-            ["Forecast", totals.forecast.toLocaleString("fr-FR")],
-            ["Commandé", totals.order.toLocaleString("fr-FR")],
-            ["Reçu", totals.received.toLocaleString("fr-FR")],
+            ["Forecast", Math.round(totals.forecast).toLocaleString("fr-FR")],
+            ["Commandé", Math.round(totals.order).toLocaleString("fr-FR")],
+            ["Reçu", Math.round(totals.received).toLocaleString("fr-FR")],
             ["Budget commande €", Math.round(totals.budgetOrder).toLocaleString("fr-FR")],
             ["Rupture All. €", Math.round(totals.ruptEuro).toLocaleString("fr-FR")],
             ["Accuracy", totals.budgetFinal > 0 ? Math.round(totals.accuracy * 100) + "%" : "—"],
@@ -520,7 +520,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
                     <td style={{ padding: "6px 12px", fontFamily: "monospace", fontWeight: 700, color: r.matched ? C.text : C.red }}>{r.refFR || "—"}</td>
                     <td style={{ padding: "6px 12px", fontFamily: "monospace", color: C.muted }}>{r.article}</td>
                     <td style={{ padding: "6px 12px", color: C.muted, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</td>
-                    <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.forecastJ || "·"}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.forecastJ ? Math.round(r.forecastJ).toLocaleString("fr-FR") : "·"}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.orderQty}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.received}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right", color: r.ruptQty < 0 ? C.red : C.text, fontWeight: r.ruptQty < 0 ? 700 : 400 }}>{r.ruptQty}</td>
