@@ -396,19 +396,20 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         // Recalcule budget et rupture € avec le prix Odoo.
         const budgetOrder = D * price;
         const ruptEuro = b.ruptQty * price;
-        // Accuracy ligne = MIN(D,F)/F (formule fichier, colonne S), plafonnée à 100%.
-        // Le sur-commande ne dépasse jamais 100%. "—" si F=0.
-        const accuracy = F > 0 ? Math.min(D, F) / F : null;
-        // Emoji comme le fichier (colonne R) : ⬇️ D<F, ⚠️ rupture fourn., 🔵 D>F, ✅ pile.
-        // Le % affiché est D/F (peut dépasser 100% pour signaler le sur-commande).
-        let accLabel = "—";
-        if (F > 0) {
-          const pctDF = Math.round((D / F) * 100);
-          if (D < F) accLabel = `⬇️ ${pctDF}%`;
-          else if (b.received < D) accLabel = `⚠️ ${pctDF}% (rupture fourn.)`;
-          else if (D > F) accLabel = `🔵 ${pctDF}%`;
-          else accLabel = "✅ 100%";
-        }
+        // Accuracy ligne = MIN(D,Plan)/Plan, plafonnée à 100%. "—" si Plan=0.
+        // Deux versions : SISSI (F, officiel) et JORDAN (E, forecast qui bouge).
+        const mkLabel = (Plan: number): string => {
+          if (Plan <= 0) return "—";
+          const pct = Math.round((D / Plan) * 100);
+          if (D < Plan) return `⬇️ ${pct}%`;
+          if (b.received < D) return `⚠️ ${pct}% (rupture)`;
+          if (D > Plan) return `🔵 ${pct}%`;
+          return "✅ 100%";
+        };
+        const accuracy = F > 0 ? Math.min(D, F) / F : null;   // vs Sissi
+        const accuracyJ = E > 0 ? Math.min(D, E) / E : null;  // vs Jordan
+        const accLabel = mkLabel(F);                           // Sissi
+        const accLabelJ = mkLabel(E);                          // Jordan
         return {
           ...b,
           refFR, name: od?.name || "", matched: !!refFR,
@@ -418,7 +419,8 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
           forecastJ: E, budgetFinal: F,
           diffQty: D - E,                                      // commandé - forecast Jordan
           budgetCmd: D * price, budgetForecast: E * price, budgetFin: F * price,
-          accuracy, accLabel,
+          accuracy, accLabel,          // vs Sissi
+          accuracyJ, accLabelJ,        // vs Jordan
         };
       });
       // Ne garde que les lignes avec DE L'ACTIVITÉ : au moins une valeur > 0
@@ -433,21 +435,23 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   const totals = useMemo(() => {
     if (!computed) return null;
     const t = { order: 0, received: 0, budgetOrder: 0, ruptQty: 0, ruptEuro: 0, nbNonCmd: 0,
-      forecast: 0, budgetFinal: 0, budgetForecastEur: 0, budgetFinEur: 0, accuracy: 0 };
+      forecast: 0, budgetFinal: 0, budgetForecastEur: 0, budgetFinEur: 0, accuracy: 0, accuracyJordan: 0 };
     // Accuracy globale du mois = SUM(MIN(Commandé, Planifié Sissi)) / SUM(Planifié Sissi),
     // sur TOUTES les réfs (pondéré par les quantités). = formule fichier (cellule S384).
     // L'accuracy PAR LIGNE, elle, est MIN(D,F)/F réf par réf (voir plus haut).
-    let sumNum = 0, sumF = 0;
+    let sumNum = 0, sumF = 0, sumNumJ = 0, sumE = 0;
     for (const r of computed) {
       t.order += r.orderQty; t.received += r.received; t.budgetOrder += r.budgetOrder;
       t.ruptQty += r.ruptQty; t.ruptEuro += r.ruptEuro;
       t.forecast += r.forecastJ; t.budgetFinal += r.budgetFinal;
       t.budgetForecastEur += r.budgetForecast; t.budgetFinEur += r.budgetFin;
       if (r.orderQty === 0) t.nbNonCmd++;
-      // Formule fichier : SUM(MIN(D,F)) / SUM(F).
+      // SISSI : SUM(MIN(D,F))/SUM(F).  JORDAN : SUM(MIN(D,E))/SUM(E).
       if (r.budgetFinal > 0) { sumNum += Math.min(r.orderQty, r.budgetFinal); sumF += r.budgetFinal; }
+      if (r.forecastJ > 0) { sumNumJ += Math.min(r.orderQty, r.forecastJ); sumE += r.forecastJ; }
     }
     t.accuracy = sumF > 0 ? sumNum / sumF : 0;
+    t.accuracyJordan = sumE > 0 ? sumNumJ / sumE : 0;
     return t;
   }, [computed]);
 
@@ -928,7 +932,8 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             ["Reçu", Math.round(totals.received).toLocaleString("fr-FR")],
             ["Budget commande €", Math.round(totals.budgetOrder).toLocaleString("fr-FR")],
             ["Rupture All. €", Math.round(totals.ruptEuro).toLocaleString("fr-FR")],
-            ["Accuracy", totals.budgetFinal > 0 ? Math.round(totals.accuracy * 100) + "%" : "—"],
+            ["Accuracy Sissi", totals.budgetFinal > 0 ? Math.round(totals.accuracy * 100) + "%" : "—"],
+            ["Accuracy Jordan", totals.forecast > 0 ? Math.round(totals.accuracyJordan * 100) + "%" : "—"],
             ["Réfs non commandées", totals.nbNonCmd],
           ].map(([label, val]) => (
             <div key={label as string} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", minWidth: 120 }}>
@@ -945,7 +950,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ position: "sticky", top: 0, background: C.bg }}>
                 <tr>
-                  {["Ref FR", "Article No.", "Désignation", "Forecast", "Commandé", "Reçu", "Rupture Qté", "Accuracy"].map((h) => (
+                  {["Ref FR", "Article No.", "Désignation", "Forecast", "Commandé", "Reçu", "Rupture Qté", "Acc. Jordan", "Acc. Sissi"].map((h) => (
                     <th key={h} style={{ textAlign: (h === "Désignation" || h === "Ref FR" || h === "Article No.") ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: C.muted, borderBottom: `1px solid ${C.border}` }}>{h}</th>
                   ))}
                 </tr>
@@ -960,6 +965,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.orderQty}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.received}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right", color: r.ruptQty < 0 ? C.red : C.text, fontWeight: r.ruptQty < 0 ? 700 : 400 }}>{r.ruptQty}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", whiteSpace: "nowrap", color: C.muted }}>{r.accLabelJ}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right", whiteSpace: "nowrap" }}>{r.accLabel}</td>
                   </tr>
                 ))}
