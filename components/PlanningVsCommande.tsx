@@ -117,7 +117,8 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   const [month, setMonth] = useState<string>(MONTHS[new Date().getMonth()]);
   const [matching, setMatching] = useState(false);
   const [order, setOrder] = useState<SourceFile | null>(null);
-  const [reception, setReception] = useState<SourceFile | null>(null);
+  const [reception, setReception] = useState<SourceFile | null>(null);   // 1re réception (garde le mapping)
+  const [receptionsExtra, setReceptionsExtra] = useState<SourceFile[]>([]); // RG supplémentaires (même format)
   const [forecastJ, setForecastJ] = useState<SourceFile | null>(null);
   const [forecastS, setForecastS] = useState<SourceFile | null>(null);
   const [orderMap, setOrderMap] = useState({ article: "", qty: "", price: "", name: "" });
@@ -218,6 +219,37 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     setSourceFromWb(kind, file.name, wb, sheets, best);
   };
 
+  // Réception : accepte PLUSIEURS fichiers RG (même format). Le 1er définit le mapping,
+  // les suivants s'ajoutent à receptionsExtra et leurs quantités se cumulent au calcul.
+  const onDropReceptions = async (files: FileList) => {
+    const arr = Array.from(files);
+    if (!arr.length) return;
+    const parsed: SourceFile[] = [];
+    for (const f of arr) {
+      const { wb, sheets } = await readWorkbook(f);
+      const sheet = pickBestSheet("reception", sheets);
+      const { headers, rows } = parseSheet(wb, sheet);
+      parsed.push({ name: f.name, headers, rows, wb, sheets, sheet });
+    }
+    // 1er fichier → reception principale (+ auto-map). Les autres → extra.
+    setReception(parsed[0]);
+    autoMap("reception", parsed[0].headers);
+    setReceptionsExtra(parsed.slice(1));
+    setComputed(null);
+  };
+  const addMoreReceptions = async (files: FileList) => {
+    const arr = Array.from(files);
+    const parsed: SourceFile[] = [];
+    for (const f of arr) {
+      const { wb, sheets } = await readWorkbook(f);
+      const sheet = pickBestSheet("reception", sheets);
+      const { headers, rows } = parseSheet(wb, sheet);
+      parsed.push({ name: f.name, headers, rows, wb, sheets, sheet });
+    }
+    setReceptionsExtra(prev => [...prev, ...parsed]);
+    setComputed(null);
+  };
+
   // Changer d'onglet sur une source déjà chargée (menu déroulant).
   const changeSheet = (kind: "order" | "reception" | "j" | "s", src: SourceFile, sheet: string) => {
     if (!src.wb) return;
@@ -231,13 +263,16 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     if (!order) return;
     setBusy(true);
     try {
-      // Réception : SOMME par article (plusieurs lots).
+      // Réception : SOMME par article (plusieurs lots ET plusieurs fichiers RG).
       const recByArticle: Record<string, number> = {};
-      if (reception && recMap.article && recMap.qty) {
-        for (const r of reception.rows) {
-          const art = String(r[recMap.article] ?? "").trim();
-          if (!art) continue;
-          recByArticle[art] = (recByArticle[art] || 0) + toNum(r[recMap.qty]);
+      if (recMap.article && recMap.qty) {
+        const allReceptions = [reception, ...receptionsExtra].filter(Boolean) as SourceFile[];
+        for (const src of allReceptions) {
+          for (const r of src.rows) {
+            const art = String(r[recMap.article] ?? "").trim();
+            if (!art) continue;
+            recByArticle[art] = (recByArticle[art] || 0) + toNum(r[recMap.qty]);
+          }
         }
       }
 
@@ -677,12 +712,33 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <MapSelect label="Désignation" headers={order.headers} value={orderMap.name} onChange={(v) => setOrderMap({ ...orderMap, name: v })} />
           </>
         )} />
-        <DropZone label="2. Réception (RG Wala)" src={reception} kind="reception" onFile={(f) => onDrop("reception", f)} mapUI={reception && (
-          <>
-            <MapSelect label="Article-No." headers={reception.headers} value={recMap.article} onChange={(v) => setRecMap({ ...recMap, article: v })} />
-            <MapSelect label="Qté reçue" headers={reception.headers} value={recMap.qty} onChange={(v) => setRecMap({ ...recMap, qty: v })} />
-          </>
-        )} />
+        {/* Réception : MULTI-fichiers RG (les quantités se cumulent) */}
+        <div style={{ background: C.white, border: `1.5px dashed ${reception ? C.green : C.border}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>2. Réception (RG Wala) — plusieurs OK</div>
+          <label style={{ display: "inline-block", padding: "8px 14px", background: C.blueSoft, color: C.blue, borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
+            {reception ? "Remplacer" : "📎 Choisir un ou plusieurs fichiers"}
+            <input type="file" accept=".xlsx,.xls,.xlsm" multiple style={{ display: "none" }}
+              onChange={(e) => { if (e.target.files?.length) onDropReceptions(e.target.files); }} />
+          </label>
+          {reception && (
+            <>
+              <label style={{ display: "inline-block", marginTop: 6, padding: "6px 12px", background: "#f0fdf4", color: C.green, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", border: `1px solid ${C.green}44` }}>
+                ➕ Ajouter d'autres RG
+                <input type="file" accept=".xlsx,.xls,.xlsm" multiple style={{ display: "none" }}
+                  onChange={(e) => { if (e.target.files?.length) addMoreReceptions(e.target.files); }} />
+              </label>
+              <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>
+                {[reception, ...receptionsExtra].filter(Boolean).map((r, i) => (
+                  <div key={i}>• {r!.name} <span style={{ color: "#94a3b8" }}>({r!.rows.length} l.)</span></div>
+                ))}
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <MapSelect label="Article-No." headers={reception.headers} value={recMap.article} onChange={(v) => setRecMap({ ...recMap, article: v })} />
+                <MapSelect label="Qté reçue" headers={reception.headers} value={recMap.qty} onChange={(v) => setRecMap({ ...recMap, qty: v })} />
+              </div>
+            </>
+          )}
+        </div>
         <DropZone label="3. Forecast Jordan (optionnel)" src={forecastJ} kind="j" onFile={(f) => onDropForecast("j", f)} mapUI={forecastJ && (
           <>
             <MapSelect label="Ref FR" headers={forecastJ.headers} value={fjMap.ref} onChange={(v) => setFjMap({ ...fjMap, ref: v })} />
