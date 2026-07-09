@@ -151,17 +151,18 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   // Calcule les totaux (PlanningMonth) à partir d'un tableau de lignes détail — même formule partout.
   const totalsFromRows = (monthName: string, rows: any[]): PlanningMonth => {
     let order = 0, received = 0, budgetOrder = 0, ruptEuro = 0, forecast = 0, budgetSissi = 0,
-      budgetSissiEur = 0, budgetForecastEur = 0, nbNonCmd = 0, sumNum = 0, sumF = 0;
+      budgetSissiEur = 0, budgetForecastEur = 0, nbNonCmd = 0, sumNum = 0, sumF = 0, sumNumJ = 0, sumE = 0;
     for (const r of rows) {
       order += r.orderQty || 0; received += r.received || 0; budgetOrder += r.budgetOrder || 0;
       ruptEuro += r.ruptEuro || 0; forecast += r.forecastJ || 0; budgetSissi += r.budgetFinal || 0;
       budgetSissiEur += r.budgetFin || 0; budgetForecastEur += r.budgetForecast || 0;
       if ((r.orderQty || 0) === 0) nbNonCmd++;
       if ((r.budgetFinal || 0) > 0) { sumNum += Math.min(r.orderQty || 0, r.budgetFinal); sumF += r.budgetFinal; }
+      if ((r.forecastJ || 0) > 0) { sumNumJ += Math.min(r.orderQty || 0, r.forecastJ); sumE += r.forecastJ; }
     }
     return {
       month: monthName, forecast, order, received, budgetOrder, ruptEuro,
-      accuracy: sumF > 0 ? sumNum / sumF : 0, nbNonCmd,
+      accuracy: sumF > 0 ? sumNum / sumF : 0, accuracyJordan: sumE > 0 ? sumNumJ / sumE : 0, nbNonCmd,
       budgetSissi, budgetSissiEur, budgetForecastEur,
       varBudgetQty: order - budgetSissi, varBudgetEur: budgetOrder - budgetSissiEur,
     };
@@ -194,7 +195,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     try {
       const m: PlanningMonth = {
         month, forecast: totals.forecast, order: totals.order, received: totals.received,
-        budgetOrder: totals.budgetOrder, ruptEuro: totals.ruptEuro, accuracy: totals.accuracy, nbNonCmd: totals.nbNonCmd,
+        budgetOrder: totals.budgetOrder, ruptEuro: totals.ruptEuro, accuracy: totals.accuracy, accuracyJordan: totals.accuracyJordan, nbNonCmd: totals.nbNonCmd,
         budgetSissi: totals.budgetFinal, budgetSissiEur: totals.budgetFinEur, budgetForecastEur: totals.budgetForecastEur,
         varBudgetQty: totals.order - totals.budgetFinal, varBudgetEur: totals.budgetOrder - totals.budgetFinEur,
       };
@@ -569,22 +570,22 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
 
       // ── Bloc 1 : Synthèse mensuelle ──
       wsS.getCell(r, 1).value = `SYNTHÈSE ${YEAR}`; wsS.getCell(r, 1).font = { bold: true, size: 14 }; r += 1;
-      const synHdr = ["MOIS","PLANIF JORDAN","PLANIF SISSI","COMMANDÉ","REÇU","BUDGET SISSI €","BUDGET CMD €","VAR BUDGET €","RUPTURE ALL €","ACCURACY %"];
+      const synHdr = ["MOIS","PLANIF JORDAN","PLANIF SISSI","COMMANDÉ","REÇU","BUDGET SISSI €","BUDGET CMD €","VAR BUDGET €","RUPTURE ALL €","ACC. JORDAN","ACC. SISSI"];
       headerRow(r, synHdr, accent); const synHeadRow = r; r += 1;
       for (const m of orderedMonths) {
         const s = savedMonths.find(x => x.month === m)!;
         const varEur = s.varBudgetEur ?? (s.budgetOrder - (s.budgetSissiEur ?? 0));
         const vals = [m, Math.round(s.forecast ?? 0), Math.round(s.budgetSissi ?? 0), Math.round(s.order), Math.round(s.received),
-          Math.round(s.budgetSissiEur ?? 0), Math.round(s.budgetOrder), Math.round(varEur), Math.round(s.ruptEuro), s.accuracy];
+          Math.round(s.budgetSissiEur ?? 0), Math.round(s.budgetOrder), Math.round(varEur), Math.round(s.ruptEuro), s.accuracyJordan ?? null, s.accuracy];
         const row = wsS.getRow(r);
         vals.forEach((v, i) => { const c = row.getCell(i + 1); c.value = v as any; c.border = allB; });
         [6,7,8,9].forEach(ci => row.getCell(ci).numFmt = eur);
-        row.getCell(10).numFmt = pct;
+        row.getCell(10).numFmt = pct; row.getCell(11).numFmt = pct;
         if ((r - synHeadRow) % 2 === 0) row.eachCell((c: any) => { if (!c.fill) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra } }; });
         r += 1;
       }
       // largeurs
-      [14,14,13,12,12,16,15,15,15,12].forEach((w, i) => { wsS.getColumn(i + 1).width = Math.max(wsS.getColumn(i + 1).width || 0, w); });
+      [14,14,13,12,12,16,15,15,15,12,12].forEach((w, i) => { wsS.getColumn(i + 1).width = Math.max(wsS.getColumn(i + 1).width || 0, w); });
       r += 2; // saut
 
       // ── Bloc 2 : Accuracy 25 Best Sellers × mois ──
@@ -993,7 +994,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ background: C.blueSoft }}>
                 <tr>
-                  {["Mois", "Planif Jordan", "Planif Sissi", "Commandé", "Reçu", "Budget Sissi €", "Budget cmd €", "Var budget €", "Rupture All. €", "Accuracy"].map((h) => (
+                  {["Mois", "Planif Jordan", "Planif Sissi", "Commandé", "Reçu", "Budget Sissi €", "Budget cmd €", "Var budget €", "Rupture All. €", "Acc. Jordan", "Acc. Sissi"].map((h) => (
                     <th key={h} style={{ textAlign: h === "Mois" ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: C.blue, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -1013,6 +1014,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
                       <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.budgetOrder).toLocaleString("fr-FR")}</td>
                       <td style={{ padding: "6px 12px", textAlign: "right", color: varEur < 0 ? C.red : C.text, fontWeight: 700 }}>{Math.round(varEur).toLocaleString("fr-FR")}</td>
                       <td style={{ padding: "6px 12px", textAlign: "right", color: s.ruptEuro < 0 ? C.red : C.text }}>{Math.round(s.ruptEuro).toLocaleString("fr-FR")}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "right", color: C.muted }}>{s.accuracyJordan != null ? Math.round(s.accuracyJordan * 100) + "%" : "—"}</td>
                       <td style={{ padding: "6px 12px", textAlign: "right", fontWeight: 700 }}>{Math.round(s.accuracy * 100)}%</td>
                     </tr>
                   );
