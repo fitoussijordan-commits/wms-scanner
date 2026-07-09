@@ -966,6 +966,12 @@ export async function saveModelOverrides(overrides: Record<string, string>): Pro
 export interface PlanningMonth {
   month: string; forecast: number; order: number; received: number;
   budgetOrder: number; ruptEuro: number; accuracy: number; nbNonCmd: number;
+  // Enrichissements : planification Sissi (qté + €) et variances vs commandé.
+  budgetSissi?: number;        // qté planifiée Sissi (F)
+  budgetSissiEur?: number;     // budget Sissi en € (F * coût)
+  budgetForecastEur?: number;  // budget forecast Jordan en €
+  varBudgetQty?: number;       // commandé - Sissi (qté)
+  varBudgetEur?: number;       // budget commandé - budget Sissi (€)
 }
 
 export async function loadPlanningSynthese(year: number): Promise<PlanningMonth[]> {

@@ -83,6 +83,8 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   const [reception, setReception] = useState<SourceFile | null>(null);
   const [forecastJ, setForecastJ] = useState<SourceFile | null>(null);
   const [forecastS, setForecastS] = useState<SourceFile | null>(null);
+  const [bestSellers, setBestSellers] = useState<SourceFile | null>(null);
+  const [bsMap, setBsMap] = useState({ ref: "" });
   const [orderMap, setOrderMap] = useState({ article: "", qty: "", price: "", name: "" });
   const [recMap, setRecMap] = useState({ article: "", qty: "" });
   // Forecast : clé Ref FR (ou code Wala) + colonne du mois choisi.
@@ -103,6 +105,8 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       const m: PlanningMonth = {
         month, forecast: totals.forecast, order: totals.order, received: totals.received,
         budgetOrder: totals.budgetOrder, ruptEuro: totals.ruptEuro, accuracy: totals.accuracy, nbNonCmd: totals.nbNonCmd,
+        budgetSissi: totals.budgetFinal, budgetSissiEur: totals.budgetFinEur, budgetForecastEur: totals.budgetForecastEur,
+        varBudgetQty: totals.order - totals.budgetFinal, varBudgetEur: totals.budgetOrder - totals.budgetFinEur,
       };
       await savePlanningMonth(YEAR, m);
       setSavedMonths(await loadPlanningSynthese(YEAR));
@@ -125,7 +129,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   };
 
   // Applique le mapping auto d'une source selon son type, sur les en-têtes donnés.
-  const autoMap = (kind: "order" | "reception" | "j" | "s", headers: string[]) => {
+  const autoMap = (kind: "order" | "reception" | "j" | "s" | "bs", headers: string[]) => {
     if (kind === "order") setOrderMap({
       article: guessCol(headers, ["Article No.", "Article-No.", "ArticleNo", "articleno"]),
       qty: guessCol(headers, ["Order Qty.", "Order Qty", "OrderQty", "quantité commandée", "qty"]),
@@ -138,38 +142,41 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     });
     else if (kind === "j") setFjMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "default_code"]), monthCol: guessMonthCol(headers, month) });
     else if (kind === "s") setFsMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "default_code"]), monthCol: guessMonthCol(headers, month) });
+    else if (kind === "bs") setBsMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "Ref", "default_code"]) || headers[0] || "" });
   };
 
   // Choisit automatiquement la meilleure feuille selon le type (nom d'onglet).
-  const pickBestSheet = (kind: "order" | "reception" | "j" | "s", sheets: string[]): string => {
+  const pickBestSheet = (kind: "order" | "reception" | "j" | "s" | "bs", sheets: string[]): string => {
     const rx: Record<string, RegExp> = {
       j: /pr[ée]vision|jordan|forecast/i,
       s: /budget|sissi|planning budget/i,
       reception: /rg|wala|r[ée]ception|sheet/i,
       order: /order|commande|tabelle/i,
+      bs: /best.?seller|top|meilleur/i,
     };
     return sheets.find(s => rx[kind].test(s)) || sheets[0];
   };
 
-  const setSourceFromWb = (kind: "order" | "reception" | "j" | "s", name: string, wb: any, sheets: string[], sheet: string) => {
+  const setSourceFromWb = (kind: "order" | "reception" | "j" | "s" | "bs", name: string, wb: any, sheets: string[], sheet: string) => {
     const { headers, rows } = parseSheet(wb, sheet);
     const sf: SourceFile = { name, headers, rows, wb, sheets, sheet };
     if (kind === "order") setOrder(sf);
     else if (kind === "reception") setReception(sf);
     else if (kind === "j") setForecastJ(sf);
-    else setForecastS(sf);
+    else if (kind === "s") setForecastS(sf);
+    else setBestSellers(sf);
     autoMap(kind, headers);
     setComputed(null);
   };
 
-  const onDropAny = async (kind: "order" | "reception" | "j" | "s", file: File) => {
+  const onDropAny = async (kind: "order" | "reception" | "j" | "s" | "bs", file: File) => {
     const { wb, sheets } = await readWorkbook(file);
     const best = pickBestSheet(kind, sheets);
     setSourceFromWb(kind, file.name, wb, sheets, best);
   };
 
   // Changer d'onglet sur une source déjà chargée (menu déroulant).
-  const changeSheet = (kind: "order" | "reception" | "j" | "s", src: SourceFile, sheet: string) => {
+  const changeSheet = (kind: "order" | "reception" | "j" | "s" | "bs", src: SourceFile, sheet: string) => {
     if (!src.wb) return;
     setSourceFromWb(kind, src.name, src.wb, src.sheets || [], sheet);
   };
@@ -205,16 +212,21 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
           return { article, nameSrc, orderQty, price, budgetOrder, received, ruptQty, ruptEuro };
         });
 
-      // Matching Odoo : code fournisseur Wala (article) → Ref FR (default_code) + désignation Odoo.
+      // Matching Odoo : code fournisseur Wala (article) → Ref FR + désignation + prix d'achat Odoo.
       let odooMap: Record<string, { defaultCode: string; name: string }> = {};
+      let priceMap: Record<string, number> = {};
       if (session) {
         setMatching(true);
         try {
           const codes = Array.from(new Set(base.map((b) => b.article)));
-          const m = await odoo.matchWalaArticles(session, codes);
+          const [m, prices] = await Promise.all([
+            odoo.matchWalaArticles(session, codes),
+            odoo.getWalaPurchasePrices(session, codes),
+          ]);
           for (const [code, v] of Object.entries(m)) {
             odooMap[code] = { defaultCode: (v as any).defaultCode || "", name: (v as any).name || "" };
           }
+          priceMap = prices;
         } catch { /* si le matching échoue, on garde les données brutes */ }
         setMatching(false);
       }
@@ -244,7 +256,11 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         const D = b.orderQty;                                  // commandé
         const E = lookForecast(fjIdx, refFR, b.article);       // forecast Jordan
         const F = lookForecast(fsIdx, refFR, b.article);       // budget Sissi (planning final)
-        const price = b.price;
+        // Prix d'achat = coût Odoo (standard_price) en priorité, sinon prix du fichier.
+        const price = priceMap[b.article] != null && priceMap[b.article] > 0 ? priceMap[b.article] : b.price;
+        // Recalcule budget et rupture € avec le prix Odoo.
+        const budgetOrder = D * price;
+        const ruptEuro = b.ruptQty * price;
         // Accuracy = min(Commandé, Forecast Jordan) / Forecast Jordan, cappé à 100%.
         // Dénominateur = E (Planning Jordan). "—" si E=0. (Sissi = comparaison à part.)
         const accRaw = E > 0 ? Math.min(D, E) / E : null;
@@ -261,7 +277,9 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         return {
           ...b,
           refFR, name: od?.name || "", matched: !!refFR,
-          forecastJ: E, budgetFinal: F, price,
+          price, budgetOrder, ruptEuro,                        // ← recalculés avec le coût Odoo
+          hasOdooPrice: priceMap[b.article] != null && priceMap[b.article] > 0,
+          forecastJ: E, budgetFinal: F,
           diffQty: D - E,                                      // commandé - forecast Jordan
           budgetCmd: D * price, budgetForecast: E * price, budgetFin: F * price,
           accuracy, accLabel,
@@ -290,6 +308,13 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     t.accuracy = sumE > 0 ? sumMinDE / sumE : 0;
     return t;
   }, [computed]);
+
+  // Top produits = lignes calculées dont la Ref FR est dans le fichier Best Sellers.
+  const topProducts = useMemo(() => {
+    if (!computed || !bestSellers || !bsMap.ref) return [];
+    const wanted = new Set(bestSellers.rows.map(r => String(r[bsMap.ref] ?? "").trim()).filter(Boolean));
+    return computed.filter(r => r.refFR && wanted.has(String(r.refFR).trim()));
+  }, [computed, bestSellers, bsMap]);
 
   const exportXlsx = async () => {
     if (!computed || !totals) return;
@@ -391,7 +416,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     URL.revokeObjectURL(url);
   };
 
-  const DropZone = ({ label, src, kind, onFile, mapUI }: { label: string; src: SourceFile | null; kind: "order" | "reception" | "j" | "s"; onFile: (f: File) => void; mapUI: React.ReactNode }) => (
+  const DropZone = ({ label, src, kind, onFile, mapUI }: { label: string; src: SourceFile | null; kind: "order" | "reception" | "j" | "s" | "bs"; onFile: (f: File) => void; mapUI: React.ReactNode }) => (
     <div style={{ background: C.white, border: `1.5px dashed ${src ? C.green : C.border}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column" }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>{label}</div>
       <label style={{ display: "inline-block", padding: "8px 14px", background: C.blueSoft, color: C.blue, borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
@@ -465,6 +490,9 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <MapSelect label="Ref FR" headers={forecastS.headers} value={fsMap.ref} onChange={(v) => setFsMap({ ...fsMap, ref: v })} />
             <MapSelect label={`Colonne mois (${month})`} headers={forecastS.headers} value={fsMap.monthCol} onChange={(v) => setFsMap({ ...fsMap, monthCol: v })} />
           </>
+        )} />
+        <DropZone label="5. Best Sellers (optionnel)" src={bestSellers} kind="bs" onFile={(f) => onDropAny("bs", f)} mapUI={bestSellers && (
+          <MapSelect label="Ref FR" headers={bestSellers.headers} value={bsMap.ref} onChange={(v) => setBsMap({ ref: v })} />
         )} />
       </div>
 
@@ -542,26 +570,59 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ background: C.blueSoft }}>
                 <tr>
-                  {["Mois", "Forecast", "Commandé", "Reçu", "Budget cmd €", "Rupture All. €", "Accuracy"].map((h) => (
-                    <th key={h} style={{ textAlign: h === "Mois" ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: C.blue, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                  {["Mois", "Planif Sissi", "Commandé", "Reçu", "Budget Sissi €", "Budget cmd €", "Var budget €", "Rupture All. €", "Accuracy"].map((h) => (
+                    <th key={h} style={{ textAlign: h === "Mois" ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: C.blue, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {MONTHS.filter(m => savedMonths.some(s => s.month === m)).map((m) => {
                   const s = savedMonths.find(x => x.month === m)!;
+                  const varEur = s.varBudgetEur ?? (s.budgetOrder - (s.budgetSissiEur ?? 0));
                   return (
                     <tr key={m} style={{ borderBottom: `1px solid ${C.bg}` }}>
                       <td style={{ padding: "6px 12px", fontWeight: 700 }}>{m}</td>
-                      <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.forecast).toLocaleString("fr-FR")}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.budgetSissi ?? 0).toLocaleString("fr-FR")}</td>
                       <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.order).toLocaleString("fr-FR")}</td>
                       <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.received).toLocaleString("fr-FR")}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.budgetSissiEur ?? 0).toLocaleString("fr-FR")}</td>
                       <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.budgetOrder).toLocaleString("fr-FR")}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "right", color: varEur < 0 ? C.red : C.text, fontWeight: 700 }}>{Math.round(varEur).toLocaleString("fr-FR")}</td>
                       <td style={{ padding: "6px 12px", textAlign: "right", color: s.ruptEuro < 0 ? C.red : C.text }}>{Math.round(s.ruptEuro).toLocaleString("fr-FR")}</td>
                       <td style={{ padding: "6px 12px", textAlign: "right", fontWeight: 700 }}>{Math.round(s.accuracy * 100)}%</td>
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Top produits (Best Sellers) + leur accuracy pour le mois ── */}
+      {topProducts.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 8 }}>⭐ Top produits — accuracy {month}</div>
+          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead style={{ background: "#fef9c3" }}>
+                <tr>
+                  {["Ref FR", "Désignation", "Forecast", "Commandé", "Reçu", "Accuracy"].map((h) => (
+                    <th key={h} style={{ textAlign: (h === "Ref FR" || h === "Désignation") ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: "#854d0e", borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {topProducts.map((r, i) => (
+                  <tr key={i} style={{ borderBottom: `1px solid ${C.bg}` }}>
+                    <td style={{ padding: "6px 12px", fontFamily: "monospace", fontWeight: 700 }}>{r.refFR}</td>
+                    <td style={{ padding: "6px 12px", color: C.muted, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.forecastJ ? Math.round(r.forecastJ).toLocaleString("fr-FR") : "·"}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.orderQty}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.received}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", whiteSpace: "nowrap", fontWeight: 700 }}>{r.accLabel}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

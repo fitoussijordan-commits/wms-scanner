@@ -3462,6 +3462,41 @@ export async function getProductsByCodePrefix(session: OdooSession, prefix: stri
   return (products || []).map((p: any) => p.default_code as string).filter(Boolean);
 }
 
+/**
+ * Récupère le prix d'achat (standard_price = coût) Odoo par code fournisseur Wala.
+ * Chaîne : code Wala (product.supplierinfo.product_code) → product.template → standard_price.
+ * Renvoie { [codeWala]: coût }.
+ */
+export async function getWalaPurchasePrices(session: OdooSession, articleCodes: string[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  const codes = Array.from(new Set(articleCodes.map(c => String(c).trim()).filter(Boolean)));
+  if (!codes.length) return out;
+  // 1. supplierinfo : code Wala → template
+  const sis = await searchRead(
+    session, M("MODEL_PRODUCT_SUPPLIER"),
+    [["product_code", "in", codes]],
+    ["product_code", "product_tmpl_id", "product_id"], 0
+  );
+  const tmplByCode: Record<string, number> = {};
+  const tmplIds = new Set<number>();
+  for (const si of sis) {
+    const code = String(si.product_code || "").trim();
+    const tid = Array.isArray(si.product_tmpl_id) ? si.product_tmpl_id[0] : null;
+    if (code && tid) { tmplByCode[code] = tid; tmplIds.add(tid); }
+  }
+  if (!tmplIds.size) return out;
+  // 2. templates → standard_price
+  const tmpls = await searchRead(
+    session, M("MODEL_PRODUCT_TEMPLATE"),
+    [["id", "in", Array.from(tmplIds)]],
+    ["id", "standard_price"], 0
+  );
+  const priceByTmpl: Record<number, number> = {};
+  for (const t of tmpls) priceByTmpl[t.id] = Number(t.standard_price) || 0;
+  for (const [code, tid] of Object.entries(tmplByCode)) out[code] = priceByTmpl[tid] ?? 0;
+  return out;
+}
+
 /** true si un default_code (référence interne) existe déjà sur un produit. */
 export async function productCodeExists(session: OdooSession, code: string): Promise<boolean> {
   const c = code.trim();
