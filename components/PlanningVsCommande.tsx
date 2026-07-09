@@ -302,17 +302,17 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         // Recalcule budget et rupture € avec le prix Odoo.
         const budgetOrder = D * price;
         const ruptEuro = b.ruptQty * price;
-        // Accuracy = min(Commandé, Forecast Jordan) / Forecast Jordan, cappé à 100%.
-        // Dénominateur = E (Planning Jordan). "—" si E=0. (Sissi = comparaison à part.)
-        const accRaw = E > 0 ? Math.min(D, E) / E : null;
-        const accuracy = accRaw == null ? null : Math.min(accRaw, 1);
-        // Emoji : ⬇️ si D<E, ⚠️ si reçu<commandé (rupture), 🔵 si D>E, ✅ si =.
+        // Accuracy vs Budget Sissi (F, comme le fichier officiel), AVEC pénalité du
+        // dépassement : accuracy = 1 - |Commandé - Sissi| / Sissi (planchée à 0).
+        // → commander 50% OU 150% du budget donne tous deux 50%. "—" si F=0.
+        const accuracy = F > 0 ? Math.max(0, 1 - Math.abs(D - F) / F) : null;
+        // Emoji : ⬇️ sous-commandé, 🔵 sur-commandé (pénalisé), ⚠️ rupture fourn., ✅ pile.
         let accLabel = "—";
-        if (E > 0) {
-          const pct = Math.round((D / E) * 100);
-          if (D < E) accLabel = `⬇️ ${pct}%`;
+        if (F > 0) {
+          const pct = Math.round((accuracy as number) * 100);
+          if (D < F) accLabel = `⬇️ ${pct}%`;
+          else if (D > F) accLabel = `🔵 ${pct}% (sur-cmd)`;
           else if (b.received < D) accLabel = `⚠️ ${pct}% (rupture)`;
-          else if (D > E) accLabel = `🔵 ${pct}%`;
           else accLabel = "✅ 100%";
         }
         return {
@@ -336,17 +336,18 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     if (!computed) return null;
     const t = { order: 0, received: 0, budgetOrder: 0, ruptQty: 0, ruptEuro: 0, nbNonCmd: 0,
       forecast: 0, budgetFinal: 0, budgetForecastEur: 0, budgetFinEur: 0, accuracy: 0 };
-    // Accuracy globale = SOMME(min(Commandé, Forecast Jordan)) / SOMME(Forecast Jordan).
-    let sumMinDE = 0, sumE = 0;
+    // Accuracy globale vs Sissi, avec pénalité dépassement :
+    // SOMME(F - |D - F|) / SOMME(F), planchée à 0. (F = Budget Sissi)
+    let sumNum = 0, sumF = 0;
     for (const r of computed) {
       t.order += r.orderQty; t.received += r.received; t.budgetOrder += r.budgetOrder;
       t.ruptQty += r.ruptQty; t.ruptEuro += r.ruptEuro;
       t.forecast += r.forecastJ; t.budgetFinal += r.budgetFinal;
       t.budgetForecastEur += r.budgetForecast; t.budgetFinEur += r.budgetFin;
       if (r.orderQty === 0) t.nbNonCmd++;
-      if (r.forecastJ > 0) { sumMinDE += Math.min(r.orderQty, r.forecastJ); sumE += r.forecastJ; }
+      if (r.budgetFinal > 0) { sumNum += Math.max(0, r.budgetFinal - Math.abs(r.orderQty - r.budgetFinal)); sumF += r.budgetFinal; }
     }
-    t.accuracy = sumE > 0 ? sumMinDE / sumE : 0;
+    t.accuracy = sumF > 0 ? sumNum / sumF : 0;
     return t;
   }, [computed]);
 
@@ -364,17 +365,18 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   // Accuracy PAR GAMME : sur TOUTES les lignes calculées, regroupées par gamme
   // (gamme via la table Best Sellers ; les produits hors liste vont dans "Autres").
   const accuracyByGamme = useMemo(() => {
-    if (!computed) return [] as { gamme: string; forecast: number; order: number; received: number; accuracy: number; nb: number }[];
+    if (!computed) return [] as { gamme: string; forecast: number; order: number; received: number; sissi: number; accuracy: number; nb: number }[];
     const gammeByRef = new Map(BEST_SELLERS.map(b => [b.ref, b.gamme]));
-    const acc: Record<string, { forecast: number; order: number; received: number; sumMinDE: number; sumE: number; nb: number }> = {};
+    const acc: Record<string, { forecast: number; order: number; received: number; sumNum: number; sumF: number; nb: number }> = {};
     for (const r of computed) {
       const g = gammeByRef.get(String(r.refFR).trim()) || "Autres";
-      (acc[g] ||= { forecast: 0, order: 0, received: 0, sumMinDE: 0, sumE: 0, nb: 0 });
+      (acc[g] ||= { forecast: 0, order: 0, received: 0, sumNum: 0, sumF: 0, nb: 0 });
       acc[g].forecast += r.forecastJ; acc[g].order += r.orderQty; acc[g].received += r.received; acc[g].nb++;
-      if (r.forecastJ > 0) { acc[g].sumMinDE += Math.min(r.orderQty, r.forecastJ); acc[g].sumE += r.forecastJ; }
+      // Accuracy vs Sissi (budgetFinal), avec pénalité dépassement.
+      if (r.budgetFinal > 0) { acc[g].sumNum += Math.max(0, r.budgetFinal - Math.abs(r.orderQty - r.budgetFinal)); acc[g].sumF += r.budgetFinal; }
     }
     return Object.entries(acc)
-      .map(([gamme, v]) => ({ gamme, forecast: v.forecast, order: v.order, received: v.received, accuracy: v.sumE > 0 ? v.sumMinDE / v.sumE : 0, nb: v.nb }))
+      .map(([gamme, v]) => ({ gamme, forecast: v.forecast, order: v.order, received: v.received, sissi: v.sumF, accuracy: v.sumF > 0 ? v.sumNum / v.sumF : 0, nb: v.nb }))
       .sort((a, b) => b.order - a.order);
   }, [computed]);
 
@@ -628,7 +630,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             ["Reçu", Math.round(totals.received).toLocaleString("fr-FR")],
             ["Budget commande €", Math.round(totals.budgetOrder).toLocaleString("fr-FR")],
             ["Rupture All. €", Math.round(totals.ruptEuro).toLocaleString("fr-FR")],
-            ["Accuracy", totals.forecast > 0 ? Math.round(totals.accuracy * 100) + "%" : "—"],
+            ["Accuracy", totals.budgetFinal > 0 ? Math.round(totals.accuracy * 100) + "%" : "—"],
             ["Réfs non commandées", totals.nbNonCmd],
           ].map(([label, val]) => (
             <div key={label as string} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", minWidth: 120 }}>
@@ -727,7 +729,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(g.forecast).toLocaleString("fr-FR")}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(g.order).toLocaleString("fr-FR")}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(g.received).toLocaleString("fr-FR")}</td>
-                    <td style={{ padding: "6px 12px", textAlign: "right", fontWeight: 700, color: g.forecast > 0 ? C.text : C.muted }}>{g.forecast > 0 ? Math.round(g.accuracy * 100) + "%" : "—"}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", fontWeight: 700, color: g.sissi > 0 ? C.text : C.muted }}>{g.sissi > 0 ? Math.round(g.accuracy * 100) + "%" : "—"}</td>
                   </tr>
                 ))}
               </tbody>
