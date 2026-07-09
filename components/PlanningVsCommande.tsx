@@ -24,21 +24,28 @@ async function loadXLSX(): Promise<any> {
   return (window as any).XLSX;
 }
 
-async function readSheet(file: File): Promise<{ headers: string[]; rows: any[] }> {
+// Lit le workbook une fois → renvoie l'objet wb + la liste des feuilles.
+async function readWorkbook(file: File): Promise<{ wb: any; sheets: string[] }> {
   const XLSX = await loadXLSX();
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array" });
-  const ws = wb.Sheets[wb.SheetNames[0]];
+  return { wb, sheets: wb.SheetNames as string[] };
+}
+
+// Extrait { headers, rows } d'une feuille donnée d'un workbook déjà lu.
+function parseSheet(wb: any, sheetName: string): { headers: string[]; rows: any[] } {
+  const XLSX = (window as any).XLSX;
+  const ws = wb.Sheets[sheetName];
   const arr: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
   let headerIdx = 0;
   for (let i = 0; i < Math.min(arr.length, 10); i++) {
-    const nonEmpty = arr[i].filter((c) => String(c).trim()).length;
+    const nonEmpty = arr[i].filter((c: any) => String(c).trim()).length;
     if (nonEmpty >= 3) { headerIdx = i; break; }
   }
-  const headers = arr[headerIdx].map((h, i) => String(h).trim() || `Col${i + 1}`);
+  const headers = (arr[headerIdx] || []).map((h: any, i: number) => String(h).trim() || `Col${i + 1}`);
   const rows = arr.slice(headerIdx + 1).map((r) => {
     const o: any = {};
-    headers.forEach((h, i) => { o[h] = r[i]; });
+    headers.forEach((h: string, i: number) => { o[h] = r[i]; });
     return o;
   });
   return { headers, rows };
@@ -60,7 +67,7 @@ const toNum = (v: any) => {
   return isNaN(n) ? 0 : n;
 };
 
-interface SourceFile { name: string; headers: string[]; rows: any[]; }
+interface SourceFile { name: string; headers: string[]; rows: any[]; wb?: any; sheets?: string[]; sheet?: string; }
 
 const C = {
   bg: "#f8fafc", white: "#fff", text: "#0f172a", muted: "#64748b", border: "#e2e8f0",
@@ -117,38 +124,58 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     return "";
   };
 
-  const onDropForecast = async (which: "j" | "s", file: File) => {
-    const { headers, rows } = await readSheet(file);
-    const sf = { name: file.name, headers, rows };
-    if (which === "j") {
-      setForecastJ(sf);
-      setFjMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "default_code"]), monthCol: guessMonthCol(headers, month) });
-    } else {
-      setForecastS(sf);
-      setFsMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "default_code"]), monthCol: guessMonthCol(headers, month) });
-    }
+  // Applique le mapping auto d'une source selon son type, sur les en-têtes donnés.
+  const autoMap = (kind: "order" | "reception" | "j" | "s", headers: string[]) => {
+    if (kind === "order") setOrderMap({
+      article: guessCol(headers, ["Article No.", "Article-No.", "ArticleNo", "articleno"]),
+      qty: guessCol(headers, ["Order Qty.", "Order Qty", "OrderQty", "quantité commandée", "qty"]),
+      price: guessCol(headers, ["Gross Price", "Prix", "Price", "prixcommande"]),
+      name: guessCol(headers, ["Product Name French", "Product Name English", "Désignation", "Description"]),
+    });
+    else if (kind === "reception") setRecMap({
+      article: guessCol(headers, ["Article-No.", "Article No.", "ArticleNo", "articleno"]),
+      qty: guessCol(headers, ["Quantity", "Qty", "quantité", "reçu"]),
+    });
+    else if (kind === "j") setFjMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "default_code"]), monthCol: guessMonthCol(headers, month) });
+    else if (kind === "s") setFsMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "default_code"]), monthCol: guessMonthCol(headers, month) });
+  };
+
+  // Choisit automatiquement la meilleure feuille selon le type (nom d'onglet).
+  const pickBestSheet = (kind: "order" | "reception" | "j" | "s", sheets: string[]): string => {
+    const rx: Record<string, RegExp> = {
+      j: /pr[ée]vision|jordan|forecast/i,
+      s: /budget|sissi|planning budget/i,
+      reception: /rg|wala|r[ée]ception|sheet/i,
+      order: /order|commande|tabelle/i,
+    };
+    return sheets.find(s => rx[kind].test(s)) || sheets[0];
+  };
+
+  const setSourceFromWb = (kind: "order" | "reception" | "j" | "s", name: string, wb: any, sheets: string[], sheet: string) => {
+    const { headers, rows } = parseSheet(wb, sheet);
+    const sf: SourceFile = { name, headers, rows, wb, sheets, sheet };
+    if (kind === "order") setOrder(sf);
+    else if (kind === "reception") setReception(sf);
+    else if (kind === "j") setForecastJ(sf);
+    else setForecastS(sf);
+    autoMap(kind, headers);
     setComputed(null);
   };
 
-  const onDrop = async (which: "order" | "reception", file: File) => {
-    const { headers, rows } = await readSheet(file);
-    if (which === "order") {
-      setOrder({ name: file.name, headers, rows });
-      setOrderMap({
-        article: guessCol(headers, ["Article No.", "Article-No.", "ArticleNo", "articleno"]),
-        qty: guessCol(headers, ["Order Qty.", "Order Qty", "OrderQty", "quantité commandée", "qty"]),
-        price: guessCol(headers, ["Gross Price", "Prix", "Price", "prixcommande"]),
-        name: guessCol(headers, ["Product Name French", "Product Name English", "Désignation", "Description"]),
-      });
-    } else {
-      setReception({ name: file.name, headers, rows });
-      setRecMap({
-        article: guessCol(headers, ["Article-No.", "Article No.", "ArticleNo", "articleno"]),
-        qty: guessCol(headers, ["Quantity", "Qty", "quantité", "reçu"]),
-      });
-    }
-    setComputed(null);
+  const onDropAny = async (kind: "order" | "reception" | "j" | "s", file: File) => {
+    const { wb, sheets } = await readWorkbook(file);
+    const best = pickBestSheet(kind, sheets);
+    setSourceFromWb(kind, file.name, wb, sheets, best);
   };
+
+  // Changer d'onglet sur une source déjà chargée (menu déroulant).
+  const changeSheet = (kind: "order" | "reception" | "j" | "s", src: SourceFile, sheet: string) => {
+    if (!src.wb) return;
+    setSourceFromWb(kind, src.name, src.wb, src.sheets || [], sheet);
+  };
+
+  const onDropForecast = (which: "j" | "s", file: File) => onDropAny(which, file);
+  const onDrop = (which: "order" | "reception", file: File) => onDropAny(which, file);
 
   const compute = async () => {
     if (!order) return;
@@ -363,7 +390,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     URL.revokeObjectURL(url);
   };
 
-  const DropZone = ({ label, src, onFile, mapUI }: { label: string; src: SourceFile | null; onFile: (f: File) => void; mapUI: React.ReactNode }) => (
+  const DropZone = ({ label, src, kind, onFile, mapUI }: { label: string; src: SourceFile | null; kind: "order" | "reception" | "j" | "s"; onFile: (f: File) => void; mapUI: React.ReactNode }) => (
     <div style={{ background: C.white, border: `1.5px dashed ${src ? C.green : C.border}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column" }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>{label}</div>
       <label style={{ display: "inline-block", padding: "8px 14px", background: C.blueSoft, color: C.blue, borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
@@ -371,6 +398,15 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         <input type="file" accept=".xlsx,.xls,.xlsm" style={{ display: "none" }}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
       </label>
+      {src && src.sheets && src.sheets.length > 1 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+          <span style={{ fontSize: 11.5, color: C.muted, width: 88, flexShrink: 0 }}>Onglet</span>
+          <select value={src.sheet} onChange={(e) => changeSheet(kind, src, e.target.value)}
+            style={{ flex: 1, minWidth: 0, padding: "5px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, background: C.white, fontWeight: 700 }}>
+            {src.sheets.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+      )}
       {src && <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>{src.name} · {src.rows.length} lignes</div>}
       {src && <div style={{ marginTop: 10 }}>{mapUI}</div>}
     </div>
@@ -403,7 +439,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginBottom: 16, alignItems: "stretch" }}>
-        <DropZone label="1. Commande fournisseur (Order Form)" src={order} onFile={(f) => onDrop("order", f)} mapUI={order && (
+        <DropZone label="1. Commande fournisseur (Order Form)" src={order} kind="order" onFile={(f) => onDrop("order", f)} mapUI={order && (
           <>
             <MapSelect label="Article No." headers={order.headers} value={orderMap.article} onChange={(v) => setOrderMap({ ...orderMap, article: v })} />
             <MapSelect label="Qté commandée" headers={order.headers} value={orderMap.qty} onChange={(v) => setOrderMap({ ...orderMap, qty: v })} />
@@ -411,19 +447,19 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <MapSelect label="Désignation" headers={order.headers} value={orderMap.name} onChange={(v) => setOrderMap({ ...orderMap, name: v })} />
           </>
         )} />
-        <DropZone label="2. Réception (RG Wala)" src={reception} onFile={(f) => onDrop("reception", f)} mapUI={reception && (
+        <DropZone label="2. Réception (RG Wala)" src={reception} kind="reception" onFile={(f) => onDrop("reception", f)} mapUI={reception && (
           <>
             <MapSelect label="Article-No." headers={reception.headers} value={recMap.article} onChange={(v) => setRecMap({ ...recMap, article: v })} />
             <MapSelect label="Qté reçue" headers={reception.headers} value={recMap.qty} onChange={(v) => setRecMap({ ...recMap, qty: v })} />
           </>
         )} />
-        <DropZone label="3. Forecast Jordan (optionnel)" src={forecastJ} onFile={(f) => onDropForecast("j", f)} mapUI={forecastJ && (
+        <DropZone label="3. Forecast Jordan (optionnel)" src={forecastJ} kind="j" onFile={(f) => onDropForecast("j", f)} mapUI={forecastJ && (
           <>
             <MapSelect label="Ref FR" headers={forecastJ.headers} value={fjMap.ref} onChange={(v) => setFjMap({ ...fjMap, ref: v })} />
             <MapSelect label={`Colonne mois (${month})`} headers={forecastJ.headers} value={fjMap.monthCol} onChange={(v) => setFjMap({ ...fjMap, monthCol: v })} />
           </>
         )} />
-        <DropZone label="4. Budget Sissi (optionnel)" src={forecastS} onFile={(f) => onDropForecast("s", f)} mapUI={forecastS && (
+        <DropZone label="4. Budget Sissi (optionnel)" src={forecastS} kind="s" onFile={(f) => onDropForecast("s", f)} mapUI={forecastS && (
           <>
             <MapSelect label="Ref FR" headers={forecastS.headers} value={fsMap.ref} onChange={(v) => setFsMap({ ...fsMap, ref: v })} />
             <MapSelect label={`Colonne mois (${month})`} headers={forecastS.headers} value={fsMap.monthCol} onChange={(v) => setFsMap({ ...fsMap, monthCol: v })} />
