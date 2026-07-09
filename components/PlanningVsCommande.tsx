@@ -148,6 +148,46 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   };
   useEffect(() => { reloadAll().catch(() => {}); /* eslint-disable-next-line */ }, [YEAR]);
 
+  // Calcule les totaux (PlanningMonth) à partir d'un tableau de lignes détail — même formule partout.
+  const totalsFromRows = (monthName: string, rows: any[]): PlanningMonth => {
+    let order = 0, received = 0, budgetOrder = 0, ruptEuro = 0, forecast = 0, budgetSissi = 0,
+      budgetSissiEur = 0, budgetForecastEur = 0, nbNonCmd = 0, sumNum = 0, sumF = 0;
+    for (const r of rows) {
+      order += r.orderQty || 0; received += r.received || 0; budgetOrder += r.budgetOrder || 0;
+      ruptEuro += r.ruptEuro || 0; forecast += r.forecastJ || 0; budgetSissi += r.budgetFinal || 0;
+      budgetSissiEur += r.budgetFin || 0; budgetForecastEur += r.budgetForecast || 0;
+      if ((r.orderQty || 0) === 0) nbNonCmd++;
+      if ((r.budgetFinal || 0) > 0) { sumNum += Math.min(r.orderQty || 0, r.budgetFinal); sumF += r.budgetFinal; }
+    }
+    return {
+      month: monthName, forecast, order, received, budgetOrder, ruptEuro,
+      accuracy: sumF > 0 ? sumNum / sumF : 0, nbNonCmd,
+      budgetSissi, budgetSissiEur, budgetForecastEur,
+      varBudgetQty: order - budgetSissi, varBudgetEur: budgetOrder - budgetSissiEur,
+    };
+  };
+
+  // Recalcule TOUS les mois stockés (à partir du détail déjà en base) avec la formule à jour.
+  const [recalcing, setRecalcing] = useState(false);
+  const recalcAll = async () => {
+    setRecalcing(true);
+    try {
+      const months = await loadPlanningSynthese(YEAR);
+      let done = 0, skipped = 0;
+      for (const mm of months) {
+        const rows = await loadPlanningDetail(YEAR, mm.month);
+        if (!rows.length) { skipped++; continue; } // mois sans détail → à recharger à la main
+        await savePlanningMonth(YEAR, totalsFromRows(mm.month, rows));
+        done++;
+      }
+      await reloadAll();
+      alert(`Recalcul terminé : ${done} mois mis à jour${skipped ? `, ${skipped} sans détail (à recharger)` : ""}.`);
+    } catch (e: any) {
+      alert("Recalcul échoué : " + (e?.message || e));
+    }
+    setRecalcing(false);
+  };
+
   const saveMonth = async () => {
     if (!totals) return;
     setSaving(true);
@@ -937,6 +977,10 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <button onClick={exportFullFile} disabled={exportingFull}
               style={{ padding: "7px 14px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>
               {exportingFull ? "Génération…" : "📦 Exporter le fichier complet"}
+            </button>
+            <button onClick={recalcAll} disabled={recalcing}
+              style={{ padding: "7px 14px", background: "#0891b2", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>
+              {recalcing ? "Recalcul…" : "🔄 Recalculer tous les mois"}
             </button>
           </div>
           <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "auto" }}>
