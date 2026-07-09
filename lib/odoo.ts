@@ -3497,6 +3497,39 @@ export async function getWalaPurchasePrices(session: OdooSession, articleCodes: 
   return out;
 }
 
+/**
+ * Récupère la GAMME (catégorie produit = categ_id → product.category) par code fournisseur Wala.
+ * Chaîne : code Wala (product.supplierinfo.product_code) → product.template → categ_id.
+ * Renvoie { [codeWala]: "Nom de la gamme" }.
+ */
+export async function getWalaCategories(session: OdooSession, articleCodes: string[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const codes = Array.from(new Set(articleCodes.map(c => String(c).trim()).filter(Boolean)));
+  if (!codes.length) return out;
+  const sis = await searchRead(
+    session, M("MODEL_PRODUCT_SUPPLIER"),
+    [["product_code", "in", codes]],
+    ["product_code", "product_tmpl_id"], 0
+  );
+  const tmplByCode: Record<string, number> = {};
+  const tmplIds = new Set<number>();
+  for (const si of sis) {
+    const code = String(si.product_code || "").trim();
+    const tid = Array.isArray(si.product_tmpl_id) ? si.product_tmpl_id[0] : null;
+    if (code && tid) { tmplByCode[code] = tid; tmplIds.add(tid); }
+  }
+  if (!tmplIds.size) return out;
+  const tmpls = await searchRead(
+    session, M("MODEL_PRODUCT_TEMPLATE"),
+    [["id", "in", Array.from(tmplIds)]],
+    ["id", "categ_id"], 0
+  );
+  const catByTmpl: Record<number, string> = {};
+  for (const t of tmpls) catByTmpl[t.id] = Array.isArray(t.categ_id) ? String(t.categ_id[1] || "") : "";
+  for (const [code, tid] of Object.entries(tmplByCode)) { const c = catByTmpl[tid]; if (c) out[code] = c; }
+  return out;
+}
+
 /** true si un default_code (référence interne) existe déjà sur un produit. */
 export async function productCodeExists(session: OdooSession, code: string): Promise<boolean> {
   const c = code.trim();

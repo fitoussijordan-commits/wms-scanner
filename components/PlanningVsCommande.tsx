@@ -258,18 +258,21 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       // Matching Odoo : code fournisseur Wala (article) → Ref FR + désignation + prix d'achat Odoo.
       let odooMap: Record<string, { defaultCode: string; name: string }> = {};
       let priceMap: Record<string, number> = {};
+      let gammeMap: Record<string, string> = {};
       if (session) {
         setMatching(true);
         try {
           const codes = Array.from(new Set(base.map((b) => b.article)));
-          const [m, prices] = await Promise.all([
+          const [m, prices, cats] = await Promise.all([
             odoo.matchWalaArticles(session, codes),
             odoo.getWalaPurchasePrices(session, codes),
+            odoo.getWalaCategories(session, codes),
           ]);
           for (const [code, v] of Object.entries(m)) {
             odooMap[code] = { defaultCode: (v as any).defaultCode || "", name: (v as any).name || "" };
           }
           priceMap = prices;
+          gammeMap = cats;
         } catch { /* si le matching échoue, on garde les données brutes */ }
         setMatching(false);
       }
@@ -320,6 +323,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         return {
           ...b,
           refFR, name: od?.name || "", matched: !!refFR,
+          gammeOdoo: gammeMap[b.article] || "",                // Gamme (categ_id) depuis Odoo
           price, budgetOrder, ruptEuro,                        // ← recalculés avec le coût Odoo
           hasOdooPrice: priceMap[b.article] != null && priceMap[b.article] > 0,
           forecastJ: E, budgetFinal: F,
@@ -367,14 +371,13 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       .sort((a, b) => info.get(String(a.refFR).trim())!.i - info.get(String(b.refFR).trim())!.i);
   }, [computed]);
 
-  // Accuracy PAR GAMME : sur TOUTES les lignes calculées, regroupées par gamme
-  // (gamme via la table Best Sellers ; les produits hors liste vont dans "Autres").
+  // Accuracy PAR GAMME : sur TOUTES les lignes calculées, regroupées par la
+  // gamme Odoo (categ_id). Produits sans catégorie Odoo → "Autres".
   const accuracyByGamme = useMemo(() => {
     if (!computed) return [] as { gamme: string; forecast: number; order: number; received: number; sissi: number; accuracy: number; nb: number }[];
-    const gammeByRef = new Map(BEST_SELLERS.map(b => [b.ref, b.gamme]));
     const acc: Record<string, { forecast: number; order: number; received: number; sumNum: number; sumF: number; nb: number }> = {};
     for (const r of computed) {
-      const g = gammeByRef.get(String(r.refFR).trim()) || "Autres";
+      const g = r.gammeOdoo || "Autres";
       (acc[g] ||= { forecast: 0, order: 0, received: 0, sumNum: 0, sumF: 0, nb: 0 });
       acc[g].forecast += r.forecastJ; acc[g].order += r.orderQty; acc[g].received += r.received; acc[g].nb++;
       // Accuracy vs Sissi (budgetFinal), avec pénalité dépassement.
@@ -852,7 +855,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
                   <tr key={i} style={{ borderBottom: `1px solid ${C.bg}` }}>
                     <td style={{ padding: "6px 12px", fontFamily: "monospace", fontWeight: 700 }}>{r.refFR}</td>
                     <td style={{ padding: "6px 12px", color: C.muted, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</td>
-                    <td style={{ padding: "6px 12px", color: C.muted }}>{r.gamme}</td>
+                    <td style={{ padding: "6px 12px", color: C.muted }}>{r.gammeOdoo || r.gamme}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.forecastJ ? Math.round(r.forecastJ).toLocaleString("fr-FR") : "·"}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.orderQty}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.received}</td>
