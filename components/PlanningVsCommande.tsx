@@ -350,17 +350,17 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         // Recalcule budget et rupture € avec le prix Odoo.
         const budgetOrder = D * price;
         const ruptEuro = b.ruptQty * price;
-        // Accuracy vs Budget Sissi (F, comme le fichier officiel), AVEC pénalité du
-        // dépassement : accuracy = 1 - |Commandé - Sissi| / Sissi (planchée à 0).
-        // → commander 50% OU 150% du budget donne tous deux 50%. "—" si F=0.
-        const accuracy = F > 0 ? Math.max(0, 1 - Math.abs(D - F) / F) : null;
-        // Emoji : ⬇️ sous-commandé, 🔵 sur-commandé (pénalisé), ⚠️ rupture fourn., ✅ pile.
+        // Accuracy ligne = MIN(D,F)/F (formule fichier, colonne S), plafonnée à 100%.
+        // Le sur-commande ne dépasse jamais 100%. "—" si F=0.
+        const accuracy = F > 0 ? Math.min(D, F) / F : null;
+        // Emoji comme le fichier (colonne R) : ⬇️ D<F, ⚠️ rupture fourn., 🔵 D>F, ✅ pile.
+        // Le % affiché est D/F (peut dépasser 100% pour signaler le sur-commande).
         let accLabel = "—";
         if (F > 0) {
-          const pct = Math.round((accuracy as number) * 100);
-          if (D < F) accLabel = `⬇️ ${pct}%`;
-          else if (D > F) accLabel = `🔵 ${pct}% (sur-cmd)`;
-          else if (b.received < D) accLabel = `⚠️ ${pct}% (rupture)`;
+          const pctDF = Math.round((D / F) * 100);
+          if (D < F) accLabel = `⬇️ ${pctDF}%`;
+          else if (b.received < D) accLabel = `⚠️ ${pctDF}% (rupture fourn.)`;
+          else if (D > F) accLabel = `🔵 ${pctDF}%`;
           else accLabel = "✅ 100%";
         }
         return {
@@ -397,7 +397,8 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       t.forecast += r.forecastJ; t.budgetFinal += r.budgetFinal;
       t.budgetForecastEur += r.budgetForecast; t.budgetFinEur += r.budgetFin;
       if (r.orderQty === 0) t.nbNonCmd++;
-      if (r.budgetFinal > 0) { sumNum += Math.max(0, r.budgetFinal - Math.abs(r.orderQty - r.budgetFinal)); sumF += r.budgetFinal; }
+      // Formule fichier : SUM(MIN(D,F)) / SUM(F).
+      if (r.budgetFinal > 0) { sumNum += Math.min(r.orderQty, r.budgetFinal); sumF += r.budgetFinal; }
     }
     t.accuracy = sumF > 0 ? sumNum / sumF : 0;
     return t;
@@ -406,10 +407,12 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   // Mois disponibles (enregistrés), dans l'ordre calendaire.
   const availMonths = useMemo(() => MONTHS.filter(m => (allDetails[m] || []).length > 0), [allDetails]);
 
-  // Accuracy d'un ensemble de lignes (formule Sissi + pénalité). null si pas de budget Sissi.
+  // Accuracy d'un ensemble de lignes — FORMULE EXACTE DU FICHIER :
+  // SUM(MIN(Commandé, Sissi)) / SUM(Sissi)  [sur les lignes où Sissi>0].
+  // Le sur-commande plafonne à Sissi (MIN) → compte 100% max, jamais > 100%.
   const accOf = (rows: any[]): number | null => {
     let num = 0, den = 0;
-    for (const r of rows) { if (r.budgetFinal > 0) { num += Math.max(0, r.budgetFinal - Math.abs(r.orderQty - r.budgetFinal)); den += r.budgetFinal; } }
+    for (const r of rows) { const F = r.budgetFinal; if (F > 0) { num += Math.min(r.orderQty, F); den += F; } }
     return den > 0 ? num / den : null;
   };
 
@@ -473,7 +476,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       (acc[g] ||= { forecast: 0, order: 0, received: 0, sumNum: 0, sumF: 0, nb: 0 });
       acc[g].forecast += r.forecastJ; acc[g].order += r.orderQty; acc[g].received += r.received; acc[g].nb++;
       // Accuracy vs Sissi (budgetFinal), avec pénalité dépassement.
-      if (r.budgetFinal > 0) { acc[g].sumNum += Math.max(0, r.budgetFinal - Math.abs(r.orderQty - r.budgetFinal)); acc[g].sumF += r.budgetFinal; }
+      if (r.budgetFinal > 0) { acc[g].sumNum += Math.min(r.orderQty, r.budgetFinal); acc[g].sumF += r.budgetFinal; }
     }
     return Object.entries(acc)
       .map(([gamme, v]) => ({ gamme, forecast: v.forecast, order: v.order, received: v.received, sissi: v.sumF, accuracy: v.sumF > 0 ? v.sumNum / v.sumF : 0, nb: v.nb }))
