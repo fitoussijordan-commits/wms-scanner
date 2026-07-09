@@ -9,8 +9,9 @@
 // Jointure : sur l'Article No. (code Wala allemand) présent dans les 2 fichiers.
 // Réception : SOMME des quantités par article (plusieurs lots par article).
 // ────────────────────────────────────────────────────────────────────────────
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import * as odoo from "@/lib/odoo";
+import { loadPlanningSynthese, savePlanningMonth, type PlanningMonth } from "@/lib/supabase";
 
 async function loadXLSX(): Promise<any> {
   if ((window as any).XLSX) return (window as any).XLSX;
@@ -73,10 +74,61 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   const [matching, setMatching] = useState(false);
   const [order, setOrder] = useState<SourceFile | null>(null);
   const [reception, setReception] = useState<SourceFile | null>(null);
+  const [forecastJ, setForecastJ] = useState<SourceFile | null>(null);
+  const [forecastS, setForecastS] = useState<SourceFile | null>(null);
   const [orderMap, setOrderMap] = useState({ article: "", qty: "", price: "", name: "" });
   const [recMap, setRecMap] = useState({ article: "", qty: "" });
+  // Forecast : clé Ref FR (ou code Wala) + colonne du mois choisi.
+  const [fjMap, setFjMap] = useState({ ref: "", monthCol: "" });
+  const [fsMap, setFsMap] = useState({ ref: "", monthCol: "" });
   const [computed, setComputed] = useState<any[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const YEAR = new Date().getFullYear();
+  const [savedMonths, setSavedMonths] = useState<PlanningMonth[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { loadPlanningSynthese(YEAR).then(setSavedMonths).catch(() => {}); }, [YEAR]);
+
+  const saveMonth = async () => {
+    if (!totals) return;
+    setSaving(true);
+    try {
+      const m: PlanningMonth = {
+        month, forecast: totals.forecast, order: totals.order, received: totals.received,
+        budgetOrder: totals.budgetOrder, ruptEuro: totals.ruptEuro, accuracy: totals.accuracy, nbNonCmd: totals.nbNonCmd,
+      };
+      await savePlanningMonth(YEAR, m);
+      setSavedMonths(await loadPlanningSynthese(YEAR));
+    } catch { /* silencieux */ }
+    setSaving(false);
+  };
+
+  // Devine la colonne du mois : en-tête = initiale du mois (J/F/M/A...) ou nom complet.
+  const guessMonthCol = (headers: string[], monthName: string): string => {
+    const idx = MONTHS.indexOf(monthName); // 0..11
+    const initiales = ["J","F","M","A","M","J","J","A","S","O","N","D"];
+    const want = initiales[idx];
+    // Cherche une colonne dont l'en-tête == initiale (en comptant les doublons J/M/A).
+    // On récupère toutes les colonnes mois candidates, dans l'ordre, et on prend la idx-ième.
+    const monthCols = headers.filter(h => /^[JFMASOND]$/i.test(String(h).trim()) || MONTHS.some(m => String(h).toLowerCase().startsWith(m.toLowerCase().slice(0,3))));
+    if (monthCols.length >= 12) return monthCols[idx];        // 12 colonnes mois → prend la idx-ième
+    const exact = headers.find(h => String(h).trim().toLowerCase() === monthName.toLowerCase());
+    if (exact) return exact;
+    return "";
+  };
+
+  const onDropForecast = async (which: "j" | "s", file: File) => {
+    const { headers, rows } = await readSheet(file);
+    const sf = { name: file.name, headers, rows };
+    if (which === "j") {
+      setForecastJ(sf);
+      setFjMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "default_code"]), monthCol: guessMonthCol(headers, month) });
+    } else {
+      setForecastS(sf);
+      setFsMap({ ref: guessCol(headers, ["REF FR", "RefFR", "Ref FR", "default_code"]), monthCol: guessMonthCol(headers, month) });
+    }
+    setComputed(null);
+  };
 
   const onDrop = async (which: "order" | "reception", file: File) => {
     const { headers, rows } = await readSheet(file);
@@ -140,13 +192,51 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         setMatching(false);
       }
 
+      // Index forecast par Ref FR ET par code Wala (double clé, robuste).
+      const buildForecastIndex = (src: SourceFile | null, map: { ref: string; monthCol: string }) => {
+        const idx: Record<string, number> = {};
+        if (!src || !map.monthCol) return idx;
+        for (const r of src.rows) {
+          const qty = toNum(r[map.monthCol]);
+          const refKey = map.ref ? String(r[map.ref] ?? "").trim() : "";
+          if (refKey && refKey !== "#N/A") idx[refKey] = qty;
+          // 2e clé : si le forecast a une colonne Material (code Wala), on l'indexe aussi
+          const walaCol = src.headers.find(h => /material$|^material$|article/i.test(String(h)));
+          if (walaCol) { const w = String(r[walaCol] ?? "").trim(); if (w) idx["W:" + w] = qty; }
+        }
+        return idx;
+      };
+      const fjIdx = buildForecastIndex(forecastJ, fjMap);
+      const fsIdx = buildForecastIndex(forecastS, fsMap);
+      const lookForecast = (idx: Record<string, number>, refFR: string, wala: string) =>
+        (refFR && idx[refFR] != null) ? idx[refFR] : (idx["W:" + wala] != null ? idx["W:" + wala] : 0);
+
       const out = base.map((b) => {
         const od = odooMap[b.article];
+        const refFR = od?.defaultCode || "";
+        const D = b.orderQty;                                  // commandé
+        const E = lookForecast(fjIdx, refFR, b.article);       // forecast Jordan
+        const F = lookForecast(fsIdx, refFR, b.article);       // budget Sissi (planning final)
+        const price = b.price;
+        // Accuracy = min(D,F)/F cappé à 100% (formule du fichier). "—" si F=0.
+        const accRaw = F > 0 ? Math.min(D, F) / F : null;
+        const accuracy = accRaw == null ? null : Math.min(accRaw, 1);
+        // Emoji comme le fichier : ⬇️ si D<F, ⚠️ si reçu<commandé (rupture), 🔵 si D>F, ✅ si =.
+        let accLabel = "—";
+        if (F > 0) {
+          const pct = Math.round((D / F) * 100);
+          if (D < F) accLabel = `⬇️ ${pct}%`;
+          else if (b.received < D) accLabel = `⚠️ ${pct}% (rupture)`;
+          else if (D > F) accLabel = `🔵 ${pct}%`;
+          else accLabel = "✅ 100%";
+        }
         return {
           ...b,
-          refFR: od?.defaultCode || "",                // Référence interne Odoo
-          name: od?.name || "",                        // désignation ODOO uniquement (pas de fallback allemand)
-          matched: !!od?.defaultCode,
+          refFR, name: od?.name || "", matched: !!refFR,
+          forecastJ: E, budgetFinal: F, price,
+          diffQty: D - E,                                      // commandé - forecast Jordan
+          budgetCmd: D * price, budgetForecast: E * price, budgetFin: F * price,
+          accuracy, accLabel,
         };
       });
       setComputed(out);
@@ -157,37 +247,129 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
 
   const totals = useMemo(() => {
     if (!computed) return null;
-    const t = { order: 0, received: 0, budgetOrder: 0, ruptQty: 0, ruptEuro: 0, nbNonCmd: 0 };
+    const t = { order: 0, received: 0, budgetOrder: 0, ruptQty: 0, ruptEuro: 0, nbNonCmd: 0,
+      forecast: 0, budgetFinal: 0, budgetForecastEur: 0, budgetFinEur: 0, accuracy: 0 };
+    // Accuracy globale = SOMME(min(D,F)) / SOMME(F)  (pondérée, comme la synthèse du fichier).
+    let sumMinDF = 0, sumF = 0;
     for (const r of computed) {
       t.order += r.orderQty; t.received += r.received; t.budgetOrder += r.budgetOrder;
       t.ruptQty += r.ruptQty; t.ruptEuro += r.ruptEuro;
+      t.forecast += r.forecastJ; t.budgetFinal += r.budgetFinal;
+      t.budgetForecastEur += r.budgetForecast; t.budgetFinEur += r.budgetFin;
       if (r.orderQty === 0) t.nbNonCmd++;
+      if (r.budgetFinal > 0) { sumMinDF += Math.min(r.orderQty, r.budgetFinal); sumF += r.budgetFinal; }
     }
+    t.accuracy = sumF > 0 ? sumMinDF / sumF : 0;
     return t;
   }, [computed]);
 
   const exportXlsx = async () => {
-    if (!computed) return;
-    const XLSX = await loadXLSX();
-    const data = computed.map((r) => ({
-      "Ref FR": r.refFR, "Article No.": r.article, "Désignation": r.name, "Order Qty.": r.orderQty,
-      "Prix commande": r.price, "Budget commande": Math.round(r.budgetOrder * 100) / 100,
-      "Réception finale": r.received, "Rupture Allemagne Qté": r.ruptQty,
-      "Rupture Allemagne €": Math.round(r.ruptEuro * 100) / 100,
-    }));
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, month.slice(0, 3));
-    XLSX.writeFile(wb, `planning_vs_commande_${month}.xlsx`);
+    if (!computed || !totals) return;
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "WMS Scanner"; wb.created = new Date();
+
+    const CL = {
+      dark: "FF1E293B", accent: "FF2563EB", white: "FFFFFFFF", zebra: "FFF1F5F9",
+      green: "FFDCFCE7", red: "FFFEE2E2", redT: "FFB91C1C", border: "FFE2E8F0", kpiBg: "FFEFF6FF",
+    };
+    const thin = { style: "thin" as const, color: { argb: CL.border } };
+    const allB = { top: thin, left: thin, bottom: thin, right: thin };
+    const eur = '#,##0.00 €'; const pct = '0 %';
+
+    // ── Onglet DÉTAIL du mois ──
+    const ws = wb.addWorksheet(month.slice(0, 3) + " 26");
+    ws.columns = [
+      { header: "Ref FR", key: "ref", width: 14 },
+      { header: "Article No.", key: "art", width: 14 },
+      { header: "Désignation", key: "name", width: 38 },
+      { header: "Forecast", key: "fc", width: 11 },
+      { header: "Commandé", key: "ord", width: 11 },
+      { header: "Reçu", key: "rec", width: 11 },
+      { header: "Prix", key: "price", width: 10 },
+      { header: "Budget commande", key: "bud", width: 16 },
+      { header: "Rupture Qté", key: "rq", width: 12 },
+      { header: "Rupture €", key: "re", width: 13 },
+      { header: "Accuracy", key: "acc", width: 12 },
+    ];
+    for (const r of computed) {
+      ws.addRow({
+        ref: r.refFR, art: r.article, name: r.name, fc: r.forecastJ, ord: r.orderQty, rec: r.received,
+        price: r.price, bud: Math.round(r.budgetOrder * 100) / 100, rq: r.ruptQty,
+        re: Math.round(r.ruptEuro * 100) / 100, acc: r.accLabel,
+      });
+    }
+    // En-tête stylé
+    const h = ws.getRow(1); h.height = 22;
+    h.eachCell((c: any) => {
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: CL.dark } };
+      c.font = { bold: true, color: { argb: CL.white }, size: 11 };
+      c.alignment = { vertical: "middle", horizontal: "center" }; c.border = allB;
+    });
+    ws.views = [{ state: "frozen", ySplit: 1 }];
+    // Corps : formats, zebra, rupture en rouge
+    for (let i = 2; i <= ws.rowCount; i++) {
+      const row = ws.getRow(i);
+      if (i % 2 === 0) row.eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: CL.zebra } }; });
+      row.eachCell((c: any) => { c.border = allB; });
+      row.getCell("price").numFmt = eur; row.getCell("bud").numFmt = eur; row.getCell("re").numFmt = eur;
+      const rq = row.getCell("rq"); if (Number(rq.value) < 0) { rq.font = { bold: true, color: { argb: CL.redT } }; }
+      const re = row.getCell("re"); if (Number(re.value) < 0) { re.font = { color: { argb: CL.redT } }; }
+    }
+
+    // ── Onglet SYNTHÈSE (ligne du mois calculé + historique Supabase) ──
+    const wsS = wb.addWorksheet("Synthèse");
+    wsS.columns = [
+      { header: "MOIS", key: "m", width: 14 },
+      { header: "FORECAST", key: "fc", width: 12 },
+      { header: "COMMANDÉ", key: "ord", width: 12 },
+      { header: "REÇU", key: "rec", width: 12 },
+      { header: "BUDGET CMD €", key: "bud", width: 16 },
+      { header: "RUPTURE ALL €", key: "rupt", width: 16 },
+      { header: "ACCURACY %", key: "acc", width: 13 },
+      { header: "NB NON CMDÉS", key: "nb", width: 14 },
+    ];
+    const synthRows = [
+      ...(savedMonths || []),
+      { month, forecast: totals.forecast, order: totals.order, received: totals.received,
+        budgetOrder: totals.budgetOrder, ruptEuro: totals.ruptEuro, accuracy: totals.accuracy, nbNonCmd: totals.nbNonCmd },
+    ];
+    // dédoublonne (garde la dernière version d'un mois), ordonne par calendrier
+    const byMonth: Record<string, any> = {};
+    for (const s of synthRows) byMonth[s.month] = s;
+    const ordered = MONTHS.filter(m => byMonth[m]).map(m => byMonth[m]);
+    for (const s of ordered) {
+      wsS.addRow({ m: s.month, fc: Math.round(s.forecast), ord: Math.round(s.order), rec: Math.round(s.received),
+        bud: Math.round(s.budgetOrder), rupt: Math.round(s.ruptEuro), acc: s.accuracy, nb: s.nbNonCmd });
+    }
+    const hS = wsS.getRow(1); hS.height = 22;
+    hS.eachCell((c: any) => {
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: CL.accent } };
+      c.font = { bold: true, color: { argb: CL.white }, size: 11 };
+      c.alignment = { vertical: "middle", horizontal: "center" }; c.border = allB;
+    });
+    for (let i = 2; i <= wsS.rowCount; i++) {
+      const row = wsS.getRow(i);
+      if (i % 2 === 0) row.eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: CL.kpiBg } }; });
+      row.eachCell((c: any) => { c.border = allB; });
+      row.getCell("bud").numFmt = eur; row.getCell("rupt").numFmt = eur; row.getCell("acc").numFmt = pct;
+    }
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `planning_vs_commande_${month}.xlsx`; a.click();
+    URL.revokeObjectURL(url);
   };
 
-  const DropZone = ({ label, src, which, mapUI }: { label: string; src: SourceFile | null; which: "order" | "reception"; mapUI: React.ReactNode }) => (
-    <div style={{ background: C.white, border: `1.5px dashed ${src ? C.green : C.border}`, borderRadius: 12, padding: 16, flex: 1, minWidth: 260 }}>
+  const DropZone = ({ label, src, onFile, mapUI }: { label: string; src: SourceFile | null; onFile: (f: File) => void; mapUI: React.ReactNode }) => (
+    <div style={{ background: C.white, border: `1.5px dashed ${src ? C.green : C.border}`, borderRadius: 12, padding: 16, flex: 1, minWidth: 240 }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>{label}</div>
       <label style={{ display: "inline-block", padding: "8px 14px", background: C.blueSoft, color: C.blue, borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
         {src ? "Changer de fichier" : "📎 Choisir un fichier"}
         <input type="file" accept=".xlsx,.xls" style={{ display: "none" }}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) onDrop(which, f); }} />
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
       </label>
       {src && <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>{src.name} · {src.rows.length} lignes</div>}
       {src && <div style={{ marginTop: 10 }}>{mapUI}</div>}
@@ -221,7 +403,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       </div>
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 16 }}>
-        <DropZone label="1. Commande fournisseur (Order Form)" src={order} which="order" mapUI={order && (
+        <DropZone label="1. Commande fournisseur (Order Form)" src={order} onFile={(f) => onDrop("order", f)} mapUI={order && (
           <>
             <MapSelect label="Article No." headers={order.headers} value={orderMap.article} onChange={(v) => setOrderMap({ ...orderMap, article: v })} />
             <MapSelect label="Qté commandée" headers={order.headers} value={orderMap.qty} onChange={(v) => setOrderMap({ ...orderMap, qty: v })} />
@@ -229,10 +411,22 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <MapSelect label="Désignation" headers={order.headers} value={orderMap.name} onChange={(v) => setOrderMap({ ...orderMap, name: v })} />
           </>
         )} />
-        <DropZone label="2. Réception (RG Wala)" src={reception} which="reception" mapUI={reception && (
+        <DropZone label="2. Réception (RG Wala)" src={reception} onFile={(f) => onDrop("reception", f)} mapUI={reception && (
           <>
             <MapSelect label="Article-No." headers={reception.headers} value={recMap.article} onChange={(v) => setRecMap({ ...recMap, article: v })} />
             <MapSelect label="Qté reçue" headers={reception.headers} value={recMap.qty} onChange={(v) => setRecMap({ ...recMap, qty: v })} />
+          </>
+        )} />
+        <DropZone label="3. Forecast Jordan (optionnel)" src={forecastJ} onFile={(f) => onDropForecast("j", f)} mapUI={forecastJ && (
+          <>
+            <MapSelect label="Ref FR" headers={forecastJ.headers} value={fjMap.ref} onChange={(v) => setFjMap({ ...fjMap, ref: v })} />
+            <MapSelect label={`Colonne mois (${month})`} headers={forecastJ.headers} value={fjMap.monthCol} onChange={(v) => setFjMap({ ...fjMap, monthCol: v })} />
+          </>
+        )} />
+        <DropZone label="4. Budget Sissi (optionnel)" src={forecastS} onFile={(f) => onDropForecast("s", f)} mapUI={forecastS && (
+          <>
+            <MapSelect label="Ref FR" headers={forecastS.headers} value={fsMap.ref} onChange={(v) => setFsMap({ ...fsMap, ref: v })} />
+            <MapSelect label={`Colonne mois (${month})`} headers={forecastS.headers} value={fsMap.monthCol} onChange={(v) => setFsMap({ ...fsMap, monthCol: v })} />
           </>
         )} />
       </div>
@@ -243,19 +437,26 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
           {matching ? "Matching Odoo…" : busy ? "Calcul…" : "🧮 Calculer le mois"}
         </button>
         {computed && (
-          <button onClick={exportXlsx} style={{ padding: "10px 18px", background: C.green, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
-            📥 Exporter Excel
-          </button>
+          <>
+            <button onClick={exportXlsx} style={{ padding: "10px 18px", background: C.green, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+              📥 Exporter Excel
+            </button>
+            <button onClick={saveMonth} disabled={saving} style={{ padding: "10px 18px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+              {saving ? "Enregistrement…" : `💾 Enregistrer ${month}`}
+            </button>
+          </>
         )}
       </div>
 
       {totals && (
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
           {[
+            ["Forecast", totals.forecast.toLocaleString("fr-FR")],
             ["Commandé", totals.order.toLocaleString("fr-FR")],
             ["Reçu", totals.received.toLocaleString("fr-FR")],
             ["Budget commande €", Math.round(totals.budgetOrder).toLocaleString("fr-FR")],
             ["Rupture All. €", Math.round(totals.ruptEuro).toLocaleString("fr-FR")],
+            ["Accuracy", totals.budgetFinal > 0 ? Math.round(totals.accuracy * 100) + "%" : "—"],
             ["Réfs non commandées", totals.nbNonCmd],
           ].map(([label, val]) => (
             <div key={label as string} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", minWidth: 120 }}>
@@ -272,8 +473,8 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ position: "sticky", top: 0, background: C.bg }}>
                 <tr>
-                  {["Ref FR", "Article No.", "Désignation", "Commandé", "Reçu", "Rupture Qté", "Rupture €"].map((h) => (
-                    <th key={h} style={{ textAlign: h === "Désignation" ? "left" : (h === "Ref FR" || h === "Article No.") ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: C.muted, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                  {["Ref FR", "Article No.", "Désignation", "Forecast", "Commandé", "Reçu", "Rupture Qté", "Accuracy"].map((h) => (
+                    <th key={h} style={{ textAlign: (h === "Désignation" || h === "Ref FR" || h === "Article No.") ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: C.muted, borderBottom: `1px solid ${C.border}` }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -282,13 +483,48 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
                   <tr key={i} style={{ borderBottom: `1px solid ${C.bg}` }}>
                     <td style={{ padding: "6px 12px", fontFamily: "monospace", fontWeight: 700, color: r.matched ? C.text : C.red }}>{r.refFR || "—"}</td>
                     <td style={{ padding: "6px 12px", fontFamily: "monospace", color: C.muted }}>{r.article}</td>
-                    <td style={{ padding: "6px 12px", color: C.muted, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</td>
+                    <td style={{ padding: "6px 12px", color: C.muted, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.forecastJ || "·"}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.orderQty}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.received}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right", color: r.ruptQty < 0 ? C.red : C.text, fontWeight: r.ruptQty < 0 ? 700 : 400 }}>{r.ruptQty}</td>
-                    <td style={{ padding: "6px 12px", textAlign: "right", color: r.ruptEuro < 0 ? C.red : C.text }}>{Math.round(r.ruptEuro).toLocaleString("fr-FR")}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", whiteSpace: "nowrap" }}>{r.accLabel}</td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Synthèse annuelle (mois stockés Supabase) ── */}
+      {savedMonths.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 8 }}>Synthèse {YEAR}</div>
+          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead style={{ background: C.blueSoft }}>
+                <tr>
+                  {["Mois", "Forecast", "Commandé", "Reçu", "Budget cmd €", "Rupture All. €", "Accuracy"].map((h) => (
+                    <th key={h} style={{ textAlign: h === "Mois" ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: C.blue, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {MONTHS.filter(m => savedMonths.some(s => s.month === m)).map((m) => {
+                  const s = savedMonths.find(x => x.month === m)!;
+                  return (
+                    <tr key={m} style={{ borderBottom: `1px solid ${C.bg}` }}>
+                      <td style={{ padding: "6px 12px", fontWeight: 700 }}>{m}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.forecast).toLocaleString("fr-FR")}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.order).toLocaleString("fr-FR")}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.received).toLocaleString("fr-FR")}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "right" }}>{Math.round(s.budgetOrder).toLocaleString("fr-FR")}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "right", color: s.ruptEuro < 0 ? C.red : C.text }}>{Math.round(s.ruptEuro).toLocaleString("fr-FR")}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "right", fontWeight: 700 }}>{Math.round(s.accuracy * 100)}%</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

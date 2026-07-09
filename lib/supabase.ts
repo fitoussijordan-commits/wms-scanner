@@ -957,3 +957,39 @@ export async function saveModelOverrides(overrides: Record<string, string>): Pro
   );
   if (error) throw new Error(error.message);
 }
+
+// ══════════════════════════════════════════
+// PLANNING VS COMMANDE — synthèse mensuelle (par année)
+// Stocké dans wms_sync_meta / clé "planning_synthese_<année>" = JSON { [mois]: {...totaux} }
+// ══════════════════════════════════════════
+
+export interface PlanningMonth {
+  month: string; forecast: number; order: number; received: number;
+  budgetOrder: number; ruptEuro: number; accuracy: number; nbNonCmd: number;
+}
+
+export async function loadPlanningSynthese(year: number): Promise<PlanningMonth[]> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", `planning_synthese_${year}`).single();
+    if (data?.value) {
+      const obj = JSON.parse(data.value);
+      return Object.values(obj) as PlanningMonth[];
+    }
+  } catch {}
+  return [];
+}
+
+export async function savePlanningMonth(year: number, m: PlanningMonth): Promise<void> {
+  // Charge l'existant, remplace le mois, réécrit.
+  let obj: Record<string, PlanningMonth> = {};
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", `planning_synthese_${year}`).single();
+    if (data?.value) obj = JSON.parse(data.value);
+  } catch {}
+  obj[m.month] = m;
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: `planning_synthese_${year}`, value: JSON.stringify(obj), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}
