@@ -364,11 +364,11 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   };
 
   const DropZone = ({ label, src, onFile, mapUI }: { label: string; src: SourceFile | null; onFile: (f: File) => void; mapUI: React.ReactNode }) => (
-    <div style={{ background: C.white, border: `1.5px dashed ${src ? C.green : C.border}`, borderRadius: 12, padding: 16, flex: 1, minWidth: 240 }}>
+    <div style={{ background: C.white, border: `1.5px dashed ${src ? C.green : C.border}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column" }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>{label}</div>
       <label style={{ display: "inline-block", padding: "8px 14px", background: C.blueSoft, color: C.blue, borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
         {src ? "Changer de fichier" : "📎 Choisir un fichier"}
-        <input type="file" accept=".xlsx,.xls" style={{ display: "none" }}
+        <input type="file" accept=".xlsx,.xls,.xlsm" style={{ display: "none" }}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
       </label>
       {src && <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>{src.name} · {src.rows.length} lignes</div>}
@@ -377,10 +377,10 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
   );
 
   const MapSelect = ({ label, headers, value, onChange }: { label: string; headers: string[]; value: string; onChange: (v: string) => void }) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-      <span style={{ fontSize: 11.5, color: C.muted, minWidth: 90 }}>{label}</span>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, minWidth: 0 }}>
+      <span style={{ fontSize: 11.5, color: C.muted, width: 88, flexShrink: 0 }}>{label}</span>
       <select value={value} onChange={(e) => onChange(e.target.value)}
-        style={{ flex: 1, padding: "5px 8px", border: `1px solid ${value ? C.border : C.red}`, borderRadius: 6, fontSize: 12, background: C.white }}>
+        style={{ flex: 1, minWidth: 0, maxWidth: "100%", padding: "5px 8px", border: `1px solid ${value ? C.border : C.red}`, borderRadius: 6, fontSize: 12, background: C.white }}>
         <option value="">— colonne —</option>
         {headers.map((h) => <option key={h} value={h}>{h}</option>)}
       </select>
@@ -402,7 +402,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
         </select>
       </div>
 
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginBottom: 16, alignItems: "stretch" }}>
         <DropZone label="1. Commande fournisseur (Order Form)" src={order} onFile={(f) => onDrop("order", f)} mapUI={order && (
           <>
             <MapSelect label="Article No." headers={order.headers} value={orderMap.article} onChange={(v) => setOrderMap({ ...orderMap, article: v })} />
