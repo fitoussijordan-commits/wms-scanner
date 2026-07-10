@@ -631,20 +631,22 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
           { header: "Ref FR", key: "ref", width: 12 }, { header: "Article No.", key: "art", width: 13 },
           { header: "Désignation", key: "name", width: 40 }, { header: "Forecast", key: "fc", width: 10 },
           { header: "Commandé", key: "ord", width: 10 }, { header: "Reçu", key: "rec", width: 10 },
-          { header: "Prix", key: "price", width: 9 }, { header: "Budget cmd", key: "bud", width: 14 },
+          { header: "Prix", key: "price", width: 9 }, { header: "Planif Sissi", key: "sissi", width: 11 },
+          { header: "Budget Sissi €", key: "bse", width: 14 }, { header: "Budget cmd €", key: "bud", width: 14 },
           { header: "Rupture Qté", key: "rq", width: 11 }, { header: "Rupture €", key: "re", width: 12 },
           { header: "Accuracy", key: "acc", width: 12 },
         ];
         for (const r of rows) {
           w.addRow({ ref: r.refFR, art: r.article, name: r.name, fc: Math.round(r.forecastJ || 0), ord: r.orderQty, rec: r.received,
-            price: r.price, bud: Math.round((r.budgetOrder || 0) * 100) / 100, rq: r.ruptQty, re: Math.round((r.ruptEuro || 0) * 100) / 100, acc: r.accLabel });
+            price: r.price, sissi: Math.round(r.budgetFinal || 0), bse: Math.round((r.budgetFin || 0) * 100) / 100,
+            bud: Math.round((r.budgetOrder || 0) * 100) / 100, rq: r.ruptQty, re: Math.round((r.ruptEuro || 0) * 100) / 100, acc: r.accLabel });
         }
         styleHead(w, dark);
         for (let i = 2; i <= w.rowCount; i++) {
           const row = w.getRow(i);
           if (i % 2 === 0) row.eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: zebra2 } }; });
           row.eachCell((c: any) => { c.border = allB; });
-          ["price","bud","re"].forEach(k => row.getCell(k).numFmt = eur);
+          ["price","bse","bud","re"].forEach(k => row.getCell(k).numFmt = eur);
           if (Number(row.getCell("rq").value) < 0) row.getCell("rq").font = { bold: true, color: { argb: redT } };
         }
       }
@@ -686,7 +688,9 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       { header: "Commandé", key: "ord", width: 11 },
       { header: "Reçu", key: "rec", width: 11 },
       { header: "Prix", key: "price", width: 10 },
-      { header: "Budget commande", key: "bud", width: 16 },
+      { header: "Planif Sissi", key: "sissi", width: 11 },
+      { header: "Budget Sissi €", key: "bse", width: 14 },
+      { header: "Budget cmd €", key: "bud", width: 16 },
       { header: "Rupture Qté", key: "rq", width: 12 },
       { header: "Rupture €", key: "re", width: 13 },
       { header: "Accuracy", key: "acc", width: 12 },
@@ -694,7 +698,8 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
     for (const r of computed) {
       ws.addRow({
         ref: r.refFR, art: r.article, name: r.name, fc: r.forecastJ, ord: r.orderQty, rec: r.received,
-        price: r.price, bud: Math.round(r.budgetOrder * 100) / 100, rq: r.ruptQty,
+        price: r.price, sissi: Math.round(r.budgetFinal || 0), bse: Math.round((r.budgetFin || 0) * 100) / 100,
+        bud: Math.round(r.budgetOrder * 100) / 100, rq: r.ruptQty,
         re: Math.round(r.ruptEuro * 100) / 100, acc: r.accLabel,
       });
     }
@@ -711,7 +716,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       const row = ws.getRow(i);
       if (i % 2 === 0) row.eachCell((c: any) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: CL.zebra } }; });
       row.eachCell((c: any) => { c.border = allB; });
-      row.getCell("price").numFmt = eur; row.getCell("bud").numFmt = eur; row.getCell("re").numFmt = eur;
+      row.getCell("price").numFmt = eur; row.getCell("bse").numFmt = eur; row.getCell("bud").numFmt = eur; row.getCell("re").numFmt = eur;
       const rq = row.getCell("rq"); if (Number(rq.value) < 0) { rq.font = { bold: true, color: { argb: CL.redT } }; }
       const re = row.getCell("re"); if (Number(re.value) < 0) { re.font = { color: { argb: CL.redT } }; }
     }
@@ -951,7 +956,7 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ position: "sticky", top: 0, background: C.bg }}>
                 <tr>
-                  {["Ref FR", "Article No.", "Désignation", "Forecast", "Commandé", "Reçu", "Rupture Qté", "Acc. Jordan", "Acc. Sissi"].map((h) => (
+                  {["Ref FR", "Article No.", "Désignation", "Forecast", "Planif Sissi", "Commandé", "Reçu", "Budget Sissi €", "Rupture Qté", "Acc. Jordan", "Acc. Sissi"].map((h) => (
                     <th key={h} style={{ textAlign: (h === "Désignation" || h === "Ref FR" || h === "Article No.") ? "left" : "right", padding: "8px 12px", fontSize: 10.5, textTransform: "uppercase", color: C.muted, borderBottom: `1px solid ${C.border}` }}>{h}</th>
                   ))}
                 </tr>
@@ -963,8 +968,10 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
                     <td style={{ padding: "6px 12px", fontFamily: "monospace", color: C.muted }}>{r.article}</td>
                     <td style={{ padding: "6px 12px", color: C.muted, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.forecastJ ? Math.round(r.forecastJ).toLocaleString("fr-FR") : "·"}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.budgetFinal ? Math.round(r.budgetFinal).toLocaleString("fr-FR") : "·"}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.orderQty}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right" }}>{r.received}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right", color: C.muted }}>{r.budgetFin ? Math.round(r.budgetFin).toLocaleString("fr-FR") : "·"}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right", color: r.ruptQty < 0 ? C.red : C.text, fontWeight: r.ruptQty < 0 ? 700 : 400 }}>{r.ruptQty}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right", whiteSpace: "nowrap", color: C.muted }}>{r.accLabelJ}</td>
                     <td style={{ padding: "6px 12px", textAlign: "right", whiteSpace: "nowrap" }}>{r.accLabel}</td>
