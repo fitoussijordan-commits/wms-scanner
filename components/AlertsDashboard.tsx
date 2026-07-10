@@ -25,6 +25,19 @@ export default function AlertsDashboard({ session }: { session: odoo.OdooSession
     setLoading(true);
     try {
       const g = await odoo.collectAlerts(session);
+      // Surveillance E-SHOP : commandes du jour non encore sorties (via l'API Shopware).
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const res = await fetch(`/api/shopware-explore?action=dailySales&from=${today}&to=${today}`);
+        const d = await res.json();
+        const orders = d.orders || [];
+        // On ne connaît pas ici l'état "processed" (Supabase) → on remonte le total du jour.
+        g.push({
+          key: "eshop", title: "Sorties e-shop à faire", icon: "🛒", severity: "warning", screen: "eshopSorties",
+          count: orders.length,
+          items: orders.slice(0, 100).map((o: any) => ({ label: o.number || o.orderNumber || "commande", detail: o.customer || o.partnerName || "", extra: o.status || "" })),
+        } as odoo.AlertGroup);
+      } catch { /* API e-shop indispo → on ignore ce groupe */ }
       setGroups(g);
       setLastRun(new Date());
     } catch { /* affiché via error par groupe */ }
@@ -81,6 +94,12 @@ export default function AlertsDashboard({ session }: { session: odoo.OdooSession
                 </div>
                 <span style={{ fontSize: 20, fontWeight: 800, color: g.count > 0 ? s.color : "#94a3b8", minWidth: 40, textAlign: "right" }}>{g.count}</span>
                 {g.count > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: s.color, background: "#fff", border: `1px solid ${s.border}`, padding: "2px 8px", borderRadius: 99 }}>{s.label}</span>}
+                {g.screen && g.count > 0 && (
+                  <a href={`/?screen=${g.screen}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+                    style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", textDecoration: "none", background: "#eff6ff", padding: "4px 10px", borderRadius: 8, whiteSpace: "nowrap" }}>
+                    Ouvrir →
+                  </a>
+                )}
                 <span style={{ color: "#94a3b8", fontSize: 12 }}>{isOpen ? "▲" : "▼"}</span>
               </button>
               {isOpen && g.items.length > 0 && (

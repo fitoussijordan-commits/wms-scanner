@@ -1512,7 +1512,18 @@ export default function Page() {
         console.warn("Chargement du mapping Odoo échoué, valeurs par défaut utilisées.", e);
       }
       const s = loadSess();
-      if (s) { setSession(s); setScreen("home"); setHistory(loadHistory()); odoo.getLocations(s).then(setLocations).catch(() => { clearSess(); setScreen("login"); }); }
+      if (s) {
+        setSession(s); setHistory(loadHistory());
+        odoo.getLocations(s).then(setLocations).catch(() => { clearSess(); setScreen("login"); });
+        // Deep-link : ?screen=<écran> (venant du tableau de bord alertes p.ex.)
+        let target = "home";
+        try {
+          const sc = new URLSearchParams(window.location.search).get("screen");
+          const VALID = ["transfer","prep","waitingOrders","packing","arrival","eshop","inventory","inventoryCount","freeScan","negativeStock","reprintLabel","productImport","supplierImport","returns","order","eshopSorties","locationManager","imparfaite","fefo","admin"];
+          if (sc && VALID.includes(sc)) target = sc;
+        } catch {}
+        setScreen(target as any);
+      }
     })();
   }, []);
 

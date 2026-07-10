@@ -2534,7 +2534,7 @@ export async function createInventoryAdjustment(
 // AGENT DE SURVEILLANCE — collecte des alertes WMS pour le tableau de bord.
 // ══════════════════════════════════════════════════════════════════════════
 export interface AlertItem { label: string; detail?: string; qty?: number; extra?: string }
-export interface AlertGroup { key: string; title: string; icon: string; severity: "critical" | "warning" | "info"; count: number; items: AlertItem[]; error?: string }
+export interface AlertGroup { key: string; title: string; icon: string; severity: "critical" | "warning" | "info"; count: number; items: AlertItem[]; error?: string; screen?: string }
 
 export async function collectAlerts(session: OdooSession, opts?: { returnDays?: number; dlvMonths?: number }): Promise<AlertGroup[]> {
   const returnDays = opts?.returnDays ?? 10;
@@ -2544,7 +2544,7 @@ export async function collectAlerts(session: OdooSession, opts?: { returnDays?: 
   try {
     const negs = await getNegativeStockQuants(session);
     groups.push({
-      key: "negative", title: "Stock négatif", icon: "⚠️", severity: "critical",
+      key: "negative", title: "Stock négatif", icon: "⚠️", severity: "critical", screen: "negativeStock",
       count: negs.length,
       items: negs.slice(0, 100).map((q: any) => ({
         label: Array.isArray(q.product_id) ? q.product_id[1] : String(q.product_id),
@@ -2576,7 +2576,7 @@ export async function collectAlerts(session: OdooSession, opts?: { returnDays?: 
         items.push({ label: p.name, detail: Array.isArray(p.partner_id) ? p.partner_id[1] : (p.origin || ""), extra: `${days} j` });
       }
     }
-    groups.push({ key: "returns", title: `Retours en attente > ${returnDays} j`, icon: "↩️", severity: "warning", count: items.length, items });
+    groups.push({ key: "returns", title: `Retours en attente > ${returnDays} j`, icon: "↩️", severity: "warning", screen: "returns", count: items.length, items });
   } catch (e: any) { groups.push({ key: "returns", title: "Retours en attente", icon: "↩️", severity: "warning", count: 0, items: [], error: e?.message }); }
 
   // 3) DLV / DLC COURTES (lots qui périment bientôt)
@@ -2586,7 +2586,7 @@ export async function collectAlerts(session: OdooSession, opts?: { returnDays?: 
     const short = (lots as any[]).filter(l => l.dlvDate && new Date(l.dlvDate) <= soon && (l.qtyDispo ?? l.qty) > 0)
       .sort((a, b) => (a.dlvDate < b.dlvDate ? -1 : 1));
     groups.push({
-      key: "dlv", title: "DLV / DLC courtes", icon: "⏳", severity: "warning", count: short.length,
+      key: "dlv", title: "DLV / DLC courtes", icon: "⏳", severity: "warning", screen: "fefo", count: short.length,
       items: short.slice(0, 100).map(l => ({ label: `${l.ref} — ${l.name}`, detail: `Lot ${l.lotName}`, qty: l.qtyDispo ?? l.qty, extra: String(l.dlvDate).slice(0, 10) })),
     });
   } catch (e: any) { groups.push({ key: "dlv", title: "DLV / DLC courtes", icon: "⏳", severity: "warning", count: 0, items: [], error: e?.message }); }
@@ -2598,10 +2598,33 @@ export async function collectAlerts(session: OdooSession, opts?: { returnDays?: 
     const tmpls = await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), [["sale_ok", "=", false], ["type", "=", "product"]], ["id", "name", "default_code", "qty_available"], 500);
     const withStock = (tmpls as any[]).filter(t => (t.qty_available ?? 0) > 0);
     groups.push({
-      key: "nonsellable", title: "Stock non vendable (Odoo)", icon: "🚫", severity: "info", count: withStock.length,
+      key: "nonsellable", title: "Stock non vendable (Odoo)", icon: "🚫", severity: "info", screen: "productImport", count: withStock.length,
       items: withStock.slice(0, 100).map(t => ({ label: `${t.default_code || ""} ${t.name}`.trim(), qty: t.qty_available })),
     });
   } catch (e: any) { groups.push({ key: "nonsellable", title: "Stock non vendable", icon: "🚫", severity: "info", count: 0, items: [], error: e?.message }); }
+
+  // 5) SORTIES ORPHELINES (stock en Sortie sans réservation)
+  try {
+    const orphans = await getOrphanMoves(session);
+    groups.push({
+      key: "orphans", title: "Sorties orphelines", icon: "📤", severity: "warning", screen: "inventory", count: orphans.length,
+      items: orphans.slice(0, 100).map((o: any) => ({ label: `${o.ref} — ${o.name}`, detail: o.locationName, qty: o.uncoveredQty, extra: o.lotName })),
+    });
+  } catch (e: any) { groups.push({ key: "orphans", title: "Sorties orphelines", icon: "📤", severity: "warning", count: 0, items: [], error: e?.message }); }
+
+  // 6) STRATÉGIE DE RANGEMENT À RÉGLER (produits stockables sans règle de putaway)
+  try {
+    const rules = await searchRead(session, "stock.putaway.rule", [], ["product_id"], 5000);
+    const withRule = new Set<number>();
+    for (const r of rules) { const pid = Array.isArray(r.product_id) ? r.product_id[0] : r.product_id; if (pid) withRule.add(pid); }
+    // Produits stockables actifs et vendables → devraient avoir une règle.
+    const prods = await searchRead(session, M("MODEL_PRODUCT"), [["type", "=", "product"], ["active", "=", true], ["sale_ok", "=", true]], ["id", "default_code", "name"], 3000);
+    const missing = (prods as any[]).filter(p => !withRule.has(p.id));
+    groups.push({
+      key: "putaway", title: "Stratégie de rangement à régler", icon: "📦", severity: "info", screen: "locationManager", count: missing.length,
+      items: missing.slice(0, 100).map(p => ({ label: `${p.default_code || ""} ${p.name}`.trim() })),
+    });
+  } catch (e: any) { groups.push({ key: "putaway", title: "Stratégie de rangement", icon: "📦", severity: "info", count: 0, items: [], error: e?.message }); }
 
   return groups;
 }
