@@ -985,6 +985,7 @@ export default function Dashboard() {
       const allLignes: CarrierLigne[] = [];
       const allCommandes: CarrierCommande[] = [];
       const allFactures: CarrierFacture[] = [];
+      const statsList: CarrierStats[] = [];
       let omises = false;
       for (const file of files) {
         const buf = await file.arrayBuffer();
@@ -1002,8 +1003,20 @@ export default function Dashboard() {
         allLignes.push(...(data.lignes || []));
         allCommandes.push(...(data.commandes || []));
         allFactures.push(...(data.factures || []));
+        if (data.stats) statsList.push(data.stats);
         if (data.lignes_omises) omises = true;
       }
+      // Stats CUMULÉES sur toutes les factures.
+      const mergedStats: CarrierStats = {
+        nb_lignes: statsList.reduce((s, x) => s + (x.nb_lignes || 0), 0),
+        nb_commandes: statsList.reduce((s, x) => s + (x.nb_commandes || 0), 0),
+        total_transport: statsList.reduce((s, x) => s + (x.total_transport || 0), 0),
+        total_facture: statsList.reduce((s, x) => s + (x.total_facture || 0), 0),
+        total_options: statsList.reduce((s, x) => s + (x.total_options || 0), 0),
+        surcharge_carburant: statsList.reduce((s, x) => s + (x.surcharge_carburant || 0), 0),
+        total_general_ht: statsList.reduce((s, x) => s + (x.total_general_ht || 0), 0),
+      };
+      setCarStats(mergedStats);
       // Dédoublonne les commandes par réf (une même réf peut apparaître sur 2 factures → on cumule).
       const byRef: Record<string, CarrierCommande> = {};
       for (const c of allCommandes) {
