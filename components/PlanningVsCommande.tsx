@@ -339,7 +339,9 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
           const price = orderMap.price ? toNum(r[orderMap.price]) : 0;
           const nameSrc = orderMap.name ? String(r[orderMap.name] ?? "") : "";
           const received = recByArticle[article] ?? 0;
-          const ruptQty = received - orderQty;
+          // Rupture = MANQUE uniquement (commandé non reçu). Négatif = manque.
+          // On NE compte PAS les surplus (reçu > commandé, ex. Order Form périmé) → plafonné à 0.
+          const ruptQty = Math.min(0, received - orderQty);   // ≤ 0 : ce qui manque
           const ruptEuro = ruptQty * price;
           const budgetOrder = orderQty * price;
           return { article, nameSrc, orderQty, price, budgetOrder, received, ruptQty, ruptEuro };
