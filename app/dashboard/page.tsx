@@ -973,30 +973,54 @@ export default function Dashboard() {
     return `${year}-${mm}-${dd}`;
   };
 
-  async function carHandlePdf(file: File) {
-    setCarLoading(true); setCarError(""); setCarPdfName(file.name);
+  async function carHandlePdf(file: File) { return carHandlePdfs([file]); }
+
+  // Extrait UN ou PLUSIEURS PDF de factures et CUMULE les résultats.
+  async function carHandlePdfs(files: File[]) {
+    if (!files.length) return;
+    setCarLoading(true); setCarError("");
+    setCarPdfName(files.length === 1 ? files[0].name : `${files.length} factures`);
     setCarOdoo([]); setCarOdooLoaded(false); setCarView("commandes");
     try {
-      const buf = await file.arrayBuffer();
-      const res = await fetch("/api/pdf-extract", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: buf });
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.includes("application/json")) {
-        const txt = (await res.text()).slice(0, 200);
-        setCarError(res.status === 404
-          ? "L'extraction PDF n'est disponible qu'en ligne (Vercel), pas en local. Teste depuis l'URL déployée."
-          : `Réponse inattendue du serveur (HTTP ${res.status}) : ${txt}`);
-        return;
+      const allLignes: CarrierLigne[] = [];
+      const allCommandes: CarrierCommande[] = [];
+      const allFactures: CarrierFacture[] = [];
+      let omises = false;
+      for (const file of files) {
+        const buf = await file.arrayBuffer();
+        const res = await fetch("/api/pdf-extract", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: buf });
+        const ct = res.headers.get("content-type") || "";
+        if (!ct.includes("application/json")) {
+          const txt = (await res.text()).slice(0, 200);
+          setCarError(res.status === 404
+            ? "L'extraction PDF n'est disponible qu'en ligne (Vercel), pas en local. Teste depuis l'URL déployée."
+            : `Réponse inattendue du serveur (HTTP ${res.status}) : ${txt}`);
+          return;
+        }
+        const data = await res.json();
+        if (data.error) { setCarError(`Erreur extraction (${file.name}) : ` + data.error); return; }
+        allLignes.push(...(data.lignes || []));
+        allCommandes.push(...(data.commandes || []));
+        allFactures.push(...(data.factures || []));
+        if (data.lignes_omises) omises = true;
       }
-      const data = await res.json();
-      if (data.error) { setCarError("Erreur extraction : " + data.error); return; }
-      setCarLignes(data.lignes); setCarCommandes(data.commandes); setCarStats(data.stats);
-      setCarFactures(data.factures || []);
-      setCarLignesOmises(!!data.lignes_omises);
-      // Bornes de dates (juste pour l'entête de l'export, plus de filtre)
-      const isoDates = (data.lignes as CarrierLigne[]).map(l => carParseDate(l.date)).filter(Boolean) as string[];
+      // Dédoublonne les commandes par réf (une même réf peut apparaître sur 2 factures → on cumule).
+      const byRef: Record<string, CarrierCommande> = {};
+      for (const c of allCommandes) {
+        if (byRef[c.ref]) {
+          const e = byRef[c.ref];
+          byRef[c.ref] = { ...e, colis: e.colis + c.colis, weight: e.weight + c.weight, transport: e.transport + c.transport, options: (e.options || 0) + (c.options || 0), total: e.total + c.total };
+        } else byRef[c.ref] = { ...c };
+      }
+      const mergedCommandes = Object.values(byRef);
+
+      setCarLignes(allLignes);
+      setCarCommandes(mergedCommandes);
+      setCarFactures(allFactures);
+      setCarLignesOmises(omises);
+      const isoDates = allLignes.map(l => carParseDate(l.date)).filter(Boolean) as string[];
       if (isoDates.length) { isoDates.sort(); setCarStart(isoDates[0]); setCarEnd(isoDates[isoDates.length - 1]); }
-      // Recherche Odoo automatique par référence (S…), sans filtre de date
-      const refs = (data.commandes as CarrierCommande[]).map(c => c.ref);
+      const refs = mergedCommandes.map(c => c.ref);
       if (session && refs.length) {
         setCarSearching(true);
         try {
@@ -5553,10 +5577,10 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                   onClick={() => carPdfInput.current?.click()}
                   onDragOver={e => { e.preventDefault(); setCarDrag(true); }}
                   onDragLeave={() => setCarDrag(false)}
-                  onDrop={e => { e.preventDefault(); setCarDrag(false); const f = e.dataTransfer.files[0]; if (f) carHandlePdf(f); }}
+                  onDrop={e => { e.preventDefault(); setCarDrag(false); const fs = Array.from(e.dataTransfer.files); if (fs.length) carHandlePdfs(fs); }}
                   style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, padding: "70px 24px", border: `2px dashed ${carDrag ? "var(--accent)" : "var(--border)"}`, borderRadius: 16, background: carDrag ? "var(--accent-soft)" : "var(--bg-raised)", cursor: "pointer", transition: "all .2s" }}
                 >
-                  <input ref={carPdfInput} type="file" accept="application/pdf" hidden onChange={e => e.target.files?.[0] && carHandlePdf(e.target.files[0])} />
+                  <input ref={carPdfInput} type="file" accept="application/pdf" multiple hidden onChange={e => { const fs = Array.from(e.target.files || []); if (fs.length) carHandlePdfs(fs); }} />
                   {carLoading ? (
                     <>
                       <div style={{ width: 44, height: 44, border: "3px solid var(--border)", borderTopColor: "var(--accent)", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
@@ -5569,8 +5593,8 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                     <>
                       <div style={{ width: 60, height: 60, borderRadius: 16, background: "var(--accent-soft)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>{I.upload}</div>
                       <div style={{ textAlign: "center" }}>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Dépose ta facture transporteur</div>
-                        <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 3 }}>Format PDF — ou clique pour parcourir</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Dépose tes factures transporteur</div>
+                        <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 3 }}>PDF — une ou PLUSIEURS à la fois (elles se cumulent)</div>
                       </div>
                       <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Étape suivante : bornage par date + recherche directe dans Odoo</div>
                     </>
