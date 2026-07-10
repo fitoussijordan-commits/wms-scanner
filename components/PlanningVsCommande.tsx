@@ -154,7 +154,11 @@ export default function PlanningVsCommande({ session }: { session: odoo.OdooSess
       budgetSissiEur = 0, budgetForecastEur = 0, nbNonCmd = 0, sumNum = 0, sumF = 0, sumNumJ = 0, sumE = 0;
     for (const r of rows) {
       order += r.orderQty || 0; received += r.received || 0; budgetOrder += r.budgetOrder || 0;
-      ruptEuro += r.ruptEuro || 0; forecast += r.forecastJ || 0; budgetSissi += r.budgetFinal || 0;
+      // RECALCULE la rupture (manque uniquement) au lieu de reprendre l'ancienne valeur stockée.
+      const manque = Math.min(0, (r.received || 0) - (r.orderQty || 0)); // ≤ 0
+      const prix = r.price || 0;
+      ruptEuro += manque * prix;
+      forecast += r.forecastJ || 0; budgetSissi += r.budgetFinal || 0;
       budgetSissiEur += r.budgetFin || 0; budgetForecastEur += r.budgetForecast || 0;
       if ((r.orderQty || 0) === 0) nbNonCmd++;
       if ((r.budgetFinal || 0) > 0) { sumNum += Math.min(r.orderQty || 0, r.budgetFinal); sumF += r.budgetFinal; }
