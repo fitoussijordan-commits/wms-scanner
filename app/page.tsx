@@ -4599,8 +4599,13 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
       // Repère la ligne d'en-tête (1ère ligne non vide) et mappe les colonnes.
       const header = (rows[0] || []).map((c: any) => String(c).toLowerCase().trim());
       const findCol = (...keys: string[]) => header.findIndex((h: string) => keys.some(k => h.includes(k)));
-      const cName = findCol("nom complet", "destinataire", "nom", "name", "société", "societe", "raison");
+      // Prénom d'abord (colonne dédiée).
       const cFirst = findCol("prénom", "prenom", "first");
+      // Nom : on cherche "nom/name/société…" MAIS on EXCLUT la colonne prénom
+      // (car "prénom" contient "nom" → sinon les deux pointent sur prénom → "Joëlle Joëlle").
+      const findName = (...keys: string[]) => header.findIndex((h: string, idx: number) =>
+        idx !== cFirst && !h.includes("prénom") && !h.includes("prenom") && keys.some(k => h.includes(k)));
+      const cName = findName("nom complet", "destinataire", "nom", "name", "société", "societe", "raison");
       const cAddr = findCol("adresse", "rue", "address", "ligne 1", "line1", "voie");
       const cAddr2 = findCol("complément", "complement", "ligne 2", "line2", "adresse 2");
       const cZip = findCol("code postal", "cp", "zip", "postal");
