@@ -11510,6 +11510,7 @@ function EshopChariotSkus({ session }: { session: any }) {
   // Stock chariot par SKU (géré dans l'app, partagé via Supabase)
   const [stock, setStock] = useState<Record<string, number>>({});
   const [stockDraft, setStockDraft] = useState<Record<string, string>>({});
+  const [stockError, setStockError] = useState("");
   // Désignation Odoo par SKU (rapprochement via réf / réf fournisseur / EAN / nom)
   const [names, setNames] = useState<Record<string, { name: string; ref: string }>>({});
   const [resolving, setResolving] = useState(false);
@@ -11589,12 +11590,21 @@ function EshopChariotSkus({ session }: { session: any }) {
     if (raw == null || raw === "") return;
     const v = parseInt(raw, 10);
     if (Number.isNaN(v) || v < 0) return;
+    setStockError("");
     try {
       const sb = await import("@/lib/supabase");
       const next = await sb.setChariotStock(sku, v);
+      // Vérifie que l'écriture a bien été PARTAGÉE (relit depuis Supabase).
+      const check = await sb.getChariotStock();
+      if ((check[sku] ?? -1) !== v) {
+        setStockError(`⚠ Le stock de ${sku} n'a PAS été enregistré en base (partagé). Réessaie — si ça persiste, problème d'accès Supabase.`);
+        return;
+      }
       setStock(next);
       setStockDraft(prev => { const c = { ...prev }; delete c[sku]; return c; });
-    } catch {}
+    } catch (e: any) {
+      setStockError("⚠ Échec enregistrement stock : " + (e?.message || e) + " — la valeur n'est PAS partagée entre postes.");
+    }
   };
 
   const save = (updated: string[]) => {
@@ -11620,6 +11630,9 @@ function EshopChariotSkus({ session }: { session: any }) {
       <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>
         Ces SKU seront affichés avec l'emplacement <strong>Chariot Eshop</strong> (partagé entre tous les utilisateurs)
       </div>
+      {stockError && (
+        <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#dc2626", borderRadius: 8, padding: "8px 12px", fontSize: 12, marginBottom: 10 }}>{stockError}</div>
+      )}
       <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
         <input value={newSku} onChange={e => setNewSku(e.target.value)}
           onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") add(); }}
