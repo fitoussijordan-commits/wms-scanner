@@ -542,9 +542,16 @@ async function generatePackingListPDF(chain: {
 
     doc.setFont("helvetica", "normal");
     doc.setTextColor(...BLACK);
-    doc.text(row.ref, colXs[1] + cols[1].w / 2, y + 4.8, { align: "center" });
-
-    const descFit = doc.splitTextToSize(row.ref, cols[2].w - 3);
+    // Sépare le CODE (chiffres/alphanum du début) de la DÉSIGNATION (le reste).
+    // Si pas de code numérique en tête (ex. "Cartons vides") → code vide, tout en désignation.
+    const mRef = row.ref.match(/^([A-Za-z]?\d[\d]*)\s+(.*)$/);
+    const codeArt = mRef ? mRef[1] : "";
+    const desig = mRef ? mRef[2] : row.ref;
+    // Code article (tronqué à la largeur de colonne)
+    const codeFit = doc.splitTextToSize(codeArt, cols[1].w - 3);
+    doc.text(codeFit[0] || "", colXs[1] + cols[1].w / 2, y + 4.8, { align: "center" });
+    // Description
+    const descFit = doc.splitTextToSize(desig, cols[2].w - 3);
     doc.text(descFit[0] || "", colXs[2] + 2, y + 4.8);
     doc.text(row.lot || "", colXs[3] + cols[3].w / 2, y + 4.8, { align: "center" });
     doc.text(row.qty > 0 ? String(row.qty) : "", colXs[4] + cols[4].w / 2, y + 4.8, { align: "center" });
