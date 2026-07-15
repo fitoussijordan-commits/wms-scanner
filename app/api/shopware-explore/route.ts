@@ -300,29 +300,25 @@ export async function GET(req: NextRequest) {
     // ── generate: tenter de générer une étiquette TNT pour une commande ──
     // ── activeProducts: liste TOUS les produits actifs avec leur stock (audit catalogue) ──
     if (action === "activeProducts") {
-      // Liste des articles actifs (paginée). On récupère les variants pour avoir number + inStock.
-      const all: any[] = [];
+      // Liste des articles actifs. 1re page → total, puis pages suivantes EN PARALLÈLE.
       const pageSize = 500;
-      let start = 0;
-      for (let page = 0; page < 20; page++) { // garde-fou 10000 max
-        const url = `/articles?filter[0][property]=active&filter[0][value]=1&limit=${pageSize}&start=${start}`;
-        const r = await safeJson(await swFetch(url, creds));
-        const data = r.json?.data || [];
-        if (!data.length) break;
-        for (const a of data) {
-          // mainDetail contient number + inStock
-          const md = a.mainDetail || {};
-          all.push({
-            articleId: a.id,
-            detailId: md.id || a.mainDetailId, // detailId de la variante (lien vers les emplacements)
-            number: md.number || a.mainDetailId,
-            name: a.name,
-            active: a.active,
-            inStock: md.inStock ?? null,
-          });
-        }
-        if (data.length < pageSize) break;
-        start += pageSize;
+      const mapArticle = (a: any) => {
+        const md = a.mainDetail || {};
+        return { articleId: a.id, detailId: md.id || a.mainDetailId, number: md.number || a.mainDetailId, name: a.name, active: a.active, inStock: md.inStock ?? null };
+      };
+      const buildUrl = (start: number) => `/articles?filter[0][property]=active&filter[0][value]=1&limit=${pageSize}&start=${start}`;
+
+      const first = await safeJson(await swFetch(buildUrl(0), creds));
+      const firstData = first.json?.data || [];
+      const total: number = first.json?.total ?? firstData.length;
+      const all: any[] = firstData.map(mapArticle);
+
+      if (total > pageSize) {
+        // Toutes les pages restantes lancées d'un coup (parallèle).
+        const starts: number[] = [];
+        for (let s = pageSize; s < total && s < 10000; s += pageSize) starts.push(s);
+        const pages = await Promise.all(starts.map(async (s) => safeJson(await swFetch(buildUrl(s), creds))));
+        for (const p of pages) for (const a of (p.json?.data || [])) all.push(mapArticle(a));
       }
       return NextResponse.json({ count: all.length, products: all });
     }
@@ -373,7 +369,7 @@ export async function GET(req: NextRequest) {
       const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=2000", creds));
       const bins = (blRes.json?.data || []).filter((b: any) => b.code !== "pickware_null_bin_location");
       const byDetail: Record<string, { code: string; stock: number }> = {};
-      const batchSize = 10;
+      const batchSize = 20; // parallélisme accru (chargement audit plus rapide)
       for (let i = 0; i < bins.length; i += batchSize) {
         const slice = bins.slice(i, i + batchSize);
         const details = await Promise.all(
