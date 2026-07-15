@@ -30,6 +30,25 @@ export async function suggestProducts(session: OdooSession, q: string): Promise<
   return rows.map((r: any) => ({ id: r.id, name: r.name || "", ref: r.default_code || "" }));
 }
 
+/** Lots en STOCK d'un produit (emplacements internes), avec quantité dispo. Le + dispo d'abord. */
+export async function getProductStockLots(session: OdooSession, productId: number): Promise<{ lotId: number; lotName: string; qty: number }[]> {
+  if (!productId) return [];
+  const quants = await searchRead(session, M("MODEL_QUANT"),
+    [["product_id", "=", productId], ["lot_id", "!=", false], ["location_id.usage", "=", "internal"], ["quantity", ">", 0]],
+    ["lot_id", "quantity", "reserved_quantity"], 200);
+  // Agrège par lot (un lot peut être sur plusieurs emplacements).
+  const byLot: Record<number, { lotName: string; qty: number }> = {};
+  for (const q of quants) {
+    const lid = Array.isArray(q.lot_id) ? q.lot_id[0] : null;
+    if (!lid) continue;
+    if (!byLot[lid]) byLot[lid] = { lotName: Array.isArray(q.lot_id) ? q.lot_id[1] : "", qty: 0 };
+    byLot[lid].qty += (q.quantity || 0);
+  }
+  return Object.entries(byLot)
+    .map(([lotId, v]) => ({ lotId: Number(lotId), lotName: v.lotName, qty: Math.round(v.qty) }))
+    .sort((a, b) => b.qty - a.qty);
+}
+
 // ── Recherche des VENTES (livraisons OUT) d'un produit pour un client ──
 // Renvoie une ligne par livraison validée (done) : date, n° OUT, commande, qté, lots.
 export interface ClientProductSale {

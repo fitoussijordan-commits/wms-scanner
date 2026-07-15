@@ -9,6 +9,7 @@ import * as sbase from "@/lib/supabase";
 import * as fieldMap from "@/lib/fieldMap";
 import { useAdminMode } from "@/lib/adminMode";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
+import ChainLineInput from "@/components/ChainLineInput";
 import AdminScreen, { ALL_TOOLS } from "@/components/AdminScreen";
 import * as pn from "@/lib/printnode";
 
@@ -5180,25 +5181,19 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
                 {/* Lignes ref */}
                 <div style={{ padding: "8px 10px" }}>
                   {pal2.lines.map((line, li) => (
-                    <div key={li} style={{ display: "flex", gap: 5, marginBottom: 5, alignItems: "center" }}>
-                      <input value={line.ref} onChange={e => {
-                        const ps = [...chain.palettes]; ps[pi].lines[li].ref = e.target.value; setChain({ ...chain, palettes: ps });
-                      }} placeholder="Réf / Désignation"
-                        style={{ flex: 2, minWidth: 0, padding: "7px 8px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
-                      <input value={line.lot} onChange={e => {
-                        const ps = [...chain.palettes]; ps[pi].lines[li].lot = e.target.value; setChain({ ...chain, palettes: ps });
-                      }} placeholder="Lot"
-                        style={{ flex: 1, minWidth: 0, padding: "7px 6px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
-                      <input value={line.qty} onChange={e => {
-                        const ps = [...chain.palettes]; ps[pi].lines[li].qty = e.target.value; setChain({ ...chain, palettes: ps });
-                      }} placeholder="Qté"
-                        style={{ width: 52, padding: "7px 4px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", textAlign: "center" as const, boxSizing: "border-box" as const }} />
-                      {pal2.lines.length > 1 && (
-                        <button onClick={() => {
-                          const ps = [...chain.palettes]; ps[pi].lines = ps[pi].lines.filter((_, j) => j !== li); setChain({ ...chain, palettes: ps });
-                        }} style={{ background: "none", border: "none", color: C.textMuted, cursor: "pointer", fontSize: 16, lineHeight: 1, flexShrink: 0 }}>✕</button>
-                      )}
-                    </div>
+                    session ? (
+                      <ChainLineInput key={li} session={session} line={line as any}
+                        onChange={(nl) => { const ps = [...chain.palettes]; ps[pi].lines[li] = nl as any; setChain({ ...chain, palettes: ps }); }}
+                        onRemove={() => { const ps = [...chain.palettes]; ps[pi].lines = ps[pi].lines.filter((_, j) => j !== li); setChain({ ...chain, palettes: ps }); }}
+                        canRemove={pal2.lines.length > 1}
+                      />
+                    ) : (
+                      <div key={li} style={{ display: "flex", gap: 5, marginBottom: 5, alignItems: "center" }}>
+                        <input value={line.ref} onChange={e => { const ps = [...chain.palettes]; ps[pi].lines[li].ref = e.target.value; setChain({ ...chain, palettes: ps }); }} placeholder="Réf / Désignation" style={{ flex: 2, minWidth: 0, padding: "7px 8px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+                        <input value={line.lot} onChange={e => { const ps = [...chain.palettes]; ps[pi].lines[li].lot = e.target.value; setChain({ ...chain, palettes: ps }); }} placeholder="Lot" style={{ flex: 1, minWidth: 0, padding: "7px 6px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+                        <input value={line.qty} onChange={e => { const ps = [...chain.palettes]; ps[pi].lines[li].qty = e.target.value; setChain({ ...chain, palettes: ps }); }} placeholder="Qté" style={{ width: 52, padding: "7px 4px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", textAlign: "center" as const, boxSizing: "border-box" as const }} />
+                      </div>
+                    )
                   ))}
                   <button onClick={() => {
                     const ps = [...chain.palettes]; ps[pi].lines.push({ ref: "", qty: "", lot: "" }); setChain({ ...chain, palettes: ps });
