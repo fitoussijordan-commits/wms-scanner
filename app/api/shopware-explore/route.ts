@@ -484,7 +484,9 @@ export async function GET(req: NextRequest) {
         documents: [],
         billing: stripAddr(src.billing),
         shipping: stripAddr(src.shipping || src.billing),
-        paymentStatusId: 12, // payée — pour remonter normalement dans le flux e-shop (renvoi gratuit)
+        // Hérite du statut de paiement de la commande source (déjà payée) plutôt qu'un ID
+        // en dur : les IDs de statut de paiement peuvent différer d'une boutique à l'autre.
+        paymentStatusId: src.paymentStatusId,
         orderStatusId: 0,
         // Shopware génère lui-même le "number" (impossible à forcer via l'API) — on rend la
         // traçabilité explicite dans le commentaire interne + trackingCode, visibles dans le backend.
@@ -519,6 +521,33 @@ export async function GET(req: NextRequest) {
         newOrderNumber,
         raw: newOrderId ? undefined : createR.json, // debug si l'id n'a pas été trouvé
       });
+    }
+
+    // ── findDuplicates: DIAGNOSTIC (lecture seule) — retrouve les commandes créées par
+    // duplicateOrder en cherchant "RENVOI GRATUIT" dans le commentaire interne, sur les
+    // commandes les plus récentes. Ne crée rien : sert à vérifier qu'un duplicata existe
+    // vraiment et voir pourquoi il n'apparaît pas dans les vues habituelles du backend.
+    if (action === "findDuplicates") {
+      const res = await swFetch("/orders?limit=50&sort[0][property]=orderTime&sort[0][direction]=DESC", creds);
+      const r = await safeJson(res);
+      if (!r.json?.data) return NextResponse.json({ error: "Non-JSON response", raw: r.raw });
+      // Le listing /orders ne renvoie pas internalComment → on doit charger le détail de chaque
+      // commande récente pour vérifier. On limite aux 50 plus récentes pour rester raisonnable.
+      const candidates = r.json.data as any[];
+      const details = await Promise.all(candidates.map(async (o: any) => {
+        const dRes = await swFetch(`/orders/${o.id}`, creds);
+        const dR = await safeJson(dRes);
+        return dR.json?.data;
+      }));
+      const matches = details
+        .filter(Boolean)
+        .filter((o: any) => (o.internalComment || "").includes("RENVOI GRATUIT"))
+        .map((o: any) => ({
+          id: o.id, number: o.number, orderStatusId: o.orderStatusId, paymentStatusId: o.paymentStatusId,
+          orderTime: o.orderTime, internalComment: o.internalComment, customerId: o.customerId,
+          invoiceAmount: o.invoiceAmount, detailsCount: (o.details || []).length,
+        }));
+      return NextResponse.json({ scanned: candidates.length, matches });
     }
 
     return NextResponse.json({ error: "actions: ping, orders, dispatches, order, pickware" }, { status: 400 });
