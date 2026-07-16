@@ -945,6 +945,37 @@ interface ResendRow {
 function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
   const [input, setInput] = useState("");
   const [rows, setRows] = useState<ResendRow[]>([]);
+  const [diag, setDiag] = useState<{ loading: boolean; scanned: number; matches: any[] } | null>(null);
+
+  const runDiagnostic = async () => {
+    setDiag({ loading: true, scanned: 0, matches: [] });
+    try {
+      const res = await fetch(`/api/shopware-explore?action=findDuplicates`).then(x => x.json());
+      setDiag({ loading: false, scanned: res.scanned || 0, matches: res.matches || [] });
+    } catch (e: any) {
+      onToast("Erreur diagnostic : " + e.message, "error");
+      setDiag(null);
+    }
+  };
+
+  // Suppression d'un duplicata de test (montant 0€ uniquement, refusé côté serveur sinon).
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const deleteDuplicate = async (m: { number: string; invoiceAmount: number; number_label?: string }) => {
+    if (!confirm(`Supprimer DÉFINITIVEMENT la commande n° ${m.number} (montant ${m.invoiceAmount}€) ?\nCette action est irréversible.`)) return;
+    setDeleting(m.number);
+    try {
+      const res = await fetch(`/api/shopware-explore?action=deleteOrder&number=${encodeURIComponent(m.number)}`, { headers: writeHeaders }).then(x => x.json());
+      if (res.ok) {
+        onToast(`✓ Commande ${m.number} supprimée`, "success");
+        setDiag(prev => prev ? { ...prev, matches: prev.matches.filter((x: any) => x.number !== m.number) } : prev);
+      } else {
+        onToast("Erreur : " + (res.error || "échec"), "error");
+      }
+    } catch (e: any) {
+      onToast("Erreur : " + e.message, "error");
+    }
+    setDeleting(null);
+  };
 
   const addNumbers = () => {
     const nums = input.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
@@ -990,6 +1021,41 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
         Recrée une commande Shopware existante (mêmes articles, même client) à 0€, pour un renvoi gratuit (colis perdu, erreur de préparation…).
         La nouvelle commande remonte normalement dans Shopware → SendCloud, où tu pourras générer l'étiquette.
       </div>
+
+      {/* Diagnostic (lecture seule) : retrouve les duplicatas déjà créés, sans rien recréer */}
+      <div style={{ background: C.blueSoft, border: `1px solid #bfdbfe`, borderRadius: 10, padding: 12, marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: diag ? 8 : 0 }}>
+          <span style={{ fontSize: 12, color: C.textSec, flex: 1 }}>Vérifier qu'un duplicata déjà créé existe bien (scan des 50 dernières commandes, lecture seule)</span>
+          <button onClick={runDiagnostic} disabled={diag?.loading}
+            style={{ padding: "7px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: "pointer", opacity: diag?.loading ? 0.6 : 1 }}>
+            {diag?.loading ? "Scan…" : "🔍 Diagnostic"}
+          </button>
+        </div>
+        {diag && !diag.loading && (
+          diag.matches.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: C.textMuted }}>{diag.scanned} commande(s) scannée(s) — aucun duplicata trouvé.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {diag.matches.map((m, i) => (
+                <div key={i} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, display: "flex", alignItems: "flex-start", gap: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div><strong style={{ fontFamily: "monospace" }}>n° {m.number}</strong> (id {m.id}) — {m.detailsCount} ligne(s) — {m.orderTime}</div>
+                    <div style={{ color: C.textMuted, marginTop: 2 }}>{m.internalComment}</div>
+                    <div style={{ color: C.textMuted, marginTop: 2 }}>orderStatusId {m.orderStatusId} · paymentStatusId {m.paymentStatusId} · montant {m.invoiceAmount}€</div>
+                  </div>
+                  {Number(m.invoiceAmount) === 0 && (
+                    <button onClick={() => deleteDuplicate(m)} disabled={deleting === m.number}
+                      style={{ padding: "6px 12px", background: C.red, color: "#fff", border: "none", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: deleting === m.number ? 0.6 : 1, whiteSpace: "nowrap" }}>
+                      {deleting === m.number ? "…" : "🗑 Supprimer"}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </div>
+
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addNumbers(); }}
           placeholder="Numéro(s) de commande Shopware (ex: ECDE2643350) — séparés par espace/virgule"

@@ -14,7 +14,7 @@ function getCreds() {
 }
 
 // Actions qui ÉCRIVENT dans Shopware → exigent le token interne (x-wms-token).
-const WRITE_ACTIONS = new Set(["setStock", "binSetStock", "duplicateOrder"]);
+const WRITE_ACTIONS = new Set(["setStock", "binSetStock", "duplicateOrder", "deleteOrder"]);
 
 async function swFetch(path: string, creds: { url: string; user: string; key: string }, method = "GET", body?: any) {
   const base64 = Buffer.from(`${creds.user}:${creds.key}`).toString("base64");
@@ -521,6 +521,38 @@ export async function GET(req: NextRequest) {
         newOrderNumber,
         raw: newOrderId ? undefined : createR.json, // debug si l'id n'a pas été trouvé
       });
+    }
+
+    // ── deleteOrder: supprime une commande Shopware par son NUMÉRO. ⚠ ÉCRITURE — IRRÉVERSIBLE ──
+    // Garde-fou : refuse de supprimer si invoiceAmount > 0 (on ne supprime que des commandes à 0€,
+    // typiquement des duplicatas de renvoi créés par erreur), sauf si ?force=1 est passé explicitement.
+    if (action === "deleteOrder") {
+      const number = searchParams.get("number");
+      const force = searchParams.get("force") === "1";
+      if (!number) return NextResponse.json({ error: "number requis" }, { status: 400 });
+
+      const searchRes = await swFetch(
+        `/orders?filter[0][property]=number&filter[0][value]=${encodeURIComponent(number)}&limit=1`,
+        creds
+      );
+      const searchR = await safeJson(searchRes);
+      if (!searchR.json?.data?.length) {
+        return NextResponse.json({ error: `Commande ${number} introuvable`, raw: searchR.raw }, { status: 404 });
+      }
+      const order = searchR.json.data[0];
+
+      if (!force && Number(order.invoiceAmount) > 0) {
+        return NextResponse.json({
+          error: `Refusé : cette commande a un montant de ${order.invoiceAmount}€ (probablement une vraie commande). Passe force=1 si c'est volontaire.`,
+        }, { status: 400 });
+      }
+
+      const delRes = await swFetch(`/orders/${order.id}`, creds, "DELETE");
+      if (delRes.status !== 200 && delRes.status !== 204) {
+        const delR = await safeJson(delRes);
+        return NextResponse.json({ error: `Échec suppression (${delRes.status})`, raw: delR.raw, json: delR.json }, { status: delRes.status });
+      }
+      return NextResponse.json({ ok: true, deletedNumber: number, deletedId: order.id, invoiceAmount: order.invoiceAmount });
     }
 
     // ── findDuplicates: DIAGNOSTIC (lecture seule) — retrouve les commandes créées par
