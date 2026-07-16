@@ -2877,7 +2877,6 @@ export default function Page() {
     { key: "imparfaite", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>, label: "Import Imparfaite", onClick: () => setScreen("imparfaite"), admin: true, badge: null, badgeColor: "" },
     { key: "fefo", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>, label: "Analyse FEFO", onClick: () => setScreen("fefo"), admin: true, badge: null, badgeColor: "" },
     { key: "dashboard", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; }, admin: true, badge: null, badgeColor: "" },
-    { key: "order", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>, label: "Commande", onClick: () => { try { localStorage.setItem("wms_order_session", JSON.stringify(session)); } catch {} window.open("/order", "_blank"); }, admin: false, badge: null, badgeColor: "" },
     { key: "admin", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>, label: "Administration", onClick: () => setScreen("admin"), admin: true, badge: null, badgeColor: "" },
   ];
   // ── Droits d'accès ──
@@ -2886,7 +2885,7 @@ export default function Page() {
   const amAdmin = session ? odoo.isAdmin(session) : false;
   const DEFAULT_TOOLS = new Set([
     "transfer", "prep", "waitingOrders", "packing", "arrival", "eshop",
-    "inventory", "inventoryCount", "freeScan", "returns", "labels", "reprintLabel", "order",
+    "inventory", "inventoryCount", "freeScan", "returns", "labels", "reprintLabel",
   ]);
   const canSee = (key: string): boolean => {
     if (amAdmin) return true;
