@@ -483,8 +483,12 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
           <div style={{ fontSize: 13, color: C.textMuted, padding: "8px 0" }}>{recentLoading ? "Chargement…" : "Aucune commande validée récemment"}</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {recentStatus.map((s, i) => (
-              <div key={i} style={{ border: `1px solid ${s.anomaly ? "#fecaca" : C.border}`, background: s.anomaly ? C.redSoft : C.bg, borderRadius: 10, padding: "10px 12px" }}>
+            {recentStatus.map((s, i) => {
+              const MAX_REFS = 6;
+              const shownRefs = s.orderNumbers.slice(0, MAX_REFS);
+              const hiddenCount = s.orderNumbers.length - shownRefs.length;
+              return (
+              <div key={i} style={{ border: `1px solid ${s.anomaly ? "#fecaca" : C.border}`, background: s.anomaly ? C.redSoft : C.bg, borderRadius: 10, padding: "10px 12px", width: "100%", maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
                   <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Commande Odoo</span>
                   <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 14, color: C.text }}>{s.devis}</span>
@@ -492,10 +496,12 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
                     {s.anomaly ? "⚠ Anomalie" : "✓ OK"}
                   </span>
                 </div>
-                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6 }}>
-                  réf. Shopware : {s.orderNumbers.map((n, k) => (
-                    <span key={k} style={{ fontFamily: "monospace", marginRight: 8 }}>{n}</span>
+                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", overflowWrap: "anywhere" }}>
+                  <span style={{ flexShrink: 0 }}>réf. Shopware :</span>
+                  {shownRefs.map((n, k) => (
+                    <span key={k} style={{ fontFamily: "monospace", background: C.white, border: `1px solid ${C.border}`, borderRadius: 5, padding: "1px 5px" }}>{n}</span>
                   ))}
+                  {hiddenCount > 0 && <span style={{ fontWeight: 700 }}>+{hiddenCount} autre{hiddenCount > 1 ? "s" : ""}</span>}
                 </div>
                 <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12 }}>
                   <span style={{ color: s.pick?.state === "done" ? C.green : C.orange, fontWeight: 700 }}>
@@ -509,12 +515,13 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
                   </span>
                 </div>
                 {s.anomaly && (
-                  <div style={{ marginTop: 6, fontSize: 11.5, color: C.red }}>
+                  <div style={{ marginTop: 6, fontSize: 11.5, color: C.red, overflowWrap: "anywhere" }}>
                     {s.anomaly} — à traiter manuellement sur Odoo.
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
