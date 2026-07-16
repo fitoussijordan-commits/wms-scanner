@@ -946,11 +946,16 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
   const [input, setInput] = useState("");
   const [rows, setRows] = useState<ResendRow[]>([]);
   const [diag, setDiag] = useState<{ loading: boolean; scanned: number; matches: any[] } | null>(null);
+  const [diagNumbers, setDiagNumbers] = useState("");
 
   const runDiagnostic = async () => {
     setDiag({ loading: true, scanned: 0, matches: [] });
     try {
-      const res = await fetch(`/api/shopware-explore?action=findDuplicates`).then(x => x.json());
+      const nums = diagNumbers.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+      const url = nums.length
+        ? `/api/shopware-explore?action=findDuplicates&numbers=${encodeURIComponent(nums.join(","))}`
+        : `/api/shopware-explore?action=findDuplicates`;
+      const res = await fetch(url).then(x => x.json());
       setDiag({ loading: false, scanned: res.scanned || 0, matches: res.matches || [] });
     } catch (e: any) {
       onToast("Erreur diagnostic : " + e.message, "error");
@@ -1024,10 +1029,15 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
 
       {/* Diagnostic (lecture seule) : retrouve les duplicatas déjà créés, sans rien recréer */}
       <div style={{ background: C.blueSoft, border: `1px solid #bfdbfe`, borderRadius: 10, padding: 12, marginBottom: 14 }}>
+        <div style={{ fontSize: 12, color: C.textSec, marginBottom: 8 }}>
+          Vérifier qu'un duplicata existe bien, sans rien recréer. Laisse vide pour scanner les 50 dernières commandes, ou précise les numéros exacts à vérifier.
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: diag ? 8 : 0 }}>
-          <span style={{ fontSize: 12, color: C.textSec, flex: 1 }}>Vérifier qu'un duplicata déjà créé existe bien (scan des 50 dernières commandes, lecture seule)</span>
+          <input value={diagNumbers} onChange={e => setDiagNumbers(e.target.value)} onKeyDown={e => { if (e.key === "Enter") runDiagnostic(); }}
+            placeholder="Numéros précis (optionnel) — ex: ECDE2643786, ECDE2643787"
+            style={{ flex: 1, padding: "7px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 12.5, fontFamily: "inherit" }} />
           <button onClick={runDiagnostic} disabled={diag?.loading}
-            style={{ padding: "7px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: "pointer", opacity: diag?.loading ? 0.6 : 1 }}>
+            style={{ padding: "7px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: "pointer", opacity: diag?.loading ? 0.6 : 1, whiteSpace: "nowrap" }}>
             {diag?.loading ? "Scan…" : "🔍 Diagnostic"}
           </button>
         </div>

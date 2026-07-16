@@ -556,16 +556,31 @@ export async function GET(req: NextRequest) {
     }
 
     // ── findDuplicates: DIAGNOSTIC (lecture seule) — retrouve les commandes créées par
-    // duplicateOrder en cherchant "RENVOI GRATUIT" dans le commentaire interne, sur les
-    // commandes les plus récentes. Ne crée rien : sert à vérifier qu'un duplicata existe
-    // vraiment et voir pourquoi il n'apparaît pas dans les vues habituelles du backend.
+    // duplicateOrder en cherchant "RENVOI GRATUIT" dans le commentaire interne.
+    // ?numbers=ECDE...,ECDE...  → vérifie précisément ces numéros (rapide, recommandé).
+    // Sans "numbers" → scanne les commandes les plus récentes (limit, défaut 50).
     if (action === "findDuplicates") {
-      const res = await swFetch("/orders?limit=50&sort[0][property]=orderTime&sort[0][direction]=DESC", creds);
-      const r = await safeJson(res);
-      if (!r.json?.data) return NextResponse.json({ error: "Non-JSON response", raw: r.raw });
+      const numbersParam = searchParams.get("numbers");
+      const limit = Math.min(parseInt(searchParams.get("limit") || "50", 10) || 50, 300);
+
+      let candidates: any[];
+      if (numbersParam) {
+        const numbers = numbersParam.split(",").map(s => s.trim()).filter(Boolean);
+        const found = await Promise.all(numbers.map(async (num) => {
+          const sRes = await swFetch(`/orders?filter[0][property]=number&filter[0][value]=${encodeURIComponent(num)}&limit=1`, creds);
+          const sR = await safeJson(sRes);
+          return sR.json?.data?.[0] || null;
+        }));
+        candidates = found.filter(Boolean);
+      } else {
+        const res = await swFetch(`/orders?limit=${limit}&sort[0][property]=orderTime&sort[0][direction]=DESC`, creds);
+        const r = await safeJson(res);
+        if (!r.json?.data) return NextResponse.json({ error: "Non-JSON response", raw: r.raw });
+        candidates = r.json.data;
+      }
+
       // Le listing /orders ne renvoie pas internalComment → on doit charger le détail de chaque
-      // commande récente pour vérifier. On limite aux 50 plus récentes pour rester raisonnable.
-      const candidates = r.json.data as any[];
+      // commande candidate pour vérifier.
       const details = await Promise.all(candidates.map(async (o: any) => {
         const dRes = await swFetch(`/orders/${o.id}`, creds);
         const dR = await safeJson(dRes);
@@ -573,7 +588,7 @@ export async function GET(req: NextRequest) {
       }));
       const matches = details
         .filter(Boolean)
-        .filter((o: any) => (o.internalComment || "").includes("RENVOI GRATUIT"))
+        .filter((o: any) => numbersParam ? true : (o.internalComment || "").includes("RENVOI GRATUIT"))
         .map((o: any) => ({
           id: o.id, number: o.number, orderStatusId: o.orderStatusId, paymentStatusId: o.paymentStatusId,
           orderTime: o.orderTime, internalComment: o.internalComment, customerId: o.customerId,
