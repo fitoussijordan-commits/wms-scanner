@@ -4561,6 +4561,109 @@ export async function validateOrderPickings(
   return out;
 }
 
+// Statut Odoo (pick / out / facture) d'une commande e-shop déjà sortie (devis créé).
+// Utilisé pour le petit récap des dernières commandes validées côté e-shop.
+export interface EshopOrderStatus {
+  devis: string;             // nom sale.order, ex "S00234"
+  orderNumbers: string[];    // n° commandes Shopware regroupées
+  found: boolean;            // false si le devis n'existe plus / introuvable dans Odoo
+  saleState?: string;        // état sale.order : draft/sent/sale/done/cancel
+  pick?: { name: string; state: string } | null;   // transfert interne (préparation)
+  out?: { name: string; state: string } | null;    // livraison sortante
+  invoiceStatus?: string;    // invoice_status du sale.order : upselling/invoiced/to invoice/no
+  invoiced: boolean;         // facture(s) posée(s) (account.move state = posted) liée(s) à la commande
+  anomaly: string | null;    // message si un souci est détecté, sinon null
+}
+
+export async function getRecentEshopOrdersStatus(
+  session: OdooSession,
+  recents: { devis: string; orderNumbers: string[]; processedAt: string }[]
+): Promise<EshopOrderStatus[]> {
+  const devisNames = Array.from(new Set(recents.map(r => r.devis).filter(n => n && n !== "chariot")));
+  const out: EshopOrderStatus[] = [];
+  if (!devisNames.length) return recents.map(r => ({
+    devis: r.devis, orderNumbers: r.orderNumbers, found: false, invoiced: false,
+    anomaly: r.devis === "chariot" ? null : "Commande introuvable dans Odoo",
+  }));
+
+  const orders = await searchRead(
+    session, M("MODEL_SALE_ORDER"),
+    [["name", "in", devisNames]],
+    ["id", "name", "state", "invoice_status"],
+    devisNames.length
+  );
+  const orderByName: Record<string, any> = {};
+  for (const o of orders) orderByName[o.name] = o;
+  const orderIds = orders.map((o: any) => o.id);
+
+  // Pickings (pick interne + out) liés aux commandes.
+  const picksByOrder: Record<number, any[]> = {};
+  if (orderIds.length) {
+    const picks = await searchRead(
+      session, M("MODEL_PICKING"),
+      [["sale_id", "in", orderIds]],
+      ["id", "name", "state", "sale_id", "picking_type_code"],
+      500
+    );
+    for (const p of picks) {
+      const sid = p.sale_id?.[0];
+      if (!sid) continue;
+      (picksByOrder[sid] ||= []).push(p);
+    }
+  }
+
+  // Factures (account.move) liées via invoice_ids sur sale.order.
+  const invoicedByOrder: Record<number, boolean> = {};
+  if (orderIds.length) {
+    try {
+      const invoiceLines = await searchRead(
+        session, "account.move",
+        [["invoice_origin", "in", orders.map((o: any) => o.name)], ["move_type", "=", "out_invoice"]],
+        ["id", "invoice_origin", "state"],
+        500
+      );
+      const originToOrderId: Record<string, number> = {};
+      for (const o of orders) originToOrderId[o.name] = o.id;
+      for (const inv of invoiceLines) {
+        const oid = originToOrderId[inv.invoice_origin];
+        if (oid && inv.state === "posted") invoicedByOrder[oid] = true;
+      }
+    } catch { /* non bloquant si le champ invoice_origin diffère */ }
+  }
+
+  for (const r of recents) {
+    if (r.devis === "chariot") {
+      // Vente 100% chariot, sans devis Odoo : rien à valider côté pick/out/facture.
+      out.push({ devis: r.devis, orderNumbers: r.orderNumbers, found: true, invoiced: true, anomaly: null });
+      continue;
+    }
+    const o = orderByName[r.devis];
+    if (!o) {
+      out.push({ devis: r.devis, orderNumbers: r.orderNumbers, found: false, invoiced: false, anomaly: "Commande introuvable dans Odoo" });
+      continue;
+    }
+    const picks = picksByOrder[o.id] || [];
+    const pick = picks.find((p: any) => p.picking_type_code === "internal") || null;
+    const outP = picks.find((p: any) => p.picking_type_code === "outgoing") || null;
+    const invoiced = !!invoicedByOrder[o.id] || o.invoice_status === "invoiced";
+
+    let anomaly: string | null = null;
+    if (o.state === "cancel") anomaly = "Commande annulée dans Odoo";
+    else if (pick && pick.state !== "done") anomaly = `Pick non validé (${pick.state})`;
+    else if (outP && outP.state !== "done") anomaly = `Sortie (OUT) non validée (${outP.state})`;
+    else if (!outP && picks.length) anomaly = "Pas de transfert de sortie (OUT) trouvé";
+    else if (!invoiced) anomaly = "Facture non faite";
+
+    out.push({
+      devis: r.devis, orderNumbers: r.orderNumbers, found: true, saleState: o.state,
+      pick: pick ? { name: pick.name, state: pick.state } : null,
+      out: outP ? { name: outP.name, state: outP.state } : null,
+      invoiceStatus: o.invoice_status, invoiced, anomaly,
+    });
+  }
+  return out;
+}
+
 // ============================================
 // IMPORT MARKETPLACE (Imparfaite) — 1 commande = 1 nouveau client + 1 sale.order
 // ============================================

@@ -660,6 +660,27 @@ export async function markEshopOrdersProcessed(orderNumbers: string[], devis: st
   if (error) throw new Error(error.message);
 }
 
+// Dernières commandes e-shop sorties (devis créé), les plus récentes d'abord.
+// Regroupe par devis (un devis peut couvrir plusieurs order_number Shopware).
+export interface RecentEshopOrder { devis: string; orderNumbers: string[]; processedAt: string; }
+export async function getLastProcessedEshopOrders(limit = 5): Promise<RecentEshopOrder[]> {
+  const { data, error } = await sb
+    .from("wms_eshop_processed")
+    .select("order_number, devis, processed_at")
+    .order("processed_at", { ascending: false })
+    .limit(200); // large fenêtre pour pouvoir regrouper par devis avant de couper à `limit`
+  if (error) throw new Error(error.message);
+  const byDevis: Record<string, RecentEshopOrder> = {};
+  const order: string[] = [];
+  for (const r of (data || [])) {
+    const key = r.devis || r.order_number;
+    if (!byDevis[key]) { byDevis[key] = { devis: key, orderNumbers: [], processedAt: r.processed_at }; order.push(key); }
+    byDevis[key].orderNumbers.push(r.order_number);
+    if (r.processed_at > byDevis[key].processedAt) byDevis[key].processedAt = r.processed_at;
+  }
+  return order.map(k => byDevis[k]).slice(0, limit);
+}
+
 // ══════════════════════════════════════════
 // COMMANDES E-SHOP MASQUÉES (fantômes/tests SendCloud) — partagé via wms_sync_meta
 // ══════════════════════════════════════════

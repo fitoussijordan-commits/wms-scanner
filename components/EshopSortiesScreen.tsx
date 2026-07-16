@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, Fragment as Fragment2 } from "react";
 import * as odoo from "@/lib/odoo";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
-import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, type EshopMappingOverrides } from "@/lib/supabase";
+import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, getLastProcessedEshopOrders, type EshopMappingOverrides } from "@/lib/supabase";
 import { writeHeaders } from "@/lib/writeToken";
 
 const C = {
@@ -82,6 +82,19 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   const [autoValidate, setAutoValidate] = useState<boolean>(() => {
     try { return localStorage.getItem("eshop_auto_validate") === "1"; } catch { return false; }
   });
+  // Récap des 5 dernières commandes validées (pick / out / facture) — anomalies à traiter à la main sur Odoo
+  const [recentStatus, setRecentStatus] = useState<odoo.EshopOrderStatus[]>([]);
+  const [recentLoading, setRecentLoading] = useState(false);
+
+  const loadRecentStatus = useCallback(async () => {
+    setRecentLoading(true);
+    try {
+      const recents = await getLastProcessedEshopOrders(5);
+      const statuses = await odoo.getRecentEshopOrdersStatus(session, recents);
+      setRecentStatus(statuses);
+    } catch { /* non bloquant — juste un récap informatif */ }
+    setRecentLoading(false);
+  }, [session]);
 
   useEffect(() => {
     fetch("/api/shopware-explore?action=orderStatuses").then(r => r.json()).then(d => {
@@ -99,6 +112,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
     // Client e-shop mémorisé localement (id) — résolu via Odoo
     const saved = (() => { try { return localStorage.getItem(PARTNER_KEY) || ""; } catch { return ""; } })();
     if (saved) { setPartnerInput(saved); odoo.findEshopPartner(session, saved).then(p => p && setPartner(p)).catch(() => {}); }
+    loadRecentStatus();
   }, [session]);
 
   const load = useCallback(async () => {
@@ -300,6 +314,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
       }
     } catch (e: any) { onToast("Erreur création devis : " + e.message, "error"); }
     setCreatingQuote(false);
+    loadRecentStatus();
   };
 
   return (
@@ -452,6 +467,57 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
       {!loading && orders.length === 0 && !error && (
         <div style={{ textAlign: "center", color: C.textMuted, padding: 40, fontSize: 14 }}>Aucune commande ce jour-là</div>
       )}
+
+      {/* Récap des 5 dernières commandes validées — pick / out / facture, anomalies à traiter à la main sur Odoo */}
+      <div style={{ marginTop: 24, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, boxShadow: C.shadow }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", flex: 1 }}>
+            5 dernières commandes validées
+          </div>
+          <button onClick={loadRecentStatus} disabled={recentLoading}
+            style={{ padding: "5px 10px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11, fontWeight: 700, color: C.textSec, cursor: "pointer", fontFamily: "inherit", opacity: recentLoading ? 0.6 : 1 }}>
+            {recentLoading ? "…" : "↻ Rafraîchir"}
+          </button>
+        </div>
+        {recentStatus.length === 0 ? (
+          <div style={{ fontSize: 13, color: C.textMuted, padding: "8px 0" }}>{recentLoading ? "Chargement…" : "Aucune commande validée récemment"}</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {recentStatus.map((s, i) => (
+              <div key={i} style={{ border: `1px solid ${s.anomaly ? "#fecaca" : C.border}`, background: s.anomaly ? C.redSoft : C.bg, borderRadius: 10, padding: "10px 12px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Commande Odoo</span>
+                  <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 14, color: C.text }}>{s.devis}</span>
+                  <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: s.anomaly ? C.red : C.green }}>
+                    {s.anomaly ? "⚠ Anomalie" : "✓ OK"}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6 }}>
+                  réf. Shopware : {s.orderNumbers.map((n, k) => (
+                    <span key={k} style={{ fontFamily: "monospace", marginRight: 8 }}>{n}</span>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12 }}>
+                  <span style={{ color: s.pick?.state === "done" ? C.green : C.orange, fontWeight: 700 }}>
+                    Pick : {s.pick ? (s.pick.state === "done" ? "✓ validé" : `⏳ ${s.pick.state}`) : (s.found ? "—" : "?")}
+                  </span>
+                  <span style={{ color: s.out?.state === "done" ? C.green : C.orange, fontWeight: 700 }}>
+                    Out : {s.out ? (s.out.state === "done" ? "✓ validé" : `⏳ ${s.out.state}`) : (s.found ? "—" : "?")}
+                  </span>
+                  <span style={{ color: s.invoiced ? C.green : C.orange, fontWeight: 700 }}>
+                    Facture : {s.invoiced ? "✓ faite" : "⏳ à faire"}
+                  </span>
+                </div>
+                {s.anomaly && (
+                  <div style={{ marginTop: 6, fontSize: 11.5, color: C.red }}>
+                    {s.anomaly} — à traiter manuellement sur Odoo.
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
