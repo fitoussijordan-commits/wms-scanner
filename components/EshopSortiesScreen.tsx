@@ -24,7 +24,7 @@ interface SaleOrder { id: number; number: string; orderStatusId: number; payment
 const PARTNER_KEY = "wms_eshop_partner_id";
 
 export default function EshopSortiesScreen({ session, onBack, onToast }: Props) {
-  const [tab, setTab] = useState<"sorties" | "stock" | "audit">("sorties");
+  const [tab, setTab] = useState<"sorties" | "stock" | "audit" | "resend">("sorties");
   return (
     <div style={{ padding: "16px 16px 0", width: "100%", maxWidth: "100%", boxSizing: "border-box", fontFamily: "'DM Sans', sans-serif" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
@@ -34,8 +34,8 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
         <div style={{ fontSize: 17, fontWeight: 700, color: C.text, flex: 1 }}>E-shop</div>
         <FieldSettingsGear session={session} onToast={onToast} screen="eshopSorties" />
       </div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-        {([["sorties", "Sorties du jour"], ["stock", "Synchro stock"], ["audit", "Audit catalogue"]] as const).map(([k, lbl]) => (
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+        {([["sorties", "Sorties du jour"], ["stock", "Synchro stock"], ["audit", "Audit catalogue"], ["resend", "Renvoi"]] as const).map(([k, lbl]) => (
           <button key={k} onClick={() => setTab(k)}
             style={{ padding: "9px 16px", borderRadius: 10, border: `1.5px solid ${tab === k ? C.blue : C.border}`, background: tab === k ? C.blueSoft : C.white, color: tab === k ? C.blue : C.textSec, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
             {lbl}
@@ -46,6 +46,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       <div style={{ display: tab === "sorties" ? "block" : "none" }}><SortiesTab session={session} onToast={onToast} /></div>
       <div style={{ display: tab === "stock" ? "block" : "none" }}><StockSyncTab session={session} onToast={onToast} /></div>
       <div style={{ display: tab === "audit" ? "block" : "none" }}><AuditTab session={session} onToast={onToast} /></div>
+      <div style={{ display: tab === "resend" ? "block" : "none" }}><ResendTab onToast={onToast} /></div>
     </div>
   );
 }
@@ -922,6 +923,109 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
                 })}
               </tbody>
             </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Onglet Renvoi — duplique une commande Shopware existante (renvoi gratuit)
+//  Utile quand un colis est perdu/retourné : recrée la commande (mêmes lignes,
+//  même client) à 0€ pour qu'elle remonte normalement dans le flux e-shop → SendCloud.
+// ════════════════════════════════════════════════════════════════
+interface ResendRow {
+  number: string;
+  status: "idle" | "loading" | "done" | "error";
+  message?: string;
+  newOrderId?: number;
+}
+function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
+  const [input, setInput] = useState("");
+  const [rows, setRows] = useState<ResendRow[]>([]);
+
+  const addNumbers = () => {
+    const nums = input.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+    if (!nums.length) return;
+    setRows(prev => {
+      const existing = new Set(prev.map(r => r.number));
+      const toAdd = nums.filter(n => !existing.has(n)).map(n => ({ number: n, status: "idle" as const }));
+      return [...prev, ...toAdd];
+    });
+    setInput("");
+  };
+
+  const removeRow = (number: string) => setRows(prev => prev.filter(r => r.number !== number));
+
+  const duplicateOne = async (number: string) => {
+    setRows(prev => prev.map(r => r.number === number ? { ...r, status: "loading", message: undefined } : r));
+    try {
+      const res = await fetch(`/api/shopware-explore?action=duplicateOrder&number=${encodeURIComponent(number)}`, { headers: writeHeaders }).then(x => x.json());
+      if (res.ok) {
+        setRows(prev => prev.map(r => r.number === number ? { ...r, status: "done", newOrderId: res.newOrderId, message: `Nouvelle commande créée (id ${res.newOrderId})` } : r));
+        onToast(`✓ ${number} dupliquée (renvoi)`, "success");
+      } else {
+        setRows(prev => prev.map(r => r.number === number ? { ...r, status: "error", message: res.error || "échec" } : r));
+        onToast(`Erreur ${number} : ${res.error || "échec"}`, "error");
+      }
+    } catch (e: any) {
+      setRows(prev => prev.map(r => r.number === number ? { ...r, status: "error", message: e.message } : r));
+      onToast("Erreur : " + e.message, "error");
+    }
+  };
+
+  const duplicateAll = async () => {
+    const pending = rows.filter(r => r.status === "idle" || r.status === "error");
+    if (!pending.length) return;
+    if (!confirm(`Dupliquer ${pending.length} commande(s) en renvoi gratuit (0€) ? Chaque duplicata créera une NOUVELLE commande Shopware avec les mêmes articles.`)) return;
+    for (const r of pending) await duplicateOne(r.number);
+  };
+
+  return (
+    <div style={{ paddingBottom: 80 }}>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>
+        Recrée une commande Shopware existante (mêmes articles, même client) à 0€, pour un renvoi gratuit (colis perdu, erreur de préparation…).
+        La nouvelle commande remonte normalement dans Shopware → SendCloud, où tu pourras générer l'étiquette.
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addNumbers(); }}
+          placeholder="Numéro(s) de commande Shopware (ex: ECDE2643350) — séparés par espace/virgule"
+          style={{ flex: 1, padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }} />
+        <button onClick={addNumbers} style={{ padding: "9px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>+ Ajouter</button>
+      </div>
+
+      {rows.length === 0 ? (
+        <div style={{ textAlign: "center", color: C.textMuted, padding: 40, fontSize: 14 }}>Ajoute les numéros de commande à renvoyer</div>
+      ) : (
+        <>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+            <button onClick={duplicateAll} style={{ padding: "9px 16px", background: C.green, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+              Dupliquer tout ({rows.filter(r => r.status === "idle" || r.status === "error").length})
+            </button>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {rows.map((r, i) => (
+              <div key={i} style={{
+                border: `1px solid ${r.status === "error" ? "#fecaca" : r.status === "done" ? "#bbf7d0" : C.border}`,
+                background: r.status === "error" ? C.redSoft : r.status === "done" ? C.greenSoft : C.white,
+                borderRadius: 10, padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+              }}>
+                <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 13, color: C.text }}>{r.number}</span>
+                <span style={{ fontSize: 12, flex: 1, color: r.status === "error" ? C.red : r.status === "done" ? C.green : C.textMuted }}>
+                  {r.status === "idle" && "En attente"}
+                  {r.status === "loading" && "Duplication en cours…"}
+                  {r.status === "done" && (r.message || "✓ dupliquée")}
+                  {r.status === "error" && (r.message || "Erreur")}
+                </span>
+                {(r.status === "idle" || r.status === "error") && (
+                  <button onClick={() => duplicateOne(r.number)} style={{ padding: "6px 12px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                    Dupliquer
+                  </button>
+                )}
+                <button onClick={() => removeRow(r.number)} style={{ background: "none", border: "none", cursor: "pointer", color: C.textMuted, fontSize: 16 }}>×</button>
+              </div>
+            ))}
           </div>
         </>
       )}

@@ -14,7 +14,7 @@ function getCreds() {
 }
 
 // Actions qui ÉCRIVENT dans Shopware → exigent le token interne (x-wms-token).
-const WRITE_ACTIONS = new Set(["setStock", "binSetStock"]);
+const WRITE_ACTIONS = new Set(["setStock", "binSetStock", "duplicateOrder"]);
 
 async function swFetch(path: string, creds: { url: string; user: string; key: string }, method = "GET", body?: any) {
   const base64 = Buffer.from(`${creds.user}:${creds.key}`).toString("base64");
@@ -408,6 +408,98 @@ export async function GET(req: NextRequest) {
       const afterRes = await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds);
       const after = (await safeJson(afterRes)).json?.data;
       return NextResponse.json({ ok: true, articleNumber: an, oldStock, requested: n, newStock: after?.inStock });
+    }
+
+    // ── duplicateOrder: recrée une commande (renvoi gratuit) à partir d'une commande existante. ⚠ ÉCRITURE ──
+    // ?number=20001 — copie client + adresses + lignes produit de la commande source, montant à 0€
+    // (invoiceAmount/invoiceShipping = 0), paymentStatusId=12 (payée) pour que ça remonte normalement
+    // dans le flux e-shop du WMS. La nouvelle commande a un NOUVEAU numéro Shopware généré par Shopware.
+    if (action === "duplicateOrder") {
+      const number = searchParams.get("number");
+      if (!number) return NextResponse.json({ error: "number requis" }, { status: 400 });
+
+      // 1) Retrouver la commande source par numéro.
+      const searchRes = await swFetch(
+        `/orders?filter[0][property]=number&filter[0][value]=${encodeURIComponent(number)}&limit=1`,
+        creds
+      );
+      const searchR = await safeJson(searchRes);
+      if (!searchR.json?.data?.length) {
+        return NextResponse.json({ error: `Commande ${number} introuvable`, raw: searchR.raw }, { status: 404 });
+      }
+      const orderId = searchR.json.data[0].id;
+
+      // 2) Détail complet (lignes, client, adresses).
+      const detailRes = await swFetch(`/orders/${orderId}`, creds);
+      const detailR = await safeJson(detailRes);
+      const src = detailR.json?.data;
+      if (!src) return NextResponse.json({ error: "Détail commande introuvable", raw: detailR.raw }, { status: 404 });
+
+      // Lignes produit réelles uniquement (mode 0 = article normal ; on exclut les frais/remises mode 4,
+      // sinon on redemande de la port/remise sans raison sur un renvoi gratuit).
+      const details = (src.details || [])
+        .filter((d: any) => d.mode === 0)
+        .map((d: any) => ({
+          articleId: d.articleId,
+          taxId: d.taxId,
+          taxRate: d.taxRate,
+          statusId: 0,
+          articleNumber: d.articleNumber,
+          price: 0,
+          quantity: d.quantity,
+          articleName: d.articleName,
+          shipped: 0,
+          shippedGroup: 0,
+          mode: 0,
+          esdArticle: d.esdArticle || 0,
+        }));
+      if (!details.length) return NextResponse.json({ error: "Aucune ligne article à dupliquer (commande vide ?)" }, { status: 400 });
+
+      const stripAddr = (a: any) => a ? ({
+        countryId: a.countryId, stateId: a.stateId, customerId: a.customerId,
+        company: a.company || "", department: a.department || "", salutation: a.salutation || "mr",
+        firstName: a.firstName, lastName: a.lastName, street: a.street,
+        zipCode: a.zipCode, city: a.city, phone: a.phone || "", additionalAddressLine1: a.additionalAddressLine1 || "",
+        additionalAddressLine2: a.additionalAddressLine2 || "",
+      }) : undefined;
+
+      const payload: any = {
+        customerId: src.customerId,
+        paymentId: src.paymentId,
+        dispatchId: src.dispatchId,
+        partnerId: src.partnerId || "",
+        shopId: src.shopId || 1,
+        invoiceAmount: 0,
+        invoiceAmountNet: 0,
+        invoiceShipping: 0,
+        invoiceShippingNet: 0,
+        orderTime: new Date().toISOString().slice(0, 19).replace("T", " "),
+        net: src.net || 0,
+        taxFree: src.taxFree || 0,
+        languageIso: src.languageIso || "1",
+        currency: src.currency || "EUR",
+        currencyFactor: src.currencyFactor || 1,
+        remoteAddress: "",
+        details,
+        documents: [],
+        billing: stripAddr(src.billing),
+        shipping: stripAddr(src.shipping || src.billing),
+        paymentStatusId: 12, // payée — pour remonter normalement dans le flux e-shop (renvoi gratuit)
+        orderStatusId: 0,
+        internalComment: `Renvoi gratuit — duplicata de la commande ${src.number}`,
+      };
+
+      const createRes = await swFetch(`/orders`, creds, "POST", payload);
+      const createR = await safeJson(createRes);
+      if (!createR.ok) {
+        return NextResponse.json({ error: `Échec création (${createR.status})`, raw: createR.raw, json: createR.json }, { status: createR.status || 500 });
+      }
+      return NextResponse.json({
+        ok: true,
+        sourceNumber: src.number,
+        newOrderId: createR.json?.id,
+        location: createR.json?.location,
+      });
     }
 
     return NextResponse.json({ error: "actions: ping, orders, dispatches, order, pickware" }, { status: 400 });
