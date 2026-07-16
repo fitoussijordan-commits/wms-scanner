@@ -486,7 +486,10 @@ export async function GET(req: NextRequest) {
         shipping: stripAddr(src.shipping || src.billing),
         paymentStatusId: 12, // payée — pour remonter normalement dans le flux e-shop (renvoi gratuit)
         orderStatusId: 0,
-        internalComment: `Renvoi gratuit — duplicata de la commande ${src.number}`,
+        // Shopware génère lui-même le "number" (impossible à forcer via l'API) — on rend la
+        // traçabilité explicite dans le commentaire interne + trackingCode, visibles dans le backend.
+        internalComment: `RENVOI GRATUIT — duplicata de la commande ${src.number}`,
+        comment: `Renvoi (copie de ${src.number})`,
       };
 
       const createRes = await swFetch(`/orders`, creds, "POST", payload);
@@ -494,11 +497,27 @@ export async function GET(req: NextRequest) {
       if (!createR.ok) {
         return NextResponse.json({ error: `Échec création (${createR.status})`, raw: createR.raw, json: createR.json }, { status: createR.status || 500 });
       }
+      // La réponse de création peut varier selon la version (id à la racine, ou dans .data).
+      const newOrderId = createR.json?.id ?? createR.json?.data?.id ?? null;
+
+      // Relecture pour récupérer le VRAI numéro de commande Shopware (généré par Shopware,
+      // différent de l'id interne) — c'est ce numéro qui sert à retrouver la commande dans
+      // Shopware / SendCloud.
+      let newOrderNumber: string | null = null;
+      if (newOrderId) {
+        try {
+          const rereadRes = await swFetch(`/orders/${newOrderId}`, creds);
+          const rereadR = await safeJson(rereadRes);
+          newOrderNumber = rereadR.json?.data?.number ?? null;
+        } catch { /* non bloquant */ }
+      }
+
       return NextResponse.json({
         ok: true,
         sourceNumber: src.number,
-        newOrderId: createR.json?.id,
-        location: createR.json?.location,
+        newOrderId,
+        newOrderNumber,
+        raw: newOrderId ? undefined : createR.json, // debug si l'id n'a pas été trouvé
       });
     }
 

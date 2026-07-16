@@ -940,6 +940,7 @@ interface ResendRow {
   status: "idle" | "loading" | "done" | "error";
   message?: string;
   newOrderId?: number;
+  newOrderNumber?: string;
 }
 function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
   const [input, setInput] = useState("");
@@ -963,8 +964,9 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
     try {
       const res = await fetch(`/api/shopware-explore?action=duplicateOrder&number=${encodeURIComponent(number)}`, { headers: writeHeaders }).then(x => x.json());
       if (res.ok) {
-        setRows(prev => prev.map(r => r.number === number ? { ...r, status: "done", newOrderId: res.newOrderId, message: `Nouvelle commande créée (id ${res.newOrderId})` } : r));
-        onToast(`✓ ${number} dupliquée (renvoi)`, "success");
+        const label = res.newOrderNumber ? `n° ${res.newOrderNumber}` : `id interne ${res.newOrderId ?? "?"}`;
+        setRows(prev => prev.map(r => r.number === number ? { ...r, status: "done", newOrderId: res.newOrderId, newOrderNumber: res.newOrderNumber, message: `Nouvelle commande créée (${label})` } : r));
+        onToast(`✓ ${number} dupliquée → ${label}`, "success");
       } else {
         setRows(prev => prev.map(r => r.number === number ? { ...r, status: "error", message: res.error || "échec" } : r));
         onToast(`Erreur ${number} : ${res.error || "échec"}`, "error");
