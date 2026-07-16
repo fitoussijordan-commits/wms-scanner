@@ -963,15 +963,17 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
     }
   };
 
-  // Suppression d'un duplicata de test (montant 0€ uniquement, refusé côté serveur sinon).
+  // Annule un duplicata de test (montant 0€ uniquement, refusé côté serveur sinon).
+  // La suppression pure n'est pas possible (bloquée côté serveur + bug Shopware 5) : on passe
+  // la commande au statut "Annulée" à la place — elle reste visible mais clairement neutralisée.
   const [deleting, setDeleting] = useState<string | null>(null);
   const deleteDuplicate = async (m: { number: string; invoiceAmount: number; number_label?: string }) => {
-    if (!confirm(`Supprimer DÉFINITIVEMENT la commande n° ${m.number} (montant ${m.invoiceAmount}€) ?\nCette action est irréversible.`)) return;
+    if (!confirm(`Annuler la commande n° ${m.number} (montant ${m.invoiceAmount}€) ?\nElle passera au statut "Annulée" dans Shopware (la suppression définitive n'est pas possible via l'API).`)) return;
     setDeleting(m.number);
     try {
-      const res = await fetch(`/api/shopware-explore?action=deleteOrder&number=${encodeURIComponent(m.number)}`, { headers: writeHeaders }).then(x => x.json());
+      const res = await fetch(`/api/shopware-explore?action=cancelOrder&number=${encodeURIComponent(m.number)}`, { headers: writeHeaders }).then(x => x.json());
       if (res.ok) {
-        onToast(`✓ Commande ${m.number} supprimée`, "success");
+        onToast(`✓ Commande ${m.number} annulée`, "success");
         setDiag(prev => prev ? { ...prev, matches: prev.matches.filter((x: any) => x.number !== m.number) } : prev);
       } else {
         onToast("Erreur : " + (res.error || "échec"), "error");
@@ -1053,11 +1055,14 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
                     <div style={{ color: C.textMuted, marginTop: 2 }}>{m.internalComment}</div>
                     <div style={{ color: C.textMuted, marginTop: 2 }}>orderStatusId {m.orderStatusId} · paymentStatusId {m.paymentStatusId} · montant {m.invoiceAmount}€</div>
                   </div>
-                  {Number(m.invoiceAmount) === 0 && (
+                  {Number(m.invoiceAmount) === 0 && m.orderStatusId !== -1 && (
                     <button onClick={() => deleteDuplicate(m)} disabled={deleting === m.number}
                       style={{ padding: "6px 12px", background: C.red, color: "#fff", border: "none", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: deleting === m.number ? 0.6 : 1, whiteSpace: "nowrap" }}>
-                      {deleting === m.number ? "…" : "🗑 Supprimer"}
+                      {deleting === m.number ? "…" : "🚫 Annuler"}
                     </button>
+                  )}
+                  {m.orderStatusId === -1 && (
+                    <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 700, whiteSpace: "nowrap" }}>déjà annulée</span>
                   )}
                 </div>
               ))}

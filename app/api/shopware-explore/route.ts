@@ -14,7 +14,7 @@ function getCreds() {
 }
 
 // Actions qui ÉCRIVENT dans Shopware → exigent le token interne (x-wms-token).
-const WRITE_ACTIONS = new Set(["setStock", "binSetStock", "duplicateOrder", "deleteOrder"]);
+const WRITE_ACTIONS = new Set(["setStock", "binSetStock", "duplicateOrder", "cancelOrder"]);
 
 async function swFetch(path: string, creds: { url: string; user: string; key: string }, method = "GET", body?: any) {
   const base64 = Buffer.from(`${creds.user}:${creds.key}`).toString("base64");
@@ -523,10 +523,13 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // ── deleteOrder: supprime une commande Shopware par son NUMÉRO. ⚠ ÉCRITURE — IRRÉVERSIBLE ──
-    // Garde-fou : refuse de supprimer si invoiceAmount > 0 (on ne supprime que des commandes à 0€,
-    // typiquement des duplicatas de renvoi créés par erreur), sauf si ?force=1 est passé explicitement.
-    if (action === "deleteOrder") {
+    // ── cancelOrder: ANNULE une commande Shopware par son NUMÉRO (orderStatusId = -1). ⚠ ÉCRITURE ──
+    // La suppression pure (DELETE /api/orders) est bloquée côté serveur (405 nginx) et bugguée côté
+    // Shopware 5 (404 malgré la doc) → on neutralise plutôt : la commande reste visible mais passe
+    // au statut "Annulée", clairement identifiable, et n'est plus traitée comme active.
+    // Garde-fou : refuse si invoiceAmount > 0 (on n'annule que des commandes à 0€, typiquement des
+    // duplicatas de renvoi créés par erreur), sauf si ?force=1 est passé explicitement.
+    if (action === "cancelOrder") {
       const number = searchParams.get("number");
       const force = searchParams.get("force") === "1";
       if (!number) return NextResponse.json({ error: "number requis" }, { status: 400 });
@@ -547,12 +550,15 @@ export async function GET(req: NextRequest) {
         }, { status: 400 });
       }
 
-      const delRes = await swFetch(`/orders/${order.id}`, creds, "DELETE");
-      if (delRes.status !== 200 && delRes.status !== 204) {
-        const delR = await safeJson(delRes);
-        return NextResponse.json({ error: `Échec suppression (${delRes.status})`, raw: delR.raw, json: delR.json }, { status: delRes.status });
+      const putRes = await swFetch(`/orders/${order.id}`, creds, "PUT", {
+        orderStatusId: -1,
+        internalComment: `${order.internalComment || ""}\n[ANNULÉE — duplicata de test supprimé via WMS]`.trim(),
+      });
+      const putR = await safeJson(putRes);
+      if (!putR.ok) {
+        return NextResponse.json({ error: `Échec annulation (${putR.status})`, raw: putR.raw, json: putR.json }, { status: putR.status });
       }
-      return NextResponse.json({ ok: true, deletedNumber: number, deletedId: order.id, invoiceAmount: order.invoiceAmount });
+      return NextResponse.json({ ok: true, cancelledNumber: number, cancelledId: order.id, invoiceAmount: order.invoiceAmount });
     }
 
     // ── findDuplicates: DIAGNOSTIC (lecture seule) — retrouve les commandes créées par
