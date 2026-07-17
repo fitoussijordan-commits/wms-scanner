@@ -8756,6 +8756,9 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   // Saisie du poids pour un colis qui n'en a pas encore (ex: colis créé via split/nouveau colis)
   const [pkgWeightInput, setPkgWeightInput] = useState<Record<number, string>>({});
   const [savingPkgWeight, setSavingPkgWeight] = useState<number | null>(null);
+  // Synchronisation des colis du PICK avec ceux du OUT (répare la chaîne pick→OUT après un
+  // recolisage côté OUT, quand le pick garde une structure de colis différente/obsolète)
+  const [syncingPickPkgs, setSyncingPickPkgs] = useState(false);
   // ── Codes-barres produits par tranche de 5 (packing list) ──
   interface PbRow { productId: number; ref: string; name: string; barcode: string; qty: number; labels: number; }
   const [pbRows, setPbRows] = useState<PbRow[]>([]);
@@ -8856,6 +8859,38 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
       await loadScanPicking(scanPicking.name);
     } catch (e: any) { onToast("❌ " + e.message); }
     setRepairingLine(null);
+  };
+
+  // ── Recoliser une ligne "en vrac" d'un PICK en plusieurs colis (ex: 200 -> 70/70/60) ──
+  const [pickSplitPickNo, setPickSplitPickNo] = useState("");
+  const [pickSplitProductId, setPickSplitProductId] = useState("");
+  const [pickSplitLotId, setPickSplitLotId] = useState("");
+  const [pickSplitQtys, setPickSplitQtys] = useState("70/70/60");
+  const [pickSplitBusy, setPickSplitBusy] = useState(false);
+  const [pickSplitPlan, setPickSplitPlan] = useState<string>("");
+
+  const runPickSplit = async (dryRun: boolean) => {
+    const productId = parseInt(pickSplitProductId, 10);
+    const quantities = pickSplitQtys.split(/[\/,;\s]+/).map(s => parseFloat(s)).filter(n => !isNaN(n) && n > 0);
+    if (!pickSplitPickNo.trim()) { onToast("❌ Numéro de PICK requis"); return; }
+    if (isNaN(productId)) { onToast("❌ ID produit (product.product) requis"); return; }
+    if (!quantities.length) { onToast("❌ Répartition invalide (ex: 70/70/60)"); return; }
+    setPickSplitBusy(true); setPickSplitPlan("");
+    try {
+      // 1) retrouver le picking par son n°
+      const picks = await odoo.searchPickingByCommande(session, pickSplitPickNo.trim());
+      if (!picks.length) { onToast("❌ PICK introuvable : " + pickSplitPickNo.trim()); setPickSplitBusy(false); return; }
+      const pickingId = picks[0].id;
+      const lotId = pickSplitLotId.trim() ? parseInt(pickSplitLotId, 10) : undefined;
+      const res = await odoo.splitPickLineIntoPackages(
+        session,
+        { pickingId, productId, lotId, quantities },
+        dryRun
+      );
+      setPickSplitPlan(res.message);
+      onToast(res.ok ? (dryRun ? "ℹ️ Plan calculé (rien écrit)" : "✓ Recolisage effectué") : "❌ " + res.message);
+    } catch (e: any) { onToast("❌ " + e.message); setPickSplitPlan("Erreur : " + e.message); }
+    setPickSplitBusy(false);
   };
 
   // ── Prépare la liste des codes-barres produits d'UN colis (1 étiquette / 5 unités) ──
@@ -9239,6 +9274,24 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
     setAddingPkg(prev => ({ ...prev, [picking.id]: false }));
   };
 
+  // ── Synchronise les colis du PICK avec ceux du OUT scanné ──
+  // Utile après un recolisage sur le OUT (ex: 200 → 60/70/70) quand le PICK déjà validé
+  // garde encore une seule ligne groupée : ça bloque la validation du OUT avec l'erreur
+  // "impossible de déréserver plus que la quantité en stock". Cette action divise la ligne
+  // du pick dans les mêmes proportions et l'assigne aux mêmes colis que le OUT.
+  const syncPickPackages = async () => {
+    if (!scanPicking) return;
+    if (!confirm("Synchroniser les colis du PICK avec ceux du OUT ?\nCeci va diviser/réassigner les lignes du transfert de préparation déjà validé pour qu'elles correspondent aux colis actuels du OUT.")) return;
+    setSyncingPickPkgs(true);
+    try {
+      const res = await odoo.syncPickPackagesFromOut(session, scanPicking.id);
+      const summary = res.map(r => `${r.pickName} : ${r.updated} ligne(s) mise(s) à jour${r.split ? `, ${r.split} division(s)` : ""}`).join(" · ");
+      onToast(`✓ ${summary || "Aucune modification nécessaire"}`);
+      await loadScanPicking(scanPicking.name);
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setSyncingPickPkgs(false);
+  };
+
   // ── state onglet local ──────────────────────────────────────────────────────
   const [reprTab, setReprTab] = useState<"transport" | "packinglist">("transport");
 
@@ -9355,6 +9408,38 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
         </button>
         <div style={{ fontSize: 17, fontWeight: 700, color: C.text, flex: 1 }}>Réimprimer étiquettes</div>
         {session && odoo.isAdmin(session) && <FieldSettingsGear session={session} onToast={onToast} screen="reprintLabel" />}
+      </div>
+
+      {/* ══════════════════════════════════════════════════════
+          OUTIL — Recoliser une ligne "en vrac" d'un PICK en N colis
+          (ex: 200 unités → 70 / 70 / 60 sur 3 colis). Marche même
+          sur un PICK validé. Fais TOUJOURS "Simuler" avant "Appliquer".
+      ══════════════════════════════════════════════════════ */}
+      <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 16, background: C.bg }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>📦 Recoliser un PICK (ex : 200 → 70/70/60)</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+          <input value={pickSplitPickNo} onChange={e => setPickSplitPickNo(e.target.value)} placeholder="N° PICK (ex WH/PICK/...)"
+            style={{ flex: "1 1 160px", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: C.white, color: C.text }} />
+          <input value={pickSplitProductId} onChange={e => setPickSplitProductId(e.target.value)} placeholder="ID produit (product.product)"
+            style={{ flex: "1 1 140px", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: C.white, color: C.text }} />
+          <input value={pickSplitLotId} onChange={e => setPickSplitLotId(e.target.value)} placeholder="ID lot (optionnel)"
+            style={{ flex: "1 1 120px", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: C.white, color: C.text }} />
+          <input value={pickSplitQtys} onChange={e => setPickSplitQtys(e.target.value)} placeholder="70/70/60"
+            style={{ flex: "1 1 100px", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: C.white, color: C.text }} />
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => runPickSplit(true)} disabled={pickSplitBusy}
+            style={{ padding: "8px 14px", background: C.white, color: C.text, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: pickSplitBusy ? 0.6 : 1 }}>
+            {pickSplitBusy ? "…" : "Simuler (dry-run)"}
+          </button>
+          <button onClick={() => { if (confirm("Appliquer le recolisage dans Odoo ? Vérifie d'abord le plan de simulation.")) runPickSplit(false); }} disabled={pickSplitBusy}
+            style={{ padding: "8px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: pickSplitBusy ? 0.6 : 1 }}>
+            Appliquer
+          </button>
+        </div>
+        {pickSplitPlan && (
+          <div style={{ marginTop: 8, fontSize: 12, color: C.textMuted, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, whiteSpace: "pre-wrap" }}>{pickSplitPlan}</div>
+        )}
       </div>
 
       {/* ── Onglets ── */}
@@ -9594,6 +9679,14 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
                 </div>
               )}
               {scanPkgs.map((pkg: any) => renderPkgRow(scanPicking, pkg))}
+
+              {/* Sync colis PICK ↔ OUT — pour débloquer "impossible de déréserver..." à la validation */}
+              {scanPkgs.length > 0 && (
+                <button onClick={syncPickPackages} disabled={syncingPickPkgs}
+                  style={{ width: "100%", padding: "10px 14px", background: syncingPickPkgs ? C.border : "#fff7ed", color: "#c2410c", border: "1.5px solid #fdba74", borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginBottom: 12, opacity: syncingPickPkgs ? 0.6 : 1 }}>
+                  {syncingPickPkgs ? "Synchronisation…" : "🔄 Synchroniser les colis du PICK avec ceux du OUT"}
+                </button>
+              )}
 
               {/* Lignes sans colis (orphelines) — à réparer/réassigner */}
               {orphanLines.length > 0 && (

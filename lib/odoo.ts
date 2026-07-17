@@ -1348,6 +1348,109 @@ export async function findOutPickingFromPick(session: OdooSession, pickId: numbe
   return outs[0] || null;
 }
 
+/** Trouve le(s) PICK picking(s) (internal, déjà "done") liés à un OUT via group_id */
+export async function findPickPickingsFromOut(session: OdooSession, outPickingId: number): Promise<any[]> {
+  const [out] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", outPickingId]], ["group_id"], 1);
+  if (!out?.group_id) return [];
+  const groupId = Array.isArray(out.group_id) ? out.group_id[0] : out.group_id;
+  return searchRead(session, M("MODEL_PICKING"),
+    [["group_id", "=", groupId], ["picking_type_code", "=", "internal"]],
+    ["id", "name", "state"], 10
+  );
+}
+
+/**
+ * Synchronise les colis (result_package_id) d'un OUT vers les move lines correspondantes
+ * du PICK déjà validé, produit par produit + lot par lot. Nécessaire quand le pick a été
+ * "défait" (colis retirés) après validation : le pick garde alors une seule ligne groupée
+ * (ou des colis obsolètes/vides), ce qui empêche Odoo de réconcilier correctement la chaîne
+ * pick→OUT à la validation du OUT (erreur "impossible de déréserver plus que la quantité
+ * en stock"). Si le OUT a divisé un produit/lot en plusieurs colis (ex: 60/70/70) alors que
+ * le pick n'a qu'UNE ligne groupée pour ce produit/lot, cette fonction DIVISE aussi la ligne
+ * du pick dans les mêmes proportions, puis assigne chaque nouvelle ligne au bon colis —
+ * pour que la structure du pick corresponde exactement à celle du OUT.
+ */
+export async function syncPickPackagesFromOut(
+  session: OdooSession, outPickingId: number
+): Promise<{ pickName: string; updated: number; split: number }[]> {
+  const picks = await findPickPickingsFromOut(session, outPickingId);
+  if (!picks.length) throw new Error("Aucun pick lié trouvé pour ce OUT");
+
+  const outLines = await searchRead(session, M("MODEL_MOVE_LINE"),
+    [["picking_id", "=", outPickingId], ["qty_done", ">", 0]],
+    ["product_id", "lot_id", "qty_done", "result_package_id"], 500);
+
+  const key = (pid: number, lid: number | null) => `${pid}_${lid ?? 0}`;
+  // Groupe les lignes OUT par produit+lot → liste des {packageId, qty} à répartir.
+  const outByKey: Record<string, { packageId: number; qty: number }[]> = {};
+  for (const ol of outLines) {
+    const pid = Array.isArray(ol.product_id) ? ol.product_id[0] : ol.product_id;
+    const lid = ol.lot_id ? (Array.isArray(ol.lot_id) ? ol.lot_id[0] : ol.lot_id) : null;
+    const pkgId = ol.result_package_id ? (Array.isArray(ol.result_package_id) ? ol.result_package_id[0] : ol.result_package_id) : null;
+    if (!pkgId) continue;
+    const k = key(pid, lid);
+    (outByKey[k] ||= []).push({ packageId: pkgId, qty: ol.qty_done || 0 });
+  }
+
+  const results: { pickName: string; updated: number; split: number }[] = [];
+  for (const pick of picks) {
+    const pickLines = await searchRead(session, M("MODEL_MOVE_LINE"),
+      [["picking_id", "=", pick.id]],
+      ["id", "product_id", "lot_id", "qty_done", "result_package_id"], 500);
+
+    let updated = 0, splitCount = 0;
+    for (const pl of pickLines) {
+      const pid = Array.isArray(pl.product_id) ? pl.product_id[0] : pl.product_id;
+      const lid = pl.lot_id ? (Array.isArray(pl.lot_id) ? pl.lot_id[0] : pl.lot_id) : null;
+      const k = key(pid, lid);
+      const targets = outByKey[k];
+      if (!targets || !targets.length) continue;
+
+      if (targets.length === 1) {
+        // Un seul colis pour ce produit/lot côté OUT → assignation directe, pas de split requis.
+        const target = targets[0];
+        if (!pl.result_package_id || pl.result_package_id[0] !== target.packageId) {
+          await write(session, M("MODEL_MOVE_LINE"), [pl.id], { result_package_id: target.packageId });
+          updated++;
+        }
+        continue;
+      }
+
+      // Plusieurs colis côté OUT pour ce produit/lot → diviser la ligne du pick dans les
+      // mêmes proportions, puis assigner chaque nouvelle ligne au colis correspondant.
+      const totalTarget = targets.reduce((s, t) => s + t.qty, 0);
+      const totalPick = pl.qty_done || 0;
+      if (totalTarget <= 0 || totalPick <= 0) continue;
+
+      let remaining = totalPick;
+      let currentLineId = pl.id;
+      for (let i = 0; i < targets.length; i++) {
+        const isLast = i === targets.length - 1;
+        // Répartit au prorata (proportionnel au qty du OUT), le dernier colis récupère le reliquat
+        // exact pour ne pas perdre d'unités par arrondi.
+        const wantQty = isLast ? remaining : Math.round((targets[i].qty / totalTarget) * totalPick);
+        if (wantQty <= 0) continue;
+
+        if (isLast) {
+          // Dernière part : assigne directement la ligne courante (pas besoin de re-diviser).
+          await write(session, M("MODEL_MOVE_LINE"), [currentLineId], { result_package_id: targets[i].packageId });
+          updated++;
+        } else {
+          // Divise : la ligne courante garde `wantQty`, le reliquat part dans une nouvelle ligne
+          // qu'on traitera à l'itération suivante.
+          const newLineId = await splitMoveLine(session, currentLineId, wantQty);
+          await write(session, M("MODEL_MOVE_LINE"), [currentLineId], { result_package_id: targets[i].packageId });
+          updated++; splitCount++;
+          currentLineId = newLineId;
+        }
+        remaining -= wantQty;
+      }
+    }
+    results.push({ pickName: pick.name, updated, split: splitCount });
+  }
+  return results;
+}
+
 /** Workflow complet emballage + expédition pour un OUT picking.
  *  1. action_assign  2. qty_done = réservé  3. crée N colis avec poids
  *  4. valide  5. send_to_shipper  6. retourne les pièces jointes PDF (étiquettes)
@@ -5035,4 +5138,144 @@ export async function findEshopPartner(session: OdooSession, idOrRef: string): P
   r = await searchRead(session, M("MODEL_PARTNER"), [["ref", "=", q]], fields, 1);
   if (r.length) return { id: r[0].id, name: r[0].name };
   return null;
+}
+
+// ============================================
+// PICK — Recoliser une ligne "en vrac" en plusieurs colis (ex: 200 -> 70/70/60)
+// ============================================
+
+export interface PickSplitPlanLine {
+  moveLineId: number;
+  product: string;
+  lot: string;
+  currentQty: number;
+  currentPackage: string | null;
+}
+
+export interface PickSplitResult {
+  ok: boolean;
+  message: string;
+  sourceLine?: PickSplitPlanLine;
+  createdPackages?: { id: number; name: string; qty: number }[];
+}
+
+/**
+ * Recolise une move line "en vrac" (result_package_id vide) d'un picking en
+ * plusieurs colis selon une répartition de quantités (ex: [70, 70, 60]).
+ *
+ * Fonctionne même sur un picking VALIDÉ (done) : on ne touche pas au total
+ * qty_done (la somme des parts doit être égale au qty_done de la ligne source),
+ * on découpe la ligne en N sous-lignes et on crée/affecte un colis à chacune.
+ *
+ * IMPORTANT : la somme de `quantities` DOIT être égale à la quantité de la
+ * ligne source, sinon on refuse (pour ne jamais modifier le stock total).
+ *
+ * @param dryRun  si true, ne fait AUCUNE écriture — renvoie seulement le plan.
+ */
+export async function splitPickLineIntoPackages(
+  session: OdooSession,
+  params: {
+    pickingId: number;
+    productId: number;   // ex: 1061021 -> passer l'id interne product.product
+    lotId?: number;      // optionnel, pour cibler un lot précis (A436928)
+    quantities: number[]; // ex: [70, 70, 60]
+  },
+  dryRun = true
+): Promise<PickSplitResult> {
+  const { pickingId, productId, lotId, quantities } = params;
+
+  if (!quantities.length || quantities.some(q => q <= 0)) {
+    return { ok: false, message: "Quantités invalides (toutes > 0 requises)." };
+  }
+  const target = quantities.reduce((a, b) => a + b, 0);
+
+  // 1) Trouver la move line "en vrac" (sans colis) du produit/lot dans ce picking
+  const domain: any[] = [
+    ["picking_id", "=", pickingId],
+    ["product_id", "=", productId],
+    ["result_package_id", "=", false],
+    ["qty_done", ">", 0],
+  ];
+  if (lotId) domain.push(["lot_id", "=", lotId]);
+
+  const lines = await searchRead(
+    session, M("MODEL_MOVE_LINE"), domain,
+    ["id", "product_id", "lot_id", "qty_done", "reserved_uom_qty",
+     "location_id", "location_dest_id", "move_id", "product_uom_id", "result_package_id"],
+    50
+  );
+
+  if (!lines.length) {
+    return { ok: false, message: "Aucune ligne 'en vrac' (sans colis) trouvée pour ce produit/lot dans ce picking." };
+  }
+
+  // On prend la ligne dont qty_done == target si possible, sinon la plus grosse.
+  let src = lines.find((l: any) => (l.qty_done || 0) === target) || lines.sort((a: any, b: any) => (b.qty_done || 0) - (a.qty_done || 0))[0];
+
+  const srcQty = src.qty_done || 0;
+  const sourceLine: PickSplitPlanLine = {
+    moveLineId: src.id,
+    product: src.product_id?.[1] || String(productId),
+    lot: src.lot_id?.[1] || "-",
+    currentQty: srcQty,
+    currentPackage: src.result_package_id ? src.result_package_id[1] : null,
+  };
+
+  if (srcQty !== target) {
+    return {
+      ok: false,
+      message: `La ligne en vrac contient ${srcQty} unités mais la répartition demandée totalise ${target}. Ajuste les quantités pour qu'elles fassent exactement ${srcQty}, ou cible une autre ligne.`,
+      sourceLine,
+    };
+  }
+
+  if (dryRun) {
+    return {
+      ok: true,
+      message: `PLAN (dry-run) : la ligne ${src.id} (${srcQty} u.) sera découpée en ${quantities.length} colis : ${quantities.join(" / ")}. Aucune écriture effectuée.`,
+      sourceLine,
+      createdPackages: quantities.map((q, i) => ({ id: -1, name: `NOUVEAU_COLIS_${i + 1}`, qty: q })),
+    };
+  }
+
+  // 2) EXÉCUTION
+  const created: { id: number; name: string; qty: number }[] = [];
+
+  // 2a) La 1re part reste sur la ligne source : on réduit qty_done + reserved à quantities[0]
+  //     et on lui crée un colis.
+  const firstQty = quantities[0];
+  await write(session, M("MODEL_MOVE_LINE"), [src.id], {
+    qty_done: firstQty,
+    reserved_uom_qty: Math.min(src.reserved_uom_qty || 0, firstQty),
+  });
+  const pkg0 = await createPackage(session);
+  await write(session, M("MODEL_MOVE_LINE"), [src.id], { result_package_id: pkg0.id });
+  created.push({ id: pkg0.id, name: pkg0.name, qty: firstQty });
+
+  // 2b) Les parts suivantes : nouvelle move line + nouveau colis chacune.
+  for (let i = 1; i < quantities.length; i++) {
+    const q = quantities[i];
+    const newLineId = await create(session, M("MODEL_MOVE_LINE"), {
+      product_id: src.product_id?.[0],
+      lot_id: src.lot_id?.[0] || false,
+      location_id: src.location_id?.[0],
+      location_dest_id: src.location_dest_id?.[0],
+      picking_id: pickingId,
+      move_id: src.move_id?.[0],
+      product_uom_id: src.product_uom_id?.[0],
+      qty_done: q,
+      reserved_uom_qty: 0,
+      result_package_id: false,
+    }) as number;
+    const pkg = await createPackage(session);
+    await write(session, M("MODEL_MOVE_LINE"), [newLineId], { result_package_id: pkg.id });
+    created.push({ id: pkg.id, name: pkg.name, qty: q });
+  }
+
+  return {
+    ok: true,
+    message: `OK : ${srcQty} u. réparties en ${created.length} colis (${created.map(c => `${c.name}:${c.qty}`).join(", ")}).`,
+    sourceLine,
+    createdPackages: created,
+  };
 }
