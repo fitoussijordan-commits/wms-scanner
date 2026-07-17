@@ -1360,6 +1360,21 @@ export async function findPickPickingsFromOut(session: OdooSession, outPickingId
 }
 
 /**
+ * Force reserved_uom_qty=0 sur TOUTES les move lines "done" d'un picking qui ont encore
+ * une réservation résiduelle (Odoo interdit qu'une ligne faite ait une quantité réservée :
+ * "Une ligne de mouvement fait ne doit jamais comporter de quantité réservée."). Corrige
+ * n'importe quel résidu, pas seulement celui du produit qu'on vient de synchroniser.
+ */
+export async function clearReservedOnDoneLines(session: OdooSession, pickingId: number): Promise<number> {
+  const lines = await searchRead(session, M("MODEL_MOVE_LINE"),
+    [["picking_id", "=", pickingId], ["state", "=", "done"], ["reserved_uom_qty", "!=", 0]],
+    ["id"], 500);
+  if (!lines.length) return 0;
+  await write(session, M("MODEL_MOVE_LINE"), lines.map((l: any) => l.id), { reserved_uom_qty: 0 });
+  return lines.length;
+}
+
+/**
  * Synchronise les colis (result_package_id) d'un OUT vers les move lines correspondantes
  * du PICK déjà validé, produit par produit + lot par lot. Nécessaire quand le pick a été
  * "défait" (colis retirés) après validation : le pick garde alors une seule ligne groupée
@@ -1451,6 +1466,9 @@ export async function syncPickPackagesFromOut(
         remaining -= wantQty;
       }
     }
+    // Filet de sécurité : nettoie TOUT résidu de réservation sur ce pick, pas seulement
+    // celui du produit traité ci-dessus (au cas où un autre écart traînerait ailleurs).
+    await clearReservedOnDoneLines(session, pick.id);
     results.push({ pickName: pick.name, updated, split: splitCount });
   }
   return results;
