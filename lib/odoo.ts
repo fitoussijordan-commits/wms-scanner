@@ -31,34 +31,43 @@ export async function suggestProducts(session: OdooSession, q: string): Promise<
 }
 
 /**
- * Lots d'un produit, avec quantité dispo (emplacements internes).
- * Inclut TOUS les lots ayant du stock (le + dispo d'abord), PLUS au moins les 5 derniers
- * lots créés pour ce produit même s'ils sont à 0 (épuisés) — pour pouvoir quand même
- * sélectionner/tracer un lot récent qui n'a plus de stock dispo.
+ * Lots d'un produit, avec quantité DISPO NETTE (qty physique - réservé) sur les
+ * emplacements internes. Inclut aussi les lots totalement réservés (dispo nette 0 ou
+ * négative) — on ne filtre plus sur "quantity > 0" (stock physique brut), sinon un lot
+ * avec du stock mais 100% réservé n'apparaissait jamais. Complété par les 5 derniers
+ * lots créés pour ce produit même s'ils n'ont plus aucune quant (épuisés).
  */
 export async function getProductStockLots(session: OdooSession, productId: number): Promise<{ lotId: number; lotName: string; qty: number }[]> {
   if (!productId) return [];
   const quants = await searchRead(session, M("MODEL_QUANT"),
-    [["product_id", "=", productId], ["lot_id", "!=", false], ["location_id.usage", "=", "internal"], ["quantity", ">", 0]],
+    [["product_id", "=", productId], ["lot_id", "!=", false], ["location_id.usage", "=", "internal"]],
     ["lot_id", "quantity", "reserved_quantity"], 200);
-  // Agrège par lot (un lot peut être sur plusieurs emplacements).
+  // Agrège par lot (un lot peut être sur plusieurs emplacements). qty = dispo nette (brut - réservé).
   const byLot: Record<number, { lotName: string; qty: number }> = {};
   for (const q of quants) {
     const lid = Array.isArray(q.lot_id) ? q.lot_id[0] : null;
     if (!lid) continue;
     if (!byLot[lid]) byLot[lid] = { lotName: Array.isArray(q.lot_id) ? q.lot_id[1] : "", qty: 0 };
-    byLot[lid].qty += (q.quantity || 0);
+    byLot[lid].qty += ((q.quantity || 0) - (q.reserved_quantity || 0));
   }
 
   // Complète avec les 5 derniers lots créés pour ce produit (même à 0 stock), pour ne pas
-  // se limiter aux seuls lots ayant encore du dispo.
-  try {
-    const recentLots = await searchRead(session, M("MODEL_LOT"),
-      [["product_id", "=", productId]], ["id", "name"], 5, "id desc");
-    for (const l of recentLots) {
-      if (!byLot[l.id]) byLot[l.id] = { lotName: l.name || "", qty: 0 };
-    }
-  } catch { /* non bloquant si le modèle/domaine diffère selon la version Odoo */ }
+  // se limiter aux seuls lots ayant encore du dispo. On essaie le nom de modèle configuré,
+  // puis les deux noms possibles selon la version d'Odoo (stock.lot / stock.production.lot),
+  // au cas où l'override configuré ne correspondrait pas à la réalité de cette instance.
+  const lotModelCandidates = Array.from(new Set([M("MODEL_LOT"), "stock.lot", "stock.production.lot"]));
+  for (const model of lotModelCandidates) {
+    try {
+      const recentLots = await searchRead(session, model,
+        [["product_id", "=", productId]], ["id", "name"], 5, "id desc");
+      if (recentLots.length) {
+        for (const l of recentLots) {
+          if (!byLot[l.id]) byLot[l.id] = { lotName: l.name || "", qty: 0 };
+        }
+        break; // le premier modèle qui répond avec des résultats est le bon — inutile d'essayer les autres
+      }
+    } catch { /* modèle invalide sur cette instance — on tente le suivant */ }
+  }
 
   return Object.entries(byLot)
     .map(([lotId, v]) => ({ lotId: Number(lotId), lotName: v.lotName, qty: Math.round(v.qty) }))
