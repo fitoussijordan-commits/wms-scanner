@@ -8751,6 +8751,8 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const [orphanLines, setOrphanLines] = useState<any[]>([]);
   const [repairingLine, setRepairingLine] = useState<number | null>(null);
   const [splitInput, setSplitInput] = useState<Record<number, string>>({});
+  // Contenu détaillé d'un colis affiché (pour diviser/déplacer une ligne saine, pas seulement orpheline)
+  const [expandedPkgId, setExpandedPkgId] = useState<number | null>(null);
   // ── Codes-barres produits par tranche de 5 (packing list) ──
   interface PbRow { productId: number; ref: string; name: string; barcode: string; qty: number; labels: number; }
   const [pbRows, setPbRows] = useState<PbRow[]>([]);
@@ -9250,24 +9252,62 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const renderPkgRow = (picking: any, pkg: any) => {
     const weight = pkg.shipping_weight || null;
     const isPL = !!printingPL[pkg.id];
+    const isExpanded = expandedPkgId === pkg.id;
+    const pkgLines: any[] = pkg.lines || [];
     return (
-      <div key={pkg.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", background: C.bg, borderRadius: 10, marginBottom: 8, border: `1px solid ${C.border}` }}>
-        <span style={{ fontSize: 22 }}>📦</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{pkg.name}</div>
-          {weight != null && weight > 0
-            ? <div style={{ fontSize: 11, color: C.textMuted }}>{weight} kg</div>
-            : <div style={{ fontSize: 11, color: "#f59e0b" }}>Poids non renseigné</div>}
+      <div key={pkg.id} style={{ background: C.bg, borderRadius: 10, marginBottom: 8, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px" }}>
+          <span style={{ fontSize: 22 }}>📦</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{pkg.name}</div>
+            {weight != null && weight > 0
+              ? <div style={{ fontSize: 11, color: C.textMuted }}>{weight} kg</div>
+              : <div style={{ fontSize: 11, color: "#f59e0b" }}>Poids non renseigné</div>}
+          </div>
+          <button onClick={() => setExpandedPkgId(isExpanded ? null : pkg.id)}
+            title="Voir le contenu (diviser/déplacer une ligne)"
+            style={{ padding: "7px 10px", background: isExpanded ? C.blue : C.white, color: isExpanded ? "#fff" : C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const }}>
+            {isExpanded ? "▲ Fermer" : `▼ Contenu (${pkgLines.length})`}
+          </button>
+          <button onClick={() => preparePbList(picking, pkg)} disabled={pbLoading}
+            title="Imprimer les codes-barres produits (1 étiq. / 5 unités)"
+            style={{ padding: "7px 10px", background: C.white, color: C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: pbLoading ? "wait" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const }}>
+            🏷️ CB
+          </button>
+          <button onClick={() => printPackingList(picking, pkg)} disabled={isPL}
+            style={{ padding: "7px 12px", background: isPL ? C.border : C.blue, color: isPL ? C.textMuted : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: isPL ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const, opacity: isPL ? 0.6 : 1 }}>
+            {isPL ? "…" : "🖨 Imprimer"}
+          </button>
         </div>
-        <button onClick={() => preparePbList(picking, pkg)} disabled={pbLoading}
-          title="Imprimer les codes-barres produits (1 étiq. / 5 unités)"
-          style={{ padding: "7px 10px", background: C.white, color: C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: pbLoading ? "wait" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const }}>
-          🏷️ CB
-        </button>
-        <button onClick={() => printPackingList(picking, pkg)} disabled={isPL}
-          style={{ padding: "7px 12px", background: isPL ? C.border : C.blue, color: isPL ? C.textMuted : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: isPL ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const, opacity: isPL ? 0.6 : 1 }}>
-          {isPL ? "…" : "🖨 Imprimer"}
-        </button>
+        {isExpanded && (
+          <div style={{ padding: "0 12px 12px" }}>
+            {pkgLines.length === 0 ? (
+              <div style={{ fontSize: 12, color: C.textMuted, fontStyle: "italic", padding: "8px 0" }}>Aucune ligne trouvée dans ce colis pour ce picking.</div>
+            ) : pkgLines.map((ml: any) => (
+              <div key={ml.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, marginBottom: 6 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text }}>{ml.product_id?.[1] || "Produit"}</div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6 }}>
+                  {ml.lot_id ? `Lot ${ml.lot_id[1]} · ` : ""}Qté {ml.qty_done || 0}
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: C.textMuted }}>Diviser : garder</span>
+                  <input type="number" min={1} max={(ml.qty_done || 1) - 1} value={splitInput[ml.id] ?? ""}
+                    onChange={e => setSplitInput(prev => ({ ...prev, [ml.id]: e.target.value }))}
+                    placeholder="qté"
+                    style={{ width: 56, padding: "5px 6px", border: `1.5px solid ${C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "inherit" }} />
+                  <span style={{ fontSize: 11, color: C.textMuted }}>ici, reste → nouvelle ligne à assigner</span>
+                  <button onClick={async () => {
+                    await splitOrphanLine(ml.id);
+                    setExpandedPkgId(null); // referme : la vue colis va se recharger via loadScanPicking
+                  }} disabled={repairingLine === ml.id || !splitInput[ml.id]}
+                    style={{ padding: "5px 12px", background: C.blue, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginLeft: "auto" }}>
+                    {repairingLine === ml.id ? "…" : "Diviser"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   };
