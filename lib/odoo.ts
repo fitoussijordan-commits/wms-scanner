@@ -2981,7 +2981,7 @@ export async function splitMoveLine(session: OdooSession, moveLineId: number, ke
   const [ml] = await searchRead(session, M("MODEL_MOVE_LINE"),
     [["id", "=", moveLineId]],
     ["product_id", "lot_id", "location_id", "location_dest_id", "picking_id", "move_id", "product_uom_id",
-     "qty_done", "reserved_uom_qty", "result_package_id", "package_id"],
+     "qty_done", "reserved_uom_qty", "result_package_id", "package_id", "state"],
     1);
   if (!ml) throw new Error("Ligne introuvable");
 
@@ -2992,9 +2992,12 @@ export async function splitMoveLine(session: OdooSession, moveLineId: number, ke
   }
   const restQty = totalQty - keepQty;
   // Répartit la réservation au prorata (évite de laisser une ligne avec reserved_uom_qty
-  // incohérent, ce qui bloquerait la validation stricte du picking).
-  const keepReserved = totalReserved > 0 ? Math.round((keepQty / totalQty) * totalReserved * 100) / 100 : keepQty;
-  const restReserved = totalReserved > 0 ? Math.round((totalReserved - keepReserved) * 100) / 100 : restQty;
+  // incohérent, ce qui bloquerait la validation stricte du picking) — SAUF si la ligne
+  // est déjà "done" : Odoo interdit alors toute quantité réservée non nulle
+  // ("Une ligne de mouvement fait ne doit jamais comporter de quantité réservée").
+  const isDone = ml.state === "done";
+  const keepReserved = isDone ? 0 : (totalReserved > 0 ? Math.round((keepQty / totalQty) * totalReserved * 100) / 100 : keepQty);
+  const restReserved = isDone ? 0 : (totalReserved > 0 ? Math.round((totalReserved - keepReserved) * 100) / 100 : restQty);
 
   // 1) Réduit la ligne existante à keepQty.
   await write(session, M("MODEL_MOVE_LINE"), [moveLineId], { qty_done: keepQty, reserved_uom_qty: keepReserved });
