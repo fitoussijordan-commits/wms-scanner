@@ -2782,18 +2782,32 @@ export async function getPickingPackages(session: OdooSession, pickingId: number
 }
 
 /**
- * Lignes d'un picking qui ne sont dans AUCUN colis (result_package_id vide) mais
- * qui ont bien du stock fait (qty_done > 0) — typiquement une ligne "orpheline"
- * après une manipulation de colis mal faite. Sert à repérer et réparer ces lignes
- * (les réassigner à un colis, ou réaligner reserved_uom_qty) sans repasser par Odoo.
+ * Lignes "à problème" d'un picking : soit sans colis (result_package_id vide) avec
+ * du stock fait, soit avec reserved_uom_qty désynchronisé de qty_done (ex: Fait=200
+ * mais Réservé=0, cas typique après un mouvement de stock manuel qui corrige le
+ * quant physique sans mettre à jour la réservation de la move line du transfert).
+ * Sert à repérer et réparer ces lignes sans repasser par Odoo directement.
  */
 export async function getOrphanMoveLines(session: OdooSession, pickingId: number): Promise<any[]> {
-  return searchRead(
+  const lines = await searchRead(
     session, M("MODEL_MOVE_LINE"),
-    [["picking_id", "=", pickingId], ["result_package_id", "=", false], ["qty_done", ">", 0]],
-    ["id", "product_id", "lot_id", "qty_done", "reserved_uom_qty", "location_id", "location_dest_id"],
+    [["picking_id", "=", pickingId], ["qty_done", ">", 0]],
+    ["id", "product_id", "lot_id", "qty_done", "reserved_uom_qty", "location_id", "location_dest_id", "result_package_id"],
     200
   );
+  return lines.filter((ml: any) =>
+    !ml.result_package_id || (ml.reserved_uom_qty || 0) !== (ml.qty_done || 0)
+  );
+}
+
+/**
+ * Cherche un colis (stock.quant.package) par son nom exact (ex: "PACK0041495").
+ * Sert à retrouver un colis VIDÉ (aucune ligne dedans actuellement) qui n'apparaît
+ * plus dans getPickingPackages, pour pouvoir le réutiliser au lieu d'en créer un nouveau.
+ */
+export async function findPackageByName(session: OdooSession, name: string): Promise<{ id: number; name: string } | null> {
+  const res = await searchRead(session, M("MODEL_QUANT_PACKAGE"), [["name", "=", name.trim()]], ["id", "name"], 1);
+  return res.length ? { id: res[0].id, name: res[0].name } : null;
 }
 
 /**
@@ -2809,6 +2823,16 @@ export async function repairAndAssignLine(session: OdooSession, moveLineId: numb
     vals.reserved_uom_qty = ml.qty_done || 0;
   }
   await write(session, M("MODEL_MOVE_LINE"), [moveLineId], vals);
+}
+
+/**
+ * Réaligne reserved_uom_qty sur qty_done pour une ligne SANS toucher à son colis actuel
+ * (utile quand le colis est déjà le bon, seul reserved_uom_qty est désynchronisé).
+ */
+export async function repairLineQty(session: OdooSession, moveLineId: number): Promise<void> {
+  const [ml] = await searchRead(session, M("MODEL_MOVE_LINE"), [["id", "=", moveLineId]], ["qty_done"], 1);
+  if (!ml) throw new Error("Ligne introuvable");
+  await write(session, M("MODEL_MOVE_LINE"), [moveLineId], { reserved_uom_qty: ml.qty_done || 0 });
 }
 
 /**

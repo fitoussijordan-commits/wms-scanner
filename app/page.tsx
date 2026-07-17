@@ -8803,6 +8803,19 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
     setScanLoading(false);
   };
 
+  // ── Réparation colis : réaligne reserved_uom_qty=qty_done SANS changer de colis ──
+  // (cas où le colis est déjà le bon, ex: un mouvement de stock manuel a corrigé le
+  // quant physique mais pas la réservation de la move line du transfert).
+  const repairLineQtyOnly = async (lineId: number) => {
+    setRepairingLine(lineId);
+    try {
+      await odoo.repairLineQty(session, lineId);
+      onToast("✓ Réservation réalignée sur la quantité faite");
+      await loadScanPicking(scanPicking.name);
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setRepairingLine(null);
+  };
+
   // ── Réparation colis : réassigne une ligne orpheline à un colis existant ──
   const assignOrphanToPackage = async (lineId: number, packageId: number) => {
     setRepairingLine(lineId);
@@ -9522,7 +9535,14 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
                       <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>{ml.product_id?.[1] || "Produit"}</div>
                       <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8 }}>
                         {ml.lot_id ? `Lot ${ml.lot_id[1]} · ` : ""}Fait {ml.qty_done || 0} · Réservé {ml.reserved_uom_qty || 0}
+                        {ml.result_package_id ? ` · Colis actuel : ${ml.result_package_id[1]}` : " · Aucun colis"}
                       </div>
+                      {ml.result_package_id && (ml.reserved_uom_qty || 0) !== (ml.qty_done || 0) && (
+                        <button onClick={() => repairLineQtyOnly(ml.id)} disabled={repairingLine === ml.id}
+                          style={{ display: "block", width: "100%", padding: "8px 12px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: repairingLine === ml.id ? 0.6 : 1, marginBottom: 8 }}>
+                          {repairingLine === ml.id ? "…" : `🔧 Réparer la réservation (garder ${ml.result_package_id[1]})`}
+                        </button>
+                      )}
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                         {scanPkgs.map((pkg: any) => (
                           <button key={pkg.id} onClick={() => assignOrphanToPackage(ml.id, pkg.id)} disabled={repairingLine === ml.id}
