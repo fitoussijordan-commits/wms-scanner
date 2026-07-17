@@ -8753,6 +8753,9 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const [splitInput, setSplitInput] = useState<Record<number, string>>({});
   // Contenu détaillé d'un colis affiché (pour diviser/déplacer une ligne saine, pas seulement orpheline)
   const [expandedPkgId, setExpandedPkgId] = useState<number | null>(null);
+  // Saisie du poids pour un colis qui n'en a pas encore (ex: colis créé via split/nouveau colis)
+  const [pkgWeightInput, setPkgWeightInput] = useState<Record<number, string>>({});
+  const [savingPkgWeight, setSavingPkgWeight] = useState<number | null>(null);
   // ── Codes-barres produits par tranche de 5 (packing list) ──
   interface PbRow { productId: number; ref: string; name: string; barcode: string; qty: number; labels: number; }
   const [pbRows, setPbRows] = useState<PbRow[]>([]);
@@ -9248,6 +9251,26 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
     transition: "background .15s",
   } as React.CSSProperties);
 
+  // Enregistre le poids d'un colis qui n'en a pas encore, et met à jour les deux
+  // sources d'état possibles (onglet Transporteur "packages", onglet Packing lists "scanPkgs").
+  const savePkgWeight = async (pickingId: number, pkg: any) => {
+    const raw = pkgWeightInput[pkg.id];
+    const w = parseFloat(raw);
+    if (isNaN(w) || w <= 0) { onToast("❌ Poids invalide"); return; }
+    setSavingPkgWeight(pkg.id);
+    try {
+      await odoo.setPackageWeight(session, pkg.id, w);
+      setPackages(prev => {
+        const list = prev[pickingId];
+        if (!list) return prev;
+        return { ...prev, [pickingId]: list.map((p: any) => p.id === pkg.id ? { ...p, shipping_weight: w } : p) };
+      });
+      setScanPkgs(prev => prev.map((p: any) => p.id === pkg.id ? { ...p, shipping_weight: w } : p));
+      onToast(`✓ Poids enregistré : ${w} kg`);
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setSavingPkgWeight(null);
+  };
+
   // Réutilisé dans les deux onglets pour afficher un colis avec boutons
   const renderPkgRow = (picking: any, pkg: any) => {
     const weight = pkg.shipping_weight || null;
@@ -9260,9 +9283,20 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
           <span style={{ fontSize: 22 }}>📦</span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{pkg.name}</div>
-            {weight != null && weight > 0
-              ? <div style={{ fontSize: 11, color: C.textMuted }}>{weight} kg</div>
-              : <div style={{ fontSize: 11, color: "#f59e0b" }}>Poids non renseigné</div>}
+            {weight != null && weight > 0 ? (
+              <div style={{ fontSize: 11, color: C.textMuted }}>{weight} kg</div>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                <span style={{ fontSize: 11, color: "#f59e0b" }}>Poids non renseigné</span>
+                <input type="number" min={0} step={0.01} value={pkgWeightInput[pkg.id] ?? ""}
+                  onChange={e => setPkgWeightInput(prev => ({ ...prev, [pkg.id]: e.target.value }))}
+                  placeholder="kg" style={{ width: 52, padding: "3px 5px", border: `1.5px solid ${C.border}`, borderRadius: 6, fontSize: 11, fontFamily: "inherit" }} />
+                <button onClick={() => savePkgWeight(picking.id, pkg)} disabled={savingPkgWeight === pkg.id || !pkgWeightInput[pkg.id]}
+                  style={{ padding: "3px 8px", background: C.blue, color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: (savingPkgWeight === pkg.id || !pkgWeightInput[pkg.id]) ? 0.6 : 1 }}>
+                  {savingPkgWeight === pkg.id ? "…" : "OK"}
+                </button>
+              </div>
+            )}
           </div>
           <button onClick={() => setExpandedPkgId(isExpanded ? null : pkg.id)}
             title="Voir le contenu (diviser/déplacer une ligne)"
