@@ -1408,9 +1408,10 @@ export async function syncPickPackagesFromOut(
 
       if (targets.length === 1) {
         // Un seul colis pour ce produit/lot côté OUT → assignation directe, pas de split requis.
+        // reserved_uom_qty forcé à 0 : une ligne "done" ne doit jamais avoir de réservation.
         const target = targets[0];
         if (!pl.result_package_id || pl.result_package_id[0] !== target.packageId) {
-          await write(session, M("MODEL_MOVE_LINE"), [pl.id], { result_package_id: target.packageId });
+          await write(session, M("MODEL_MOVE_LINE"), [pl.id], { result_package_id: target.packageId, reserved_uom_qty: 0 });
           updated++;
         }
         continue;
@@ -1433,13 +1434,17 @@ export async function syncPickPackagesFromOut(
 
         if (isLast) {
           // Dernière part : assigne directement la ligne courante (pas besoin de re-diviser).
-          await write(session, M("MODEL_MOVE_LINE"), [currentLineId], { result_package_id: targets[i].packageId });
+          // reserved_uom_qty forcé à 0 : une ligne "done" ne doit jamais avoir de réservation.
+          await write(session, M("MODEL_MOVE_LINE"), [currentLineId], { result_package_id: targets[i].packageId, reserved_uom_qty: 0 });
           updated++;
         } else {
           // Divise : la ligne courante garde `wantQty`, le reliquat part dans une nouvelle ligne
           // qu'on traitera à l'itération suivante.
           const newLineId = await splitMoveLine(session, currentLineId, wantQty);
-          await write(session, M("MODEL_MOVE_LINE"), [currentLineId], { result_package_id: targets[i].packageId });
+          // reserved_uom_qty forcé à 0 des deux côtés : une ligne "done" ne doit jamais avoir
+          // de réservation (splitMoveLine proratise reserved_uom_qty, invalide ici).
+          await write(session, M("MODEL_MOVE_LINE"), [currentLineId], { result_package_id: targets[i].packageId, reserved_uom_qty: 0 });
+          await write(session, M("MODEL_MOVE_LINE"), [newLineId], { reserved_uom_qty: 0 });
           updated++; splitCount++;
           currentLineId = newLineId;
         }
