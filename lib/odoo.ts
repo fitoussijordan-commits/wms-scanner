@@ -30,7 +30,12 @@ export async function suggestProducts(session: OdooSession, q: string): Promise<
   return rows.map((r: any) => ({ id: r.id, name: r.name || "", ref: r.default_code || "" }));
 }
 
-/** Lots en STOCK d'un produit (emplacements internes), avec quantité dispo. Le + dispo d'abord. */
+/**
+ * Lots d'un produit, avec quantité dispo (emplacements internes).
+ * Inclut TOUS les lots ayant du stock (le + dispo d'abord), PLUS au moins les 5 derniers
+ * lots créés pour ce produit même s'ils sont à 0 (épuisés) — pour pouvoir quand même
+ * sélectionner/tracer un lot récent qui n'a plus de stock dispo.
+ */
 export async function getProductStockLots(session: OdooSession, productId: number): Promise<{ lotId: number; lotName: string; qty: number }[]> {
   if (!productId) return [];
   const quants = await searchRead(session, M("MODEL_QUANT"),
@@ -44,6 +49,17 @@ export async function getProductStockLots(session: OdooSession, productId: numbe
     if (!byLot[lid]) byLot[lid] = { lotName: Array.isArray(q.lot_id) ? q.lot_id[1] : "", qty: 0 };
     byLot[lid].qty += (q.quantity || 0);
   }
+
+  // Complète avec les 5 derniers lots créés pour ce produit (même à 0 stock), pour ne pas
+  // se limiter aux seuls lots ayant encore du dispo.
+  try {
+    const recentLots = await searchRead(session, M("MODEL_LOT"),
+      [["product_id", "=", productId]], ["id", "name"], 5, "id desc");
+    for (const l of recentLots) {
+      if (!byLot[l.id]) byLot[l.id] = { lotName: l.name || "", qty: 0 };
+    }
+  } catch { /* non bloquant si le modèle/domaine diffère selon la version Odoo */ }
+
   return Object.entries(byLot)
     .map(([lotId, v]) => ({ lotId: Number(lotId), lotName: v.lotName, qty: Math.round(v.qty) }))
     .sort((a, b) => b.qty - a.qty);
