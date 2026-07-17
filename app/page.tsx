@@ -8747,6 +8747,10 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const [scanLoading, setScanLoading] = useState(false);
   const scanInputRef = useRef<HTMLInputElement>(null);
   const [printingPdf, setPrintingPdf] = useState(false);
+  // Lignes sans colis (orphelines) sur le OUT scanné — à réparer/réassigner
+  const [orphanLines, setOrphanLines] = useState<any[]>([]);
+  const [repairingLine, setRepairingLine] = useState<number | null>(null);
+  const [splitInput, setSplitInput] = useState<Record<number, string>>({});
   // ── Codes-barres produits par tranche de 5 (packing list) ──
   interface PbRow { productId: number; ref: string; name: string; barcode: string; qty: number; labels: number; }
   const [pbRows, setPbRows] = useState<PbRow[]>([]);
@@ -8769,15 +8773,16 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   // ── Mode SCAN direct ──────────────────────────────────────────────────────────
   const loadScanPicking = async (outNumber: string) => {
     setScanLoading(true);
-    setScanPicking(null); setScanPkgs([]); setScanAtts([]);
+    setScanPicking(null); setScanPkgs([]); setScanAtts([]); setOrphanLines([]);
     try {
       const results = await odoo.searchPickingByCommande(session, outNumber.trim());
       if (results.length === 0) { onToast("❌ Aucun OUT trouvé : " + outNumber.trim()); setScanLoading(false); return; }
       const p = results[0];
       setScanPicking(p);
-      const [att, pkgs] = await Promise.all([
+      const [att, pkgs, orphans] = await Promise.all([
         odoo.getPickingAttachments(session, p.id),
         odoo.getPickingPackages(session, p.id),
+        odoo.getOrphanMoveLines(session, p.id),
       ]);
       // Enrich packages with weight
       let pkgsEnriched = pkgs;
@@ -8793,8 +8798,46 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
       }
       setScanPkgs(pkgsEnriched);
       setScanAtts(att);
+      setOrphanLines(orphans);
     } catch (e: any) { onToast("❌ " + e.message); }
     setScanLoading(false);
+  };
+
+  // ── Réparation colis : réassigne une ligne orpheline à un colis existant ──
+  const assignOrphanToPackage = async (lineId: number, packageId: number) => {
+    setRepairingLine(lineId);
+    try {
+      await odoo.repairAndAssignLine(session, lineId, packageId);
+      onToast("✓ Ligne réparée et assignée au colis");
+      await loadScanPicking(scanPicking.name);
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setRepairingLine(null);
+  };
+
+  // ── Réparation colis : crée un NOUVEAU colis et y assigne la ligne orpheline ──
+  const assignOrphanToNewPackage = async (lineId: number) => {
+    setRepairingLine(lineId);
+    try {
+      const pkg = await odoo.createPackage(session);
+      await odoo.repairAndAssignLine(session, lineId, pkg.id);
+      onToast(`✓ Ligne assignée au nouveau colis ${pkg.name}`);
+      await loadScanPicking(scanPicking.name);
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setRepairingLine(null);
+  };
+
+  // ── Divise une ligne orpheline en 2 (ex: 200 → 70 conservés ici + 130 dans une nouvelle ligne) ──
+  const splitOrphanLine = async (lineId: number) => {
+    const raw = splitInput[lineId];
+    const keepQty = parseFloat(raw);
+    if (isNaN(keepQty) || keepQty <= 0) { onToast("❌ Quantité invalide"); return; }
+    setRepairingLine(lineId);
+    try {
+      await odoo.splitMoveLine(session, lineId, keepQty);
+      onToast("✓ Ligne divisée — répartis maintenant chaque partie dans un colis");
+      await loadScanPicking(scanPicking.name);
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setRepairingLine(null);
   };
 
   // ── Prépare la liste des codes-barres produits d'UN colis (1 étiquette / 5 unités) ──
@@ -9464,6 +9507,51 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
                 </div>
               )}
               {scanPkgs.map((pkg: any) => renderPkgRow(scanPicking, pkg))}
+
+              {/* Lignes sans colis (orphelines) — à réparer/réassigner */}
+              {orphanLines.length > 0 && (
+                <div style={{ marginTop: 16, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#dc2626", textTransform: "uppercase" as const, letterSpacing: 1, marginBottom: 8 }}>
+                    ⚠ {orphanLines.length} ligne(s) sans colis
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "#7f1d1d", marginBottom: 10 }}>
+                    Ces lignes ont du stock fait mais ne sont dans aucun colis (souvent après une manip de colis annulée). Assigne-les à un colis existant, crée-en un nouveau, ou divise la quantité pour la répartir sur plusieurs colis.
+                  </div>
+                  {orphanLines.map((ml: any) => (
+                    <div key={ml.id} style={{ background: C.white, border: "1px solid #fecaca", borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>{ml.product_id?.[1] || "Produit"}</div>
+                      <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8 }}>
+                        {ml.lot_id ? `Lot ${ml.lot_id[1]} · ` : ""}Fait {ml.qty_done || 0} · Réservé {ml.reserved_uom_qty || 0}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                        {scanPkgs.map((pkg: any) => (
+                          <button key={pkg.id} onClick={() => assignOrphanToPackage(ml.id, pkg.id)} disabled={repairingLine === ml.id}
+                            style={{ padding: "6px 12px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: repairingLine === ml.id ? 0.6 : 1 }}>
+                            → {pkg.name}
+                          </button>
+                        ))}
+                        <button onClick={() => assignOrphanToNewPackage(ml.id)} disabled={repairingLine === ml.id}
+                          style={{ padding: "6px 12px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: repairingLine === ml.id ? 0.6 : 1 }}>
+                          {repairingLine === ml.id ? "…" : "+ Nouveau colis"}
+                        </button>
+                      </div>
+                      {/* Diviser la ligne en 2 pour répartir sur plusieurs colis */}
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+                        <span style={{ fontSize: 11.5, color: C.textMuted }}>Diviser : garder</span>
+                        <input type="number" min={1} max={(ml.qty_done || 1) - 1} value={splitInput[ml.id] ?? ""}
+                          onChange={e => setSplitInput(prev => ({ ...prev, [ml.id]: e.target.value }))}
+                          placeholder="qté"
+                          style={{ width: 60, padding: "5px 6px", border: `1.5px solid ${C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "inherit" }} />
+                        <span style={{ fontSize: 11.5, color: C.textMuted }}>ici, le reste dans une nouvelle ligne</span>
+                        <button onClick={() => splitOrphanLine(ml.id)} disabled={repairingLine === ml.id || !splitInput[ml.id]}
+                          style={{ padding: "5px 12px", background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginLeft: "auto" }}>
+                          Diviser
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Étiquettes PDF transporteur si présentes */}
               {scanAtts.length > 0 && (

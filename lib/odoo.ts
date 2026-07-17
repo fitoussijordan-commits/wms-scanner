@@ -2781,6 +2781,91 @@ export async function getPickingPackages(session: OdooSession, pickingId: number
   return Object.values(packages);
 }
 
+/**
+ * Lignes d'un picking qui ne sont dans AUCUN colis (result_package_id vide) mais
+ * qui ont bien du stock fait (qty_done > 0) — typiquement une ligne "orpheline"
+ * après une manipulation de colis mal faite. Sert à repérer et réparer ces lignes
+ * (les réassigner à un colis, ou réaligner reserved_uom_qty) sans repasser par Odoo.
+ */
+export async function getOrphanMoveLines(session: OdooSession, pickingId: number): Promise<any[]> {
+  return searchRead(
+    session, M("MODEL_MOVE_LINE"),
+    [["picking_id", "=", pickingId], ["result_package_id", "=", false], ["qty_done", ">", 0]],
+    ["id", "product_id", "lot_id", "qty_done", "reserved_uom_qty", "location_id", "location_dest_id"],
+    200
+  );
+}
+
+/**
+ * Réaligne reserved_uom_qty sur qty_done pour une ligne (cas où une manip a
+ * laissé reserved_uom_qty désynchronisé, ex: 0 réservé alors que 200 sont faits) —
+ * puis l'assigne au colis donné. Combine réparation + affectation en un seul appel.
+ */
+export async function repairAndAssignLine(session: OdooSession, moveLineId: number, packageId: number): Promise<void> {
+  const [ml] = await searchRead(session, M("MODEL_MOVE_LINE"), [["id", "=", moveLineId]], ["qty_done", "reserved_uom_qty"], 1);
+  if (!ml) throw new Error("Ligne introuvable");
+  const vals: any = { result_package_id: packageId };
+  if ((ml.reserved_uom_qty || 0) !== (ml.qty_done || 0)) {
+    vals.reserved_uom_qty = ml.qty_done || 0;
+  }
+  await write(session, M("MODEL_MOVE_LINE"), [moveLineId], vals);
+}
+
+/**
+ * Retire une move line d'un colis (remet result_package_id à vide) pour pouvoir
+ * la réassigner à un autre colis ensuite. Utile pour corriger un colis mal rempli
+ * sans devoir repasser par Odoo directement.
+ */
+export async function unassignLineFromPackage(session: OdooSession, moveLineId: number): Promise<void> {
+  await write(session, M("MODEL_MOVE_LINE"), [moveLineId], { result_package_id: false });
+}
+
+/**
+ * Divise une move line en deux : la ligne existante garde `keepQty`, une NOUVELLE
+ * ligne est créée avec le reliquat (qty_done ET reserved_uom_qty totaux - keepQty).
+ * Sert à répartir une quantité groupée (ex: 200 unités) sur plusieurs colis
+ * distincts (ex: 3 cartons de 70/70/60) sans repasser par Odoo directement.
+ * Retourne l'id de la nouvelle ligne créée (celle qui contient le reliquat).
+ */
+export async function splitMoveLine(session: OdooSession, moveLineId: number, keepQty: number): Promise<number> {
+  const [ml] = await searchRead(session, M("MODEL_MOVE_LINE"),
+    [["id", "=", moveLineId]],
+    ["product_id", "lot_id", "location_id", "location_dest_id", "picking_id", "move_id", "product_uom_id",
+     "qty_done", "reserved_uom_qty", "result_package_id", "package_id"],
+    1);
+  if (!ml) throw new Error("Ligne introuvable");
+
+  const totalQty = ml.qty_done || 0;
+  const totalReserved = ml.reserved_uom_qty || 0;
+  if (keepQty <= 0 || keepQty >= totalQty) {
+    throw new Error(`Quantité à conserver invalide (doit être entre 0 et ${totalQty} exclus)`);
+  }
+  const restQty = totalQty - keepQty;
+  // Répartit la réservation au prorata (évite de laisser une ligne avec reserved_uom_qty
+  // incohérent, ce qui bloquerait la validation stricte du picking).
+  const keepReserved = totalReserved > 0 ? Math.round((keepQty / totalQty) * totalReserved * 100) / 100 : keepQty;
+  const restReserved = totalReserved > 0 ? Math.round((totalReserved - keepReserved) * 100) / 100 : restQty;
+
+  // 1) Réduit la ligne existante à keepQty.
+  await write(session, M("MODEL_MOVE_LINE"), [moveLineId], { qty_done: keepQty, reserved_uom_qty: keepReserved });
+
+  // 2) Crée une nouvelle ligne avec le reliquat, SANS colis assigné (à répartir ensuite).
+  const newId = await create(session, M("MODEL_MOVE_LINE"), {
+    product_id: ml.product_id?.[0],
+    lot_id: ml.lot_id?.[0] || false,
+    location_id: ml.location_id?.[0],
+    location_dest_id: ml.location_dest_id?.[0],
+    picking_id: ml.picking_id?.[0],
+    move_id: ml.move_id?.[0],
+    product_uom_id: ml.product_uom_id?.[0],
+    qty_done: restQty,
+    reserved_uom_qty: restReserved,
+    result_package_id: false,
+  }) as number;
+
+  return newId;
+}
+
 export async function setPackageWeight(session: OdooSession, packageId: number, weight: number) {
   return write(session, M("MODEL_QUANT_PACKAGE"), [packageId], { shipping_weight: weight });
 }
