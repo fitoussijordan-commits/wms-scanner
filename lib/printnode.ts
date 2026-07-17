@@ -410,11 +410,15 @@ export function paletteDataToTemplate(data: PaletteLabelData, paletteNumber?: nu
     ? data.refs
     : [{ ref: data.ref, productName: data.productName, lot: data.lotNumber, qty: data.quantity }];
 
-  for (const r of refs) {
+  refs.forEach((r, idx) => {
     if (r.productName) addText(r.productName, 10, true);
-    const parts = [r.ref && `Réf: ${r.ref}`, r.lot && `Lot: ${r.lot}`, r.qty && `Qt: ${r.qty}${data.unit ? " " + data.unit : ""}`].filter(Boolean).join("  ");
-    if (parts) addText(parts, 8);
-  }
+    // Réf, Lot, Qté chacun sur leur propre ligne (au lieu d'être accolés sur une seule ligne).
+    if (r.ref) addText(`Réf: ${r.ref}`, 8);
+    if (r.lot) addText(`Lot: ${r.lot}`, 8);
+    if (r.qty) addText(`Qté: ${r.qty}${data.unit ? " " + data.unit : ""}`, 8);
+    // Ligne noire de séparation entre chaque référence (sauf après la dernière).
+    if (idx < refs.length - 1) { y += 1; addLine(); }
+  });
   if (data.weight) addText(`Poids: ${data.weight}`, 8);
   if (data.expiryDate) addText(`DLUO: ${data.expiryDate}`, 8);
   const refs2 = [data.orderRef && `CDE: ${data.orderRef}`, data.deliveryRef && `BL: ${data.deliveryRef}`].filter(Boolean).join("   ");
@@ -489,21 +493,25 @@ export function generatePaletteZPL(data: PaletteLabelData): string {
     ? data.refs
     : [{ ref: data.ref, productName: data.productName, lot: data.lotNumber, qty: data.quantity }];
 
-  for (const r of allRefs) {
+  allRefs.forEach((r, idx) => {
     if (r.productName) {
       lines.push(`^FO10,${y}^A0N,${mH},${mH}^FB${cW},2,0,L^FD${zplSafe(r.productName)}^FS`);
       y += mH + 2;
     }
-    // Ref + lot + qty on same line
-    const parts: string[] = [];
-    if (r.ref) parts.push(`Ref: ${r.ref}`);
-    if (r.lot) parts.push(`Lot: ${r.lot}`);
-    if (r.qty) parts.push(`Qt: ${r.qty}${data.unit ? " " + data.unit : " cartons"}`);
-    if (parts.length > 0) {
-      lines.push(`^FO10,${y}^A0N,${sH},${sH}^FB${cW},2,0,L^FD${zplSafe(parts.join(" / "))}^FS`);
+    // Ref, Lot, Qté chacun sur leur propre ligne (au lieu d'être accolés sur une seule ligne).
+    if (r.ref) { lines.push(`^FO10,${y}^A0N,${sH},${sH}^FB${cW},1,0,L^FD${zplSafe(`Ref: ${r.ref}`)}^FS`); y += sH + 2; }
+    if (r.lot) { lines.push(`^FO10,${y}^A0N,${sH},${sH}^FB${cW},1,0,L^FD${zplSafe(`Lot: ${r.lot}`)}^FS`); y += sH + 2; }
+    if (r.qty) {
+      const qtyLabel = `Qte: ${r.qty}${data.unit ? " " + data.unit : " cartons"}`;
+      lines.push(`^FO10,${y}^A0N,${sH},${sH}^FB${cW},1,0,L^FD${zplSafe(qtyLabel)}^FS`);
       y += sH + 4;
     }
-  }
+    // Ligne noire de séparation entre chaque référence (sauf après la dernière).
+    if (idx < allRefs.length - 1) {
+      lines.push(hline(y + 2));
+      y += sectionGap + 6;
+    }
+  });
 
   if (data.weight) {
     lines.push(`^FO10,${y}^A0N,${mH},${mH}^FDPoids: ${zplSafe(data.weight)}^FS`);
