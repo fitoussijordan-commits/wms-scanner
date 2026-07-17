@@ -5168,7 +5168,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
 
             {/* Palettes */}
             {chain.palettes.map((pal2, pi) => (
-              <div key={pal2.id} style={{ background: C.bg, border: `1.5px solid ${C.border}`, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div key={pal2.id} style={{ background: C.bg, border: `1.5px solid ${C.border}`, borderRadius: 12, marginBottom: 10 }}>
                 {/* Header palette avec grand numéro */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: C.white, borderBottom: `1px solid ${C.border}` }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
