@@ -1688,6 +1688,9 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
     { id: "poids", label: "Poids (kg)", key: "poids" },
     { id: "dimensions", label: "Dimensions (L×l×h cm)", key: "dimensions" },
     { id: "ref_fournisseur", label: "Référence fournisseur", key: "ref_fournisseur" },
+    { id: "prix_achat", label: "Prix d'achat", key: "prix_achat" },
+    { id: "prix_vente", label: "Prix de vente", key: "prix_vente" },
+    { id: "ean", label: "EAN", key: "ean" },
     { id: "conso_periode", label: "Consommation (période)", key: "conso_periode" },
     { id: "lots_en_stock", label: "Lots en stock", key: "lots_en_stock" },
     { id: "lot_expiry", label: "Date d'expiration (lot)", key: "lot_expiry" },
@@ -3036,15 +3039,18 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       const row: Record<string, any> = { "Référence": ref.raw, "Type": ref.type };
       try {
         if (ref.type === "product" || ref.type === "unknown") {
-          const needsProduct = libreCols.some(c => ["stock_dispo","stock_total","nom_produit","ref_produit","poids","dimensions","ref_fournisseur","lots_en_stock"].includes(c.key));
+          const needsProduct = libreCols.some(c => ["stock_dispo","stock_total","nom_produit","ref_produit","poids","dimensions","ref_fournisseur","lots_en_stock","prix_achat","prix_vente","ean"].includes(c.key));
           if (needsProduct) {
             const prods = await odoo.searchRead(session, "product.product",
               ["|", ["default_code", "=", ref.raw], ["barcode", "=", ref.raw]],
-              ["id","name","default_code","weight","volume","product_tmpl_id"], 1);
+              ["id","name","default_code","weight","volume","product_tmpl_id","standard_price","list_price","barcode"], 1);
             if (prods.length) {
               const p = prods[0];
               row["nom_produit"] = p.name;
               row["ref_produit"] = p.default_code || ref.raw;
+              if (libreCols.some(c => c.key === "prix_achat")) row["prix_achat"] = p.standard_price != null ? String(p.standard_price).replace(".", ",") : "";
+              if (libreCols.some(c => c.key === "prix_vente")) row["prix_vente"] = p.list_price != null ? String(p.list_price).replace(".", ",") : "";
+              if (libreCols.some(c => c.key === "ean")) row["ean"] = p.barcode || "";
               if (libreCols.some(c => c.key === "poids")) row["poids"] = p.weight ? String(p.weight).replace(".", ",") : "";
               if (libreCols.some(c => c.key === "dimensions")) {
                 try {
