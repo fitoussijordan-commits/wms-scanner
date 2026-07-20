@@ -314,8 +314,20 @@ async function runCron(): Promise<any> {
 
   const end = new Date();
   const start = new Date(end.getTime() - LOOKBACK_HOURS * 3600 * 1000);
-  const fmt = (d: Date) => d.toISOString().slice(0, 19).replace("T", " ");
-  L(`[cron] Fenêtre : ${fmt(start)} → ${fmt(end)} (lookback ${LOOKBACK_HOURS}h)`);
+  // Shopware stocke/compare orderTime en heure LOCALE (Europe/Paris), pas en UTC.
+  // Le serveur (Vercel) tourne en UTC → il faut convertir les bornes en heure Paris
+  // avant de les envoyer, sinon le filtre coupe 1-2h trop tôt (été/hiver) et rate
+  // les commandes les plus récentes.
+  const fmt = (d: Date) => {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Paris",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }).formatToParts(d);
+    const get = (t: string) => parts.find(p => p.type === t)?.value || "00";
+    return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
+  };
+  L(`[cron] Fenêtre (heure Paris) : ${fmt(start)} → ${fmt(end)} (lookback ${LOOKBACK_HOURS}h)`);
 
   L(`[cron] Auth Odoo…`);
   const s = await odooAuth();
