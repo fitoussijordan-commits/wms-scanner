@@ -88,6 +88,8 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   const [recentLoading, setRecentLoading] = useState(false);
   // Dernier run du cron auto (22h) — pour vérifier qu'il tourne sans attendre le lendemain
   const [cronStatus, setCronStatus] = useState<CronRunStatus | null | undefined>(undefined);
+  // Popup d'anomalie (pick/OUT non validé) à l'arrivée sur l'écran — régularisation manuelle sur Odoo
+  const [showAnomalyPopup, setShowAnomalyPopup] = useState(false);
 
   const loadRecentStatus = useCallback(async () => {
     setRecentLoading(true);
@@ -95,6 +97,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
       const recents = await getLastProcessedEshopOrders(5);
       const statuses = await odoo.getRecentEshopOrdersStatus(session, recents);
       setRecentStatus(statuses);
+      if (statuses.some(s => s.anomaly)) setShowAnomalyPopup(true);
     } catch { /* non bloquant — juste un récap informatif */ }
     setRecentLoading(false);
   }, [session]);
@@ -566,6 +569,63 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
           </div>
         )}
       </div>
+
+      {/* Popup d'anomalie — pick/OUT non validé (souvent créé par le cron auto 22h) */}
+      {showAnomalyPopup && (
+        <div onClick={() => setShowAnomalyPopup(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: C.white, borderRadius: 16, padding: 20, maxWidth: 520, width: "100%", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px -12px rgba(0,0,0,0.35)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span style={{ fontSize: 20 }}>⚠️</span>
+              <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>Commande(s) à régulariser</div>
+            </div>
+            <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 14 }}>
+              Un pick ou une sortie (OUT) n'a pas pu être validé automatiquement — à corriger dans Odoo.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+              {recentStatus.filter(s => s.anomaly).map((s, i) => {
+                const base = (session.config.url || "").replace(/\/$/, "");
+                const pickLink = s.pick ? `${base}/web#id=${s.pick.id}&model=stock.picking&view_type=form` : null;
+                const outLink = s.out ? `${base}/web#id=${s.out.id}&model=stock.picking&view_type=form` : null;
+                const orderLink = s.saleOrderId ? `${base}/web#id=${s.saleOrderId}&model=sale.order&view_type=form` : null;
+                return (
+                  <div key={i} style={{ border: `1.5px solid #fecaca`, background: C.redSoft, borderRadius: 10, padding: "10px 12px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 14, color: C.text }}>{s.devis}</span>
+                      <span style={{ fontSize: 11, color: C.red, fontWeight: 700 }}>{s.anomaly}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {pickLink && (
+                        <a href={pickLink} target="_blank" rel="noopener noreferrer"
+                          style={{ fontSize: 12, fontWeight: 700, color: C.blue, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 10px", textDecoration: "none" }}>
+                          → Ouvrir le pick {s.pick?.name}
+                        </a>
+                      )}
+                      {outLink && (
+                        <a href={outLink} target="_blank" rel="noopener noreferrer"
+                          style={{ fontSize: 12, fontWeight: 700, color: C.blue, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 10px", textDecoration: "none" }}>
+                          → Ouvrir le OUT {s.out?.name}
+                        </a>
+                      )}
+                      {!pickLink && !outLink && orderLink && (
+                        <a href={orderLink} target="_blank" rel="noopener noreferrer"
+                          style={{ fontSize: 12, fontWeight: 700, color: C.blue, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 10px", textDecoration: "none" }}>
+                          → Ouvrir la commande {s.devis}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <button onClick={() => setShowAnomalyPopup(false)}
+              style={{ width: "100%", padding: "11px", background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>
+              Fermer
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

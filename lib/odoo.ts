@@ -4831,8 +4831,9 @@ export interface EshopOrderStatus {
   orderNumbers: string[];    // n° commandes Shopware regroupées
   found: boolean;            // false si le devis n'existe plus / introuvable dans Odoo
   saleState?: string;        // état sale.order : draft/sent/sale/done/cancel
-  pick?: { name: string; state: string } | null;   // transfert interne (préparation)
-  out?: { name: string; state: string } | null;    // livraison sortante
+  pick?: { id: number; name: string; state: string } | null;   // transfert interne (préparation)
+  out?: { id: number; name: string; state: string } | null;    // livraison sortante
+  saleOrderId?: number;      // id sale.order Odoo (pour lien direct)
   invoiceStatus?: string;    // invoice_status du sale.order : upselling/invoiced/to invoice/no
   invoiced: boolean;         // facture(s) posée(s) (account.move state = posted) liée(s) à la commande
   anomaly: string | null;    // message si un souci est détecté, sinon null
@@ -4922,9 +4923,9 @@ export async function getRecentEshopOrdersStatus(
 
     out.push({
       devis: r.devis, orderNumbers: r.orderNumbers, found: true, saleState: o.state,
-      pick: pick ? { name: pick.name, state: pick.state } : null,
-      out: outP ? { name: outP.name, state: outP.state } : null,
-      invoiceStatus: o.invoice_status, invoiced, anomaly, source,
+      pick: pick ? { id: pick.id, name: pick.name, state: pick.state } : null,
+      out: outP ? { id: outP.id, name: outP.name, state: outP.state } : null,
+      invoiceStatus: o.invoice_status, invoiced, anomaly, source, saleOrderId: o.id,
     });
   }
   return out;
