@@ -13017,9 +13017,17 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
   }, [picking?.id]);
 
   // ── Auto-assigner les lignes complétées au colis ouvert ──
+  // IMPORTANT : une ligne peut être répartie sur PLUSIEURS colis (ex: 200 unités d'un
+  // produit scannées en 70/70/60 dans 3 cartons distincts). On ne peut donc pas attendre
+  // que la ligne soit 100% complète pour l'assigner (bug historique : tout finissait dans
+  // le dernier colis ouvert). À la place, on suit par ligne la quantité déjà "capturée"
+  // par un colis précédemment fermé (capturedQtyRef), et on n'assigne au colis OUVERT
+  // que le delta réellement scanné depuis la dernière capture — comme un instantané
+  // pris à chaque changement de quantité, pas seulement à 100%.
   const prevDoneRef = useRef<Set<number>>(new Set());
   const currentColisIdRef = useRef<number | null>(null);
   useEffect(() => { currentColisIdRef.current = currentColisId; }, [currentColisId]);
+  const capturedQtyRef = useRef<Record<number, number>>({}); // ml.id -> qté déjà affectée à un colis (courant ou déjà fermé)
 
   useEffect(() => {
     const cid = currentColisIdRef.current;
@@ -13033,9 +13041,19 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
         ...c,
         lines: Array.from(new Set([...c.lines, ...newlyDone.map((ml: any) => ml.id)])),
       } : c));
+      // Ligne 100% faite d'un coup (cas normal, 1 seul colis) : toute la qté est capturée ici.
+      for (const ml of newlyDone) capturedQtyRef.current[ml.id] = ml.reserved_uom_qty || ml.qty_done || 0;
     }
     prevDoneRef.current = nowDone;
   }, [moveLines, qtyOverrides]);
+
+  // Delta scanné (non encore capturé par un colis) pour une ligne donnée, avec le colis actuel ouvert.
+  // Sert à répartir une même ligne sur plusieurs colis (fermeture successive de colis partiels).
+  const getUncapturedDelta = (ml: any): number => {
+    const current = qtyOverrides?.[ml.id] ?? ml.qty_done ?? 0;
+    const captured = capturedQtyRef.current[ml.id] || 0;
+    return Math.max(0, current - captured);
+  };
 
   // ── Colis helpers ──
   const openNewColis = async () => {
@@ -13066,12 +13084,40 @@ function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, 
     try {
       const currentPack = colis.find(c => c.id === currentColisId);
       if (currentPack?.odooPackageId) {
-        // Assigner les move lines au package dans Odoo (result_package_id)
-        if (currentPack.lines.length > 0) {
-          await odoo.assignLinesToPackage(session, currentPack.lines, currentPack.odooPackageId);
+        const pkgId = currentPack.odooPackageId;
+        const directLineIds = new Set(currentPack.lines);
+
+        // ── Lignes PARTIELLEMENT scannées pas encore capturées ──
+        // Une ligne peut être répartie sur plusieurs colis (ex: 200 unités en 70/70/60) :
+        // elle n'atteint jamais 100% d'un coup donc n'apparaît jamais dans currentPack.lines.
+        // On cherche ici tout delta scanné-mais-pas-capturé, on divise la move line pour isoler
+        // exactement cette portion, et on assigne CETTE portion (pas la ligne entière) au colis.
+        const splitLineIds: number[] = [];
+        for (const ml of allLines as any[]) {
+          if (directLineIds.has(ml.id)) continue; // déjà géré normalement (ligne 100% faite)
+          const delta = getUncapturedDelta(ml);
+          if (delta <= 0) continue;
+          const totalQty = qtyOverrides?.[ml.id] ?? ml.qty_done ?? 0;
+          if (delta >= totalQty) {
+            // Toute la ligne correspond au delta (rien capturé avant) → assignation directe.
+            splitLineIds.push(ml.id);
+          } else {
+            // Delta partiel : diviser pour isoler la portion de CE colis.
+            // splitMoveLine garde `keepQty` sur la ligne d'origine et renvoie une NOUVELLE ligne
+            // avec le reliquat — on veut assigner le delta (la part scannée pour ce colis), donc
+            // on garde (totalQty - delta) sur l'ancienne ligne et on assigne la nouvelle (= delta).
+            const newLineId = await odoo.splitMoveLine(session, ml.id, totalQty - delta);
+            splitLineIds.push(newLineId);
+          }
+          capturedQtyRef.current[ml.id] = (capturedQtyRef.current[ml.id] || 0) + delta;
+        }
+
+        const allLineIdsToAssign = [...currentPack.lines, ...splitLineIds];
+        if (allLineIdsToAssign.length > 0) {
+          await odoo.assignLinesToPackage(session, allLineIdsToAssign, pkgId);
         }
         // Enregistrer le poids
-        await odoo.setPackageWeight(session, currentPack.odooPackageId, w);
+        await odoo.setPackageWeight(session, pkgId, w);
       }
       setColis(prev => prev.map(c => c.id === currentColisId ? { ...c, weight: w, closed: true } : c));
       setCurrentColisId(null);
