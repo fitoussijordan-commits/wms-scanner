@@ -644,6 +644,31 @@ export async function saveEshopMappingCache(cache: EshopMappingCache): Promise<v
 }
 
 // ══════════════════════════════════════════
+// SUIVI DU CRON eshop-out-cron — dernier run (date, résultat, erreur éventuelle)
+// Permet de vérifier depuis l'app que le cron tourne bien, sans attendre le lendemain.
+// ══════════════════════════════════════════
+export interface CronRunStatus {
+  ranAt: string;
+  ok: boolean;
+  summary: string; // résumé humain (ex: "2 commande(s) → S00456")
+  error?: string;
+}
+export async function saveCronRunStatus(status: CronRunStatus): Promise<void> {
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "eshop_cron_last_run", value: JSON.stringify(status), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}
+export async function getCronRunStatus(): Promise<CronRunStatus | null> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_cron_last_run").single();
+    if (data?.value) return JSON.parse(data.value);
+  } catch {}
+  return null;
+}
+
+// ══════════════════════════════════════════
 // GARDE-FOU : commandes e-shop déjà sorties (devis créé) — anti double déduction
 // Table wms_eshop_processed : { order_number, devis, processed_at }
 // ══════════════════════════════════════════
@@ -653,20 +678,20 @@ export async function getProcessedEshopOrders(orderNumbers: string[]): Promise<S
   return new Set((data || []).map((r: any) => r.order_number));
 }
 
-export async function markEshopOrdersProcessed(orderNumbers: string[], devis: string): Promise<void> {
+export async function markEshopOrdersProcessed(orderNumbers: string[], devis: string, source: "manual" | "cron" = "manual"): Promise<void> {
   if (!orderNumbers.length) return;
-  const rows = orderNumbers.map(n => ({ order_number: n, devis, processed_at: new Date().toISOString() }));
+  const rows = orderNumbers.map(n => ({ order_number: n, devis, processed_at: new Date().toISOString(), source }));
   const { error } = await sb.from("wms_eshop_processed").upsert(rows, { onConflict: "order_number" });
   if (error) throw new Error(error.message);
 }
 
 // Dernières commandes e-shop sorties (devis créé), les plus récentes d'abord.
 // Regroupe par devis (un devis peut couvrir plusieurs order_number Shopware).
-export interface RecentEshopOrder { devis: string; orderNumbers: string[]; processedAt: string; }
+export interface RecentEshopOrder { devis: string; orderNumbers: string[]; processedAt: string; source: "manual" | "cron"; }
 export async function getLastProcessedEshopOrders(limit = 5): Promise<RecentEshopOrder[]> {
   const { data, error } = await sb
     .from("wms_eshop_processed")
-    .select("order_number, devis, processed_at")
+    .select("order_number, devis, processed_at, source")
     .order("processed_at", { ascending: false })
     .limit(200); // large fenêtre pour pouvoir regrouper par devis avant de couper à `limit`
   if (error) throw new Error(error.message);
@@ -674,9 +699,9 @@ export async function getLastProcessedEshopOrders(limit = 5): Promise<RecentEsho
   const order: string[] = [];
   for (const r of (data || [])) {
     const key = r.devis || r.order_number;
-    if (!byDevis[key]) { byDevis[key] = { devis: key, orderNumbers: [], processedAt: r.processed_at }; order.push(key); }
+    if (!byDevis[key]) { byDevis[key] = { devis: key, orderNumbers: [], processedAt: r.processed_at, source: (r.source as any) || "manual" }; order.push(key); }
     byDevis[key].orderNumbers.push(r.order_number);
-    if (r.processed_at > byDevis[key].processedAt) byDevis[key].processedAt = r.processed_at;
+    if (r.processed_at > byDevis[key].processedAt) { byDevis[key].processedAt = r.processed_at; byDevis[key].source = (r.source as any) || "manual"; }
   }
   return order.map(k => byDevis[k]).slice(0, limit);
 }

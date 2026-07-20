@@ -4836,17 +4836,19 @@ export interface EshopOrderStatus {
   invoiceStatus?: string;    // invoice_status du sale.order : upselling/invoiced/to invoice/no
   invoiced: boolean;         // facture(s) posée(s) (account.move state = posted) liée(s) à la commande
   anomaly: string | null;    // message si un souci est détecté, sinon null
+  source: "manual" | "cron"; // créée à la main sur l'écran Sorties, ou automatiquement par le cron 22h
 }
 
 export async function getRecentEshopOrdersStatus(
   session: OdooSession,
-  recents: { devis: string; orderNumbers: string[]; processedAt: string }[]
+  recents: { devis: string; orderNumbers: string[]; processedAt: string; source?: "manual" | "cron" }[]
 ): Promise<EshopOrderStatus[]> {
   const devisNames = Array.from(new Set(recents.map(r => r.devis).filter(n => n && n !== "chariot")));
   const out: EshopOrderStatus[] = [];
   if (!devisNames.length) return recents.map(r => ({
     devis: r.devis, orderNumbers: r.orderNumbers, found: false, invoiced: false,
     anomaly: r.devis === "chariot" ? null : "Commande introuvable dans Odoo",
+    source: r.source || "manual",
   }));
 
   const orders = await searchRead(
@@ -4895,14 +4897,15 @@ export async function getRecentEshopOrdersStatus(
   }
 
   for (const r of recents) {
+    const source = r.source || "manual";
     if (r.devis === "chariot") {
       // Vente 100% chariot, sans devis Odoo : rien à valider côté pick/out/facture.
-      out.push({ devis: r.devis, orderNumbers: r.orderNumbers, found: true, invoiced: true, anomaly: null });
+      out.push({ devis: r.devis, orderNumbers: r.orderNumbers, found: true, invoiced: true, anomaly: null, source });
       continue;
     }
     const o = orderByName[r.devis];
     if (!o) {
-      out.push({ devis: r.devis, orderNumbers: r.orderNumbers, found: false, invoiced: false, anomaly: "Commande introuvable dans Odoo" });
+      out.push({ devis: r.devis, orderNumbers: r.orderNumbers, found: false, invoiced: false, anomaly: "Commande introuvable dans Odoo", source });
       continue;
     }
     const picks = picksByOrder[o.id] || [];
@@ -4921,7 +4924,7 @@ export async function getRecentEshopOrdersStatus(
       devis: r.devis, orderNumbers: r.orderNumbers, found: true, saleState: o.state,
       pick: pick ? { name: pick.name, state: pick.state } : null,
       out: outP ? { name: outP.name, state: outP.state } : null,
-      invoiceStatus: o.invoice_status, invoiced, anomaly,
+      invoiceStatus: o.invoice_status, invoiced, anomaly, source,
     });
   }
   return out;

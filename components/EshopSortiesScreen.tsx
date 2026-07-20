@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, Fragment as Fragment2 } from "react";
 import * as odoo from "@/lib/odoo";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
-import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, getLastProcessedEshopOrders, type EshopMappingOverrides } from "@/lib/supabase";
+import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, getLastProcessedEshopOrders, getCronRunStatus, type EshopMappingOverrides, type CronRunStatus } from "@/lib/supabase";
 import { writeHeaders } from "@/lib/writeToken";
 
 const C = {
@@ -86,6 +86,8 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   // Récap des 5 dernières commandes validées (pick / out / facture) — anomalies à traiter à la main sur Odoo
   const [recentStatus, setRecentStatus] = useState<odoo.EshopOrderStatus[]>([]);
   const [recentLoading, setRecentLoading] = useState(false);
+  // Dernier run du cron auto (22h) — pour vérifier qu'il tourne sans attendre le lendemain
+  const [cronStatus, setCronStatus] = useState<CronRunStatus | null | undefined>(undefined);
 
   const loadRecentStatus = useCallback(async () => {
     setRecentLoading(true);
@@ -114,6 +116,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
     const saved = (() => { try { return localStorage.getItem(PARTNER_KEY) || ""; } catch { return ""; } })();
     if (saved) { setPartnerInput(saved); odoo.findEshopPartner(session, saved).then(p => p && setPartner(p)).catch(() => {}); }
     loadRecentStatus();
+    getCronRunStatus().then(setCronStatus).catch(() => setCronStatus(null));
   }, [session]);
 
   const load = useCallback(async () => {
@@ -273,7 +276,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
       }
       // GARDE-FOU : marque UNIQUEMENT les commandes réellement incluses (payées, non annulées)
       const includedNumbers = deductOrderNumbers;
-      try { await markEshopOrdersProcessed(includedNumbers, q ? q.name : "chariot"); setProcessed(prev => new Set([...Array.from(prev), ...includedNumbers])); } catch {}
+      try { await markEshopOrdersProcessed(includedNumbers, q ? q.name : "chariot", "manual"); setProcessed(prev => new Set([...Array.from(prev), ...includedNumbers])); } catch {}
       // Trace : export Excel du détail envoyé au devis (pour comparer avec Odoo)
       if (q) try {
         const XLSX = await import("xlsx");
@@ -469,6 +472,37 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
         <div style={{ textAlign: "center", color: C.textMuted, padding: 40, fontSize: 14 }}>Aucune commande ce jour-là</div>
       )}
 
+      {/* Statut du cron automatique (22h) — vérifier qu'il tourne sans attendre le lendemain */}
+      <div style={{ marginTop: 24, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, boxShadow: C.shadow }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", flex: 1 }}>
+            🤖 Cron automatique (22h)
+          </div>
+          <button onClick={() => { setCronStatus(undefined); getCronRunStatus().then(setCronStatus).catch(() => setCronStatus(null)); }}
+            style={{ padding: "5px 10px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11, fontWeight: 700, color: C.textSec, cursor: "pointer", fontFamily: "inherit" }}>
+            ↻ Rafraîchir
+          </button>
+        </div>
+        {cronStatus === undefined ? (
+          <div style={{ fontSize: 13, color: C.textMuted }}>Chargement…</div>
+        ) : cronStatus === null ? (
+          <div style={{ fontSize: 13, color: C.textMuted }}>Aucun run enregistré pour l'instant (le cron n'a pas encore tourné).</div>
+        ) : (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: cronStatus.ok ? C.green : C.red }}>
+                {cronStatus.ok ? "✓ Dernier run OK" : "⚠ Dernier run en échec"}
+              </span>
+              <span style={{ fontSize: 11, color: C.textMuted }}>
+                {new Date(cronStatus.ranAt).toLocaleString("fr-FR")}
+              </span>
+            </div>
+            <div style={{ fontSize: 13, color: C.text }}>{cronStatus.summary}</div>
+            {cronStatus.error && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>{cronStatus.error}</div>}
+          </div>
+        )}
+      </div>
+
       {/* Récap des 5 dernières commandes validées — pick / out / facture, anomalies à traiter à la main sur Odoo */}
       <div style={{ marginTop: 24, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, boxShadow: C.shadow }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
@@ -493,6 +527,12 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
                   <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>Commande Odoo</span>
                   <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 14, color: C.text }}>{s.devis}</span>
+                  <span style={{
+                    fontSize: 10, fontWeight: 800, padding: "2px 7px", borderRadius: 999, textTransform: "uppercase", letterSpacing: "0.03em",
+                    background: s.source === "cron" ? "#ede9fe" : "#f1f5f9", color: s.source === "cron" ? C.purple : C.textSec,
+                  }}>
+                    {s.source === "cron" ? "🤖 Auto (cron)" : "👤 Manuel"}
+                  </span>
                   <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: s.anomaly ? C.red : C.green }}>
                     {s.anomaly ? "⚠ Anomalie" : "✓ OK"}
                   </span>

@@ -23,6 +23,7 @@ import { fetchT } from "@/lib/fetchTimeout";
 import {
   getEshopMappingOverrides, getEshopMappingCache, saveEshopMappingCache,
   getProcessedEshopOrders, markEshopOrdersProcessed, decrementChariotStock,
+  saveCronRunStatus, getCronRunStatus,
 } from "@/lib/supabase";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
@@ -396,9 +397,9 @@ async function runCron(): Promise<any> {
     L(`[cron] ✅ Commande créée : ${quotation.name}`);
   }
 
-  // Garde-fou : marque les commandes réellement incluses comme sorties
+  // Garde-fou : marque les commandes réellement incluses comme sorties (source = cron)
   try {
-    await markEshopOrdersProcessed(includedOrderNumbers, quotation ? quotation.name : "chariot");
+    await markEshopOrdersProcessed(includedOrderNumbers, quotation ? quotation.name : "chariot", "cron");
     L(`[cron] ${includedOrderNumbers.length} commande(s) marquée(s) comme sortie(s)`);
   } catch (e: any) { L(`[cron] ⚠ Erreur marquage garde-fou : ${e.message}`); }
 
@@ -441,10 +442,33 @@ function checkAuth(req: NextRequest): boolean {
   return authHeader === `Bearer ${cronSecret}`;
 }
 
+// Résumé humain court pour le statut de run (affiché dans l'app sans avoir à lire les logs).
+function summarize(result: any): string {
+  if (result.message) return result.message;
+  const parts: string[] = [];
+  if (result.quotation) parts.push(`commande ${result.quotation}`);
+  if (result.lines) parts.push(`${result.lines} réf déduite(s)`);
+  if (result.chariot?.length) parts.push(`${result.chariot.length} réf chariot`);
+  if (result.validation?.failed?.length) parts.push(`⚠ validation échouée : ${result.validation.failed.map((f: any) => f.name).join(", ")}`);
+  if (result.unmapped?.length) parts.push(`⚠ ${result.unmapped.length} non mappée(s)`);
+  return parts.length ? parts.join(" · ") : `${result.scanned ?? 0} commande(s) scannée(s), rien à faire`;
+}
+
+async function runCronAndTrack(): Promise<any> {
+  try {
+    const result = await runCron();
+    try { await saveCronRunStatus({ ranAt: new Date().toISOString(), ok: true, summary: summarize(result) }); } catch {}
+    return result;
+  } catch (e: any) {
+    try { await saveCronRunStatus({ ranAt: new Date().toISOString(), ok: false, summary: "Échec du run", error: e.message }); } catch {}
+    throw e;
+  }
+}
+
 export async function POST(req: NextRequest) {
   if (!checkAuth(req)) return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
   try {
-    const result = await runCron();
+    const result = await runCronAndTrack();
     return NextResponse.json(result);
   } catch (e: any) {
     console.error("[eshop-out-cron] Erreur:", e);
@@ -452,11 +476,19 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET — appelé par Vercel Cron (Authorization géré par Vercel) ou ping informatif sans auth
+// GET — appelé par Vercel Cron (Authorization géré par Vercel), ou ?status=1 pour
+// consulter le dernier run sans en déclencher un nouveau, ou ping informatif sans auth.
 export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+
+  if (searchParams.get("status") === "1") {
+    const last = await getCronRunStatus();
+    return NextResponse.json({ route: "eshop-out-cron", lastRun: last });
+  }
+
   if (checkAuth(req)) {
     try {
-      const result = await runCron();
+      const result = await runCronAndTrack();
       return NextResponse.json(result);
     } catch (e: any) {
       console.error("[eshop-out-cron] Erreur:", e);
@@ -464,11 +496,13 @@ export async function GET(req: NextRequest) {
     }
   }
   const cronSecret = process.env.CRON_SECRET || "";
+  const last = await getCronRunStatus().catch(() => null);
   return NextResponse.json({
     route: "eshop-out-cron",
-    description: "GET/POST avec Authorization: Bearer {CRON_SECRET} pour déclencher. Reproduit l'écran E-shop → Sorties (mapping, garde-fou anti-doublon, création + validation commande Odoo).",
+    description: "GET/POST avec Authorization: Bearer {CRON_SECRET} pour déclencher. GET ?status=1 pour voir le dernier run. Reproduit l'écran E-shop → Sorties (mapping, garde-fou anti-doublon, création + validation commande Odoo).",
     lookbackHours: LOOKBACK_HOURS,
     partnerRef: ESHOP_PARTNER,
+    lastRun: last,
     env: {
       shopware_url: SW_URL ? "✓" : "⚠️ SHOPWARE_URL manquant",
       shopware_key: SW_KEY ? "✓" : "⚠️ SHOPWARE_API_KEY manquant",
