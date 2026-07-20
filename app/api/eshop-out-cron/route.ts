@@ -332,11 +332,21 @@ async function runCron(): Promise<any> {
   const overrides = await getEshopMappingOverrides();
   const cache = await getEshopMappingCache();
 
+  // Diagnostic détaillé par commande : pourquoi une commande précise est exclue.
+  const diag = orders.map(o => ({
+    number: o.number, orderStatusId: o.orderStatusId, paymentStatusId: o.paymentStatusId, orderTime: o.orderTime,
+    alreadyProcessed: processed.has(o.number),
+    excludedReason: processed.has(o.number) ? "déjà sortie"
+      : String(o.orderStatusId) === "-1" ? "annulée"
+      : String(o.paymentStatusId) !== "12" ? `paiement ≠12 (${o.paymentStatusId})`
+      : null,
+  }));
+
   // Mêmes règles EXACTES que SortiesTab.deductAgg :
   // exclut déjà-sorties, annulées, non-payées(≠12), chariot, non-mappées.
   const eligible = orders.filter(o => !processed.has(o.number) && String(o.orderStatusId) !== "-1" && String(o.paymentStatusId) === "12");
   L(`[cron] ${eligible.length} commande(s) éligible(s) (payées, non annulées, non déjà sorties)`);
-  if (!eligible.length) return { ok: true, message: "Aucune commande éligible", log, scanned: orders.length };
+  if (!eligible.length) return { ok: true, message: "Aucune commande éligible", log, scanned: orders.length, diag };
 
   // Collecte des refs à matcher (hors chariot, hors mode≠0)
   const refsNeeded = new Set<string>();
