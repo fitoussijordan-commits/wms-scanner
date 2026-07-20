@@ -915,7 +915,7 @@ export async function printPickingReportDirect(
 // via F(...), après chargement du mapping Odoo. Une constante figée au chargement
 // du module capturerait les valeurs par défaut avant l'application des overrides.
 const PICKING_FIELDS = () => [
-  "id", "name", "state", "scheduled_date", "date_deadline", "date",
+  "id", "name", "state", "scheduled_date", "date_deadline", F("PICKING_DATE"),
   "partner_id", "origin", "picking_type_id", "group_id",
   "move_ids_without_package", "location_id", "location_dest_id",
   F("SHIPPING_DATE"), F("ORDER_TAGS"), "carrier_id",
