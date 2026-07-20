@@ -12,5 +12,11 @@
       "maxDuration": 30,
       "memory": 512
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/eshop-out-cron",
+      "schedule": "0 20 * * *"
+    }
+  ]
 }
