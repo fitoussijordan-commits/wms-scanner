@@ -917,7 +917,7 @@ export async function printPickingReportDirect(
 const PICKING_FIELDS = () => [
   "id", "name", "state", "scheduled_date", "date_deadline", F("PICKING_DATE"),
   "partner_id", "origin", "picking_type_id", "group_id",
-  "move_ids_without_package", "location_id", "location_dest_id",
+  F("PICKING_MOVE_IDS"), "location_id", "location_dest_id",
   F("SHIPPING_DATE"), F("ORDER_TAGS"), "carrier_id",
   "user_id",
 ];
@@ -1175,7 +1175,7 @@ export async function createInternalTransfer(
     picking_type_id: pickingTypes[0].id,
     location_id: sourceLocationId,
     location_dest_id: destLocationId,
-    move_ids_without_package: lines.map((line) => [0, 0, {
+    [F("PICKING_MOVE_IDS")]: lines.map((line) => [0, 0, {
       name: line.productName,
       product_id: line.productId,
       product_uom_qty: line.qty,
@@ -1259,7 +1259,7 @@ export async function createMultiDestTransfer(
     picking_type_id: pickingTypes[0].id,
     location_id: sourceLocationId,
     location_dest_id: fallbackDestLocationId,
-    move_ids_without_package: lines.map((line) => [0, 0, {
+    [F("PICKING_MOVE_IDS")]: lines.map((line) => [0, 0, {
       name: line.productName,
       product_id: line.productId,
       product_uom_qty: line.qty,
@@ -1328,7 +1328,7 @@ export async function getPackablePickings(session: OdooSession): Promise<any[]> 
   return searchRead(session, M("MODEL_PICKING"),
     [["picking_type_code", "=", "outgoing"], ["state", "=", "assigned"]],
     ["id", "name", "state", "origin", F("CLIENT_ORDER"), "partner_id", "scheduled_date",
-     "date_deadline", "move_ids_without_package", "carrier_id"],
+     "date_deadline", F("PICKING_MOVE_IDS"), "carrier_id"],
     200, "date_deadline asc, scheduled_date asc, id asc"
   );
 }
@@ -1342,7 +1342,7 @@ export async function findOutPickingFromPick(session: OdooSession, pickId: numbe
     [["group_id", "=", groupId], ["picking_type_code", "=", "outgoing"],
      ["state", "in", ["assigned", "confirmed", "waiting", "partially_available"]]],
     ["id", "name", "state", "origin", "partner_id", "scheduled_date", "date_deadline",
-     "carrier_id", "move_ids_without_package"],
+     "carrier_id", F("PICKING_MOVE_IDS")],
     1
   );
   return outs[0] || null;

@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import * as odoo from "@/lib/odoo";
 import type { OdooSession } from "@/lib/odoo";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
+import { F } from "@/lib/fieldMap";
 
 // ── Palette de couleurs (reprend le thème WMS) ─────────────────────────────
 const C = {
@@ -118,7 +119,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           ["picking_type_id", "in", typeIds],
           ["state", "in", ["confirmed", "assigned", "waiting", "partially_available"]],
         ],
-        ["id", "name", "state", "origin", "partner_id", "scheduled_date", "date", "move_ids_without_package", "location_id", "location_dest_id"],
+        ["id", "name", "state", "origin", "partner_id", "scheduled_date", F("PICKING_DATE"), F("PICKING_MOVE_IDS"), "location_id", "location_dest_id"],
         100,
         "scheduled_date asc, id desc"
       );
@@ -226,7 +227,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           origin:           p.origin || "",
           partnerId:        p.partner_id ? p.partner_id[0] : null,
           partnerName:      p.partner_id ? p.partner_id[1] : "",
-          date:             p.scheduled_date || p.date || "",
+          date:             p.scheduled_date || p[F("PICKING_DATE")] || "",
           locationDestId:   Array.isArray(p.location_dest_id) ? p.location_dest_id[0] : (p.location_dest_id || 0),
           locationDestName: Array.isArray(p.location_dest_id) ? (p.location_dest_id[1] || "") : "",
           lines,

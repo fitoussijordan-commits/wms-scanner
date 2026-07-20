@@ -10064,7 +10064,7 @@ function WaitingOrdersScreen({
                     const hasMissing = cg.items.some((p: any) => (results[p.id]?.missingLines?.length ?? 0) > 0);
                     const someResult = cg.items.some((p: any) => results[p.id]);
                     const isMulti = cg.items.length > 1;
-                    const totalArticles = cg.items.reduce((s: number, p: any) => s + (p.move_ids_without_package || []).length, 0);
+                    const totalArticles = cg.items.reduce((s: number, p: any) => s + (p[fieldMap.F("PICKING_MOVE_IDS")] || []).length, 0);
                     const allMissing = cg.items.flatMap((p: any) => (results[p.id]?.missingLines ?? []).map((m: any) => ({ ...m, picking: p.name })));
                     return (
                       <div key={cg.groupId} className="dk-row" style={{ borderBottom: rowIdx < group.clientGroups.length - 1 || allMissing.length > 0 ? `1px solid ${D.border}` : "none" }}>
@@ -10223,7 +10223,7 @@ function WaitingOrdersScreen({
                   {cg.items.map((p: any) => {
                     const result = results[p.id];
                     const sl = stateLabel(result ? result.state : p.state);
-                    const nbArticles = (p.move_ids_without_package || []).length;
+                    const nbArticles = (p[fieldMap.F("PICKING_MOVE_IDS")] || []).length;
                     return (
                       <div key={p.id} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: isMulti ? `1px solid ${C.border}` : "none" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
@@ -12653,7 +12653,7 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenCollab, onOpen
                           </div>
                         )}
                         {group.map((p: any) => {
-                          const moveCount = (p.move_ids_without_package || []).length;
+                          const moveCount = (p[fieldMap.F("PICKING_MOVE_IDS")] || []).length;
                           // Priorité à la progression LIVE (Odoo, partagée) ; fallback cache local.
                           const live = liveProgress?.[p.id];
                           const prog = (live && live.total > 0) ? live : progressCache?.[p.id];

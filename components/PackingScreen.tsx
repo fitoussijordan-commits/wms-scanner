@@ -233,7 +233,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         partnerName: p.partner_id ? p.partner_id[1] : "",
         partnerId:   p.partner_id ? p.partner_id[0] : 0,
         carrierId:   p.carrier_id ? p.carrier_id[1] : "",
-        lineCount:   Array.isArray(p.move_ids_without_package) ? p.move_ids_without_package.length : 0,
+        lineCount:   Array.isArray(p[F("PICKING_MOVE_IDS")]) ? p[F("PICKING_MOVE_IDS")].length : 0,
         date:        p.date_deadline || p.scheduled_date || "",
       }));
       setPickings(mapped);
@@ -388,7 +388,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     const STATE_FILTER = ["assigned", "partially_available", "confirmed", "waiting"];
     const _cdeField = F("CLIENT_ORDER");
     const FIELDS = ["id", "name", "origin", _cdeField, "partner_id", "carrier_id",
-                    "move_ids_without_package", "date_deadline", "scheduled_date"];
+                    F("PICKING_MOVE_IDS"), "date_deadline", "scheduled_date"];
     try {
       // 3a. OUT direct (nom, origin, cdeClient ilike)
       let results: any[] = await odoo.searchRead(session, "stock.picking",

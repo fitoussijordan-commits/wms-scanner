@@ -189,6 +189,11 @@ export const FIELD_DEFS = {
   PICKING_SALE_ID: { default: "sale_id", model: "stock.picking", label: "Commande de vente liée",
     screens: ["waitingOrders", "prep", "packing", "arrival", "returns", "transfer"],
   },
+  PICKING_MOVE_IDS: { default: "move_ids_without_package", model: "stock.picking", label: "Mouvements du transfert (move_ids_without_package)",
+    hint: "⚠️ Renommé en 'move_ids' sur certaines versions récentes d'Odoo (ex. v19) — la distinction 'without_package' a été retirée. Utilisé pour lire ET créer les lignes de mouvement d'un picking.",
+    custom: true,
+    screens: ["prep", "packing", "arrival", "returns", "transfer"],
+  },
 
   // ─────────────── STOCK.MOVE.LINE ───────────────
   ML_PRODUCT_ID: { default: "product_id", model: "stock.move.line", label: "Produit (ligne)",
