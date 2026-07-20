@@ -35,12 +35,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "odooUrl et endpoint requis" }, { status: 400 });
     }
 
-    // ── Protection SSRF : l'URL doit correspondre exactement à ODOO_URL ──────
-    const allowedBase = (process.env.ODOO_URL || "").replace(/\/$/, "").toLowerCase();
+    // ── Protection SSRF : l'URL doit être dans l'allowlist ──────────────────
+    // ODOO_URL = instance principale (prod). ODOO_URL_EXTRA = liste optionnelle
+    // d'instances supplémentaires autorisées (ex: base de test v19), séparées
+    // par des virgules — permet de tester une autre base SANS désactiver la
+    // protection ni exposer un accès SSRF ouvert.
+    const allowedBases = [process.env.ODOO_URL || "", ...(process.env.ODOO_URL_EXTRA || "").split(",")]
+      .map(u => u.replace(/\/$/, "").toLowerCase())
+      .filter(Boolean);
     const requestedBase = odooUrl.replace(/\/$/, "").toLowerCase();
 
-    // Si ODOO_URL est défini en env, on bloque toute URL différente
-    if (allowedBase && requestedBase !== allowedBase) {
+    // Si au moins une URL est configurée, on bloque tout ce qui n'est pas dans la liste
+    if (allowedBases.length && !allowedBases.includes(requestedBase)) {
       console.warn(`[proxy] SSRF bloqué — URL non autorisée: ${odooUrl}`);
       return NextResponse.json({ error: "URL Odoo non autorisée" }, { status: 403 });
     }
