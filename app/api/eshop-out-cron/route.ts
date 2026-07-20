@@ -142,13 +142,22 @@ async function loadChariotSkus(s: OSess): Promise<Set<string>> {
 
 // ─── Client e-shop Odoo ─────────────────────────────────────────────────────
 
-async function findEshopPartner(s: OSess, ref: string): Promise<{ id: number; name: string } | null> {
-  const asId = Number(ref);
-  if (!isNaN(asId) && String(asId) === ref.trim()) {
-    const r = await odooSearch(s, "res.partner", [["id", "=", asId]], ["id", "name"], 1);
+// Identique à findEshopPartner (lib/odoo.ts) : priorité nom exact+société > réf exacte+société
+// > nom exact > id numérique > réf exacte (dernier recours, peut être ambigu).
+async function findEshopPartner(s: OSess, idOrRef: string): Promise<{ id: number; name: string } | null> {
+  const q = idOrRef.trim();
+  const fields = ["id", "name"];
+  let r = await odooSearch(s, "res.partner", [["name", "=", q], ["is_company", "=", true]], fields, 1);
+  if (r.length) return { id: r[0].id, name: r[0].name };
+  r = await odooSearch(s, "res.partner", [["ref", "=", q], ["is_company", "=", true]], fields, 1);
+  if (r.length) return { id: r[0].id, name: r[0].name };
+  r = await odooSearch(s, "res.partner", [["name", "=", q]], fields, 1);
+  if (r.length) return { id: r[0].id, name: r[0].name };
+  if (/^\d+$/.test(q)) {
+    r = await odooSearch(s, "res.partner", [["id", "=", Number(q)]], fields, 1);
     if (r.length) return { id: r[0].id, name: r[0].name };
   }
-  const r = await odooSearch(s, "res.partner", [["name", "ilike", ref]], ["id", "name"], 1);
+  r = await odooSearch(s, "res.partner", [["ref", "=", q]], fields, 1);
   return r.length ? { id: r[0].id, name: r[0].name } : null;
 }
 
