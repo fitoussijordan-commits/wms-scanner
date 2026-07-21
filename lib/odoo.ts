@@ -174,7 +174,14 @@ async function rpc(config: OdooConfig, endpoint: string, params: any, sessionId?
     body: JSON.stringify({ odooUrl: config.url, endpoint, params, sessionId }),
   });
   const data = await res.json();
-  if (!res.ok || data.error) throw new Error(data.error || `Erreur ${res.status}`);
+  if (!res.ok || data.error) {
+    // data.error DOIT être une string pour que new Error(...) produise un message lisible —
+    // sinon (objet) l'Error stringifie silencieusement en "[object Object]", rendant
+    // le diagnostic impossible en prod. On coerce systématiquement en string.
+    const raw = data?.error;
+    const msg = typeof raw === "string" ? raw : (raw ? JSON.stringify(raw) : `Erreur ${res.status}`);
+    throw new Error(msg);
+  }
   return { result: data.result, sessionId: data.sessionId };
 }
 
