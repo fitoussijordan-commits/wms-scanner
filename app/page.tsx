@@ -15,7 +15,7 @@ import * as pn from "@/lib/printnode";
 
 import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/components/LabelEditor";
 import SupplierImportScreen from "@/components/SupplierImportScreen";
-import ArticleCreatorScreen, { SeuilsTab, CreationTab, NonVendableTab, ABloquerTab } from "@/components/ArticleCreatorScreen";
+import ArticleCreatorScreen, { SeuilsTab, CreationTab, NonVendableTab, ABloquerTab, LogistiqueTab } from "@/components/ArticleCreatorScreen";
 import FreeScanScreen from "@/components/FreeScanScreen";
 import InventoryCountScreen from "@/components/InventoryCountScreen";
 import EshopSortiesScreen from "@/components/EshopSortiesScreen";
@@ -7781,7 +7781,7 @@ function applyMapping(row: any[], headers: string[], mapping: ColMapping): Impor
 }
 
 function ProductImportScreen({ session, onBack, onToast, desktop }: { session: any; onBack: () => void; onToast: (m: string) => void; desktop?: boolean }) {
-  const [tab, setTab] = useState<"import" | "create" | "seuils" | "nonvendable" | "abloquer">("import");
+  const [tab, setTab] = useState<"import" | "create" | "logistique" | "seuils" | "nonvendable" | "abloquer">("import");
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [checking, setChecking] = useState(false);
   const [currentIdx, setCurrentIdx] = useState<number | null>(null);
@@ -8036,7 +8036,7 @@ function ProductImportScreen({ session, onBack, onToast, desktop }: { session: a
       <div style={desktop
         ? { display: "inline-flex", gap: 4, margin: "6px 0 22px", background: "#fff", border: "1px solid #e8ecf3", borderRadius: 13, padding: 4, boxShadow: "0 1px 2px rgba(15,23,42,.04)" }
         : { display: "flex", gap: 4, marginBottom: 20, background: C.bg, borderRadius: 12, padding: 4 }}>
-        {([["import", "Import Excel"], ["create", "Créer article"], ["seuils", "Seuils d'alerte"], ["nonvendable", "Stock non vendable"], ["abloquer", "Stock à bloquer"]] as const).map(([t, label]) => (
+        {([["import", "Import Excel"], ["create", "Créer article"], ["logistique", "EAN / Poids / Dim."], ["seuils", "Seuils d'alerte"], ["nonvendable", "Stock non vendable"], ["abloquer", "Stock à bloquer"]] as const).map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)}
             style={desktop
               ? { padding: "9px 18px", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13.5, fontWeight: 600,
@@ -8056,6 +8056,10 @@ function ProductImportScreen({ session, onBack, onToast, desktop }: { session: a
       ) : tab === "create" ? (
         <div style={desktop ? { maxWidth: 652, margin: "0 0 0 -16px" } : undefined}>
           <CreationTab session={session} onToast={onToast} />
+        </div>
+      ) : tab === "logistique" ? (
+        <div style={desktop ? { maxWidth: 652, margin: "0 0 0 -16px" } : undefined}>
+          <LogistiqueTab session={session} onToast={onToast} />
         </div>
       ) : tab === "nonvendable" ? (
         <div style={desktop ? { maxWidth: 752, margin: "0 0 0 -16px" } : undefined}>
