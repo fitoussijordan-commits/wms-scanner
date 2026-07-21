@@ -1356,30 +1356,6 @@ export default function Page() {
     return () => { cancelled = true; };
   }, [pendingConfirmPicking, session]);
 
-  // Vérifie si une "jumelle" (même client, même adresse) existe déjà quand on
-  // commence à préparer une commande — pas seulement par partner_id exact
-  // (une commande e-shop crée souvent une nouvelle fiche contact par commande),
-  // mais aussi via nom + adresse, et sur TOUTES les commandes non terminées
-  // (pas seulement celles déjà chargées dans la liste "Préparation").
-  const [confirmSiblings, setConfirmSiblings] = useState<{ id: number; name: string; user: string | null; state: string; origin: string }[]>([]);
-  // Tant que true, la vérif "jumelle" est encore en cours → on bloque la validation
-  // rapide pour ne pas laisser l'utilisateur cliquer avant que le résultat arrive.
-  const [checkingSiblings, setCheckingSiblings] = useState(false);
-  useEffect(() => {
-    setConfirmSiblings([]);
-    setCheckingSiblings(false);
-    if (!pendingConfirmPicking || !session) return;
-    const partnerId = pendingConfirmPicking.partner_id?.[0];
-    if (!partnerId) return;
-    let cancelled = false;
-    setCheckingSiblings(true);
-    const excludeIds: number[] = pendingConfirmPicking._groupIds || [pendingConfirmPicking.id];
-    odoo.findGroupableSiblings(session, pendingConfirmPicking.id, partnerId, excludeIds)
-      .then(res => { if (!cancelled) setConfirmSiblings(res); })
-      .catch((e: any) => { if (!cancelled) showToast(`⚠️ Vérif jumelle échouée : ${odoo.safeErrMsg(e)}`); })
-      .finally(() => { if (!cancelled) setCheckingSiblings(false); });
-    return () => { cancelled = true; };
-  }, [pendingConfirmPicking, session]);
 
   const [pickingMoves, setPickingMoves] = useState<any[]>([]);
   const [pickingMoveLines, setPickingMoveLines] = useState<any[]>([]);
@@ -1431,9 +1407,6 @@ export default function Page() {
   // New order notification (desktop only)
   const [newOrderNotif, setNewOrderNotif] = useState<{ count: number; names: string[] } | null>(null);
   const knownOrderIdsRef = useRef<Set<number>>(new Set());
-  // Alerte "à grouper" : une nouvelle commande arrive alors qu'une autre commande du
-  // même client est déjà en attente/en préparation (non terminée) → à coupler.
-  const [groupAlert, setGroupAlert] = useState<{ clientName: string; newName: string; siblingNames: string[] } | null>(null);
 
   // ── Notifications (cloche header) ──
   const [notifs, setNotifs] = useState<WmsNotification[]>([]);
@@ -1805,38 +1778,6 @@ export default function Page() {
               `${newPickings.length} nouvelle${newPickings.length > 1 ? "s" : ""} commande${newPickings.length > 1 ? "s" : ""} en attente`,
               { body: names.join(", "), icon: "/favicon.ico" }
             );
-          }
-
-          // ── Alerte "à grouper" : une des nouvelles commandes concerne un client qui a
-          // déjà une autre commande pas encore terminée (en attente ou en préparation) ──
-          for (const p of newPickings) {
-            const partnerId = Array.isArray((p as any).partner_id) ? (p as any).partner_id[0] : null;
-            if (!partnerId) continue;
-            try {
-              const siblings = await odoo.findSiblingPickingsForPartner(session, partnerId, [p.id as number]);
-              if (siblings.length > 0) {
-                const clientName = Array.isArray((p as any).partner_id) ? (p as any).partner_id[1] : "ce client";
-                const newName = p.name || `#${p.id}`;
-                const siblingNames = siblings.map(s => s.name);
-                setGroupAlert({ clientName, newName, siblingNames });
-                if (localStorage.getItem("wms_notif_sound") !== "false") playNotifSound();
-                try {
-                  await createNotification({
-                    type: "group_alert",
-                    title: `⚠️ Commande à grouper — ${clientName}`,
-                    body: `${newName} rejoint ${siblingNames.join(", ")} (même client, pas encore terminée)`,
-                    meta: { newId: p.id, newName, clientName, siblingNames },
-                  });
-                  refreshNotifs();
-                } catch {}
-                if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-                  new Notification(`⚠️ Commande à grouper — ${clientName}`, {
-                    body: `${newName} + ${siblingNames.join(", ")}`, icon: "/favicon.ico",
-                  });
-                }
-                break; // une alerte à la fois suffit, pas besoin d'empiler
-              }
-            } catch {}
           }
         }
 
@@ -3198,43 +3139,6 @@ export default function Page() {
         </div>
       )}
 
-      {/* ── Bannière "commande à grouper" (même client, autre commande pas encore terminée) ── */}
-      {groupAlert && (
-        <div style={{
-          position: "fixed", left: 0, right: 0, zIndex: 9999,
-          top: newOrderNotif ? 52 : 0,
-          background: "linear-gradient(90deg, #7c3aed, #6d28d9)",
-          color: "#fff",
-          padding: "10px 16px",
-          display: "flex", alignItems: "center", gap: 10,
-          boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
-          fontFamily: "inherit",
-        }}>
-          <span style={{ fontSize: 20 }}>⚠️</span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>
-              Commande à grouper — {groupAlert.clientName}
-            </div>
-            <div style={{ fontSize: 12, opacity: 0.9, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {groupAlert.newName} rejoint {groupAlert.siblingNames.join(", ")} (pas encore terminée(s))
-            </div>
-          </div>
-          <button
-            onClick={() => { setGroupAlert(null); loadPickings(); setScreen("prep"); }}
-            style={{ background: "rgba(255,255,255,0.25)", border: "none", borderRadius: 8, color: "#fff", fontWeight: 700, fontSize: 13, padding: "6px 14px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
-          >
-            Voir
-          </button>
-          <button
-            onClick={() => setGroupAlert(null)}
-            style={{ background: "transparent", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", lineHeight: 1, padding: "0 4px", fontFamily: "inherit" }}
-            aria-label="Fermer"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
       <main style={isDesktopUI
         ? { marginLeft: 248, padding: screen === "home" ? "28px 36px 60px" : "28px 24px 60px" }
         : { maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px", width: "100%", boxSizing: "border-box", overflowX: "hidden" }}>
@@ -3781,10 +3685,11 @@ export default function Page() {
 
         {/* ===== CONFIRMATION PICKING ===== */}
         {pendingConfirmPicking && (() => {
-          // Autre(s) commande(s) "jumelle(s)" du même client — recherche élargie
-          // (partner_id exact OU nom+adresse identiques) sur TOUTES les commandes
-          // non terminées, pas seulement celles déjà affichées dans la liste.
-          const siblings = confirmSiblings;
+          // Cherche d'autres pickings du même partenaire dans la liste chargée
+          const partnerId = pendingConfirmPicking.partner_id?.[0];
+          const siblings = partnerId
+            ? pickings.filter((p: any) => p.partner_id?.[0] === partnerId && p.id !== pendingConfirmPicking.id)
+            : [];
           const group = [pendingConfirmPicking, ...siblings];
           return (
             <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -3807,22 +3712,14 @@ export default function Page() {
                   </div>
                 )}
 
-                {/* Petit indicateur pendant la vérif "jumelle" — évite de valider avant le résultat */}
-                {checkingSiblings && (
-                  <div style={{ fontSize: 11.5, color: "#9ca3af", marginBottom: 12 }}>🔎 Vérification d'une éventuelle commande à grouper…</div>
-                )}
-
-                {/* Bandeau groupe si d'autres pickings existent pour ce client (même partner_id, ou même nom+adresse) */}
+                {/* Bandeau groupe si d'autres pickings existent pour ce client */}
                 {siblings.length > 0 && (
-                  <div style={{ background: "#fff7ed", border: "1.5px solid #fed7aa", borderRadius: 10, padding: "10px 14px", marginBottom: 20, textAlign: "left" }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 700, color: "#9a3412", marginBottom: 6 }}>
-                      ⚠️ Cette commande a {siblings.length > 1 ? "des jumelles" : "une jumelle"} à grouper
-                    </div>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "#c2410c", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>
+                  <div style={{ background: "#eff6ff", border: "1.5px solid #bfdbfe", borderRadius: 10, padding: "10px 14px", marginBottom: 20, textAlign: "left" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#1d4ed8", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>
                       Commande groupée · {group.length} bons
                     </div>
                     {group.map((p: any) => (
-                      <div key={p.id} style={{ fontSize: 13, color: "#7c2d12", fontWeight: p.id === pendingConfirmPicking.id ? 700 : 400 }}>
+                      <div key={p.id} style={{ fontSize: 13, color: "#1e40af", fontWeight: p.id === pendingConfirmPicking.id ? 700 : 400 }}>
                         {p.id === pendingConfirmPicking.id ? "▶ " : "   "}{p.name}
                       </div>
                     ))}
@@ -3837,9 +3734,8 @@ export default function Page() {
                     </button>
                   )}
                   <button onClick={() => { const p = pendingConfirmPicking; setPendingConfirmPicking(null); openPicking(p); }}
-                    disabled={checkingSiblings}
-                    style={{ width: "100%", padding: "14px 0", background: checkingSiblings ? "#e5e7eb" : siblings.length > 0 ? "#f3f4f6" : "#2563eb", color: checkingSiblings ? "#9ca3af" : siblings.length > 0 ? "#374151" : "#fff", border: siblings.length > 0 ? "1.5px solid #d1d5db" : "none", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: checkingSiblings ? "wait" : "pointer", fontFamily: "inherit" }}>
-                    {checkingSiblings ? "🔎 Vérification…" : siblings.length > 0 ? `Juste ${pendingConfirmPicking.name}` : "✓ C'est correct"}
+                    style={{ width: "100%", padding: "14px 0", background: siblings.length > 0 ? "#f3f4f6" : "#2563eb", color: siblings.length > 0 ? "#374151" : "#fff", border: siblings.length > 0 ? "1.5px solid #d1d5db" : "none", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                    {siblings.length > 0 ? `Juste ${pendingConfirmPicking.name}` : "✓ C'est correct"}
                   </button>
                   <button onClick={() => setPendingConfirmPicking(null)}
                     style={{ width: "100%", padding: "10px 0", background: "none", color: "#9ca3af", border: "none", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
