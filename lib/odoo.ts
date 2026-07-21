@@ -161,7 +161,14 @@ export async function getActiveUsers(session: OdooSession): Promise<{ id: number
 }
 
 async function rpc(config: OdooConfig, endpoint: string, params: any, sessionId?: string) {
-  const res = await fetch("/api/odoo/proxy", {
+  // Fetch relatif "/api/odoo/proxy" : fonctionne uniquement dans un navigateur (URL de base
+  // implicite = origine de la page). Côté serveur (cron, route API appelée sans contexte
+  // navigateur), il faut une URL absolue — sans quoi le fetch échoue silencieusement.
+  // Le comportement client (navigateur) est inchangé : base reste "" dans ce cas.
+  const base = typeof window === "undefined"
+    ? (process.env.INTERNAL_BASE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"))
+    : "";
+  const res = await fetch(`${base}/api/odoo/proxy`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ odooUrl: config.url, endpoint, params, sessionId }),

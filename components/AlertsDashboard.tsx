@@ -7,6 +7,7 @@
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useEffect, useCallback } from "react";
 import * as odoo from "@/lib/odoo";
+import { getAlertsCronHistory, type AlertsCronStatus } from "@/lib/supabase";
 
 const SEV = {
   critical: { label: "Critique", color: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
@@ -19,6 +20,15 @@ export default function AlertsDashboard({ session }: { session: odoo.OdooSession
   const [loading, setLoading] = useState(false);
   const [lastRun, setLastRun] = useState<Date | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  // Dernière analyse automatique (cron quotidien) — complète l'analyse live ci-dessus,
+  // utile pour voir ce qui a été détecté même sans avoir ouvert l'écran soi-même.
+  const [cronHistory, setCronHistory] = useState<AlertsCronStatus[] | undefined>(undefined);
+  const [showAllCron, setShowAllCron] = useState(false);
+
+  const loadCronHistory = useCallback(() => {
+    getAlertsCronHistory().then(setCronHistory).catch(() => setCronHistory([]));
+  }, []);
+  useEffect(() => { loadCronHistory(); }, [loadCronHistory]);
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -77,6 +87,47 @@ export default function AlertsDashboard({ session }: { session: odoo.OdooSession
           <div style={{ color: "#475569", marginTop: 2 }}>{summary}</div>
         </div>
       )}
+
+      {/* Historique de l'analyse automatique quotidienne (cron) */}
+      <div style={{ padding: "12px 16px", borderRadius: 12, background: "#fff", border: "1px solid #e5e7eb", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", flex: 1 }}>
+            🤖 Analyse automatique quotidienne
+          </div>
+          <button onClick={() => { setCronHistory(undefined); loadCronHistory(); }}
+            style={{ padding: "5px 10px", background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, fontSize: 11, fontWeight: 700, color: "#475569", cursor: "pointer", fontFamily: "inherit" }}>
+            ↻ Rafraîchir
+          </button>
+        </div>
+        {cronHistory === undefined ? (
+          <div style={{ fontSize: 13, color: "#64748b" }}>Chargement…</div>
+        ) : cronHistory.length === 0 ? (
+          <div style={{ fontSize: 13, color: "#64748b" }}>Aucun run enregistré pour l'instant (le cron n'a pas encore tourné).</div>
+        ) : (
+          <div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {(showAllCron ? cronHistory : cronHistory.slice(0, 3)).map((r, i) => (
+                <div key={i} style={{ border: `1px solid ${r.ok ? "#e5e7eb" : "#fecaca"}`, background: r.ok ? "#f8fafc" : "#fef2f2", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: r.ok ? (r.totalCritical > 0 ? "#dc2626" : "#16a34a") : "#dc2626" }}>
+                      {r.ok ? (r.totalCritical > 0 ? "⚠ Critique" : "✓ OK") : "⚠ Échec"}
+                    </span>
+                    <span style={{ fontSize: 11, color: "#64748b" }}>{new Date(r.ranAt).toLocaleString("fr-FR")}</span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: "#0f172a" }}>{r.summary}</div>
+                  {r.error && <div style={{ fontSize: 11.5, color: "#dc2626", marginTop: 2 }}>{r.error}</div>}
+                </div>
+              ))}
+            </div>
+            {cronHistory.length > 3 && (
+              <button onClick={() => setShowAllCron(v => !v)}
+                style={{ marginTop: 8, background: "none", border: "none", color: "#2563eb", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
+                {showAllCron ? "Voir moins" : `Voir les ${cronHistory.length} runs`}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Cartes par catégorie */}
       <div style={{ display: "grid", gap: 12 }}>

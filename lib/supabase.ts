@@ -679,6 +679,37 @@ export async function getCronRunStatus(): Promise<CronRunStatus | null> {
 }
 
 // ══════════════════════════════════════════
+// SUIVI DU CRON alerts-cron — analyse quotidienne du tableau de bord alertes
+// (stock négatif, DLV courtes, retours en attente, etc.), même principe que le cron eshop.
+// ══════════════════════════════════════════
+export interface AlertsCronStatus {
+  ranAt: string;
+  ok: boolean;
+  summary: string; // ex: "⚠️ 3 stock négatif · ⏳ 5 DLV courtes"
+  totalCritical: number;
+  totalWarning: number;
+  error?: string;
+}
+const ALERTS_CRON_HISTORY_MAX = 20;
+
+export async function saveAlertsCronStatus(status: AlertsCronStatus): Promise<void> {
+  const history = await getAlertsCronHistory();
+  const next = [status, ...history].slice(0, ALERTS_CRON_HISTORY_MAX);
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "alerts_cron_history", value: JSON.stringify(next), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}
+export async function getAlertsCronHistory(): Promise<AlertsCronStatus[]> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "alerts_cron_history").single();
+    if (data?.value) return JSON.parse(data.value);
+  } catch {}
+  return [];
+}
+
+// ══════════════════════════════════════════
 // GARDE-FOU : commandes e-shop déjà sorties (devis créé) — anti double déduction
 // Table wms_eshop_processed : { order_number, devis, processed_at }
 // ══════════════════════════════════════════
