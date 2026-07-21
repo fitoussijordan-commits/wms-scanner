@@ -165,12 +165,21 @@ async function rpc(config: OdooConfig, endpoint: string, params: any, sessionId?
   // implicite = origine de la page). Côté serveur (cron, route API appelée sans contexte
   // navigateur), il faut une URL absolue — sans quoi le fetch échoue silencieusement.
   // Le comportement client (navigateur) est inchangé : base reste "" dans ce cas.
-  const base = typeof window === "undefined"
+  const isServer = typeof window === "undefined";
+  const base = isServer
     ? (process.env.INTERNAL_BASE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"))
     : "";
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  // Côté serveur, la "Protection de déploiement" de Vercel bloque même les appels internes
+  // (401 "Protected deployment") sauf à fournir ce header de contournement automatisé.
+  // VERCEL_AUTOMATION_BYPASS_SECRET est injectée automatiquement par Vercel si l'option
+  // "Protection Bypass for Automation" est activée dans Settings → Deployment Protection.
+  if (isServer && process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+    headers["x-vercel-protection-bypass"] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  }
   const res = await fetch(`${base}/api/odoo/proxy`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ odooUrl: config.url, endpoint, params, sessionId }),
   });
   const data = await res.json();
