@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, Fragment as Fragment2 } from "react";
 import * as odoo from "@/lib/odoo";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
-import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, getLastProcessedEshopOrders, getCronRunStatus, type EshopMappingOverrides, type CronRunStatus } from "@/lib/supabase";
+import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, getLastProcessedEshopOrders, getCronRunHistory, type EshopMappingOverrides, type CronRunStatus } from "@/lib/supabase";
 import { writeHeaders } from "@/lib/writeToken";
 
 const C = {
@@ -86,8 +86,10 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   // Récap des 5 dernières commandes validées (pick / out / facture) — anomalies à traiter à la main sur Odoo
   const [recentStatus, setRecentStatus] = useState<odoo.EshopOrderStatus[]>([]);
   const [recentLoading, setRecentLoading] = useState(false);
-  // Dernier run du cron auto (22h) — pour vérifier qu'il tourne sans attendre le lendemain
-  const [cronStatus, setCronStatus] = useState<CronRunStatus | null | undefined>(undefined);
+  // Historique des runs du cron auto — pour vérifier qu'il tourne sans attendre le lendemain,
+  // et repérer un échec même si un run suivant a réussi depuis (n'écrase plus l'historique).
+  const [cronHistory, setCronHistory] = useState<CronRunStatus[] | undefined>(undefined);
+  const [showAllCronHistory, setShowAllCronHistory] = useState(false);
   // Popup d'anomalie (pick/OUT non validé) à l'arrivée sur l'écran — régularisation manuelle sur Odoo
   const [showAnomalyPopup, setShowAnomalyPopup] = useState(false);
 
@@ -119,7 +121,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
     const saved = (() => { try { return localStorage.getItem(PARTNER_KEY) || ""; } catch { return ""; } })();
     if (saved) { setPartnerInput(saved); odoo.findEshopPartner(session, saved).then(p => p && setPartner(p)).catch(() => {}); }
     loadRecentStatus();
-    getCronRunStatus().then(setCronStatus).catch(() => setCronStatus(null));
+    getCronRunHistory().then(setCronHistory).catch(() => setCronHistory([]));
   }, [session]);
 
   const load = useCallback(async () => {
@@ -475,33 +477,50 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
         <div style={{ textAlign: "center", color: C.textMuted, padding: 40, fontSize: 14 }}>Aucune commande ce jour-là</div>
       )}
 
-      {/* Statut du cron automatique (22h) — vérifier qu'il tourne sans attendre le lendemain */}
+      {/* Historique du cron automatique — vérifier qu'il tourne, sans perdre un échec écrasé par un run suivant */}
       <div style={{ marginTop: 24, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, boxShadow: C.shadow }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", flex: 1 }}>
-            🤖 Cron automatique (22h)
+            🤖 Historique du cron automatique
           </div>
-          <button onClick={() => { setCronStatus(undefined); getCronRunStatus().then(setCronStatus).catch(() => setCronStatus(null)); }}
+          <button onClick={() => { setCronHistory(undefined); getCronRunHistory().then(setCronHistory).catch(() => setCronHistory([])); }}
             style={{ padding: "5px 10px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11, fontWeight: 700, color: C.textSec, cursor: "pointer", fontFamily: "inherit" }}>
             ↻ Rafraîchir
           </button>
         </div>
-        {cronStatus === undefined ? (
+        {cronHistory === undefined ? (
           <div style={{ fontSize: 13, color: C.textMuted }}>Chargement…</div>
-        ) : cronStatus === null ? (
+        ) : cronHistory.length === 0 ? (
           <div style={{ fontSize: 13, color: C.textMuted }}>Aucun run enregistré pour l'instant (le cron n'a pas encore tourné).</div>
         ) : (
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: cronStatus.ok ? C.green : C.red }}>
-                {cronStatus.ok ? "✓ Dernier run OK" : "⚠ Dernier run en échec"}
-              </span>
-              <span style={{ fontSize: 11, color: C.textMuted }}>
-                {new Date(cronStatus.ranAt).toLocaleString("fr-FR")}
-              </span>
+            {cronHistory.some(r => !r.ok) && (
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: C.red, marginBottom: 8 }}>
+                ⚠ {cronHistory.filter(r => !r.ok).length} échec(s) dans l'historique récent — à vérifier ci-dessous.
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {(showAllCronHistory ? cronHistory : cronHistory.slice(0, 5)).map((r, i) => (
+                <div key={i} style={{ border: `1px solid ${r.ok ? C.border : "#fecaca"}`, background: r.ok ? C.bg : C.redSoft, borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: r.ok ? C.green : C.red }}>
+                      {r.ok ? "✓ OK" : "⚠ Échec"}
+                    </span>
+                    <span style={{ fontSize: 11, color: C.textMuted }}>
+                      {new Date(r.ranAt).toLocaleString("fr-FR")}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: C.text }}>{r.summary}</div>
+                  {r.error && <div style={{ fontSize: 11.5, color: C.red, marginTop: 2 }}>{r.error}</div>}
+                </div>
+              ))}
             </div>
-            <div style={{ fontSize: 13, color: C.text }}>{cronStatus.summary}</div>
-            {cronStatus.error && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>{cronStatus.error}</div>}
+            {cronHistory.length > 5 && (
+              <button onClick={() => setShowAllCronHistory(v => !v)}
+                style={{ marginTop: 8, background: "none", border: "none", color: C.blue, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
+                {showAllCronHistory ? "Voir moins" : `Voir les ${cronHistory.length} runs`}
+              </button>
+            )}
           </div>
         )}
       </div>

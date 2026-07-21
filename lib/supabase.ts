@@ -644,8 +644,9 @@ export async function saveEshopMappingCache(cache: EshopMappingCache): Promise<v
 }
 
 // ══════════════════════════════════════════
-// SUIVI DU CRON eshop-out-cron — dernier run (date, résultat, erreur éventuelle)
-// Permet de vérifier depuis l'app que le cron tourne bien, sans attendre le lendemain.
+// SUIVI DU CRON eshop-out-cron — historique des N derniers runs (date, résultat, erreur)
+// Permet de vérifier depuis l'app que le cron tourne bien, sans attendre le lendemain,
+// ET de ne pas perdre un échec écrasé par le run suivant si le cron tourne souvent (ex: toutes les 3h).
 // ══════════════════════════════════════════
 export interface CronRunStatus {
   ranAt: string;
@@ -653,19 +654,28 @@ export interface CronRunStatus {
   summary: string; // résumé humain (ex: "2 commande(s) → S00456")
   error?: string;
 }
+const CRON_HISTORY_MAX = 20;
+
 export async function saveCronRunStatus(status: CronRunStatus): Promise<void> {
+  const history = await getCronRunHistory();
+  const next = [status, ...history].slice(0, CRON_HISTORY_MAX);
   const { error } = await sb.from("wms_sync_meta").upsert(
-    { key: "eshop_cron_last_run", value: JSON.stringify(status), updated_at: new Date().toISOString() },
+    { key: "eshop_cron_history", value: JSON.stringify(next), updated_at: new Date().toISOString() },
     { onConflict: "key" }
   );
   if (error) throw new Error(error.message);
 }
-export async function getCronRunStatus(): Promise<CronRunStatus | null> {
+export async function getCronRunHistory(): Promise<CronRunStatus[]> {
   try {
-    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_cron_last_run").single();
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_cron_history").single();
     if (data?.value) return JSON.parse(data.value);
   } catch {}
-  return null;
+  return [];
+}
+// Dernier run uniquement (compat écran existant / vue rapide).
+export async function getCronRunStatus(): Promise<CronRunStatus | null> {
+  const history = await getCronRunHistory();
+  return history[0] || null;
 }
 
 // ══════════════════════════════════════════
