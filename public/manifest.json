@@ -3,7 +3,7 @@
   "short_name": "WMS",
   "description": "Scanner d'entrepôt Odoo — Transferts internes, recherche stock",
   "start_url": "/",
-  "display": "standalone",
+  "display": "fullscreen",
   "orientation": "portrait",
   "background_color": "#f5f6f8",
   "theme_color": "#2563eb",
