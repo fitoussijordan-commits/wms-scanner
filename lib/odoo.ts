@@ -770,7 +770,7 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
 }
 
 /** Version légère pour le polling — ne récupère que les champs nécessaires à la détection de nouvelles commandes */
-export async function getWaitingPickingsLight(session: OdooSession): Promise<{ id: number; name: string; shipping_date: string | null; scheduled_date: string | null; date_deadline: string | null; [key: string]: any }[]> {
+export async function getWaitingPickingsLight(session: OdooSession): Promise<{ id: number; name: string; shipping_date: string | null; scheduled_date: string | null; date_deadline: string | null; partner_id: [number, string] | false; [key: string]: any }[]> {
   const { pickTypeIds, transmiseTagIds } = await _resolveWaitingIds(session);
   if (!pickTypeIds.length) return [];
 
@@ -785,7 +785,7 @@ export async function getWaitingPickingsLight(session: OdooSession): Promise<{ i
   const pickings = await searchRead(
     session, M("MODEL_PICKING"),
     domain,
-    ["id", "name", "scheduled_date", "date_deadline", F("SHIPPING_DATE"), "origin"],
+    ["id", "name", "scheduled_date", "date_deadline", F("SHIPPING_DATE"), "origin", "partner_id"],
     200
   );
 
