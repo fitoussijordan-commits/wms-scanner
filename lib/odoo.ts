@@ -4101,6 +4101,19 @@ export async function findProductForLogistics(
 
   let res = await tryRead([["barcode", "=", q]], 1);
   if (!res?.length) res = await tryRead([["default_code", "=", q]], 1);
+
+  // Recherche par NUMÉRO DE LOT : indispensable pour les articles qui n'ont pas encore
+  // d'EAN (on ne peut pas les scanner autrement) — le lot mène au produit, donc au template.
+  if (!res?.length) {
+    const lots = await searchRead(session, M("MODEL_LOT"), [["name", "=", q]], ["id", "product_id"], 1);
+    const productId = lots?.[0]?.product_id?.[0];
+    if (productId) {
+      const variants = await searchRead(session, M("MODEL_PRODUCT"), [["id", "=", productId]], ["product_tmpl_id"], 1);
+      const tmplId = variants?.[0]?.product_tmpl_id?.[0];
+      if (tmplId) res = await tryRead([["id", "=", tmplId]], 1);
+    }
+  }
+
   if (!res?.length) res = await tryRead(["|", ["default_code", "ilike", q], ["name", "ilike", q]], 1);
   if (!res?.length) return null;
 

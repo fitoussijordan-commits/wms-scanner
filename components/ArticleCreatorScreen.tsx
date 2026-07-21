@@ -1746,7 +1746,8 @@ export function LogistiqueTab({ session, onToast }: { session: odoo.OdooSession;
   const reset = () => {
     setProduct(null); setQuery("");
     setBarcode(""); setWeight(""); setLength(""); setWidth(""); setHeight("");
-    setTimeout(() => searchRef.current?.focus(), 50);
+    // Pas de focus automatique : sur PDA ça ouvrirait le clavier virtuel par-dessus
+    // l'écran alors qu'on scanne (le scanner fonctionne sans focus dans le champ).
   };
 
   const doSearch = async (raw?: string) => {
@@ -1756,11 +1757,7 @@ export function LogistiqueTab({ session, onToast }: { session: odoo.OdooSession;
     try {
       const p = await odoo.findProductForLogistics(session, q);
       if (!p) { onToast(`❌ "${q}" introuvable`, "error"); setProduct(null); }
-      else {
-        fill(p);
-        // Si l'article n'a pas encore d'EAN, on met le curseur directement dessus.
-        setTimeout(() => { if (!p.barcode) barcodeRef.current?.focus(); }, 60);
-      }
+      else { fill(p); setQuery(""); } // article trouvé → on libère la barre de recherche
     } catch (e: any) {
       onToast(`Erreur : ${odoo.safeErrMsg(e)}`, "error");
     }
@@ -1825,12 +1822,19 @@ export function LogistiqueTab({ session, onToast }: { session: odoo.OdooSession;
         <div style={{ display: "flex", gap: 8 }}>
           <input
             ref={searchRef}
+            // Le scanner tape la valeur puis envoie Enter : on lit la valeur du champ
+            // directement (et pas l'état `query`, pas encore à jour à cet instant).
+            data-keep-scan="1"
             style={{ ...S.input, flex: 1 }}
             value={query}
-            autoFocus
             onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") doSearch(); }}
-            placeholder="Code-barres, référence ou nom…"
+            onKeyDown={e => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              const v = (e.target as HTMLInputElement).value;
+              if (v.trim()) doSearch(v);
+            }}
+            placeholder="Lot, code-barres, référence ou nom…"
           />
           <button
             onClick={() => doSearch()}
@@ -1840,7 +1844,7 @@ export function LogistiqueTab({ session, onToast }: { session: odoo.OdooSession;
           </button>
         </div>
         <div style={{ fontSize: 11.5, color: "#9ca3af", marginTop: 6 }}>
-          Astuce : scanne le code-barres existant, ou tape la référence si l'article n'en a pas encore.
+          Astuce : si l'article n'a pas encore d'EAN, scanne son <strong>numéro de lot</strong> — ça retrouve la référence.
         </div>
       </div>
 
@@ -1862,11 +1866,14 @@ export function LogistiqueTab({ session, onToast }: { session: odoo.OdooSession;
               </label>
               <input
                 ref={barcodeRef}
+                // data-keep-scan : le scan tombé ici est la VALEUR à saisir, pas une
+                // commande → le listener global ne doit pas vider le champ.
+                data-keep-scan="1"
                 style={{ ...S.input, fontFamily: "monospace", fontSize: 16, letterSpacing: "0.05em" }}
                 value={barcode}
                 onChange={e => setBarcode(e.target.value)}
                 inputMode="numeric"
-                placeholder="Scanne ou tape l'EAN…"
+                placeholder="Clique ici puis scanne l'EAN…"
               />
             </div>
 

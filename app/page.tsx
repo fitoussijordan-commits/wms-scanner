@@ -993,8 +993,9 @@ function useScannerListener(onScan: (code: string) => void, enabled: boolean) {
       if (timer.current) { clearTimeout(timer.current); timer.current = null; }
       if (code.length >= 3) {
         cb.current(code);
-        // Vide le champ input si le scan est tombé dedans
-        if (tgt instanceof HTMLInputElement) {
+        // Vide le champ input si le scan est tombé dedans — sauf si le champ est
+        // marqué data-keep-scan (le scan y est la valeur à saisir, ex. un EAN).
+        if (tgt instanceof HTMLInputElement && tgt.dataset.keepScan !== "1") {
           const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
           if (s) { s.call(tgt, ""); tgt.dispatchEvent(new Event("input", { bubbles: true })); }
         }
@@ -1513,6 +1514,9 @@ export default function Page() {
     }
     setTimeout(() => {
       document.querySelectorAll("input").forEach((el) => {
+        // data-keep-scan : champ où le scan est la VALEUR à saisir (ex. saisie d'un EAN)
+        // et non une commande — on ne le vide pas.
+        if (el.dataset.keepScan === "1") return;
         if (el.value === code || el.value.includes(code)) {
           const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
           if (s) { s.call(el, ""); el.dispatchEvent(new Event("input", { bubbles: true })); }
