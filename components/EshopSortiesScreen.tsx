@@ -92,14 +92,15 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   const [showAllCronHistory, setShowAllCronHistory] = useState(false);
   // Popup d'anomalie (pick/OUT non validé) à l'arrivée sur l'écran — régularisation manuelle sur Odoo
   const [showAnomalyPopup, setShowAnomalyPopup] = useState(false);
-  // Activer/désactiver le déclenchement externe du cron (cron-job.org)
-  const [cronToggle, setCronToggle] = useState<{ enabled: boolean; jobId: number } | null | undefined>(undefined);
+  // Activer/désactiver + régler la fréquence du déclenchement externe du cron (cron-job.org)
+  const [cronToggle, setCronToggle] = useState<{ enabled: boolean; jobId: number; intervalMinutes: number | null; presets: number[] } | null | undefined>(undefined);
   const [cronToggleBusy, setCronToggleBusy] = useState(false);
+  const [cronFreqBusy, setCronFreqBusy] = useState(false);
 
   const loadCronToggle = useCallback(async () => {
     try {
       const r = await fetch("/api/cronjob-control?action=status").then(x => x.json());
-      if (r.ok) setCronToggle({ enabled: r.enabled, jobId: r.jobId });
+      if (r.ok) setCronToggle({ enabled: r.enabled, jobId: r.jobId, intervalMinutes: r.intervalMinutes ?? null, presets: r.presets || [] });
       else setCronToggle(null);
     } catch { setCronToggle(null); }
   }, []);
@@ -111,11 +112,24 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
       const action = cronToggle.enabled ? "disable" : "enable";
       const r = await fetch(`/api/cronjob-control?action=${action}`, { method: "POST", headers: writeHeaders }).then(x => x.json());
       if (r.ok) {
-        setCronToggle({ enabled: r.enabled, jobId: r.jobId });
+        setCronToggle(prev => prev ? { ...prev, enabled: r.enabled } : prev);
         onToast(r.enabled ? "✓ Cron réactivé" : "✓ Cron désactivé", "success");
       } else onToast("Erreur : " + (r.error || "échec"), "error");
     } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
     setCronToggleBusy(false);
+  };
+
+  const setCronFrequency = async (minutes: number) => {
+    if (!cronToggle) return;
+    setCronFreqBusy(true);
+    try {
+      const r = await fetch(`/api/cronjob-control?action=setFreq&minutes=${minutes}`, { method: "POST", headers: writeHeaders }).then(x => x.json());
+      if (r.ok) {
+        setCronToggle(prev => prev ? { ...prev, intervalMinutes: r.intervalMinutes } : prev);
+        onToast(`✓ Fréquence réglée : ${freqLabel(minutes)}`, "success");
+      } else onToast("Erreur : " + (r.error || "échec"), "error");
+    } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
+    setCronFreqBusy(false);
   };
 
   const loadRecentStatus = useCallback(async () => {
@@ -529,6 +543,31 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
             ↻ Rafraîchir
           </button>
         </div>
+
+        {cronToggle && cronToggle.presets?.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${C.border}` }}>
+            <span style={{ fontSize: 11.5, color: C.textMuted, fontWeight: 600 }}>Fréquence :</span>
+            {cronToggle.presets.map(m => {
+              const active = cronToggle.intervalMinutes === m;
+              return (
+                <button key={m} onClick={() => setCronFrequency(m)} disabled={cronFreqBusy || active}
+                  style={{
+                    padding: "4px 10px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, cursor: active ? "default" : "pointer", fontFamily: "inherit",
+                    border: `1.5px solid ${active ? C.blue : C.border}`,
+                    background: active ? C.blueSoft : C.white,
+                    color: active ? C.blue : C.textSec,
+                    opacity: cronFreqBusy ? 0.6 : 1,
+                  }}>
+                  {freqLabel(m)}
+                </button>
+              );
+            })}
+            {cronToggle.intervalMinutes == null && (
+              <span style={{ fontSize: 11, color: C.textMuted }}>(fréquence actuelle non reconnue — configure-la ici)</span>
+            )}
+          </div>
+        )}
+
         {cronHistory === undefined ? (
           <div style={{ fontSize: 13, color: C.textMuted }}>Chargement…</div>
         ) : cronHistory.length === 0 ? (
@@ -688,6 +727,13 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
       )}
     </div>
   );
+}
+
+function freqLabel(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes === 1440) return "1×/jour";
+  const h = minutes / 60;
+  return `${h}h`;
 }
 
 const th: React.CSSProperties = { padding: "8px 10px", letterSpacing: "0.03em" };
