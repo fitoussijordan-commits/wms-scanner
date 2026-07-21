@@ -1344,6 +1344,26 @@ export default function Page() {
     })();
     return () => { cancelled = true; };
   }, [pendingConfirmPicking, session]);
+
+  // Vérifie si une "jumelle" (même client, même adresse) existe déjà quand on
+  // commence à préparer une commande — pas seulement par partner_id exact
+  // (une commande e-shop crée souvent une nouvelle fiche contact par commande),
+  // mais aussi via nom + adresse, et sur TOUTES les commandes non terminées
+  // (pas seulement celles déjà chargées dans la liste "Préparation").
+  const [confirmSiblings, setConfirmSiblings] = useState<{ id: number; name: string; user: string | null; state: string; origin: string }[]>([]);
+  useEffect(() => {
+    setConfirmSiblings([]);
+    if (!pendingConfirmPicking || !session) return;
+    const partnerId = pendingConfirmPicking.partner_id?.[0];
+    if (!partnerId) return;
+    let cancelled = false;
+    const excludeIds: number[] = pendingConfirmPicking._groupIds || [pendingConfirmPicking.id];
+    odoo.findGroupableSiblings(session, pendingConfirmPicking.id, partnerId, excludeIds)
+      .then(res => { if (!cancelled) setConfirmSiblings(res); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [pendingConfirmPicking, session]);
+
   const [pickingMoves, setPickingMoves] = useState<any[]>([]);
   const [pickingMoveLines, setPickingMoveLines] = useState<any[]>([]);
   // Cache de progression par picking (mis à jour quand on quitte une prépa)
@@ -3712,11 +3732,10 @@ export default function Page() {
 
         {/* ===== CONFIRMATION PICKING ===== */}
         {pendingConfirmPicking && (() => {
-          // Cherche d'autres pickings du même partenaire dans la liste chargée
-          const partnerId = pendingConfirmPicking.partner_id?.[0];
-          const siblings = partnerId
-            ? pickings.filter((p: any) => p.partner_id?.[0] === partnerId && p.id !== pendingConfirmPicking.id)
-            : [];
+          // Autre(s) commande(s) "jumelle(s)" du même client — recherche élargie
+          // (partner_id exact OU nom+adresse identiques) sur TOUTES les commandes
+          // non terminées, pas seulement celles déjà affichées dans la liste.
+          const siblings = confirmSiblings;
           const group = [pendingConfirmPicking, ...siblings];
           return (
             <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -3739,14 +3758,17 @@ export default function Page() {
                   </div>
                 )}
 
-                {/* Bandeau groupe si d'autres pickings existent pour ce client */}
+                {/* Bandeau groupe si d'autres pickings existent pour ce client (même partner_id, ou même nom+adresse) */}
                 {siblings.length > 0 && (
-                  <div style={{ background: "#eff6ff", border: "1.5px solid #bfdbfe", borderRadius: 10, padding: "10px 14px", marginBottom: 20, textAlign: "left" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "#1d4ed8", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>
+                  <div style={{ background: "#fff7ed", border: "1.5px solid #fed7aa", borderRadius: 10, padding: "10px 14px", marginBottom: 20, textAlign: "left" }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: "#9a3412", marginBottom: 6 }}>
+                      ⚠️ Cette commande a {siblings.length > 1 ? "des jumelles" : "une jumelle"} à grouper
+                    </div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#c2410c", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>
                       Commande groupée · {group.length} bons
                     </div>
                     {group.map((p: any) => (
-                      <div key={p.id} style={{ fontSize: 13, color: "#1e40af", fontWeight: p.id === pendingConfirmPicking.id ? 700 : 400 }}>
+                      <div key={p.id} style={{ fontSize: 13, color: "#7c2d12", fontWeight: p.id === pendingConfirmPicking.id ? 700 : 400 }}>
                         {p.id === pendingConfirmPicking.id ? "▶ " : "   "}{p.name}
                       </div>
                     ))}

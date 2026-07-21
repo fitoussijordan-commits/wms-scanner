@@ -978,6 +978,76 @@ export async function findSiblingPickingsForPartner(
     }));
 }
 
+// Comme findSiblingPickingsForPartner, mais matche aussi par NOM + ADRESSE
+// (pas seulement par partner_id exact) : les commandes e-shop créent souvent
+// une nouvelle fiche contact par commande (partner_id différent) alors qu'il
+// s'agit du même client à la même adresse — sans ce matching élargi, ces
+// "jumelles" ne sont jamais détectées.
+// Appelée au moment de "commencer à préparer" (pas seulement à l'impression).
+export async function findGroupableSiblings(
+  session: OdooSession,
+  pickingId: number,
+  partnerId: number,
+  excludeIds: number[] = []
+): Promise<{ id: number; name: string; user: string | null; state: string; origin: string }[]> {
+  if (!partnerId) return [];
+  const { pickTypeIds } = await _resolveWaitingIds(session);
+  if (!pickTypeIds.length) return [];
+
+  const norm = (s: any) => (s || "").toString().trim().toLowerCase();
+
+  const [refPartner] = await searchRead(
+    session, M("MODEL_PARTNER"), [["id", "=", partnerId]], ["name", "street", "street2", "city", "zip"], 1
+  );
+  if (!refPartner) return [];
+  const refKey = `${norm(refPartner.name)}|${norm(refPartner.street)}|${norm(refPartner.city)}|${norm(refPartner.zip)}`;
+  const refHasAddress = !!norm(refPartner.street);
+
+  const recs = await searchRead(
+    session, M("MODEL_PICKING"),
+    [
+      ["picking_type_id", "in", pickTypeIds],
+      ["state", "in", ["confirmed", "waiting", "partially_available", "assigned"]],
+    ],
+    ["id", "name", "user_id", "state", "origin", "partner_id"],
+    300
+  );
+
+  const excl = new Set([...excludeIds, pickingId]);
+  const candidates = recs.filter((p: any) => !excl.has(p.id) && p.partner_id);
+
+  // Match direct par partner_id (le cas simple : même fiche client)
+  const direct = candidates.filter((p: any) => p.partner_id[0] === partnerId);
+
+  // Match élargi nom + adresse pour les fiches contact différentes
+  let fuzzy: any[] = [];
+  if (refHasAddress) {
+    const others = candidates.filter((p: any) => p.partner_id[0] !== partnerId);
+    if (others.length > 0) {
+      const otherPartnerIds = Array.from(new Set(others.map((p: any) => p.partner_id[0])));
+      const partners = await searchRead(
+        session, M("MODEL_PARTNER"), [["id", "in", otherPartnerIds]], ["id", "name", "street", "street2", "city", "zip"], otherPartnerIds.length
+      );
+      const partnerById: Record<number, any> = {};
+      for (const pt of partners) partnerById[pt.id] = pt;
+      fuzzy = others.filter((p: any) => {
+        const pt = partnerById[p.partner_id[0]];
+        if (!pt) return false;
+        const key = `${norm(pt.name)}|${norm(pt.street)}|${norm(pt.city)}|${norm(pt.zip)}`;
+        return key === refKey;
+      });
+    }
+  }
+
+  return [...direct, ...fuzzy].map((p: any) => ({
+    id: p.id,
+    name: p.name,
+    user: Array.isArray(p.user_id) ? p.user_id[1] : null,
+    state: p.state,
+    origin: p.origin || "",
+  }));
+}
+
 // Get pick-type pickings in confirmed/assigned state (preparation)
 export async function getOutgoingPickings(session: OdooSession) {
   // Find pick picking type(s) — preparation before delivery
