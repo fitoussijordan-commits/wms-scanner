@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "rea
 import * as odoo from "@/lib/odoo";
 import { loadPalettes as palLoad, loadPaletteDetail as palDetail, findPaletteByNumero as palFind, createPalette as palCreate, upsertLigne as palUpsert, updateLigneQty as palUpdateQty, updatePalette as palUpdate, searchProductInPalettes as palSearch, searchLotInPalettes as palSearchLot, searchByEmplacement as palSearchEmpl, generatePaletteZPL as palZPL, loadPickingSlots, upsertPickingSlot, deletePickingSlot } from "@/lib/supabase-palettes";
 import type { WmsPickingSlot } from "@/lib/supabase-palettes";
-import { createNotification, loadTodayNotifications, type WmsNotification, getCartonsConfig, saveCartonsConfig } from "@/lib/supabase";
+import { createNotification, loadTodayNotifications, type WmsNotification, getCartonsConfig, saveCartonsConfig, getAlertsCronHistory, type AlertsCronStatus } from "@/lib/supabase";
 import * as sbase from "@/lib/supabase";
 import * as fieldMap from "@/lib/fieldMap";
 import { useAdminMode } from "@/lib/adminMode";
@@ -1093,6 +1093,45 @@ const WMO_LABELS: Record<number, string> = {
   61:"Pluie légère",63:"Pluie",65:"Pluie forte",71:"Neige légère",73:"Neige",75:"Neige forte",
   80:"Averses légères",81:"Averses",82:"Averses fortes",95:"Orage",96:"Orage+grêle",99:"Orage fort",
 };
+// Petit bandeau d'alertes sur l'accueil — résume le dernier run du cron de surveillance
+// (stock négatif, retours en attente, DLV courtes, sorties orphelines, rangement manquant…).
+// Clique → ouvre le tableau de bord des alertes complet (/dashboard?tab=alerts).
+function HomeAlertBanner({ status, onDismiss }: { status: AlertsCronStatus | null | undefined; onDismiss: () => void }) {
+  if (status === undefined) return null; // en cours de chargement
+  if (status === null) return null; // aucun run enregistré pour l'instant
+  const critical = status.ok && status.totalCritical > 0;
+  const warningOnly = status.ok && status.totalCritical === 0 && status.totalWarning > 0;
+  const failed = !status.ok;
+  const color = failed || critical ? "#dc2626" : warningOnly ? "#d97706" : "#16a34a";
+  const bg = failed || critical ? "#fef2f2" : warningOnly ? "#fffbeb" : "#f0fdf4";
+  const border = failed || critical ? "#fecaca" : warningOnly ? "#fed7aa" : "#bbf7d0";
+  const icon = failed ? "⚠️" : critical ? "🔴" : warningOnly ? "🟠" : "✅";
+  const headline = failed
+    ? "Échec de la dernière analyse automatique"
+    : critical
+    ? `${status.totalCritical} point(s) critique(s)`
+    : warningOnly
+    ? `${status.totalWarning} point(s) à surveiller`
+    : "Aucune alerte";
+  return (
+    <div
+      onClick={() => { window.location.href = "/dashboard?tab=alerts"; }}
+      style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: bg, border: `1px solid ${border}`, borderRadius: 12, marginBottom: 14, cursor: "pointer" }}>
+      <span style={{ fontSize: 18, flexShrink: 0 }}>{icon}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color }}>{headline}</div>
+        <div style={{ fontSize: 11.5, color: "#475569", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {failed ? status.error : status.summary} · {new Date(status.ranAt).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+        </div>
+      </div>
+      <button
+        onClick={e => { e.stopPropagation(); onDismiss(); }}
+        style={{ background: "none", border: "none", color: "#94a3b8", fontSize: 16, cursor: "pointer", padding: 4, lineHeight: 1, flexShrink: 0 }}
+        title="Masquer">✕</button>
+    </div>
+  );
+}
+
 function WeatherWidget() {
   const [w, setW] = useState<{ temp: number; code: number } | null>(null);
   useEffect(() => {
@@ -1437,6 +1476,15 @@ export default function Page() {
     lastUpdate: string;
   } | null>(null);
   const [ccLoading, setCcLoading] = useState(false);
+
+  // Bandeau alertes accueil — dernier run du cron quotidien de surveillance
+  // (stock négatif, retours en attente, DLV courtes, etc.), sans re-scanner Odoo à chaque visite.
+  const [homeAlert, setHomeAlert] = useState<AlertsCronStatus | null | undefined>(undefined);
+  const [homeAlertDismissed, setHomeAlertDismissed] = useState(false);
+  useEffect(() => {
+    if (!session) return;
+    getAlertsCronHistory().then(h => setHomeAlert(h[0] || null)).catch(() => setHomeAlert(null));
+  }, [session]);
 
   // Print modal
   const [printReq, setPrintReq] = useState<PrintRequest | null>(null);
@@ -3101,6 +3149,7 @@ export default function Page() {
 
         {/* ===== HOME (PDA / mobile) ===== */}
         {screen === "home" && !isDesktopUI && <>
+          {!homeAlertDismissed && <HomeAlertBanner status={homeAlert} onDismiss={() => setHomeAlertDismissed(true)} />}
           <Section>
             <SectionHeader icon={scanIcon} title="Recherche rapide" sub="Scanne ou tape un code" />
             <div style={{ display: "flex", gap: 8, width: "100%", maxWidth: "100%" }}>
@@ -3233,6 +3282,8 @@ export default function Page() {
                 </div>
                 <WeatherWidget />
               </div>
+
+              {!homeAlertDismissed && <HomeAlertBanner status={homeAlert} onDismiss={() => setHomeAlertDismissed(true)} />}
 
               {/* KPI strip — aligné sur la même grille 1fr/360px que le contenu en dessous */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 26, marginBottom: 26 }}>

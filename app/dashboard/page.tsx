@@ -465,6 +465,14 @@ export default function Dashboard() {
   const [user, setUser] = useState("");
   const [pw, setPw] = useState("");
   const [tab, setTab] = useState<string>("stock-monitor");
+  // Permet d'arriver directement sur un onglet précis via /dashboard?tab=alerts
+  // (utilisé par le petit bandeau d'alertes de l'accueil scanner WMS).
+  useEffect(() => {
+    try {
+      const t = new URLSearchParams(window.location.search).get("tab");
+      if (t) setTab(t);
+    } catch {}
+  }, []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   // ── Ventes client/produit (avec autocomplétion) ──
