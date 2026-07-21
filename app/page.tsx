@@ -1573,13 +1573,19 @@ export default function Page() {
 
   // Garde l'URL synchronisée avec l'écran affiché, pour qu'un refresh (F5) recharge
   // la même page au lieu de revenir systématiquement à l'accueil.
+  // ⚠️ Ne touche pas à l'URL tant qu'on est sur "login" : au tout premier rendu,
+  // screen vaut encore "login" (valeur initiale) pendant que l'effet d'init (async,
+  // lecture de Supabase) n'a pas fini de restaurer la session ni lu ?screen= dans
+  // l'URL. Si on effaçait le paramètre ici avant que l'init ait pu le lire, le
+  // deep-link serait perdu à chaque refresh (c'était le bug).
   useEffect(() => {
+    if (screen === "login") return;
     try {
       const url = new URL(window.location.href);
       if (DEEP_LINK_SCREENS.includes(screen)) {
         url.searchParams.set("screen", screen);
       } else {
-        url.searchParams.delete("screen"); // home/login/prepDetail/... : pas de deep-link fiable
+        url.searchParams.delete("screen"); // home/prepDetail/... : pas de deep-link fiable
       }
       window.history.replaceState(null, "", url.toString());
     } catch {}
@@ -6171,7 +6177,7 @@ const printerIconWhite = <svg width="20" height="20" viewBox="0 0 24 24" fill="n
 // ============================================
 function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
   // ── Tabs ──
-  const [eshopTab, setEshopTab] = useState<"orders" | "prep" | "pack" | "wave">("orders");
+  const [eshopTab, setEshopTab] = useState<"prep" | "pack" | "wave">("prep");
 
   // ── Wave picking ──
   const [waveOrders,       setWaveOrders]       = useState<Set<string>>(new Set());
@@ -7615,7 +7621,6 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
   // ── MAIN RENDER ────────────────────────────────────────────────────────────
   const TABS = [
-    { key: "orders", label: (<span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>Commandes</span>) },
     { key: "prep",   label: (<span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Préparation</span>) },
     { key: "pack",   label: (<span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22 6 12 13 2 6"/></svg>Emballage</span>) },
     { key: "wave",   label: (<span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11V6a3 3 0 016 0v5"/><path d="M5 11h14l-1.2 9.2a2 2 0 01-2 1.8H8.2a2 2 0 01-2-1.8L5 11z"/></svg>{waveOrders.size > 0 ? ` (${waveOrders.size})` : ""}</span>) },
@@ -7644,7 +7649,6 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         </div>
       )}
 
-      {eshopTab === "orders" && renderOrdersTab()}
       {eshopTab === "prep"   && renderPrepTab()}
       {eshopTab === "pack"   && renderPackTab()}
       {eshopTab === "wave"   && renderWaveTab()}
