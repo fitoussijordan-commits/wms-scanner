@@ -1116,6 +1116,12 @@ function WeatherWidget() {
   );
 }
 
+// Écrans "de liste" qui ne dépendent que de session+screen pour s'afficher correctement
+// (pas d'état supplémentaire perdu au refresh, contrairement à prepDetail/history/settings/done
+// qui ont besoin d'un picking/contexte sélectionné en mémoire). Utilisé pour le deep-link
+// ?screen=... à la fois en lecture (restauration après refresh) et en écriture (sync URL).
+const DEEP_LINK_SCREENS = ["transfer", "prep", "waitingOrders", "packing", "arrival", "eshop", "inventory", "inventoryCount", "freeScan", "negativeStock", "reprintLabel", "productImport", "supplierImport", "returns", "order", "eshopSorties", "locationManager", "imparfaite", "fefo", "admin"];
+
 // ============================================
 // MAIN APP
 // ============================================
@@ -1351,16 +1357,22 @@ export default function Page() {
   // mais aussi via nom + adresse, et sur TOUTES les commandes non terminées
   // (pas seulement celles déjà chargées dans la liste "Préparation").
   const [confirmSiblings, setConfirmSiblings] = useState<{ id: number; name: string; user: string | null; state: string; origin: string }[]>([]);
+  // Tant que true, la vérif "jumelle" est encore en cours → on bloque la validation
+  // rapide pour ne pas laisser l'utilisateur cliquer avant que le résultat arrive.
+  const [checkingSiblings, setCheckingSiblings] = useState(false);
   useEffect(() => {
     setConfirmSiblings([]);
+    setCheckingSiblings(false);
     if (!pendingConfirmPicking || !session) return;
     const partnerId = pendingConfirmPicking.partner_id?.[0];
     if (!partnerId) return;
     let cancelled = false;
+    setCheckingSiblings(true);
     const excludeIds: number[] = pendingConfirmPicking._groupIds || [pendingConfirmPicking.id];
     odoo.findGroupableSiblings(session, pendingConfirmPicking.id, partnerId, excludeIds)
       .then(res => { if (!cancelled) setConfirmSiblings(res); })
-      .catch(() => {});
+      .catch((e: any) => { if (!cancelled) showToast(`⚠️ Vérif jumelle échouée : ${odoo.safeErrMsg(e)}`); })
+      .finally(() => { if (!cancelled) setCheckingSiblings(false); });
     return () => { cancelled = true; };
   }, [pendingConfirmPicking, session]);
 
@@ -1546,17 +1558,32 @@ export default function Page() {
       if (s) {
         setSession(s); setHistory(loadHistory());
         odoo.getLocations(s).then(setLocations).catch(() => { clearSess(); setScreen("login"); });
-        // Deep-link : ?screen=<écran> (venant du tableau de bord alertes p.ex.)
+        // Deep-link : ?screen=<écran> — restauré soit après un lien externe (tableau de
+        // bord alertes p.ex.), soit après un simple refresh de la page (on y écrit nous-
+        // mêmes l'écran courant, voir l'effet de synchronisation juste après).
         let target = "home";
         try {
           const sc = new URLSearchParams(window.location.search).get("screen");
-          const VALID = ["transfer","prep","waitingOrders","packing","arrival","eshop","inventory","inventoryCount","freeScan","negativeStock","reprintLabel","productImport","supplierImport","returns","order","eshopSorties","locationManager","imparfaite","fefo","admin"];
-          if (sc && VALID.includes(sc)) target = sc;
+          if (sc && DEEP_LINK_SCREENS.includes(sc)) target = sc;
         } catch {}
         setScreen(target as any);
       }
     })();
   }, []);
+
+  // Garde l'URL synchronisée avec l'écran affiché, pour qu'un refresh (F5) recharge
+  // la même page au lieu de revenir systématiquement à l'accueil.
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      if (DEEP_LINK_SCREENS.includes(screen)) {
+        url.searchParams.set("screen", screen);
+      } else {
+        url.searchParams.delete("screen"); // home/login/prepDetail/... : pas de deep-link fiable
+      }
+      window.history.replaceState(null, "", url.toString());
+    } catch {}
+  }, [screen]);
 
   const login = async (url: string, db: string, user: string, pw: string) => {
     setLoading(true); setError("");
@@ -3758,6 +3785,11 @@ export default function Page() {
                   </div>
                 )}
 
+                {/* Petit indicateur pendant la vérif "jumelle" — évite de valider avant le résultat */}
+                {checkingSiblings && (
+                  <div style={{ fontSize: 11.5, color: "#9ca3af", marginBottom: 12 }}>🔎 Vérification d'une éventuelle commande à grouper…</div>
+                )}
+
                 {/* Bandeau groupe si d'autres pickings existent pour ce client (même partner_id, ou même nom+adresse) */}
                 {siblings.length > 0 && (
                   <div style={{ background: "#fff7ed", border: "1.5px solid #fed7aa", borderRadius: 10, padding: "10px 14px", marginBottom: 20, textAlign: "left" }}>
@@ -3783,8 +3815,9 @@ export default function Page() {
                     </button>
                   )}
                   <button onClick={() => { const p = pendingConfirmPicking; setPendingConfirmPicking(null); openPicking(p); }}
-                    style={{ width: "100%", padding: "14px 0", background: siblings.length > 0 ? "#f3f4f6" : "#2563eb", color: siblings.length > 0 ? "#374151" : "#fff", border: siblings.length > 0 ? "1.5px solid #d1d5db" : "none", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                    {siblings.length > 0 ? `Juste ${pendingConfirmPicking.name}` : "✓ C'est correct"}
+                    disabled={checkingSiblings}
+                    style={{ width: "100%", padding: "14px 0", background: checkingSiblings ? "#e5e7eb" : siblings.length > 0 ? "#f3f4f6" : "#2563eb", color: checkingSiblings ? "#9ca3af" : siblings.length > 0 ? "#374151" : "#fff", border: siblings.length > 0 ? "1.5px solid #d1d5db" : "none", borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: checkingSiblings ? "wait" : "pointer", fontFamily: "inherit" }}>
+                    {checkingSiblings ? "🔎 Vérification…" : siblings.length > 0 ? `Juste ${pendingConfirmPicking.name}` : "✓ C'est correct"}
                   </button>
                   <button onClick={() => setPendingConfirmPicking(null)}
                     style={{ width: "100%", padding: "10px 0", background: "none", color: "#9ca3af", border: "none", borderRadius: 12, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
