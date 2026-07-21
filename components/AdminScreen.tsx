@@ -36,6 +36,7 @@ export const ALL_TOOLS: { key: string; label: string; group: string }[] = [
   { key: "order", label: "Commande", group: "Outils" },
   { key: "fefo", label: "Analyse FEFO", group: "Analyse" },
   { key: "dashboard", label: "Dashboard", group: "Analyse" },
+  { key: "homeAlerts", label: "Bandeau alertes (accueil)", group: "Analyse" },
 ];
 
 interface Props {

@@ -3149,7 +3149,6 @@ export default function Page() {
 
         {/* ===== HOME (PDA / mobile) ===== */}
         {screen === "home" && !isDesktopUI && <>
-          {!homeAlertDismissed && <HomeAlertBanner status={homeAlert} onDismiss={() => setHomeAlertDismissed(true)} />}
           <Section>
             <SectionHeader icon={scanIcon} title="Recherche rapide" sub="Scanne ou tape un code" />
             <div style={{ display: "flex", gap: 8, width: "100%", maxWidth: "100%" }}>
@@ -3283,7 +3282,7 @@ export default function Page() {
                 <WeatherWidget />
               </div>
 
-              {!homeAlertDismissed && <HomeAlertBanner status={homeAlert} onDismiss={() => setHomeAlertDismissed(true)} />}
+              {canSee("homeAlerts") && !homeAlertDismissed && <HomeAlertBanner status={homeAlert} onDismiss={() => setHomeAlertDismissed(true)} />}
 
               {/* KPI strip — aligné sur la même grille 1fr/360px que le contenu en dessous */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 26, marginBottom: 26 }}>
