@@ -1138,6 +1138,11 @@ export default function Page() {
   };
 
   const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager" | "imparfaite" | "fefo" | "admin">("login");
+  // true dès qu'on sait s'il y a une session sauvegardée ou non (localStorage, synchrone).
+  // Tant que false, on n'affiche PAS le formulaire de connexion même si screen==="login"
+  // (valeur initiale par défaut) — ça évite le flash de l'écran de connexion au refresh (F5)
+  // le temps que la session restaurée + l'écran cible soient appliqués.
+  const [authChecked, setAuthChecked] = useState(false);
 
   // ── Mode admin : contrôle l'affichage des roues crantées ⚙️ de paramétrage des champs ──
   const { adminMode, toggleAdminMode } = useAdminMode();
@@ -1544,6 +1549,24 @@ export default function Page() {
 
   // Init
   useEffect(() => {
+    // 1) Restauration de session — SYNCHRONE (juste du localStorage), faite avant tout
+    // await pour que le premier vrai rendu affiche déjà le bon écran (pas de flash de
+    // l'écran de connexion pendant que le mapping Odoo se charge depuis Supabase).
+    const s = loadSess();
+    if (s) {
+      setSession(s); setHistory(loadHistory());
+      // Deep-link : ?screen=<écran> — restauré soit après un lien externe (tableau de
+      // bord alertes p.ex.), soit après un simple refresh de la page (on y écrit nous-
+      // mêmes l'écran courant, voir l'effet de synchronisation juste après).
+      let target = "home";
+      try {
+        const sc = new URLSearchParams(window.location.search).get("screen");
+        if (sc && DEEP_LINK_SCREENS.includes(sc)) target = sc;
+      } catch {}
+      setScreen(target as any);
+    }
+    setAuthChecked(true);
+
     (async () => {
       // ⚠️ Charger le mapping des champs Odoo AVANT tout appel Odoo, pour que
       // F("...") renvoie les bons noms techniques dès la restauration de session.
@@ -1554,19 +1577,8 @@ export default function Page() {
       } catch (e) {
         console.warn("Chargement du mapping Odoo échoué, valeurs par défaut utilisées.", e);
       }
-      const s = loadSess();
       if (s) {
-        setSession(s); setHistory(loadHistory());
         odoo.getLocations(s).then(setLocations).catch(() => { clearSess(); setScreen("login"); });
-        // Deep-link : ?screen=<écran> — restauré soit après un lien externe (tableau de
-        // bord alertes p.ex.), soit après un simple refresh de la page (on y écrit nous-
-        // mêmes l'écran courant, voir l'effet de synchronisation juste après).
-        let target = "home";
-        try {
-          const sc = new URLSearchParams(window.location.search).get("screen");
-          if (sc && DEEP_LINK_SCREENS.includes(sc)) target = sc;
-        } catch {}
-        setScreen(target as any);
       }
     })();
   }, []);
@@ -2995,6 +3007,10 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, myTools, amAdmin, session?.login]);
 
+  // Tant qu'on n'a pas vérifié s'il existe une session sauvegardée (localStorage),
+  // on n'affiche PAS le formulaire de connexion — sinon il flashe une fraction de
+  // seconde à chaque refresh (F5) avant que la session restaurée ne reprenne la main.
+  if (screen === "login" && !authChecked) return null;
   if (screen === "login") return <Login onLogin={login} loading={loading} error={error} />;
 
   return (
