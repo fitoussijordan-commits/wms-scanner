@@ -92,6 +92,31 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   const [showAllCronHistory, setShowAllCronHistory] = useState(false);
   // Popup d'anomalie (pick/OUT non validé) à l'arrivée sur l'écran — régularisation manuelle sur Odoo
   const [showAnomalyPopup, setShowAnomalyPopup] = useState(false);
+  // Activer/désactiver le déclenchement externe du cron (cron-job.org)
+  const [cronToggle, setCronToggle] = useState<{ enabled: boolean; jobId: number } | null | undefined>(undefined);
+  const [cronToggleBusy, setCronToggleBusy] = useState(false);
+
+  const loadCronToggle = useCallback(async () => {
+    try {
+      const r = await fetch("/api/cronjob-control?action=status").then(x => x.json());
+      if (r.ok) setCronToggle({ enabled: r.enabled, jobId: r.jobId });
+      else setCronToggle(null);
+    } catch { setCronToggle(null); }
+  }, []);
+
+  const toggleCron = async () => {
+    if (!cronToggle) return;
+    setCronToggleBusy(true);
+    try {
+      const action = cronToggle.enabled ? "disable" : "enable";
+      const r = await fetch(`/api/cronjob-control?action=${action}`, { method: "POST", headers: writeHeaders }).then(x => x.json());
+      if (r.ok) {
+        setCronToggle({ enabled: r.enabled, jobId: r.jobId });
+        onToast(r.enabled ? "✓ Cron réactivé" : "✓ Cron désactivé", "success");
+      } else onToast("Erreur : " + (r.error || "échec"), "error");
+    } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
+    setCronToggleBusy(false);
+  };
 
   const loadRecentStatus = useCallback(async () => {
     setRecentLoading(true);
@@ -122,6 +147,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
     if (saved) { setPartnerInput(saved); odoo.findEshopPartner(session, saved).then(p => p && setPartner(p)).catch(() => {}); }
     loadRecentStatus();
     getCronRunHistory().then(setCronHistory).catch(() => setCronHistory([]));
+    loadCronToggle();
   }, [session]);
 
   const load = useCallback(async () => {
@@ -479,10 +505,25 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
 
       {/* Historique du cron automatique — vérifier qu'il tourne, sans perdre un échec écrasé par un run suivant */}
       <div style={{ marginTop: 24, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, boxShadow: C.shadow }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", flex: 1 }}>
             🤖 Historique du cron automatique
           </div>
+          {cronToggle !== undefined && cronToggle !== null && (
+            <button onClick={toggleCron} disabled={cronToggleBusy}
+              style={{
+                padding: "5px 10px", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                border: `1px solid ${cronToggle.enabled ? "#bbf7d0" : "#fecaca"}`,
+                background: cronToggle.enabled ? C.greenSoft : C.redSoft,
+                color: cronToggle.enabled ? C.green : C.red,
+                opacity: cronToggleBusy ? 0.6 : 1,
+              }}>
+              {cronToggleBusy ? "…" : cronToggle.enabled ? "✓ Activé — cliquer pour désactiver" : "⏸ Désactivé — cliquer pour activer"}
+            </button>
+          )}
+          {cronToggle === null && (
+            <span style={{ fontSize: 11, color: C.textMuted }}>Contrôle cron-job.org indisponible</span>
+          )}
           <button onClick={() => { setCronHistory(undefined); getCronRunHistory().then(setCronHistory).catch(() => setCronHistory([])); }}
             style={{ padding: "5px 10px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11, fontWeight: 700, color: C.textSec, cursor: "pointer", fontFamily: "inherit" }}>
             ↻ Rafraîchir
