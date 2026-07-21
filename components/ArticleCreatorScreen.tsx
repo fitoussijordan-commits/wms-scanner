@@ -115,14 +115,15 @@ interface Props {
   session: odoo.OdooSession;
   onBack: () => void;
   onToast: (msg: string, type?: "success" | "error" | "info") => void;
-  initialTab?: "creation" | "seuils";
+  initialTab?: "creation" | "logistique" | "seuils";
 }
 
 export default function ArticleCreatorScreen({ session, onBack, onToast, initialTab = "creation" }: Props) {
-  const [tab, setTab] = useState<"creation" | "seuils" | "nonvendable" | "abloquer">(initialTab);
+  const [tab, setTab] = useState<"creation" | "logistique" | "seuils" | "nonvendable" | "abloquer">(initialTab);
 
   const TAB_LABELS: Record<string, string> = {
     creation: "Création article",
+    logistique: "EAN / Poids / Dim.",
     seuils: "Seuils d'alerte",
     nonvendable: "Stock non vendable",
     abloquer: "Stock à bloquer",
@@ -141,7 +142,7 @@ export default function ArticleCreatorScreen({ session, onBack, onToast, initial
 
       {/* Onglets */}
       <div style={{ display: "flex", background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "0 16px", overflowX: "auto" }}>
-        {(["creation", "seuils", "nonvendable", "abloquer"] as const).map(t => (
+        {(["creation", "logistique", "seuils", "nonvendable", "abloquer"] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -160,6 +161,8 @@ export default function ArticleCreatorScreen({ session, onBack, onToast, initial
 
       {tab === "creation"
         ? <CreationTab session={session} onToast={onToast} />
+        : tab === "logistique"
+        ? <LogistiqueTab session={session} onToast={onToast} />
         : tab === "seuils"
         ? <SeuilsTab   session={session} onToast={onToast} />
         : tab === "nonvendable"
@@ -1707,6 +1710,193 @@ export function PutawayTab({ session, onToast }: { session: odoo.OdooSession; on
       )}
 
       <style>{`@keyframes putaway-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ONGLET LOGISTIQUE — saisie rapide EAN / poids / dimensions depuis le PDA
+// Scanne un article (code-barres existant, référence ou nom) puis renseigne les
+// données logistiques sans passer par le PC.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export function LogistiqueTab({ session, onToast }: { session: odoo.OdooSession; onToast: (msg: string, type?: "success"|"error"|"info") => void }) {
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [product, setProduct] = useState<odoo.ProductLogistics | null>(null);
+  // Champs du formulaire (strings → saisie libre, converties à l'enregistrement)
+  const [barcode, setBarcode] = useState("");
+  const [weight, setWeight] = useState("");
+  const [length, setLength] = useState("");
+  const [width, setWidth] = useState("");
+  const [height, setHeight] = useState("");
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const barcodeRef = useRef<HTMLInputElement | null>(null);
+
+  const fill = (p: odoo.ProductLogistics) => {
+    setProduct(p);
+    setBarcode(p.barcode || "");
+    setWeight(p.weight ? String(p.weight) : "");
+    setLength(p.length ? String(p.length) : "");
+    setWidth(p.width ? String(p.width) : "");
+    setHeight(p.height ? String(p.height) : "");
+  };
+
+  const reset = () => {
+    setProduct(null); setQuery("");
+    setBarcode(""); setWeight(""); setLength(""); setWidth(""); setHeight("");
+    setTimeout(() => searchRef.current?.focus(), 50);
+  };
+
+  const doSearch = async (raw?: string) => {
+    const q = (raw ?? query).trim();
+    if (!q) return;
+    setLoading(true);
+    try {
+      const p = await odoo.findProductForLogistics(session, q);
+      if (!p) { onToast(`❌ "${q}" introuvable`, "error"); setProduct(null); }
+      else {
+        fill(p);
+        // Si l'article n'a pas encore d'EAN, on met le curseur directement dessus.
+        setTimeout(() => { if (!p.barcode) barcodeRef.current?.focus(); }, 60);
+      }
+    } catch (e: any) {
+      onToast(`Erreur : ${odoo.safeErrMsg(e)}`, "error");
+    }
+    setLoading(false);
+  };
+
+  const num = (s: string): number | undefined => {
+    const t = s.trim().replace(",", ".");
+    if (t === "") return undefined;
+    const n = parseFloat(t);
+    return isNaN(n) ? undefined : n;
+  };
+
+  const save = async () => {
+    if (!product) return;
+    // Garde-fou EAN : un code-barres EAN fait 8 ou 13 chiffres. On avertit sans
+    // bloquer (certains articles utilisent des codes internes non standard).
+    const bc = barcode.trim();
+    if (bc && !/^\d{8}$|^\d{12,14}$/.test(bc)) {
+      const ok = window.confirm(`"${bc}" ne ressemble pas à un EAN standard (8 ou 13 chiffres).\n\nEnregistrer quand même ?`);
+      if (!ok) return;
+    }
+    setSaving(true);
+    try {
+      const res = await odoo.saveProductLogistics(session, product.id, {
+        barcode: bc,
+        weight: num(weight),
+        length: num(length),
+        width: num(width),
+        height: num(height),
+      });
+      if (res.skippedDimensions) {
+        onToast("✅ EAN/poids enregistrés — dimensions non disponibles sur cet Odoo", "info");
+      } else {
+        onToast(`✅ ${product.default_code || product.name} enregistré`, "success");
+      }
+      reset();
+    } catch (e: any) {
+      onToast(`Erreur : ${odoo.safeErrMsg(e)}`, "error");
+    }
+    setSaving(false);
+  };
+
+  const numField = (label: string, unit: string, val: string, set: (v: string) => void) => (
+    <div style={S.field}>
+      <label style={S.label}>{label} <span style={{ color: "#9ca3af" }}>({unit})</span></label>
+      <input
+        style={S.input}
+        value={val}
+        onChange={e => set(e.target.value)}
+        inputMode="decimal"
+        placeholder="—"
+      />
+    </div>
+  );
+
+  return (
+    <div style={S.body}>
+      {/* Recherche / scan */}
+      <div style={S.card}>
+        <label style={S.label}>Scanner ou saisir un article</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            ref={searchRef}
+            style={{ ...S.input, flex: 1 }}
+            value={query}
+            autoFocus
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") doSearch(); }}
+            placeholder="Code-barres, référence ou nom…"
+          />
+          <button
+            onClick={() => doSearch()}
+            disabled={loading || !query.trim()}
+            style={{ ...S.btn, width: "auto", padding: "0 18px", background: loading || !query.trim() ? "#e5e7eb" : "#2563eb", color: loading || !query.trim() ? "#9ca3af" : "#fff" }}>
+            {loading ? "…" : "→"}
+          </button>
+        </div>
+        <div style={{ fontSize: 11.5, color: "#9ca3af", marginTop: 6 }}>
+          Astuce : scanne le code-barres existant, ou tape la référence si l'article n'en a pas encore.
+        </div>
+      </div>
+
+      {/* Fiche article + saisie */}
+      {product && (
+        <>
+          <div style={{ ...S.card, background: "#eff6ff", borderColor: "#bfdbfe" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#111827" }}>{product.name}</div>
+            <div style={{ fontSize: 12.5, color: "#1d4ed8", fontWeight: 600, marginTop: 2 }}>
+              {product.default_code || "sans référence"}
+            </div>
+          </div>
+
+          <div style={S.card}>
+            <div style={S.field}>
+              <label style={S.label}>
+                Code-barres EAN
+                {!product.barcode && <span style={{ color: "#ea580c", marginLeft: 6 }}>⚠️ vide</span>}
+              </label>
+              <input
+                ref={barcodeRef}
+                style={{ ...S.input, fontFamily: "monospace", fontSize: 16, letterSpacing: "0.05em" }}
+                value={barcode}
+                onChange={e => setBarcode(e.target.value)}
+                inputMode="numeric"
+                placeholder="Scanne ou tape l'EAN…"
+              />
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              {numField("Poids", "kg", weight, setWeight)}
+            </div>
+
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", color: "#6b7280", textTransform: "uppercase", margin: "14px 0 6px" }}>
+              Dimensions
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+              {numField("Long.", "cm", length, setLength)}
+              {numField("Larg.", "cm", width, setWidth)}
+              {numField("Haut.", "cm", height, setHeight)}
+            </div>
+          </div>
+
+          <button
+            onClick={save}
+            disabled={saving}
+            style={{ ...S.btn, background: saving ? "#e5e7eb" : "#16a34a", color: saving ? "#9ca3af" : "#fff" }}>
+            {saving ? "Enregistrement…" : "✓ Enregistrer"}
+          </button>
+          <button
+            onClick={reset}
+            style={{ ...S.btn, background: "none", color: "#9ca3af", padding: "10px" }}>
+            Annuler / article suivant
+          </button>
+        </>
+      )}
     </div>
   );
 }

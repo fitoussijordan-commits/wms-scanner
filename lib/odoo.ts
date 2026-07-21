@@ -4058,6 +4058,101 @@ export async function searchProductsForThreshold(
     }));
 }
 
+// ============================================
+// SAISIE LOGISTIQUE (PDA) — EAN, poids, dimensions
+// ============================================
+
+export interface ProductLogistics {
+  id: number;            // id du product.template
+  default_code: string;
+  name: string;
+  barcode: string;
+  weight: number;
+  volume: number;
+  length: number;        // champs dimensions (product_length/width/height selon l'install Odoo)
+  width: number;
+  height: number;
+}
+
+// Champs "dimensions" — n'existent pas sur toutes les installations Odoo (module
+// delivery / stock_packaging). On les lit en tolérant leur absence, plutôt que de
+// faire échouer toute la lecture si le champ n'est pas installé.
+const DIM_FIELDS = ["product_length", "product_width", "product_height"];
+
+/** Cherche UN produit pour la saisie logistique : code-barres exact, puis référence
+ *  exacte, puis recherche partielle (ref ou nom). Retourne null si rien trouvé. */
+export async function findProductForLogistics(
+  session: OdooSession,
+  code: string
+): Promise<ProductLogistics | null> {
+  const q = (code || "").trim();
+  if (!q) return null;
+
+  const baseFields = ["id", "default_code", "name", "barcode", "weight", "volume"];
+  // On tente d'abord AVEC les champs dimensions ; si l'install Odoo ne les a pas,
+  // on retombe sur les champs de base uniquement.
+  const tryRead = async (domain: any[], limit: number) => {
+    try {
+      return await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), domain, [...baseFields, ...DIM_FIELDS], limit);
+    } catch {
+      return await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), domain, baseFields, limit);
+    }
+  };
+
+  let res = await tryRead([["barcode", "=", q]], 1);
+  if (!res?.length) res = await tryRead([["default_code", "=", q]], 1);
+  if (!res?.length) res = await tryRead(["|", ["default_code", "ilike", q], ["name", "ilike", q]], 1);
+  if (!res?.length) return null;
+
+  const p = res[0];
+  const num = (v: any) => (typeof v === "number" ? v : 0);
+  return {
+    id: p.id,
+    default_code: p.default_code || "",
+    name: p.name || "",
+    barcode: p.barcode || "",
+    weight: num(p.weight),
+    volume: num(p.volume),
+    length: num(p.product_length),
+    width: num(p.product_width),
+    height: num(p.product_height),
+  };
+}
+
+/** Enregistre les données logistiques d'un product.template.
+ *  Seuls les champs fournis (non undefined) sont écrits. Si l'écriture des champs
+ *  dimensions échoue (module non installé), on réessaie sans eux pour ne pas perdre
+ *  l'EAN et le poids — et on signale les champs ignorés. */
+export async function saveProductLogistics(
+  session: OdooSession,
+  templateId: number,
+  data: { barcode?: string; weight?: number; length?: number; width?: number; height?: number }
+): Promise<{ skippedDimensions: boolean }> {
+  const vals: any = {};
+  if (data.barcode !== undefined) vals.barcode = data.barcode || false;
+  if (data.weight !== undefined) vals.weight = data.weight;
+
+  const dimVals: any = {};
+  if (data.length !== undefined) dimVals.product_length = data.length;
+  if (data.width !== undefined) dimVals.product_width = data.width;
+  if (data.height !== undefined) dimVals.product_height = data.height;
+
+  const hasDims = Object.keys(dimVals).length > 0;
+  if (!hasDims) {
+    if (Object.keys(vals).length) await write(session, M("MODEL_PRODUCT_TEMPLATE"), [templateId], vals);
+    return { skippedDimensions: false };
+  }
+
+  try {
+    await write(session, M("MODEL_PRODUCT_TEMPLATE"), [templateId], { ...vals, ...dimVals });
+    return { skippedDimensions: false };
+  } catch {
+    // Champs dimensions absents de cette install Odoo → on sauve au moins le reste.
+    if (Object.keys(vals).length) await write(session, M("MODEL_PRODUCT_TEMPLATE"), [templateId], vals);
+    return { skippedDimensions: true };
+  }
+}
+
 /** Recherche live par query partielle (nom ou ref) — pour autocomplete */
 export async function searchProductsByQuery(
   session: OdooSession,

@@ -1310,6 +1310,10 @@ export default function Page() {
   const [multiScanList, setMultiScanList] = useState<any[]>([]); // Persisté entre navigations
   const [selectedPicking, setSelectedPicking] = useState<any>(null);
   const [pendingConfirmPicking, setPendingConfirmPicking] = useState<any>(null); // picking à confirmer avant ouverture
+  // Préparation "mise en pause" : quand on quitte prepDetail sans avoir validé, on garde
+  // le picking de côté pour proposer un bandeau "Reprendre" et y revenir en 1 clic
+  // (au lieu de refaire prep → chercher le bon → confirmer).
+  const [pausedPicking, setPausedPicking] = useState<any>(null);
   // Préparation collaborative à 2 (début/fin) : session Supabase + rôle.
   const [coPrep, setCoPrep] = useState<{ id: string; role: "start" | "end" } | null>(null);
   // Droits d'accès de l'utilisateur courant : null = pas encore chargé / non configuré (défaut).
@@ -2146,6 +2150,7 @@ export default function Page() {
   const openPicking = async (picking: any) => {
     if (!session) return;
     setLoading(true); setError("");
+    setPausedPicking(null); // on rouvre une prépa → plus rien "en pause"
     setSelectedPicking(picking);
     setPrepScanned(new Set());
     setPrepStep(null);
@@ -2199,6 +2204,7 @@ export default function Page() {
     if (!session || pickingGroup.length === 0) return;
     if (pickingGroup.length === 1) { openPicking(pickingGroup[0]); return; }
     setLoading(true); setError("");
+    setPausedPicking(null); // on rouvre une prépa → plus rien "en pause"
     const mergedName = pickingGroup.map((p: any) => p.name).join(" + ");
     const mergedPicking = { ...pickingGroup[0], name: mergedName, _groupIds: pickingGroup.map((p: any) => p.id), _groupPickings: pickingGroup };
     setSelectedPicking(mergedPicking);
@@ -2766,6 +2772,7 @@ export default function Page() {
       showToast(`✅ ${selectedPicking.name} validé`);
       setScreen("prep");
       setSelectedPicking(null);
+      setPausedPicking(null);
       await loadPickings();
     } catch (e: any) { setError(e.message); vibrateError(); }
     setLoading(false);
@@ -2812,6 +2819,7 @@ export default function Page() {
       }
 
       setSelectedPicking(null);
+      setPausedPicking(null);
       await loadPickings();
       setPackingPickingId(outPickingId);
       setScreen("packing");
@@ -3139,9 +3147,42 @@ export default function Page() {
         </div>
       )}
 
+      {/* ── Bandeau "Reprendre ma préparation" (mobile) ──
+          Quand on quitte une prépa non terminée (pour aller chercher une info produit,
+          consulter un stock…), on peut y revenir en 1 tap au lieu de refaire
+          Préparation → retrouver le bon → confirmer. */}
+      {!isDesktopUI && pausedPicking && screen !== "prepDetail" && (
+        <div style={{
+          position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 9998,
+          background: "linear-gradient(90deg, #7c3aed, #6d28d9)", color: "#fff",
+          padding: "10px 14px", display: "flex", alignItems: "center", gap: 10,
+          boxShadow: "0 -2px 14px rgba(0,0,0,0.25)", fontFamily: "inherit",
+        }}>
+          <span style={{ fontSize: 20, flexShrink: 0 }}>📦</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {pausedPicking.name}
+            </div>
+            <div style={{ fontSize: 11.5, opacity: 0.9, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {pausedPicking._progress ? `${pausedPicking._progress.doneLines}/${pausedPicking._progress.totalLines} lignes · ` : ""}
+              {Array.isArray(pausedPicking.partner_id) ? pausedPicking.partner_id[1] : "préparation en cours"}
+            </div>
+          </div>
+          <button
+            onClick={() => { const p = pausedPicking; setPausedPicking(null); openPicking(p); }}
+            style={{ background: "rgba(255,255,255,0.25)", border: "none", borderRadius: 8, color: "#fff", fontWeight: 700, fontSize: 13, padding: "8px 14px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
+            ▶ Reprendre
+          </button>
+          <button
+            onClick={() => setPausedPicking(null)}
+            style={{ background: "transparent", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", lineHeight: 1, padding: "0 4px", fontFamily: "inherit", flexShrink: 0 }}
+            aria-label="Abandonner">×</button>
+        </div>
+      )}
+
       <main style={isDesktopUI
         ? { marginLeft: 248, padding: screen === "home" ? "28px 36px 60px" : "28px 24px 60px" }
-        : { maxWidth: 480, margin: "0 auto", padding: "16px 16px 100px", width: "100%", boxSizing: "border-box", overflowX: "hidden" }}>
+        : { maxWidth: 480, margin: "0 auto", padding: pausedPicking && screen !== "prepDetail" ? "16px 16px 160px" : "16px 16px 100px", width: "100%", boxSizing: "border-box", overflowX: "hidden" }}>
        <div style={isDesktopUI ? { maxWidth: screen === "home" ? 1240 : 1500, margin: "0 auto" } : undefined}>
 
         {/* ===== HOME (PDA / mobile) ===== */}
@@ -3839,6 +3880,12 @@ export default function Page() {
               const totalUnits = lines.reduce((s: number, ml: any) => s + (ml.reserved_uom_qty || 0), 0);
               const ids: number[] = selectedPicking?._groupIds || (selectedPicking ? [selectedPicking.id] : []);
               ids.forEach(id => setPickingProgressCache(prev => ({ ...prev, [id]: { done: doneUnits, total: totalUnits, doneLines, totalLines: lines.length } })));
+              // Préparation quittée sans validation → on la mémorise pour le bandeau "Reprendre".
+              if (selectedPicking && doneLines < lines.length) {
+                setPausedPicking({ ...selectedPicking, _progress: { doneLines, totalLines: lines.length } });
+              } else {
+                setPausedPicking(null);
+              }
               setScreen("prep"); setPrepStep(null); loadPickings();
             }}
             session={session}
