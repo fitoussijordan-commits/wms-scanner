@@ -96,7 +96,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   const loadRecentStatus = useCallback(async () => {
     setRecentLoading(true);
     try {
-      const recents = await getLastProcessedEshopOrders(5);
+      const recents = await getLastProcessedEshopOrders(20);
       const statuses = await odoo.getRecentEshopOrdersStatus(session, recents);
       setRecentStatus(statuses);
       if (statuses.some(s => s.anomaly)) setShowAnomalyPopup(true);
@@ -525,11 +525,11 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
         )}
       </div>
 
-      {/* Récap des 5 dernières commandes validées — pick / out / facture, anomalies à traiter à la main sur Odoo */}
+      {/* Récap des 20 dernières commandes validées — pick / out / facture, anomalies à traiter à la main sur Odoo */}
       <div style={{ marginTop: 24, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, boxShadow: C.shadow }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", flex: 1 }}>
-            5 dernières commandes validées
+            20 dernières commandes validées
           </div>
           <button onClick={loadRecentStatus} disabled={recentLoading}
             style={{ padding: "5px 10px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11, fontWeight: 700, color: C.textSec, cursor: "pointer", fontFamily: "inherit", opacity: recentLoading ? 0.6 : 1 }}>
