@@ -2966,6 +2966,10 @@ export default function Page() {
   if (screen === "login" && !authChecked) return null;
   if (screen === "login") return <Login onLogin={login} loading={loading} error={error} />;
 
+  // Bandeau "Reprendre ma préparation" : visible dès qu'une prépa a été quittée sans
+  // être validée, sauf quand on est déjà dedans.
+  const showResumeBar = !!pausedPicking && screen !== "prepDetail";
+
   return (
     <Shell toast={toast} flash={scanFlash} desktop={isDesktopUI}>
       {!isDesktopUI && <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} />}
@@ -3151,13 +3155,13 @@ export default function Page() {
         </div>
       )}
 
-      {/* ── Bandeau "Reprendre ma préparation" (mobile) ──
+      {/* ── Bandeau "Reprendre ma préparation" ──
           Quand on quitte une prépa non terminée (pour aller chercher une info produit,
-          consulter un stock…), on peut y revenir en 1 tap au lieu de refaire
+          consulter un stock…), on peut y revenir en 1 clic au lieu de refaire
           Préparation → retrouver le bon → confirmer. */}
-      {!isDesktopUI && pausedPicking && screen !== "prepDetail" && (
+      {showResumeBar && (
         <div style={{
-          position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 9998,
+          position: "fixed", left: isDesktopUI ? 248 : 0, right: 0, bottom: 0, zIndex: 9998,
           background: "linear-gradient(90deg, #7c3aed, #6d28d9)", color: "#fff",
           padding: "10px 14px", display: "flex", alignItems: "center", gap: 10,
           boxShadow: "0 -2px 14px rgba(0,0,0,0.25)", fontFamily: "inherit",
@@ -3185,8 +3189,10 @@ export default function Page() {
       )}
 
       <main style={isDesktopUI
-        ? { marginLeft: 248, padding: screen === "home" ? "28px 36px 60px" : "28px 24px 60px" }
-        : { maxWidth: 480, margin: "0 auto", padding: pausedPicking && screen !== "prepDetail" ? "16px 16px 160px" : "16px 16px 100px", width: "100%", boxSizing: "border-box", overflowX: "hidden" }}>
+        ? { marginLeft: 248, padding: screen === "home"
+            ? (showResumeBar ? "28px 36px 120px" : "28px 36px 60px")
+            : (showResumeBar ? "28px 24px 120px" : "28px 24px 60px") }
+        : { maxWidth: 480, margin: "0 auto", padding: showResumeBar ? "16px 16px 160px" : "16px 16px 100px", width: "100%", boxSizing: "border-box", overflowX: "hidden" }}>
        <div style={isDesktopUI ? { maxWidth: screen === "home" ? 1240 : 1500, margin: "0 auto" } : undefined}>
 
         {/* ===== HOME (PDA / mobile) ===== */}
@@ -3884,11 +3890,11 @@ export default function Page() {
               const totalUnits = lines.reduce((s: number, ml: any) => s + (ml.reserved_uom_qty || 0), 0);
               const ids: number[] = selectedPicking?._groupIds || (selectedPicking ? [selectedPicking.id] : []);
               ids.forEach(id => setPickingProgressCache(prev => ({ ...prev, [id]: { done: doneUnits, total: totalUnits, doneLines, totalLines: lines.length } })));
-              // Préparation quittée sans validation → on la mémorise pour le bandeau "Reprendre".
-              if (selectedPicking && doneLines < lines.length) {
+              // Préparation quittée sans validation → on la mémorise pour le bandeau
+              // "Reprendre" (on sort ici par le bouton retour, donc jamais après une
+              // validation : les deux fonctions de validation vident pausedPicking).
+              if (selectedPicking) {
                 setPausedPicking({ ...selectedPicking, _progress: { doneLines, totalLines: lines.length } });
-              } else {
-                setPausedPicking(null);
               }
               setScreen("prep"); setPrepStep(null); loadPickings();
             }}
