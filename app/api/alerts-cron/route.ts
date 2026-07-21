@@ -13,6 +13,11 @@ import { NextRequest, NextResponse } from "next/server";
 import * as odoo from "@/lib/odoo";
 import { saveAlertsCronStatus, getAlertsCronHistory } from "@/lib/supabase";
 
+// collectAlerts fait plusieurs requêtes Odoo lourdes (parallélisées, mais l'ensemble peut
+// tout de même dépasser la limite par défaut de 10s des fonctions serverless) → on étend
+// explicitement la durée max autorisée (60s = max du plan Hobby Vercel).
+export const maxDuration = 60;
+
 const ODOO_URL = process.env.ODOO_URL || "";
 const ODOO_DB = process.env.ODOO_DB || "";
 const ODOO_USER = process.env.ODOO_LOGIN || "";
@@ -55,7 +60,7 @@ async function runAndTrack(): Promise<any> {
     return { ok: true, ...result };
   } catch (e: any) {
     try {
-      await saveAlertsCronStatus({ ranAt: new Date().toISOString(), ok: false, summary: "Échec du run", totalCritical: 0, totalWarning: 0, error: e.message });
+      await saveAlertsCronStatus({ ranAt: new Date().toISOString(), ok: false, summary: "Échec du run", totalCritical: 0, totalWarning: 0, error: odoo.safeErrMsg(e) });
     } catch {}
     throw e;
   }
@@ -68,7 +73,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result);
   } catch (e: any) {
     console.error("[alerts-cron] Erreur:", e);
-    return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
+    return NextResponse.json({ ok: false, error: odoo.safeErrMsg(e) }, { status: 500 });
   }
 }
 
@@ -86,7 +91,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(result);
     } catch (e: any) {
       console.error("[alerts-cron] Erreur:", e);
-      return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
+      return NextResponse.json({ ok: false, error: odoo.safeErrMsg(e) }, { status: 500 });
     }
   }
 

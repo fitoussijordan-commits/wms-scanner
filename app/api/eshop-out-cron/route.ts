@@ -26,6 +26,17 @@ import {
   saveCronRunStatus, getCronRunStatus,
 } from "@/lib/supabase";
 
+// Marge de sécurité (par défaut 10s sur les plans serverless standards) — évite un run
+// tronqué silencieusement si beaucoup de commandes sont à traiter un jour donné.
+export const maxDuration = 60;
+
+// Erreur → message toujours lisible (jamais "[object Object]"), quel que soit ce qui est levé.
+function safeErrMsg(e: any): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try { return JSON.stringify(e); } catch { return String(e); }
+}
+
 // ─── Config ─────────────────────────────────────────────────────────────────
 
 const SW_URL = process.env.SHOPWARE_URL || "";
@@ -432,7 +443,7 @@ async function runCron(): Promise<any> {
   try {
     await markEshopOrdersProcessed(includedOrderNumbers, quotation ? quotation.name : "chariot", "cron");
     L(`[cron] ${includedOrderNumbers.length} commande(s) marquée(s) comme sortie(s)`);
-  } catch (e: any) { L(`[cron] ⚠ Erreur marquage garde-fou : ${e.message}`); }
+  } catch (e: any) { L(`[cron] ⚠ Erreur marquage garde-fou : ${safeErrMsg(e)}`); }
 
   let validation: { validated: string[]; failed: { name: string; error: string }[] } | null = null;
   if (quotation) {
@@ -441,7 +452,7 @@ async function runCron(): Promise<any> {
       validation = await validateOrderPickings(s, quotation.id);
       if (validation.validated.length) L(`[cron] ✅ Validé : ${validation.validated.join(", ")}`);
       if (validation.failed.length) L(`[cron] ⚠ Échec validation : ${validation.failed.map(f => `${f.name} (${f.error})`).join(" · ")}`);
-    } catch (e: any) { L(`[cron] ⚠ Erreur validation : ${e.message}`); }
+    } catch (e: any) { L(`[cron] ⚠ Erreur validation : ${safeErrMsg(e)}`); }
   }
 
   if (chariotDeductions.length) {
@@ -449,7 +460,7 @@ async function runCron(): Promise<any> {
       const { shortages } = await decrementChariotStock(chariotDeductions);
       if (shortages.length) L(`[cron] ⚠ Chariot insuffisant : ${shortages.map(sh => `${sh.sku} (demandé ${sh.demande}, dispo ${sh.dispo})`).join(" · ")}`);
       else L(`[cron] ✅ Chariot mis à jour (${chariotDeductions.length} réf)`);
-    } catch (e: any) { L(`[cron] ⚠ Erreur MAJ chariot : ${e.message}`); }
+    } catch (e: any) { L(`[cron] ⚠ Erreur MAJ chariot : ${safeErrMsg(e)}`); }
   }
 
   return {
@@ -491,7 +502,7 @@ async function runCronAndTrack(): Promise<any> {
     try { await saveCronRunStatus({ ranAt: new Date().toISOString(), ok: true, summary: summarize(result) }); } catch {}
     return result;
   } catch (e: any) {
-    try { await saveCronRunStatus({ ranAt: new Date().toISOString(), ok: false, summary: "Échec du run", error: e.message }); } catch {}
+    try { await saveCronRunStatus({ ranAt: new Date().toISOString(), ok: false, summary: "Échec du run", error: safeErrMsg(e) }); } catch {}
     throw e;
   }
 }
@@ -503,7 +514,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result);
   } catch (e: any) {
     console.error("[eshop-out-cron] Erreur:", e);
-    return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
+    return NextResponse.json({ ok: false, error: safeErrMsg(e) }, { status: 500 });
   }
 }
 
@@ -523,7 +534,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(result);
     } catch (e: any) {
       console.error("[eshop-out-cron] Erreur:", e);
-      return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
+      return NextResponse.json({ ok: false, error: safeErrMsg(e) }, { status: 500 });
     }
   }
   const cronSecret = process.env.CRON_SECRET || "";
