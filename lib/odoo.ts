@@ -5606,7 +5606,20 @@ export async function createManufacturingOrder(
             };
             const locId = sourceLocationId || move.location_id?.[0];
             if (locId) detail.location_id = locId;
-            await create(session, M("MODEL_MOVE_LINE"), detail);
+            try {
+              await create(session, M("MODEL_MOVE_LINE"), detail);
+            } catch (e1: any) {
+              // Selon la version d'Odoo le champ quantité s'appelle "quantity"
+              // (v17+) ou "qty_done" (avant). On retente avec l'autre nom plutôt
+              // que d'abandonner le lot.
+              delete detail.quantity;
+              detail.qty_done = 0;
+              try {
+                await create(session, M("MODEL_MOVE_LINE"), detail);
+              } catch {
+                throw e1; // on remonte la première erreur, plus parlante
+              }
+            }
           } else {
             // Plusieurs lignes (lots panachés par Odoo) : on ne touche à rien
             // pour ne pas casser une réservation déjà cohérente.
@@ -5619,7 +5632,9 @@ export async function createManufacturingOrder(
       }
 
       if (failures.length) {
-        const msg = `Lot non imposé pour ${failures.length} composant(s) — Odoo choisira à la réservation.`;
+        // On remonte la cause Odoo telle quelle : sans elle, impossible de savoir
+        // pourquoi le lot n'apparaît pas (champ absent, ligne refusée, etc.).
+        const msg = `Lot non appliqué — ${failures.join(" ; ")}`;
         warning = warning ? `${warning} ${msg}` : msg;
       }
     } catch (e: any) {

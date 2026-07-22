@@ -84,6 +84,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
 
   const [picked, setPicked] = useState<Picked[]>([]);
   const [creating, setCreating] = useState(false);
+  const [lastResult, setLastResult] = useState<{ name: string; warning?: string } | null>(null);
   const [recent, setRecent] = useState<{ id: number; name: string; product: string; qty: number; state: string; date: string }[]>([]);
 
   const loadRecent = useCallback(() => {
@@ -240,7 +241,10 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
         // prélever où il trouve, le lot choisi suffit à cibler le bon stock.
         mode === "location" ? (location?.id ?? null) : null,
       );
-      if (res.warning) onToast(`⚠️ ${res.name} — ${res.warning}`, "info");
+      // Résultat conservé à l'écran : un toast disparaît trop vite pour lire un
+      // avertissement Odoo (lot non appliqué, etc.).
+      setLastResult({ name: res.name, warning: res.warning });
+      if (res.warning) onToast(`⚠️ ${res.name} — voir le détail ci-dessous`, "info");
       else onToast(`✅ ${res.name} créé et confirmé`, "success");
       reset();
       loadRecent();
@@ -515,6 +519,25 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
             </div>
             <div style={{ fontSize: 11.5, color: C.red, marginTop: 4 }}>
               L'ordre peut être créé quand même — il restera partiellement réservé.
+            </div>
+          </div>
+        )}
+
+        {/* Résultat du dernier ordre — reste affiché pour pouvoir lire un
+            éventuel avertissement Odoo (lot non appliqué, ordre non confirmé…). */}
+        {lastResult && (
+          <div style={{ ...S.card, background: lastResult.warning ? C.amberSoft : C.greenSoft, borderColor: lastResult.warning ? "#fed7aa" : "#bbf7d0" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: lastResult.warning ? "#9a3412" : "#166534" }}>
+                  {lastResult.warning ? "⚠️" : "✅"} {lastResult.name}
+                </div>
+                <div style={{ fontSize: 12, color: lastResult.warning ? "#7c2d12" : "#166534", marginTop: 2 }}>
+                  {lastResult.warning || "Ordre créé et confirmé."}
+                </div>
+              </div>
+              <button onClick={() => setLastResult(null)}
+                style={{ background: "none", border: "none", color: C.textMuted, fontSize: 16, cursor: "pointer", padding: 2, flexShrink: 0 }}>×</button>
             </div>
           </div>
         )}
