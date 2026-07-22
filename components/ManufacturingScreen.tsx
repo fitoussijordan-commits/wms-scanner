@@ -39,7 +39,8 @@ interface Picked {
   productRef: string;
   lotId: number | null;
   lotName: string;
-  available: number;     // dispo net à l'emplacement
+  available: number;     // dispo net à l'emplacement (peut être 0 si tout réservé)
+  onHand: number;        // stock physique présent
   qtyPerUnit: string;    // saisi par l'utilisateur
 }
 
@@ -67,6 +68,8 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
   const [stock, setStock] = useState<odoo.LocationStockItem[]>([]);
   const [locLoading, setLocLoading] = useState(false);
   const [filter, setFilter] = useState("");
+  const [locSugg, setLocSugg] = useState<{ id: number; complete_name?: string; name: string }[]>([]);
+  const [locOpen, setLocOpen] = useState(false);
 
   const [picked, setPicked] = useState<Picked[]>([]);
   const [creating, setCreating] = useState(false);
@@ -92,6 +95,21 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     return () => { if (prodTimer.current) clearTimeout(prodTimer.current); };
   }, [prodQuery, product, session]);
 
+  // ── Autocomplétion emplacement (dès 2 caractères) ──
+  const locTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const q = locQuery.trim();
+    if (location || q.length < 2) { setLocSugg([]); setLocOpen(false); return; }
+    if (locTimer.current) clearTimeout(locTimer.current);
+    locTimer.current = setTimeout(async () => {
+      try {
+        const r = await odoo.findLocationsByName(session, q);
+        setLocSugg(r); setLocOpen(r.length > 0);
+      } catch { setLocSugg([]); }
+    }, 300);
+    return () => { if (locTimer.current) clearTimeout(locTimer.current); };
+  }, [locQuery, location, session]);
+
   // ── Scan / recherche d'emplacement ──
   const loadLocation = async (raw?: string) => {
     const q = (raw ?? locQuery).trim();
@@ -106,6 +124,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
         setLocation(res.location);
         setStock(res.items);
         setLocQuery("");
+        setLocSugg([]); setLocOpen(false);
         if (!res.items.length) onToast("Emplacement vide (aucun stock disponible)", "info");
       }
     } catch (e: any) {
@@ -122,7 +141,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
       ? prev.filter(p => p.key !== k)
       : [...prev, {
           key: k, productId: it.productId, productName: it.productName, productRef: it.productRef,
-          lotId: it.lotId, lotName: it.lotName, available: it.qty, qtyPerUnit: "1",
+          lotId: it.lotId, lotName: it.lotName, available: it.qty, onHand: it.onHand, qtyPerUnit: "1",
         }]);
   };
 
@@ -138,8 +157,13 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
   const validPicked = picked.filter(p => num(p.qtyPerUnit) > 0);
   const canCreate = !!product && qtyNum > 0 && validPicked.length > 0 && !creating;
 
-  // Composants dont le stock de l'emplacement ne suffit pas pour la quantité demandée.
-  const shortages = validPicked.filter(p => num(p.qtyPerUnit) * qtyNum > p.available);
+  // Manque réel : même le stock physique de l'emplacement ne suffit pas.
+  const shortages = validPicked.filter(p => num(p.qtyPerUnit) * qtyNum > p.onHand);
+  // Stock présent mais réservé ailleurs → l'ordre sera créé en attente de dispo.
+  const awaiting = validPicked.filter(p => {
+    const total = num(p.qtyPerUnit) * qtyNum;
+    return total <= p.onHand && total > p.available;
+  });
 
   const visibleStock = filter.trim()
     ? stock.filter(it => `${it.productRef} ${it.productName} ${it.lotName}`.toLowerCase().includes(filter.trim().toLowerCase()))
@@ -155,7 +179,14 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     try {
       const res = await odoo.createManufacturingOrder(
         session, product.id, qtyNum,
-        validPicked.map(p => ({ productId: p.productId, qtyPerUnit: num(p.qtyPerUnit), lotId: p.lotId })),
+        // On n'impose le lot que s'il est réellement disponible : sinon Odoo
+        // refuserait de créer la ligne de détail, alors qu'on veut justement que
+        // l'ordre reste en attente et se réserve plus tard.
+        validPicked.map(p => ({
+          productId: p.productId,
+          qtyPerUnit: num(p.qtyPerUnit),
+          lotId: num(p.qtyPerUnit) * qtyNum <= p.available ? p.lotId : null,
+        })),
         location?.id ?? null,
       );
       if (res.warning) onToast(`⚠️ ${res.name} — ${res.warning}`, "info");
@@ -233,7 +264,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
                 style={{ background: "none", border: "none", color: C.textMuted, fontSize: 18, cursor: "pointer", padding: 4 }}>×</button>
             </div>
           ) : (
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8, position: "relative" }}>
               <input
                 data-keep-scan="1"
                 style={{ ...S.input, flex: 1 }}
@@ -245,12 +276,22 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
                   const v = (e.target as HTMLInputElement).value;
                   if (v.trim()) loadLocation(v);
                 }}
-                placeholder="Scanne l'emplacement…"
+                placeholder="Scanne ou tape l'emplacement…"
               />
               <button onClick={() => loadLocation()} disabled={locLoading || !locQuery.trim()}
                 style={{ ...S.btn, width: "auto", padding: "0 18px", background: locLoading || !locQuery.trim() ? "#e5e7eb" : C.blue, color: locLoading || !locQuery.trim() ? "#9ca3af" : "#fff" }}>
                 {locLoading ? "…" : "→"}
               </button>
+              {locOpen && locSugg.length > 0 && (
+                <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, marginTop: 4, maxHeight: 240, overflowY: "auto", boxShadow: "0 4px 14px rgba(0,0,0,.1)" }}>
+                  {locSugg.map(l => (
+                    <button key={l.id} onClick={() => loadLocation(l.complete_name || l.name)}
+                      style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", background: "none", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "inherit" }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>📍 {l.complete_name || l.name}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -285,7 +326,16 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
                         {it.expirationDate && ` · ${fmtDate(it.expirationDate)}`}
                       </div>
                     </div>
-                    <span style={{ fontSize: 12.5, fontWeight: 700, color: C.textSec, flexShrink: 0 }}>{it.qty}</span>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700, color: it.qty > 0 ? C.textSec : C.amber }}>
+                        {it.onHand}
+                      </div>
+                      {it.reserved > 0 && (
+                        <div style={{ fontSize: 10.5, color: C.amber }}>
+                          {it.qty > 0 ? `${it.qty} libre` : "tout réservé"}
+                        </div>
+                      )}
+                    </div>
                     <span style={{ fontSize: 15, color: sel ? C.blue : "#d1d5db", flexShrink: 0 }}>{sel ? "✓" : "+"}</span>
                   </button>
                 );
@@ -304,21 +354,23 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {picked.map(p => {
                 const total = num(p.qtyPerUnit) * qtyNum;
-                const short = total > p.available;
+                const short = total > p.onHand;          // même le physique ne suffit pas
+                const wait = !short && total > p.available; // présent mais réservé ailleurs
                 return (
                   <div key={p.key} style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {p.productName}
                       </div>
-                      <div style={{ fontSize: 11.5, color: short ? C.red : C.textMuted }}>
+                      <div style={{ fontSize: 11.5, color: short ? C.red : wait ? C.amber : C.textMuted }}>
                         {p.lotName ? `Lot ${p.lotName} · ` : ""}
-                        {total > 0 ? `total ${total} / ${p.available} dispo` : `${p.available} dispo`}
-                        {short && " ⚠️"}
+                        {total > 0 ? `total ${total} / ${p.onHand} en stock` : `${p.onHand} en stock`}
+                        {short && " ⚠️ insuffisant"}
+                        {wait && " ⏳ en attente de dispo"}
                       </div>
                     </div>
                     <input
-                      style={{ ...S.input, width: 74, flexShrink: 0, textAlign: "center", borderColor: short ? C.red : "#d1d5db" }}
+                      style={{ ...S.input, width: 74, flexShrink: 0, textAlign: "center", borderColor: short ? C.red : wait ? "#fed7aa" : "#d1d5db" }}
                       value={p.qtyPerUnit}
                       onChange={e => setQtyFor(p.key, e.target.value)}
                       inputMode="decimal"
@@ -333,16 +385,32 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
           </div>
         )}
 
-        {/* Avertissement stock insuffisant */}
-        {shortages.length > 0 && (
+        {/* Stock physique présent mais réservé ailleurs → l'ordre attend la dispo */}
+        {awaiting.length > 0 && (
           <div style={{ ...S.card, background: C.amberSoft, borderColor: "#fed7aa" }}>
             <div style={{ fontSize: 12.5, fontWeight: 700, color: "#9a3412", marginBottom: 4 }}>
-              ⚠️ Stock insuffisant à cet emplacement
+              ⏳ En attente de disponibilité
             </div>
             <div style={{ fontSize: 12, color: "#7c2d12" }}>
-              {shortages.map(p => `${p.productName} : ${num(p.qtyPerUnit) * qtyNum} demandé / ${p.available} dispo`).join(" · ")}
+              {awaiting.map(p => `${p.productName} : ${num(p.qtyPerUnit) * qtyNum} demandé, ${p.available} libre sur ${p.onHand}`).join(" · ")}
             </div>
             <div style={{ fontSize: 11.5, color: C.amber, marginTop: 4 }}>
+              Le stock est là mais réservé par d'autres opérations. L'ordre sera créé et se
+              réservera tout seul dès que les articles se libèrent.
+            </div>
+          </div>
+        )}
+
+        {/* Manque réel : même le stock physique ne couvre pas le besoin */}
+        {shortages.length > 0 && (
+          <div style={{ ...S.card, background: "#fef2f2", borderColor: "#fecaca" }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: "#991b1b", marginBottom: 4 }}>
+              ⚠️ Stock insuffisant à cet emplacement
+            </div>
+            <div style={{ fontSize: 12, color: "#7f1d1d" }}>
+              {shortages.map(p => `${p.productName} : ${num(p.qtyPerUnit) * qtyNum} demandé / ${p.onHand} en stock`).join(" · ")}
+            </div>
+            <div style={{ fontSize: 11.5, color: C.red, marginTop: 4 }}>
               L'ordre peut être créé quand même — il restera partiellement réservé.
             </div>
           </div>

@@ -5601,7 +5601,9 @@ export interface LocationStockItem {
   productRef: string;
   lotId: number | null;
   lotName: string;
-  qty: number;          // disponible net (physique - réservé)
+  qty: number;          // disponible net (physique - réservé) — peut être 0
+  onHand: number;       // stock physique à l'emplacement (réservations comprises)
+  reserved: number;     // quantité déjà réservée par d'autres opérations
   expirationDate: string;
 }
 
@@ -5640,9 +5642,15 @@ export async function getLocationStockForPicking(
     lotId: q.lot_id ? q.lot_id[0] : null,
     lotName: q.lot_name || (q.lot_id ? q.lot_id[1] : "") || "",
     // Disponible net : ce qui n'est pas déjà réservé par une autre opération.
+    // Peut être 0 alors qu'il y a du stock physique (tout est réservé ailleurs).
     qty: (q.quantity || 0) - (q.reserved_quantity || 0),
+    // Stock physique présent à l'emplacement, réservations comprises.
+    onHand: q.quantity || 0,
+    reserved: q.reserved_quantity || 0,
     expirationDate: q.expiration_date || "",
-  })).filter((it: LocationStockItem) => it.productId && it.qty > 0);
+    // On filtre sur le PHYSIQUE, pas sur le disponible : un composant entièrement
+    // réservé ailleurs doit rester sélectionnable (l'ordre attendra la dispo).
+  })).filter((it: LocationStockItem) => it.productId && it.onHand > 0);
 
   // FEFO : les lots qui périment le plus tôt en premier, sans date à la fin.
   items.sort((a, b) => {
