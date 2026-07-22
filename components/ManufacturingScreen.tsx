@@ -145,8 +145,13 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
         }]);
   };
 
-  const setQtyFor = (key: string, v: string) =>
-    setPicked(prev => prev.map(p => p.key === key ? { ...p, qtyPerUnit: v } : p));
+  // Saisie de quantité : on n'accepte que chiffres, point et virgule. Sans ce
+  // filtre, un scan qui tombe dans le champ (le PDA "tape" le code au clavier)
+  // écrase la quantité par un code-barres entier.
+  const setQtyFor = (key: string, v: string) => {
+    const clean = v.replace(/[^\d.,]/g, "").slice(0, 8);
+    setPicked(prev => prev.map(p => p.key === key ? { ...p, qtyPerUnit: clean } : p));
+  };
 
   const num = (s: string): number => {
     const n = parseFloat((s || "").replace(",", "."));
@@ -246,7 +251,9 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
 
           <div style={{ marginTop: 12 }}>
             <label style={S.label}>Quantité à fabriquer (packs)</label>
-            <input style={S.input} value={qty} onChange={e => setQty(e.target.value)} inputMode="decimal" />
+            <input style={S.input} value={qty}
+              onChange={e => setQty(e.target.value.replace(/[^\d.,]/g, "").slice(0, 8))}
+              inputMode="decimal" />
           </div>
         </div>
 

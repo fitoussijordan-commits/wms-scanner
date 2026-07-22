@@ -5467,7 +5467,10 @@ export async function splitPickLineIntoPackages(
 export interface ManufactureComponent {
   productId: number;    // product.product
   qtyPerUnit: number;   // quantité consommée pour UN pack
-  lotId?: number | null; // lot imposé (optionnel) — sinon Odoo réserve selon sa stratégie
+  // Lot repéré au moment du choix, conservé pour information. Il n'est pas imposé
+  // à Odoo : les lignes de détail sont créées par la réservation, et les forcer
+  // échoue quand le lot n'est pas encore disponible.
+  lotId?: number | null;
 }
 
 export interface ManufactureResult {
@@ -5526,6 +5529,8 @@ export async function createManufacturingOrder(
     product_qty: qty,
     product_uom_id: uomId,
     // Pas de bom_id : la composition est saisie librement dans le WMS.
+    // Format x2many Odoo : chaque ligne est la commande [0, 0, {valeurs}].
+    // Sans ce triplet, Odoo reçoit un dict nu et lève "unhashable type: 'dict'".
     move_raw_ids: lines.map(l => {
       const move: any = {
         product_id: l.productId,
@@ -5534,19 +5539,11 @@ export async function createManufacturingOrder(
       };
       // Emplacement de prélèvement imposé (l'emplacement scanné).
       if (sourceLocationId) move.location_id = sourceLocationId;
-      // Lot imposé : on pré-crée la ligne de détail avec ce lot, sinon Odoo
-      // choisirait lui-même selon sa stratégie de réservation (FEFO/FIFO).
-      if (l.lotId) {
-        const detail: any = {
-          product_id: l.productId,
-          product_uom_id: uomByProduct[l.productId],
-          lot_id: l.lotId,
-          quantity: l.qtyPerUnit * qty,
-        };
-        if (sourceLocationId) detail.location_id = sourceLocationId;
-        move.move_line_ids = [[0, 0, detail]];
-      }
-      return move;
+      // Le lot n'est pas imposé ici : les lignes de détail (move_line_ids) sont
+      // générées par Odoo à la réservation. Les forcer à la création échoue quand
+      // le lot n'est pas encore disponible — or c'est justement le cas d'usage
+      // (fabrication lancée en attendant le réapprovisionnement).
+      return [0, 0, move];
     }),
   };
 
