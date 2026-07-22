@@ -207,13 +207,35 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
   const validPicked = picked.filter(p => num(p.qtyPerUnit) > 0);
   const canCreate = !!product && qtyNum > 0 && validPicked.length > 0 && !creating;
 
-  // Manque réel : même le stock physique de l'emplacement ne suffit pas.
-  const shortages = validPicked.filter(p => num(p.qtyPerUnit) * qtyNum > p.onHand);
+  // Bilan PAR PRODUIT, pas par ligne : plusieurs lots du même article se cumulent
+  // (ex. lot A 3570 + lot B 280 = 3850 dispo pour un besoin de 3850). Comparer
+  // chaque lot isolément afficherait un manque à tort.
+  interface ProductNeed {
+    productId: number; productName: string;
+    need: number;      // besoin total (quantité par pack × packs, cumulée)
+    onHand: number;    // stock physique cumulé des lots retenus
+    available: number; // dispo net cumulé des lots retenus
+  }
+  const needByProduct: ProductNeed[] = (() => {
+    const map = new Map<number, ProductNeed>();
+    for (const p of validPicked) {
+      const cur = map.get(p.productId) || {
+        productId: p.productId, productName: p.productName, need: 0, onHand: 0, available: 0,
+      };
+      cur.need += num(p.qtyPerUnit) * qtyNum;
+      cur.onHand += p.onHand;
+      cur.available += p.available;
+      map.set(p.productId, cur);
+    }
+    return Array.from(map.values());
+  })();
+
+  // Manque réel : même le stock physique cumulé ne suffit pas.
+  const shortages = needByProduct.filter(n => n.need > n.onHand);
   // Stock présent mais réservé ailleurs → l'ordre sera créé en attente de dispo.
-  const awaiting = validPicked.filter(p => {
-    const total = num(p.qtyPerUnit) * qtyNum;
-    return total <= p.onHand && total > p.available;
-  });
+  const awaiting = needByProduct.filter(n => n.need <= n.onHand && n.need > n.available);
+  // Accès rapide au bilan d'un produit depuis une ligne.
+  const needOf = (productId: number) => needByProduct.find(n => n.productId === productId);
 
   const visibleStock = filter.trim()
     ? stock.filter(it => `${it.productRef} ${it.productName} ${it.lotName}`.toLowerCase().includes(filter.trim().toLowerCase()))
@@ -229,12 +251,14 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     try {
       const res = await odoo.createManufacturingOrder(
         session, product.id, qtyNum,
-        // Le lot choisi est toujours transmis : il est appliqué après la
-        // confirmation de l'ordre, donc même un lot indisponible est inscrit.
-        validPicked.map(p => ({
-          productId: p.productId,
-          qtyPerUnit: num(p.qtyPerUnit),
-          lotId: p.lotId,
+        // Un composant par PRODUIT : si plusieurs lots du même article ont été
+        // retenus, Odoo ne crée qu'un mouvement — on additionne donc les besoins
+        // et on garde le premier lot choisi (les autres seront pris par Odoo à la
+        // réservation, dans l'emplacement indiqué).
+        needByProduct.map(n => ({
+          productId: n.productId,
+          qtyPerUnit: n.need / qtyNum,
+          lotId: validPicked.find(p => p.productId === n.productId)?.lotId ?? null,
         })),
         // Emplacement source imposé uniquement en mode "un emplacement". En mode
         // recherche les composants viennent d'endroits différents : on laisse Odoo
@@ -459,9 +483,14 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
             <label style={S.label}>4 · Quantité PAR pack</label>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {picked.map(p => {
-                const total = num(p.qtyPerUnit) * qtyNum;
-                const short = total > p.onHand;          // même le physique ne suffit pas
-                const wait = !short && total > p.available; // présent mais réservé ailleurs
+                // Le verdict porte sur le PRODUIT (tous ses lots retenus cumulés),
+                // pas sur cette ligne seule — sinon deux lots complémentaires
+                // seraient signalés en manque alors qu'ensemble ils suffisent.
+                const n = needOf(p.productId);
+                const short = !!n && n.need > n.onHand;
+                const wait = !!n && !short && n.need > n.available;
+                // Nombre de lots retenus pour ce produit → on précise le cumul.
+                const lotsForProduct = validPicked.filter(x => x.productId === p.productId).length;
                 return (
                   <div key={p.key} style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -471,7 +500,9 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
                       <div style={{ fontSize: 11.5, color: short ? C.red : wait ? C.amber : C.textMuted }}>
                         {p.lotName ? `Lot ${p.lotName} · ` : ""}
                         {mode === "search" && p.locationName ? `${p.locationName} · ` : ""}
-                        {total > 0 ? `total ${total} / ${p.onHand} en stock` : `${p.onHand} en stock`}
+                        {`${p.onHand} sur ce lot`}
+                        {n && lotsForProduct > 1 && ` · cumul ${n.onHand} pour ${n.need}`}
+                        {n && lotsForProduct === 1 && n.need > 0 && ` · besoin ${n.need}`}
                         {short && " ⚠️ insuffisant"}
                         {wait && " ⏳ en attente de dispo"}
                       </div>
@@ -499,7 +530,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
               ⏳ En attente de disponibilité
             </div>
             <div style={{ fontSize: 12, color: "#7c2d12" }}>
-              {awaiting.map(p => `${p.productName} : ${num(p.qtyPerUnit) * qtyNum} demandé, ${p.available} libre sur ${p.onHand}`).join(" · ")}
+              {awaiting.map(n => `${n.productName} : ${n.need} demandé, ${n.available} libre sur ${n.onHand}`).join(" · ")}
             </div>
             <div style={{ fontSize: 11.5, color: C.amber, marginTop: 4 }}>
               Le stock est là mais réservé par d'autres opérations. L'ordre sera créé et se
@@ -515,7 +546,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
               ⚠️ Stock insuffisant à cet emplacement
             </div>
             <div style={{ fontSize: 12, color: "#7f1d1d" }}>
-              {shortages.map(p => `${p.productName} : ${num(p.qtyPerUnit) * qtyNum} demandé / ${p.onHand} en stock`).join(" · ")}
+              {shortages.map(n => `${n.productName} : ${n.need} demandé / ${n.onHand} en stock`).join(" · ")}
             </div>
             <div style={{ fontSize: 11.5, color: C.red, marginTop: 4 }}>
               L'ordre peut être créé quand même — il restera partiellement réservé.
