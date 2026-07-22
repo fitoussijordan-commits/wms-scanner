@@ -22,6 +22,9 @@ const CATEGORIES = [
 ];
 
 const FAMILLES = [
+  // Famille 0 "Autre" → préfixes en x00xx (ex. 6500177 = cat 6 + fam 00 + sf 01 + seq 77).
+  // Utilisée pour les articles hors catalogue produit : PLV, stop-rayon, matériel…
+  { code: 0,  label: "Autre" },
   { code: 1,  label: "Visage" },
   { code: 2,  label: "Régénérant" },
   { code: 3,  label: "Corps" },
@@ -44,6 +47,7 @@ const FAMILLES = [
 ];
 
 const SOUS_FAMILLES: Record<number, { code: number; label: string }[]> = {
+  0:  [{ code:1,label:"Autre Article"}],
   1:  [{ code:1,label:"Nettoyant"},{code:2,label:"Stimulant"},{code:3,label:"Crème de jour"},{code:4,label:"Stick correcteur"},{code:5,label:"Soins des yeux"},{code:6,label:"Soins des lèvres"},{code:7,label:"Soins Intensifs"},{code:8,label:"Soin Nuit"},{code:10,label:"Coffrets"}],
   2:  [{ code:1,label:"Lait et Crème"},{code:2,label:"Stimulant"},{code:3,label:"Crème de jour"},{code:4,label:"Soins des yeux / Lèvres"},{code:7,label:"Soins Intensifs"},{code:10,label:"Coffrets"}],
   3:  [{ code:1,label:"Corps"},{code:2,label:"Huile de soin"},{code:3,label:"Soins des mains-ongles"},{code:4,label:"Soins des pieds-jambes"},{code:5,label:"Solaire"},{code:6,label:"Poudre"},{code:7,label:"Déodorant"},{code:10,label:"Coffrets"}],
