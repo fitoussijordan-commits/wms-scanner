@@ -2,10 +2,12 @@
 // components/ManufacturingScreen.tsx
 // ────────────────────────────────────────────────────────────────────────────
 // Fabrication simplifiée — alternative légère à l'écran MRP d'Odoo.
-// On choisit un produit à fabriquer, une quantité de packs, et les composants
-// consommés PAR PACK. Le WMS multiplie par la quantité et crée l'ordre de
-// fabrication en état "Confirmé" (composants réservés, rien de consommé).
-// La finalisation (marquer comme fait) reste à faire dans Odoo.
+//
+// Flux : on scanne l'emplacement où sont stockés les composants, sa liste
+// (produit + lot + dispo) s'affiche, et on tape directement dessus pour ajouter
+// un composant — aucune re-saisie de référence. On indique la quantité PAR PACK,
+// le WMS multiplie par le nombre de packs et crée l'ordre en état "Confirmé"
+// (composants réservés, rien de consommé). La finalisation se fait dans Odoo.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useEffect, useCallback, useRef } from "react";
 import * as odoo from "@/lib/odoo";
@@ -13,37 +15,39 @@ import * as odoo from "@/lib/odoo";
 const C = {
   bg: "#f8f9fb", white: "#fff", text: "#111827", textSec: "#374151",
   textMuted: "#6b7280", border: "#e5e7eb", blue: "#2563eb", blueSoft: "#eff6ff",
-  green: "#16a34a", red: "#dc2626",
+  green: "#16a34a", greenSoft: "#f0fdf4", red: "#dc2626", amber: "#b45309", amberSoft: "#fffbeb",
 };
 
 const S = {
   body: { flex: 1, padding: 16, display: "flex", flexDirection: "column" as const, gap: 12, maxWidth: 620, width: "100%", margin: "0 auto" },
   card: { background: C.white, borderRadius: 12, padding: "14px 16px", border: `1px solid ${C.border}` },
   label: { fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", color: C.textMuted, textTransform: "uppercase" as const, marginBottom: 4, display: "block" },
-  input: { width: "100%", border: `1px solid #d1d5db`, borderRadius: 8, padding: "9px 10px", fontSize: 14, color: C.text, fontFamily: "inherit", outline: "none", boxSizing: "border-box" as const },
+  input: { width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 10px", fontSize: 14, color: C.text, fontFamily: "inherit", outline: "none", boxSizing: "border-box" as const },
   btn: { width: "100%", padding: 14, borderRadius: 10, border: "none", cursor: "pointer", fontSize: 15, fontWeight: 700, fontFamily: "inherit" },
 };
 
-// Libellés FR des états Odoo d'un ordre de fabrication.
 const STATE_LABELS: Record<string, string> = {
   draft: "Brouillon", confirmed: "Confirmé", progress: "En cours",
   to_close: "À clôturer", done: "Terminé", cancel: "Annulé",
 };
 
-interface Line {
-  key: string;
-  productId: number | null;
-  label: string;
-  qtyPerUnit: string;
-  query: string;
-  sugg: { id: number; name: string; ref: string }[];
-  open: boolean;
+// Un composant retenu pour la fabrication : issu d'une ligne de l'emplacement.
+interface Picked {
+  key: string;           // productId + lotId — unicité d'une ligne de stock
+  productId: number;
+  productName: string;
+  productRef: string;
+  lotId: number | null;
+  lotName: string;
+  available: number;     // dispo net à l'emplacement
+  qtyPerUnit: string;    // saisi par l'utilisateur
 }
 
-const newLine = (): Line => ({
-  key: Math.random().toString(36).slice(2),
-  productId: null, label: "", qtyPerUnit: "1", query: "", sugg: [], open: false,
-});
+const fmtDate = (d: string) => {
+  if (!d) return "";
+  const dt = new Date(d);
+  return isNaN(dt.getTime()) ? "" : dt.toLocaleDateString("fr-FR", { month: "2-digit", year: "numeric" });
+};
 
 export default function ManufacturingScreen({ session, onBack, onToast }: {
   session: odoo.OdooSession;
@@ -57,7 +61,14 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
   const [product, setProduct] = useState<{ id: number; name: string; ref: string } | null>(null);
   const [qty, setQty] = useState("1");
 
-  const [lines, setLines] = useState<Line[]>([newLine()]);
+  // Emplacement de prélèvement + son contenu
+  const [locQuery, setLocQuery] = useState("");
+  const [location, setLocation] = useState<{ id: number; name: string } | null>(null);
+  const [stock, setStock] = useState<odoo.LocationStockItem[]>([]);
+  const [locLoading, setLocLoading] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const [picked, setPicked] = useState<Picked[]>([]);
   const [creating, setCreating] = useState(false);
   const [recent, setRecent] = useState<{ id: number; name: string; product: string; qty: number; state: string; date: string }[]>([]);
 
@@ -81,33 +92,42 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     return () => { if (prodTimer.current) clearTimeout(prodTimer.current); };
   }, [prodQuery, product, session]);
 
-  // ── Autocomplétion composants (une recherche par ligne, debouncée) ──
-  const lineTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const searchLine = (key: string, q: string) => {
-    setLines(prev => prev.map(l => l.key === key ? { ...l, query: q, productId: null, label: "" } : l));
-    if (lineTimers.current[key]) clearTimeout(lineTimers.current[key]);
-    if (q.trim().length < 2) {
-      setLines(prev => prev.map(l => l.key === key ? { ...l, sugg: [], open: false } : l));
-      return;
-    }
-    lineTimers.current[key] = setTimeout(async () => {
-      try {
-        const r = await odoo.suggestProducts(session, q.trim());
-        setLines(prev => prev.map(l => l.key === key ? { ...l, sugg: r, open: r.length > 0 } : l));
-      } catch {
-        setLines(prev => prev.map(l => l.key === key ? { ...l, sugg: [], open: false } : l));
+  // ── Scan / recherche d'emplacement ──
+  const loadLocation = async (raw?: string) => {
+    const q = (raw ?? locQuery).trim();
+    if (!q) return;
+    setLocLoading(true);
+    try {
+      const res = await odoo.getLocationStockForPicking(session, q);
+      if (!res.location) {
+        onToast(`❌ Emplacement "${q}" introuvable`, "error");
+        setLocation(null); setStock([]);
+      } else {
+        setLocation(res.location);
+        setStock(res.items);
+        setLocQuery("");
+        if (!res.items.length) onToast("Emplacement vide (aucun stock disponible)", "info");
       }
-    }, 300);
+    } catch (e: any) {
+      onToast(`Erreur : ${odoo.safeErrMsg(e)}`, "error");
+    }
+    setLocLoading(false);
   };
 
-  const pickLine = (key: string, p: { id: number; name: string; ref: string }) => {
-    setLines(prev => prev.map(l => l.key === key
-      ? { ...l, productId: p.id, label: `${p.ref ? p.ref + " — " : ""}${p.name}`, query: `${p.ref ? p.ref + " — " : ""}${p.name}`, sugg: [], open: false }
-      : l));
+  const keyOf = (it: odoo.LocationStockItem) => `${it.productId}-${it.lotId ?? 0}`;
+
+  const toggle = (it: odoo.LocationStockItem) => {
+    const k = keyOf(it);
+    setPicked(prev => prev.some(p => p.key === k)
+      ? prev.filter(p => p.key !== k)
+      : [...prev, {
+          key: k, productId: it.productId, productName: it.productName, productRef: it.productRef,
+          lotId: it.lotId, lotName: it.lotName, available: it.qty, qtyPerUnit: "1",
+        }]);
   };
 
-  const setLineQty = (key: string, v: string) =>
-    setLines(prev => prev.map(l => l.key === key ? { ...l, qtyPerUnit: v } : l));
+  const setQtyFor = (key: string, v: string) =>
+    setPicked(prev => prev.map(p => p.key === key ? { ...p, qtyPerUnit: v } : p));
 
   const num = (s: string): number => {
     const n = parseFloat((s || "").replace(",", "."));
@@ -115,11 +135,18 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
   };
 
   const qtyNum = num(qty);
-  const validLines = lines.filter(l => l.productId && num(l.qtyPerUnit) > 0);
-  const canCreate = !!product && qtyNum > 0 && validLines.length > 0 && !creating;
+  const validPicked = picked.filter(p => num(p.qtyPerUnit) > 0);
+  const canCreate = !!product && qtyNum > 0 && validPicked.length > 0 && !creating;
+
+  // Composants dont le stock de l'emplacement ne suffit pas pour la quantité demandée.
+  const shortages = validPicked.filter(p => num(p.qtyPerUnit) * qtyNum > p.available);
+
+  const visibleStock = filter.trim()
+    ? stock.filter(it => `${it.productRef} ${it.productName} ${it.lotName}`.toLowerCase().includes(filter.trim().toLowerCase()))
+    : stock;
 
   const reset = () => {
-    setProduct(null); setProdQuery(""); setQty("1"); setLines([newLine()]);
+    setProduct(null); setProdQuery(""); setQty("1"); setPicked([]); setFilter("");
   };
 
   const create = async () => {
@@ -128,12 +155,14 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     try {
       const res = await odoo.createManufacturingOrder(
         session, product.id, qtyNum,
-        validLines.map(l => ({ productId: l.productId as number, qtyPerUnit: num(l.qtyPerUnit) })),
+        validPicked.map(p => ({ productId: p.productId, qtyPerUnit: num(p.qtyPerUnit), lotId: p.lotId })),
+        location?.id ?? null,
       );
       if (res.warning) onToast(`⚠️ ${res.name} — ${res.warning}`, "info");
       else onToast(`✅ ${res.name} créé et confirmé`, "success");
       reset();
       loadRecent();
+      if (location) loadLocation(location.name); // stock rafraîchi après réservation
     } catch (e: any) {
       onToast(`Erreur : ${odoo.safeErrMsg(e)}`, "error");
     }
@@ -154,9 +183,9 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
       </div>
 
       <div style={S.body}>
-        {/* Produit à fabriquer */}
+        {/* 1. Produit à fabriquer */}
         <div style={S.card}>
-          <label style={S.label}>Produit à fabriquer</label>
+          <label style={S.label}>1 · Produit à fabriquer</label>
           {product ? (
             <div style={{ display: "flex", alignItems: "center", gap: 10, background: C.blueSoft, border: "1px solid #bfdbfe", borderRadius: 8, padding: "10px 12px" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -168,17 +197,12 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
             </div>
           ) : (
             <div style={{ position: "relative" }}>
-              <input
-                style={S.input}
-                value={prodQuery}
-                onChange={e => setProdQuery(e.target.value)}
-                placeholder="Référence, code-barres ou nom…"
-              />
+              <input style={S.input} value={prodQuery} onChange={e => setProdQuery(e.target.value)}
+                placeholder="Référence, code-barres ou nom…" />
               {prodOpen && prodSugg.length > 0 && (
                 <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, marginTop: 4, maxHeight: 240, overflowY: "auto", boxShadow: "0 4px 14px rgba(0,0,0,.1)" }}>
                   {prodSugg.map(p => (
-                    <button key={p.id}
-                      onClick={() => { setProduct(p); setProdOpen(false); setProdSugg([]); }}
+                    <button key={p.id} onClick={() => { setProduct(p); setProdOpen(false); setProdSugg([]); }}
                       style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", background: "none", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "inherit" }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{p.name}</div>
                       {p.ref && <div style={{ fontSize: 11.5, color: C.textMuted }}>{p.ref}</div>}
@@ -195,70 +219,136 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
           </div>
         </div>
 
-        {/* Composants */}
+        {/* 2. Emplacement de prélèvement */}
         <div style={S.card}>
-          <label style={S.label}>Composants — quantité PAR pack</label>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {lines.map(l => (
-              <div key={l.key} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
-                  <input
-                    style={S.input}
-                    value={l.query}
-                    onChange={e => searchLine(l.key, e.target.value)}
-                    placeholder="Composant…"
-                  />
-                  {l.open && l.sugg.length > 0 && (
-                    <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, marginTop: 4, maxHeight: 220, overflowY: "auto", boxShadow: "0 4px 14px rgba(0,0,0,.1)" }}>
-                      {l.sugg.map(p => (
-                        <button key={p.id} onClick={() => pickLine(l.key, p)}
-                          style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", background: "none", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "inherit" }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{p.name}</div>
-                          {p.ref && <div style={{ fontSize: 11.5, color: C.textMuted }}>{p.ref}</div>}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <input
-                  style={{ ...S.input, width: 78, flexShrink: 0, textAlign: "center" }}
-                  value={l.qtyPerUnit}
-                  onChange={e => setLineQty(l.key, e.target.value)}
-                  inputMode="decimal"
-                />
-                <button
-                  onClick={() => setLines(prev => prev.length === 1 ? [newLine()] : prev.filter(x => x.key !== l.key))}
-                  style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, color: C.textMuted, fontSize: 16, cursor: "pointer", padding: "8px 11px", flexShrink: 0 }}
-                  aria-label="Retirer">×</button>
+          <label style={S.label}>2 · Emplacement des composants</label>
+          {location ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, background: C.greenSoft, border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 12px" }}>
+              <span style={{ fontSize: 16 }}>📍</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>{location.name}</div>
+                <div style={{ fontSize: 11.5, color: C.textMuted }}>{stock.length} ligne(s) de stock disponible</div>
               </div>
-            ))}
-          </div>
-          <button
-            onClick={() => setLines(prev => [...prev, newLine()])}
-            style={{ marginTop: 10, background: "none", border: "none", color: C.blue, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
-            + Ajouter un composant
-          </button>
+              <button onClick={() => { setLocation(null); setStock([]); setPicked([]); setFilter(""); }}
+                style={{ background: "none", border: "none", color: C.textMuted, fontSize: 18, cursor: "pointer", padding: 4 }}>×</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                data-keep-scan="1"
+                style={{ ...S.input, flex: 1 }}
+                value={locQuery}
+                onChange={e => setLocQuery(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key !== "Enter") return;
+                  e.preventDefault();
+                  const v = (e.target as HTMLInputElement).value;
+                  if (v.trim()) loadLocation(v);
+                }}
+                placeholder="Scanne l'emplacement…"
+              />
+              <button onClick={() => loadLocation()} disabled={locLoading || !locQuery.trim()}
+                style={{ ...S.btn, width: "auto", padding: "0 18px", background: locLoading || !locQuery.trim() ? "#e5e7eb" : C.blue, color: locLoading || !locQuery.trim() ? "#9ca3af" : "#fff" }}>
+                {locLoading ? "…" : "→"}
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Récapitulatif des quantités totales — évite l'erreur classique
-            "j'ai saisi le total au lieu du par-pack". */}
-        {product && qtyNum > 0 && validLines.length > 0 && (
-          <div style={{ ...S.card, background: "#fffbeb", borderColor: "#fed7aa" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#9a3412", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
-              Sera consommé au total
+        {/* 3. Sélection des composants directement dans l'emplacement */}
+        {location && stock.length > 0 && (
+          <div style={S.card}>
+            <label style={S.label}>3 · Touche un article pour l'ajouter</label>
+            {stock.length > 6 && (
+              <input style={{ ...S.input, marginBottom: 8 }} value={filter}
+                onChange={e => setFilter(e.target.value)} placeholder="Filtrer la liste…" />
+            )}
+            <div style={{ maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+              {visibleStock.map(it => {
+                const k = keyOf(it);
+                const sel = picked.some(p => p.key === k);
+                return (
+                  <button key={k} onClick={() => toggle(it)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 10, textAlign: "left", width: "100%",
+                      padding: "9px 11px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+                      background: sel ? C.blueSoft : C.white,
+                      border: `1.5px solid ${sel ? C.blue : C.border}`,
+                    }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {it.productName}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {it.productRef && `${it.productRef} · `}
+                        {it.lotName ? `Lot ${it.lotName}` : "sans lot"}
+                        {it.expirationDate && ` · ${fmtDate(it.expirationDate)}`}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: C.textSec, flexShrink: 0 }}>{it.qty}</span>
+                    <span style={{ fontSize: 15, color: sel ? C.blue : "#d1d5db", flexShrink: 0 }}>{sel ? "✓" : "+"}</span>
+                  </button>
+                );
+              })}
+              {visibleStock.length === 0 && (
+                <div style={{ fontSize: 13, color: C.textMuted, padding: "8px 0" }}>Aucun article ne correspond.</div>
+              )}
             </div>
-            {validLines.map(l => (
-              <div key={l.key} style={{ fontSize: 13, color: "#7c2d12", display: "flex", justifyContent: "space-between", gap: 10 }}>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.label}</span>
-                <strong style={{ flexShrink: 0 }}>{num(l.qtyPerUnit) * qtyNum}</strong>
-              </div>
-            ))}
           </div>
         )}
 
-        <button
-          onClick={create}
-          disabled={!canCreate}
+        {/* 4. Quantités par pack pour les composants retenus */}
+        {picked.length > 0 && (
+          <div style={S.card}>
+            <label style={S.label}>4 · Quantité PAR pack</label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {picked.map(p => {
+                const total = num(p.qtyPerUnit) * qtyNum;
+                const short = total > p.available;
+                return (
+                  <div key={p.key} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {p.productName}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: short ? C.red : C.textMuted }}>
+                        {p.lotName ? `Lot ${p.lotName} · ` : ""}
+                        {total > 0 ? `total ${total} / ${p.available} dispo` : `${p.available} dispo`}
+                        {short && " ⚠️"}
+                      </div>
+                    </div>
+                    <input
+                      style={{ ...S.input, width: 74, flexShrink: 0, textAlign: "center", borderColor: short ? C.red : "#d1d5db" }}
+                      value={p.qtyPerUnit}
+                      onChange={e => setQtyFor(p.key, e.target.value)}
+                      inputMode="decimal"
+                    />
+                    <button onClick={() => setPicked(prev => prev.filter(x => x.key !== p.key))}
+                      style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, color: C.textMuted, fontSize: 16, cursor: "pointer", padding: "8px 11px", flexShrink: 0 }}
+                      aria-label="Retirer">×</button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Avertissement stock insuffisant */}
+        {shortages.length > 0 && (
+          <div style={{ ...S.card, background: C.amberSoft, borderColor: "#fed7aa" }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: "#9a3412", marginBottom: 4 }}>
+              ⚠️ Stock insuffisant à cet emplacement
+            </div>
+            <div style={{ fontSize: 12, color: "#7c2d12" }}>
+              {shortages.map(p => `${p.productName} : ${num(p.qtyPerUnit) * qtyNum} demandé / ${p.available} dispo`).join(" · ")}
+            </div>
+            <div style={{ fontSize: 11.5, color: C.amber, marginTop: 4 }}>
+              L'ordre peut être créé quand même — il restera partiellement réservé.
+            </div>
+          </div>
+        )}
+
+        <button onClick={create} disabled={!canCreate}
           style={{ ...S.btn, background: canCreate ? C.green : "#e5e7eb", color: canCreate ? "#fff" : "#9ca3af" }}>
           {creating ? "Création…" : "✓ Créer et confirmer l'ordre"}
         </button>

@@ -5465,8 +5465,9 @@ export async function splitPickLineIntoPackages(
 // ============================================
 
 export interface ManufactureComponent {
-  productId: number;   // product.product
-  qtyPerUnit: number;  // quantité consommée pour UN pack
+  productId: number;    // product.product
+  qtyPerUnit: number;   // quantité consommée pour UN pack
+  lotId?: number | null; // lot imposé (optionnel) — sinon Odoo réserve selon sa stratégie
 }
 
 export interface ManufactureResult {
@@ -5492,6 +5493,7 @@ async function findManufacturePickingType(session: OdooSession): Promise<number 
  * @param productId  produit fini (product.product)
  * @param qty        nombre de packs à fabriquer
  * @param components composants + quantité PAR PACK (multipliée par qty ici)
+ * @param sourceLocationId emplacement de prélèvement des composants (optionnel)
  *
  * Les quantités sont multipliées côté WMS : l'utilisateur saisit "par pack", ce qui
  * est plus naturel, mais Odoo attend des quantités totales sur les move_raw_ids.
@@ -5500,7 +5502,8 @@ export async function createManufacturingOrder(
   session: OdooSession,
   productId: number,
   qty: number,
-  components: ManufactureComponent[]
+  components: ManufactureComponent[],
+  sourceLocationId?: number | null
 ): Promise<ManufactureResult> {
   if (!productId) throw new Error("Produit à fabriquer manquant");
   if (!(qty > 0)) throw new Error("Quantité à fabriquer invalide");
@@ -5523,12 +5526,31 @@ export async function createManufacturingOrder(
     product_qty: qty,
     product_uom_id: uomId,
     // Pas de bom_id : la composition est saisie librement dans le WMS.
-    move_raw_ids: lines.map(l => [0, 0, {
-      product_id: l.productId,
-      product_uom_qty: l.qtyPerUnit * qty,
-      product_uom: uomByProduct[l.productId],
-    }]),
+    move_raw_ids: lines.map(l => {
+      const move: any = {
+        product_id: l.productId,
+        product_uom_qty: l.qtyPerUnit * qty,
+        product_uom: uomByProduct[l.productId],
+      };
+      // Emplacement de prélèvement imposé (l'emplacement scanné).
+      if (sourceLocationId) move.location_id = sourceLocationId;
+      // Lot imposé : on pré-crée la ligne de détail avec ce lot, sinon Odoo
+      // choisirait lui-même selon sa stratégie de réservation (FEFO/FIFO).
+      if (l.lotId) {
+        const detail: any = {
+          product_id: l.productId,
+          product_uom_id: uomByProduct[l.productId],
+          lot_id: l.lotId,
+          quantity: l.qtyPerUnit * qty,
+        };
+        if (sourceLocationId) detail.location_id = sourceLocationId;
+        move.move_line_ids = [[0, 0, detail]];
+      }
+      return move;
+    }),
   };
+
+  if (sourceLocationId) vals.location_src_id = sourceLocationId;
 
   const pickingTypeId = await findManufacturePickingType(session);
   if (pickingTypeId) vals.picking_type_id = pickingTypeId;
@@ -5571,4 +5593,64 @@ export async function getRecentManufacturingOrders(
     state: r.state || "",
     date: r.create_date || "",
   }));
+}
+
+export interface LocationStockItem {
+  productId: number;
+  productName: string;
+  productRef: string;
+  lotId: number | null;
+  lotName: string;
+  qty: number;          // disponible net (physique - réservé)
+  expirationDate: string;
+}
+
+/**
+ * Résout un emplacement scanné (code-barres ou nom) et retourne son contenu,
+ * une ligne par couple produit/lot. Utilisé par la fabrication : les composants
+ * à picker sont tous dans un emplacement dédié, on scanne l'emplacement une fois
+ * puis on choisit dedans plutôt que de chercher chaque produit à la main.
+ *
+ * Tri FEFO (péremption la plus courte d'abord) pour que le lot à écouler soit en tête.
+ */
+export async function getLocationStockForPicking(
+  session: OdooSession,
+  code: string
+): Promise<{ location: { id: number; name: string } | null; items: LocationStockItem[] }> {
+  const trimmed = (code || "").trim();
+  if (!trimmed) return { location: null, items: [] };
+  const upper = trimmed.toUpperCase();
+  const fields = ["id", "name", "complete_name", "barcode"];
+
+  let locs = await searchRead(session, M("MODEL_LOCATION"), [["barcode", "=", trimmed]], fields, 1);
+  if (!locs.length && upper !== trimmed) {
+    locs = await searchRead(session, M("MODEL_LOCATION"), [["barcode", "=", upper]], fields, 1);
+  }
+  if (!locs.length) locs = await searchRead(session, M("MODEL_LOCATION"), [["barcode", "ilike", trimmed]], fields, 1);
+  if (!locs.length) locs = await searchRead(session, M("MODEL_LOCATION"), [["complete_name", "ilike", trimmed]], fields, 1);
+  if (!locs.length) return { location: null, items: [] };
+
+  const loc = locs[0];
+  const quants = await getProductsAtLocation(session, loc.id);
+
+  const items: LocationStockItem[] = (quants || []).map((q: any) => ({
+    productId: q.product_id?.[0],
+    productName: q.product_id?.[1] || "",
+    productRef: q.product_ref || "",
+    lotId: q.lot_id ? q.lot_id[0] : null,
+    lotName: q.lot_name || (q.lot_id ? q.lot_id[1] : "") || "",
+    // Disponible net : ce qui n'est pas déjà réservé par une autre opération.
+    qty: (q.quantity || 0) - (q.reserved_quantity || 0),
+    expirationDate: q.expiration_date || "",
+  })).filter((it: LocationStockItem) => it.productId && it.qty > 0);
+
+  // FEFO : les lots qui périment le plus tôt en premier, sans date à la fin.
+  items.sort((a, b) => {
+    if (a.productName !== b.productName) return a.productName.localeCompare(b.productName);
+    if (!a.expirationDate) return 1;
+    if (!b.expirationDate) return -1;
+    return a.expirationDate < b.expirationDate ? -1 : 1;
+  });
+
+  return { location: { id: loc.id, name: loc.complete_name || loc.name }, items };
 }
