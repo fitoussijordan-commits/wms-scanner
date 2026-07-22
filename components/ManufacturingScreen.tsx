@@ -181,21 +181,18 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
 
   const toggle = (it: odoo.LocationStockItem & { locationId?: number; locationName?: string }) => {
     const k = keyOf(it);
-    setPicked(prev => prev.some(p => p.key === k)
-      ? prev.filter(p => p.key !== k)
-      : [...prev, {
-          key: k, productId: it.productId, productName: it.productName, productRef: it.productRef,
-          lotId: it.lotId, lotName: it.lotName, available: it.qty, onHand: it.onHand, qtyPerUnit: "1",
-          locationName: it.locationName || location?.name || "",
-        }]);
-  };
-
-  // Saisie de quantité : on n'accepte que chiffres, point et virgule. Sans ce
-  // filtre, un scan qui tombe dans le champ (le PDA "tape" le code au clavier)
-  // écrase la quantité par un code-barres entier.
-  const setQtyFor = (key: string, v: string) => {
-    const clean = v.replace(/[^\d.,]/g, "").slice(0, 8);
-    setPicked(prev => prev.map(p => p.key === key ? { ...p, qtyPerUnit: clean } : p));
+    setPicked(prev => {
+      if (prev.some(p => p.key === k)) return prev.filter(p => p.key !== k);
+      // Un autre lot du même produit est déjà retenu → on reprend sa quantité,
+      // puisque la saisie est commune à tout le produit.
+      const existingQty = prev.find(p => p.productId === it.productId)?.qtyPerUnit ?? "1";
+      return [...prev, {
+        key: k, productId: it.productId, productName: it.productName, productRef: it.productRef,
+        lotId: it.lotId, lotName: it.lotName, available: it.qty, onHand: it.onHand,
+        qtyPerUnit: existingQty,
+        locationName: it.locationName || location?.name || "",
+      }];
+    });
   };
 
   const num = (s: string): number => {
@@ -204,38 +201,51 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
   };
 
   const qtyNum = num(qty);
-  const validPicked = picked.filter(p => num(p.qtyPerUnit) > 0);
-  const canCreate = !!product && qtyNum > 0 && validPicked.length > 0 && !creating;
 
-  // Bilan PAR PRODUIT, pas par ligne : plusieurs lots du même article se cumulent
-  // (ex. lot A 3570 + lot B 280 = 3850 dispo pour un besoin de 3850). Comparer
-  // chaque lot isolément afficherait un manque à tort.
-  interface ProductNeed {
+  // Regroupement PAR PRODUIT : la quantité par pack est un besoin produit, pas un
+  // besoin par lot. Plusieurs lots du même article se cumulent simplement en stock
+  // (ex. lot A 3570 + lot B 280 = 3850 disponibles pour un besoin de 3850).
+  interface ProductRow {
     productId: number; productName: string;
-    need: number;      // besoin total (quantité par pack × packs, cumulée)
-    onHand: number;    // stock physique cumulé des lots retenus
-    available: number; // dispo net cumulé des lots retenus
+    qtyPerUnit: string;      // saisie unique, partagée par tous les lots du produit
+    lots: Picked[];          // lignes de stock retenues pour ce produit
   }
-  const needByProduct: ProductNeed[] = (() => {
-    const map = new Map<number, ProductNeed>();
-    for (const p of validPicked) {
-      const cur = map.get(p.productId) || {
-        productId: p.productId, productName: p.productName, need: 0, onHand: 0, available: 0,
-      };
-      cur.need += num(p.qtyPerUnit) * qtyNum;
-      cur.onHand += p.onHand;
-      cur.available += p.available;
-      map.set(p.productId, cur);
+  const productRows: ProductRow[] = (() => {
+    const map = new Map<number, ProductRow>();
+    for (const p of picked) {
+      const cur = map.get(p.productId);
+      if (cur) cur.lots.push(p);
+      else map.set(p.productId, {
+        productId: p.productId, productName: p.productName,
+        qtyPerUnit: p.qtyPerUnit, lots: [p],
+      });
     }
     return Array.from(map.values());
   })();
+
+  // Une saisie met à jour toutes les lignes du produit (elles partagent la valeur).
+  const setQtyForProduct = (productId: number, v: string) => {
+    const clean = v.replace(/[^\d.,]/g, "").slice(0, 8);
+    setPicked(prev => prev.map(p => p.productId === productId ? { ...p, qtyPerUnit: clean } : p));
+  };
+
+  const validRows = productRows.filter(r => num(r.qtyPerUnit) > 0);
+  const canCreate = !!product && qtyNum > 0 && validRows.length > 0 && !creating;
+
+  // Bilan par produit : besoin comparé au stock cumulé des lots retenus.
+  const needByProduct = validRows.map(r => ({
+    productId: r.productId,
+    productName: r.productName,
+    need: num(r.qtyPerUnit) * qtyNum,
+    onHand: r.lots.reduce((s, l) => s + l.onHand, 0),
+    available: r.lots.reduce((s, l) => s + l.available, 0),
+    lotId: r.lots[0]?.lotId ?? null,
+  }));
 
   // Manque réel : même le stock physique cumulé ne suffit pas.
   const shortages = needByProduct.filter(n => n.need > n.onHand);
   // Stock présent mais réservé ailleurs → l'ordre sera créé en attente de dispo.
   const awaiting = needByProduct.filter(n => n.need <= n.onHand && n.need > n.available);
-  // Accès rapide au bilan d'un produit depuis une ligne.
-  const needOf = (productId: number) => needByProduct.find(n => n.productId === productId);
 
   const visibleStock = filter.trim()
     ? stock.filter(it => `${it.productRef} ${it.productName} ${it.lotName}`.toLowerCase().includes(filter.trim().toLowerCase()))
@@ -251,14 +261,13 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     try {
       const res = await odoo.createManufacturingOrder(
         session, product.id, qtyNum,
-        // Un composant par PRODUIT : si plusieurs lots du même article ont été
-        // retenus, Odoo ne crée qu'un mouvement — on additionne donc les besoins
-        // et on garde le premier lot choisi (les autres seront pris par Odoo à la
-        // réservation, dans l'emplacement indiqué).
+        // Un composant par PRODUIT (Odoo ne crée qu'un mouvement par article).
+        // Le lot transmis est le premier retenu ; si le besoin s'étale sur
+        // plusieurs lots, Odoo complète avec les autres à la réservation.
         needByProduct.map(n => ({
           productId: n.productId,
           qtyPerUnit: n.need / qtyNum,
-          lotId: validPicked.find(p => p.productId === n.productId)?.lotId ?? null,
+          lotId: n.lotId,
         })),
         // Emplacement source imposé uniquement en mode "un emplacement". En mode
         // recherche les composants viennent d'endroits différents : on laisse Odoo
@@ -477,45 +486,56 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
           </div>
         )}
 
-        {/* 4. Quantités par pack pour les composants retenus */}
+        {/* 4. Quantité par pack — UNE ligne par produit, quel que soit le nombre
+            de lots retenus : la quantité est un besoin produit, pas un besoin par
+            lot. Les lots sélectionnés sont rappelés dessous. */}
         {picked.length > 0 && (
           <div style={S.card}>
             <label style={S.label}>4 · Quantité PAR pack</label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {picked.map(p => {
-                // Le verdict porte sur le PRODUIT (tous ses lots retenus cumulés),
-                // pas sur cette ligne seule — sinon deux lots complémentaires
-                // seraient signalés en manque alors qu'ensemble ils suffisent.
-                const n = needOf(p.productId);
-                const short = !!n && n.need > n.onHand;
-                const wait = !!n && !short && n.need > n.available;
-                // Nombre de lots retenus pour ce produit → on précise le cumul.
-                const lotsForProduct = validPicked.filter(x => x.productId === p.productId).length;
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {productRows.map(row => {
+                const total = num(row.qtyPerUnit) * qtyNum;
+                const stockOnHand = row.lots.reduce((s, l) => s + l.onHand, 0);
+                const stockAvail = row.lots.reduce((s, l) => s + l.available, 0);
+                const short = total > stockOnHand;
+                const wait = !short && total > stockAvail;
                 return (
-                  <div key={p.key} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {p.productName}
+                  <div key={row.productId}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {row.productName}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: short ? C.red : wait ? C.amber : C.textMuted }}>
+                          {total > 0 ? `total ${total} / ${stockOnHand} en stock` : `${stockOnHand} en stock`}
+                          {short && " ⚠️ insuffisant"}
+                          {wait && " ⏳ en attente de dispo"}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 11.5, color: short ? C.red : wait ? C.amber : C.textMuted }}>
-                        {p.lotName ? `Lot ${p.lotName} · ` : ""}
-                        {mode === "search" && p.locationName ? `${p.locationName} · ` : ""}
-                        {`${p.onHand} sur ce lot`}
-                        {n && lotsForProduct > 1 && ` · cumul ${n.onHand} pour ${n.need}`}
-                        {n && lotsForProduct === 1 && n.need > 0 && ` · besoin ${n.need}`}
-                        {short && " ⚠️ insuffisant"}
-                        {wait && " ⏳ en attente de dispo"}
-                      </div>
+                      <input
+                        style={{ ...S.input, width: 74, flexShrink: 0, textAlign: "center", borderColor: short ? C.red : wait ? "#fed7aa" : "#d1d5db" }}
+                        value={row.qtyPerUnit}
+                        onChange={e => setQtyForProduct(row.productId, e.target.value)}
+                        inputMode="decimal"
+                      />
+                      <button onClick={() => setPicked(prev => prev.filter(x => x.productId !== row.productId))}
+                        style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, color: C.textMuted, fontSize: 16, cursor: "pointer", padding: "8px 11px", flexShrink: 0 }}
+                        aria-label="Retirer">×</button>
                     </div>
-                    <input
-                      style={{ ...S.input, width: 74, flexShrink: 0, textAlign: "center", borderColor: short ? C.red : wait ? "#fed7aa" : "#d1d5db" }}
-                      value={p.qtyPerUnit}
-                      onChange={e => setQtyFor(p.key, e.target.value)}
-                      inputMode="decimal"
-                    />
-                    <button onClick={() => setPicked(prev => prev.filter(x => x.key !== p.key))}
-                      style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, color: C.textMuted, fontSize: 16, cursor: "pointer", padding: "8px 11px", flexShrink: 0 }}
-                      aria-label="Retirer">×</button>
+                    {/* Lots retenus pour ce produit — retirables individuellement */}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 5, paddingLeft: 2 }}>
+                      {row.lots.map(l => (
+                        <span key={l.key}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 99, padding: "3px 8px", color: C.textSec }}>
+                          {l.lotName ? `Lot ${l.lotName}` : "sans lot"} · {l.onHand}
+                          {row.lots.length > 1 && (
+                            <button onClick={() => setPicked(prev => prev.filter(x => x.key !== l.key))}
+                              style={{ background: "none", border: "none", color: C.textMuted, cursor: "pointer", padding: 0, fontSize: 13, lineHeight: 1 }}
+                              aria-label="Retirer ce lot">×</button>
+                          )}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 );
               })}
