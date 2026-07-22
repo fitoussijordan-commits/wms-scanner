@@ -20,6 +20,7 @@ import FreeScanScreen from "@/components/FreeScanScreen";
 import InventoryCountScreen from "@/components/InventoryCountScreen";
 import EshopSortiesScreen from "@/components/EshopSortiesScreen";
 import LocationManagerScreen from "@/components/LocationManagerScreen";
+import ManufacturingScreen from "@/components/ManufacturingScreen";
 import ImparfaiteImportScreen from "@/components/ImparfaiteImportScreen";
 import FefoAnalysisScreen from "@/components/FefoAnalysisScreen";
 import { writeHeaders } from "@/lib/writeToken";
@@ -1121,7 +1122,7 @@ function WeatherWidget() {
 // (pas d'état supplémentaire perdu au refresh, contrairement à prepDetail/history/settings/done
 // qui ont besoin d'un picking/contexte sélectionné en mémoire). Utilisé pour le deep-link
 // ?screen=... à la fois en lecture (restauration après refresh) et en écriture (sync URL).
-const DEEP_LINK_SCREENS = ["transfer", "prep", "waitingOrders", "packing", "arrival", "eshop", "inventory", "inventoryCount", "freeScan", "negativeStock", "reprintLabel", "productImport", "supplierImport", "returns", "order", "eshopSorties", "locationManager", "imparfaite", "fefo", "admin"];
+const DEEP_LINK_SCREENS = ["transfer", "prep", "waitingOrders", "packing", "arrival", "eshop", "inventory", "inventoryCount", "freeScan", "negativeStock", "reprintLabel", "productImport", "supplierImport", "returns", "order", "eshopSorties", "locationManager", "imparfaite", "fefo", "manufacturing", "admin"];
 
 // ============================================
 // MAIN APP
@@ -1138,7 +1139,7 @@ export default function Page() {
     setIsDark(val);
   };
 
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager" | "imparfaite" | "fefo" | "admin">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager" | "imparfaite" | "fefo" | "manufacturing" | "admin">("login");
   // true dès qu'on sait s'il y a une session sauvegardée ou non (localStorage, synchrone).
   // Tant que false, on n'affiche PAS le formulaire de connexion même si screen==="login"
   // (valeur initiale par défaut) — ça évite le flash de l'écran de connexion au refresh (F5)
@@ -2929,6 +2930,7 @@ export default function Page() {
     { key: "locationManager", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>, label: "Gestion emplacements", onClick: () => setScreen("locationManager"), admin: false, badge: null, badgeColor: "" },
     { key: "imparfaite", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>, label: "Import Imparfaite", onClick: () => setScreen("imparfaite"), admin: true, badge: null, badgeColor: "" },
     { key: "fefo", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>, label: "Analyse FEFO", onClick: () => setScreen("fefo"), admin: true, badge: null, badgeColor: "" },
+    { key: "manufacturing", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 20h20V9l-6 4V9l-6 4V9l-6 4z"/><path d="M4 13V4h3v9"/></svg>, label: "Fabrication", onClick: () => setScreen("manufacturing"), admin: true, badge: null, badgeColor: "" },
     { key: "dashboard", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>, label: "Dashboard", onClick: () => { window.location.href = "/dashboard"; }, admin: true, badge: null, badgeColor: "" },
     { key: "admin", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>, label: "Administration", onClick: () => setScreen("admin"), admin: true, badge: null, badgeColor: "" },
   ];
@@ -3931,6 +3933,9 @@ export default function Page() {
         )}
         {screen === "productImport" && session && (
           <ProductImportScreen session={session} onBack={goHome} onToast={showToast} desktop={isDesktopUI} />
+        )}
+        {screen === "manufacturing" && session && odoo.isAdmin(session) && (
+          <ManufacturingScreen session={session} onBack={goHome} onToast={showToast} />
         )}
         {screen === "supplierImport" && session && odoo.isAdmin(session) && (
           <SupplierImportScreen session={session} onBack={goHome} onToast={showToast} />

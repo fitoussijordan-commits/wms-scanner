@@ -463,6 +463,8 @@ export const MODEL_DEFS = {
   MODEL_ACTIONS_REPORT:    { default: "ir.actions.report",      label: "Rapport" },
   MODEL_REPORT_PICKING:    { default: "stock.report_picking",   label: "Rapport de picking" },
   MODEL_TNT_SHIPPING:      { default: "tnt.shipping.service",   label: "Service d'expédition TNT" },
+  MODEL_MRP_PRODUCTION:    { default: "mrp.production",         label: "Ordre de fabrication" },
+  MODEL_MRP_BOM:           { default: "mrp.bom",                label: "Nomenclature (BoM)" },
 } as const satisfies Record<string, ModelDef>;
 
 export type ModelKey = keyof typeof MODEL_DEFS;

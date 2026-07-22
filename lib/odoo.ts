@@ -5456,3 +5456,119 @@ export async function splitPickLineIntoPackages(
     createdPackages: created,
   };
 }
+
+// ============================================
+// FABRICATION SIMPLIFIÉE (mrp.production)
+// Crée un ordre de fabrication avec ses composants saisis à la main, puis le
+// confirme (état "confirmed") sans le terminer : rien n'est consommé ni produit,
+// on réserve juste les composants. La finalisation se fait dans Odoo.
+// ============================================
+
+export interface ManufactureComponent {
+  productId: number;   // product.product
+  qtyPerUnit: number;  // quantité consommée pour UN pack
+}
+
+export interface ManufactureResult {
+  id: number;
+  name: string;
+  state: string;
+  warning?: string;
+}
+
+/** Type d'opération "Fabrication" (mrp_operation) du premier entrepôt trouvé. */
+async function findManufacturePickingType(session: OdooSession): Promise<number | null> {
+  const types = await searchRead(
+    session, M("MODEL_PICKING_TYPE"),
+    [["code", "=", "mrp_operation"], ["active", "=", true]],
+    ["id"], 1
+  );
+  return types?.[0]?.id ?? null;
+}
+
+/**
+ * Crée un ordre de fabrication et le passe en "Confirmé".
+ *
+ * @param productId  produit fini (product.product)
+ * @param qty        nombre de packs à fabriquer
+ * @param components composants + quantité PAR PACK (multipliée par qty ici)
+ *
+ * Les quantités sont multipliées côté WMS : l'utilisateur saisit "par pack", ce qui
+ * est plus naturel, mais Odoo attend des quantités totales sur les move_raw_ids.
+ */
+export async function createManufacturingOrder(
+  session: OdooSession,
+  productId: number,
+  qty: number,
+  components: ManufactureComponent[]
+): Promise<ManufactureResult> {
+  if (!productId) throw new Error("Produit à fabriquer manquant");
+  if (!(qty > 0)) throw new Error("Quantité à fabriquer invalide");
+  const lines = components.filter(c => c.productId && c.qtyPerUnit > 0);
+  if (!lines.length) throw new Error("Aucun composant à consommer");
+
+  // UoM du produit fini — obligatoire à la création de l'OF.
+  const [prod] = await searchRead(session, M("MODEL_PRODUCT"), [["id", "=", productId]], ["id", "name", "uom_id"], 1);
+  if (!prod) throw new Error("Produit à fabriquer introuvable dans Odoo");
+  const uomId = Array.isArray(prod.uom_id) ? prod.uom_id[0] : prod.uom_id;
+
+  // UoM de chaque composant (Odoo exige product_uom_id sur les lignes).
+  const compIds = lines.map(l => l.productId);
+  const compRows = await searchRead(session, M("MODEL_PRODUCT"), [["id", "in", compIds]], ["id", "uom_id"], compIds.length);
+  const uomByProduct: Record<number, number> = {};
+  for (const r of compRows) uomByProduct[r.id] = Array.isArray(r.uom_id) ? r.uom_id[0] : r.uom_id;
+
+  const vals: any = {
+    product_id: productId,
+    product_qty: qty,
+    product_uom_id: uomId,
+    // Pas de bom_id : la composition est saisie librement dans le WMS.
+    move_raw_ids: lines.map(l => [0, 0, {
+      product_id: l.productId,
+      product_uom_qty: l.qtyPerUnit * qty,
+      product_uom: uomByProduct[l.productId],
+    }]),
+  };
+
+  const pickingTypeId = await findManufacturePickingType(session);
+  if (pickingTypeId) vals.picking_type_id = pickingTypeId;
+
+  const id = await create(session, M("MODEL_MRP_PRODUCTION"), vals) as number;
+
+  // Confirmation : l'OF passe de "draft" à "confirmed" (composants réservés,
+  // rien de consommé). On tolère un échec pour ne pas perdre l'OF déjà créé.
+  let warning: string | undefined;
+  try {
+    await callMethod(session, M("MODEL_MRP_PRODUCTION"), "action_confirm", [[id]]);
+  } catch (e: any) {
+    warning = `Ordre créé mais non confirmé : ${safeErrMsg(e)}`;
+  }
+
+  const [saved] = await searchRead(session, M("MODEL_MRP_PRODUCTION"), [["id", "=", id]], ["id", "name", "state"], 1);
+  return {
+    id,
+    name: saved?.name || `OF#${id}`,
+    state: saved?.state || "draft",
+    warning,
+  };
+}
+
+/** Derniers ordres de fabrication, pour le récap dans le WMS. */
+export async function getRecentManufacturingOrders(
+  session: OdooSession,
+  limit = 15
+): Promise<{ id: number; name: string; product: string; qty: number; state: string; date: string }[]> {
+  const rows = await searchRead(
+    session, M("MODEL_MRP_PRODUCTION"), [],
+    ["id", "name", "product_id", "product_qty", "state", "create_date"],
+    limit, "id desc"
+  );
+  return (rows || []).map((r: any) => ({
+    id: r.id,
+    name: r.name || "",
+    product: Array.isArray(r.product_id) ? r.product_id[1] : "",
+    qty: r.product_qty || 0,
+    state: r.state || "",
+    date: r.create_date || "",
+  }));
+}

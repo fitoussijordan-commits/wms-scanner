@@ -35,6 +35,7 @@ export const ALL_TOOLS: { key: string; label: string; group: string }[] = [
   { key: "reprintLabel", label: "Réimpr. étiq.", group: "Outils" },
   { key: "order", label: "Commande", group: "Outils" },
   { key: "fefo", label: "Analyse FEFO", group: "Analyse" },
+  { key: "manufacturing", label: "Fabrication", group: "Stock" },
   { key: "dashboard", label: "Dashboard", group: "Analyse" },
 ];
 
