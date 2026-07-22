@@ -5467,9 +5467,9 @@ export async function splitPickLineIntoPackages(
 export interface ManufactureComponent {
   productId: number;    // product.product
   qtyPerUnit: number;   // quantité consommée pour UN pack
-  // Lot repéré au moment du choix, conservé pour information. Il n'est pas imposé
-  // à Odoo : les lignes de détail sont créées par la réservation, et les forcer
-  // échoue quand le lot n'est pas encore disponible.
+  // Lot imposé. Appliqué après la confirmation de l'ordre (voir
+  // createManufacturingOrder) : le poser à la création ferait échouer tout
+  // l'ordre si le composant n'est pas encore disponible.
   lotId?: number | null;
 }
 
@@ -5539,10 +5539,9 @@ export async function createManufacturingOrder(
       };
       // Emplacement de prélèvement imposé (l'emplacement scanné).
       if (sourceLocationId) move.location_id = sourceLocationId;
-      // Le lot n'est pas imposé ici : les lignes de détail (move_line_ids) sont
-      // générées par Odoo à la réservation. Les forcer à la création échoue quand
-      // le lot n'est pas encore disponible — or c'est justement le cas d'usage
-      // (fabrication lancée en attendant le réapprovisionnement).
+      // Le lot n'est pas posé ici mais après la confirmation (voir plus bas) :
+      // le forcer dès la création fait échouer tout l'ordre quand le composant
+      // n'est pas encore disponible.
       return [0, 0, move];
     }),
   };
@@ -5561,6 +5560,72 @@ export async function createManufacturingOrder(
     await callMethod(session, M("MODEL_MRP_PRODUCTION"), "action_confirm", [[id]]);
   } catch (e: any) {
     warning = `Ordre créé mais non confirmé : ${safeErrMsg(e)}`;
+  }
+
+  // ── Lots choisis dans le WMS ────────────────────────────────────────────
+  // On les pose APRÈS la confirmation : à ce stade Odoo a créé les mouvements,
+  // et selon la disponibilité il a pu créer des lignes de détail (move.line).
+  // Les imposer à la création échoue quand le lot n'est pas encore disponible
+  // ("unhashable type" / réservation impossible), d'où ce traitement séparé —
+  // et tolérant : un échec ici n'annule pas l'ordre déjà créé.
+  const withLots = lines.filter(l => l.lotId);
+  if (withLots.length) {
+    try {
+      const moves = await searchRead(
+        session, M("MODEL_MOVE"),
+        [["raw_material_production_id", "=", id]],
+        ["id", "product_id", "product_uom_qty", "product_uom", "location_id"],
+        withLots.length * 4
+      );
+      const failures: string[] = [];
+
+      for (const l of withLots) {
+        const move = moves.find((m: any) => m.product_id?.[0] === l.productId);
+        if (!move) continue;
+        const totalQty = l.qtyPerUnit * qty;
+
+        // Lignes de détail déjà créées par la réservation pour ce mouvement.
+        const existing = await searchRead(
+          session, M("MODEL_MOVE_LINE"), [["move_id", "=", move.id]], ["id", "lot_id"], 10
+        );
+
+        try {
+          if (existing.length === 1) {
+            // Cas courant : une seule ligne réservée → on lui impose notre lot.
+            await write(session, M("MODEL_MOVE_LINE"), [existing[0].id], { lot_id: l.lotId });
+          } else if (existing.length === 0) {
+            // Rien de réservé (composant indisponible) → on crée la ligne avec le
+            // lot voulu, en quantité 0 : Odoo la complètera à la réservation, mais
+            // le lot choisi est déjà inscrit et visible dans l'ordre.
+            const detail: any = {
+              move_id: move.id,
+              product_id: l.productId,
+              product_uom_id: uomByProduct[l.productId] ?? move.product_uom?.[0],
+              lot_id: l.lotId,
+              quantity: 0,
+            };
+            const locId = sourceLocationId || move.location_id?.[0];
+            if (locId) detail.location_id = locId;
+            await create(session, M("MODEL_MOVE_LINE"), detail);
+          } else {
+            // Plusieurs lignes (lots panachés par Odoo) : on ne touche à rien
+            // pour ne pas casser une réservation déjà cohérente.
+            failures.push(`${l.productId} (déjà réparti sur ${existing.length} lots)`);
+          }
+        } catch (e: any) {
+          failures.push(`${l.productId} : ${safeErrMsg(e)}`);
+        }
+        void totalQty;
+      }
+
+      if (failures.length) {
+        const msg = `Lot non imposé pour ${failures.length} composant(s) — Odoo choisira à la réservation.`;
+        warning = warning ? `${warning} ${msg}` : msg;
+      }
+    } catch (e: any) {
+      const msg = `Lots non appliqués : ${safeErrMsg(e)}`;
+      warning = warning ? `${warning} ${msg}` : msg;
+    }
   }
 
   const [saved] = await searchRead(session, M("MODEL_MRP_PRODUCTION"), [["id", "=", id]], ["id", "name", "state"], 1);
@@ -5658,4 +5723,67 @@ export async function getLocationStockForPicking(
   });
 
   return { location: { id: loc.id, name: loc.complete_name || loc.name }, items };
+}
+
+/**
+ * Stock d'un produit sur TOUS les emplacements internes, une ligne par lot
+ * et emplacement. Complète getLocationStockForPicking pour le cas où les
+ * composants ne sont pas regroupés dans un emplacement dédié : on cherche le
+ * produit, et on choisit le lot/emplacement dans la liste.
+ *
+ * Trié FEFO (péremption la plus courte d'abord), comme la vue par emplacement.
+ */
+export async function getProductStockByLocation(
+  session: OdooSession,
+  productId: number
+): Promise<(LocationStockItem & { locationId: number; locationName: string })[]> {
+  if (!productId) return [];
+
+  const quants = await searchRead(
+    session, M("MODEL_QUANT"),
+    [["product_id", "=", productId], ["location_id.usage", "=", "internal"], ["quantity", ">", 0]],
+    ["id", "product_id", "location_id", "lot_id", "quantity", "reserved_quantity"],
+    300
+  );
+  if (!quants.length) return [];
+
+  // Péremption des lots concernés (pour le tri FEFO et l'affichage).
+  const lotIds = Array.from(new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0])));
+  const lotMap: Record<number, any> = {};
+  if (lotIds.length) {
+    const lots = await searchRead(
+      session, M("MODEL_LOT"), [["id", "in", lotIds]],
+      ["id", "name", "expiration_date", "use_date", "removal_date"], lotIds.length
+    );
+    for (const l of lots) lotMap[l.id] = l;
+  }
+
+  // Référence produit (une seule lecture, même produit pour toutes les lignes).
+  const [prod] = await searchRead(session, M("MODEL_PRODUCT"), [["id", "=", productId]], ["id", "name", "default_code"], 1);
+
+  type Row = LocationStockItem & { locationId: number; locationName: string };
+  const items: Row[] = quants.map((q: any) => {
+    const lot = q.lot_id ? lotMap[q.lot_id[0]] : null;
+    return {
+      productId,
+      productName: prod?.name || q.product_id?.[1] || "",
+      productRef: prod?.default_code || "",
+      lotId: q.lot_id ? q.lot_id[0] : null,
+      lotName: lot?.name || (q.lot_id ? q.lot_id[1] : "") || "",
+      qty: (q.quantity || 0) - (q.reserved_quantity || 0),
+      onHand: q.quantity || 0,
+      reserved: q.reserved_quantity || 0,
+      expirationDate: lot?.expiration_date || lot?.use_date || lot?.removal_date || "",
+      locationId: q.location_id?.[0],
+      locationName: q.location_id?.[1] || "",
+    };
+  });
+
+  items.sort((a, b) => {
+    if (!a.expirationDate) return 1;
+    if (!b.expirationDate) return -1;
+    return a.expirationDate < b.expirationDate ? -1 : 1;
+  });
+
+  return items;
 }

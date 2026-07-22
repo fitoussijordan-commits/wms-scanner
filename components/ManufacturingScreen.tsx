@@ -42,6 +42,7 @@ interface Picked {
   available: number;     // dispo net à l'emplacement (peut être 0 si tout réservé)
   onHand: number;        // stock physique présent
   qtyPerUnit: string;    // saisi par l'utilisateur
+  locationName: string;  // emplacement d'où vient cette ligne de stock
 }
 
 const fmtDate = (d: string) => {
@@ -70,6 +71,16 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
   const [filter, setFilter] = useState("");
   const [locSugg, setLocSugg] = useState<{ id: number; complete_name?: string; name: string }[]>([]);
   const [locOpen, setLocOpen] = useState(false);
+
+  // Mode de sélection des composants : depuis un emplacement dédié (le cas
+  // habituel, tout est au même endroit) ou en cherchant un produit dans tout
+  // le stock (quand les composants sont dispersés).
+  const [mode, setMode] = useState<"location" | "search">("location");
+  const [compQuery, setCompQuery] = useState("");
+  const [compSugg, setCompSugg] = useState<{ id: number; name: string; ref: string }[]>([]);
+  const [compOpen, setCompOpen] = useState(false);
+  const [compStock, setCompStock] = useState<(odoo.LocationStockItem & { locationId: number; locationName: string })[]>([]);
+  const [compLoading, setCompLoading] = useState(false);
 
   const [picked, setPicked] = useState<Picked[]>([]);
   const [creating, setCreating] = useState(false);
@@ -110,6 +121,35 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     return () => { if (locTimer.current) clearTimeout(locTimer.current); };
   }, [locQuery, location, session]);
 
+  // ── Autocomplétion composant (mode "tout le stock", dès 2 caractères) ──
+  const compTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const q = compQuery.trim();
+    if (q.length < 2) { setCompSugg([]); setCompOpen(false); return; }
+    if (compTimer.current) clearTimeout(compTimer.current);
+    compTimer.current = setTimeout(async () => {
+      try {
+        const r = await odoo.suggestProducts(session, q);
+        setCompSugg(r); setCompOpen(r.length > 0);
+      } catch { setCompSugg([]); }
+    }, 300);
+    return () => { if (compTimer.current) clearTimeout(compTimer.current); };
+  }, [compQuery, session]);
+
+  // Charge les lots/emplacements d'un composant cherché dans tout le stock.
+  const loadComponentStock = async (p: { id: number; name: string; ref: string }) => {
+    setCompOpen(false); setCompSugg([]); setCompQuery("");
+    setCompLoading(true);
+    try {
+      const rows = await odoo.getProductStockByLocation(session, p.id);
+      setCompStock(rows);
+      if (!rows.length) onToast(`${p.name} : aucun stock trouvé`, "info");
+    } catch (e: any) {
+      onToast(`Erreur : ${odoo.safeErrMsg(e)}`, "error");
+    }
+    setCompLoading(false);
+  };
+
   // ── Scan / recherche d'emplacement ──
   const loadLocation = async (raw?: string) => {
     const q = (raw ?? locQuery).trim();
@@ -133,15 +173,19 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     setLocLoading(false);
   };
 
-  const keyOf = (it: odoo.LocationStockItem) => `${it.productId}-${it.lotId ?? 0}`;
+  // Clé unique d'une ligne de stock : produit + lot + emplacement (en mode
+  // "tout le stock", le même lot peut exister à plusieurs endroits).
+  const keyOf = (it: odoo.LocationStockItem & { locationId?: number }) =>
+    `${it.productId}-${it.lotId ?? 0}-${it.locationId ?? location?.id ?? 0}`;
 
-  const toggle = (it: odoo.LocationStockItem) => {
+  const toggle = (it: odoo.LocationStockItem & { locationId?: number; locationName?: string }) => {
     const k = keyOf(it);
     setPicked(prev => prev.some(p => p.key === k)
       ? prev.filter(p => p.key !== k)
       : [...prev, {
           key: k, productId: it.productId, productName: it.productName, productRef: it.productRef,
           lotId: it.lotId, lotName: it.lotName, available: it.qty, onHand: it.onHand, qtyPerUnit: "1",
+          locationName: it.locationName || location?.name || "",
         }]);
   };
 
@@ -184,15 +228,17 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     try {
       const res = await odoo.createManufacturingOrder(
         session, product.id, qtyNum,
-        // On n'impose le lot que s'il est réellement disponible : sinon Odoo
-        // refuserait de créer la ligne de détail, alors qu'on veut justement que
-        // l'ordre reste en attente et se réserve plus tard.
+        // Le lot choisi est toujours transmis : il est appliqué après la
+        // confirmation de l'ordre, donc même un lot indisponible est inscrit.
         validPicked.map(p => ({
           productId: p.productId,
           qtyPerUnit: num(p.qtyPerUnit),
-          lotId: num(p.qtyPerUnit) * qtyNum <= p.available ? p.lotId : null,
+          lotId: p.lotId,
         })),
-        location?.id ?? null,
+        // Emplacement source imposé uniquement en mode "un emplacement". En mode
+        // recherche les composants viennent d'endroits différents : on laisse Odoo
+        // prélever où il trouve, le lot choisi suffit à cibler le bon stock.
+        mode === "location" ? (location?.id ?? null) : null,
       );
       if (res.warning) onToast(`⚠️ ${res.name} — ${res.warning}`, "info");
       else onToast(`✅ ${res.name} créé et confirmé`, "success");
@@ -257,10 +303,46 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
           </div>
         </div>
 
-        {/* 2. Emplacement de prélèvement */}
+        {/* 2. Où prendre les composants */}
         <div style={S.card}>
-          <label style={S.label}>2 · Emplacement des composants</label>
-          {location ? (
+          <label style={S.label}>2 · Où prendre les composants</label>
+
+          {/* Choix du mode : emplacement dédié ou recherche dans tout le stock */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            {([["location", "📍 Un emplacement"], ["search", "🔍 Tout le stock"]] as const).map(([m, lbl]) => (
+              <button key={m} onClick={() => setMode(m)}
+                style={{
+                  flex: 1, padding: "8px 0", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+                  fontSize: 12.5, fontWeight: 700,
+                  border: `1.5px solid ${mode === m ? C.blue : C.border}`,
+                  background: mode === m ? C.blueSoft : C.white,
+                  color: mode === m ? C.blue : C.textSec,
+                }}>{lbl}</button>
+            ))}
+          </div>
+
+          {mode === "search" ? (
+            <div style={{ position: "relative" }}>
+              <input
+                style={S.input}
+                value={compQuery}
+                onChange={e => setCompQuery(e.target.value)}
+                placeholder="Cherche un composant (réf, code-barres, nom)…"
+              />
+              {compLoading && <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>Chargement du stock…</div>}
+              {compOpen && compSugg.length > 0 && (
+                <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, marginTop: 4, maxHeight: 240, overflowY: "auto", boxShadow: "0 4px 14px rgba(0,0,0,.1)" }}>
+                  {compSugg.map(p => (
+                    <button key={p.id} onClick={() => loadComponentStock(p)}
+                      style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", background: "none", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer", fontFamily: "inherit" }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{p.name}</div>
+                      {p.ref && <div style={{ fontSize: 11.5, color: C.textMuted }}>{p.ref}</div>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : location ? (
             <div style={{ display: "flex", alignItems: "center", gap: 10, background: C.greenSoft, border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 12px" }}>
               <span style={{ fontSize: 16 }}>📍</span>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -303,20 +385,21 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
           )}
         </div>
 
-        {/* 3. Sélection des composants directement dans l'emplacement */}
-        {location && stock.length > 0 && (
+        {/* 3. Sélection des composants — liste de l'emplacement ou du produit cherché */}
+        {((mode === "location" && location && stock.length > 0) || (mode === "search" && compStock.length > 0)) && (
           <div style={S.card}>
             <label style={S.label}>3 · Touche un article pour l'ajouter</label>
-            {stock.length > 6 && (
+            {mode === "location" && stock.length > 6 && (
               <input style={{ ...S.input, marginBottom: 8 }} value={filter}
                 onChange={e => setFilter(e.target.value)} placeholder="Filtrer la liste…" />
             )}
             <div style={{ maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
-              {visibleStock.map(it => {
-                const k = keyOf(it);
+              {(mode === "search" ? compStock : visibleStock).map(it => {
+                const k = keyOf(it as any);
                 const sel = picked.some(p => p.key === k);
+                const locName = (it as any).locationName as string | undefined;
                 return (
-                  <button key={k} onClick={() => toggle(it)}
+                  <button key={k} onClick={() => toggle(it as any)}
                     style={{
                       display: "flex", alignItems: "center", gap: 10, textAlign: "left", width: "100%",
                       padding: "9px 11px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
@@ -332,6 +415,12 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
                         {it.lotName ? `Lot ${it.lotName}` : "sans lot"}
                         {it.expirationDate && ` · ${fmtDate(it.expirationDate)}`}
                       </div>
+                      {/* En mode "tout le stock", l'emplacement varie d'une ligne à l'autre */}
+                      {mode === "search" && locName && (
+                        <div style={{ fontSize: 11, color: C.green, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          📍 {locName}
+                        </div>
+                      )}
                     </div>
                     <div style={{ textAlign: "right", flexShrink: 0 }}>
                       <div style={{ fontSize: 12.5, fontWeight: 700, color: it.qty > 0 ? C.textSec : C.amber }}>
@@ -347,10 +436,16 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
                   </button>
                 );
               })}
-              {visibleStock.length === 0 && (
+              {mode === "location" && visibleStock.length === 0 && (
                 <div style={{ fontSize: 13, color: C.textMuted, padding: "8px 0" }}>Aucun article ne correspond.</div>
               )}
             </div>
+            {mode === "search" && (
+              <button onClick={() => setCompStock([])}
+                style={{ marginTop: 8, background: "none", border: "none", color: C.blue, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
+                + Chercher un autre composant
+              </button>
+            )}
           </div>
         )}
 
@@ -371,6 +466,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
                       </div>
                       <div style={{ fontSize: 11.5, color: short ? C.red : wait ? C.amber : C.textMuted }}>
                         {p.lotName ? `Lot ${p.lotName} · ` : ""}
+                        {mode === "search" && p.locationName ? `${p.locationName} · ` : ""}
                         {total > 0 ? `total ${total} / ${p.onHand} en stock` : `${p.onHand} en stock`}
                         {short && " ⚠️ insuffisant"}
                         {wait && " ⏳ en attente de dispo"}
