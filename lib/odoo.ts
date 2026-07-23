@@ -5802,3 +5802,117 @@ export async function getProductStockByLocation(
 
   return items;
 }
+
+export interface ManufactureLine {
+  moveLineId: number | null; // stock.move.line (null si aucune ligne de détail encore)
+  moveId: number;            // stock.move (raw material)
+  productId: number;
+  productName: string;
+  lotName: string;
+  reserved: number;          // quantité réservée
+  done: number;              // quantité "Fait" (consommée à la validation)
+}
+
+export interface ManufactureDetail {
+  id: number;
+  name: string;
+  state: string;
+  product: string;
+  qty: number;
+  lines: ManufactureLine[];
+  qtyDoneField: "quantity" | "qty_done"; // nom du champ selon la version d'Odoo
+}
+
+/** Détail d'un ordre de fabrication : ses composants et l'état réservé/fait. */
+export async function getManufacturingOrderDetail(
+  session: OdooSession,
+  orderId: number
+): Promise<ManufactureDetail> {
+  const [order] = await searchRead(
+    session, M("MODEL_MRP_PRODUCTION"), [["id", "=", orderId]],
+    ["id", "name", "state", "product_id", "product_qty"], 1
+  );
+  if (!order) throw new Error("Ordre de fabrication introuvable");
+
+  const moves = await searchRead(
+    session, M("MODEL_MOVE"),
+    [["raw_material_production_id", "=", orderId]],
+    ["id", "product_id", "product_uom_qty"], 200
+  );
+
+  // Détecte le nom du champ "quantité faite" sur stock.move.line (varie selon version).
+  let qtyDoneField: "quantity" | "qty_done" = "quantity";
+  try {
+    const fields = await callMethod(session, M("MODEL_MOVE_LINE"), "fields_get", [[], ["name"]]);
+    if (fields && !("quantity" in fields) && ("qty_done" in fields)) qtyDoneField = "qty_done";
+  } catch { /* défaut "quantity" (Odoo 17+) */ }
+
+  const moveIds = moves.map((m: any) => m.id);
+  const mlines = moveIds.length
+    ? await searchRead(
+        session, M("MODEL_MOVE_LINE"),
+        [["move_id", "in", moveIds]],
+        ["id", "move_id", "product_id", "lot_id", "reserved_uom_qty", qtyDoneField], 500
+      )
+    : [];
+
+  const lines: ManufactureLine[] = [];
+  for (const m of moves) {
+    const forMove = mlines.filter((ml: any) => ml.move_id?.[0] === m.id);
+    if (forMove.length) {
+      for (const ml of forMove) {
+        lines.push({
+          moveLineId: ml.id, moveId: m.id,
+          productId: m.product_id?.[0],
+          productName: m.product_id?.[1] || "",
+          lotName: ml.lot_id ? ml.lot_id[1] : "",
+          reserved: ml.reserved_uom_qty || 0,
+          done: ml[qtyDoneField] || 0,
+        });
+      }
+    } else {
+      // Mouvement sans ligne de détail (rien de réservé) → ligne "vide".
+      lines.push({
+        moveLineId: null, moveId: m.id,
+        productId: m.product_id?.[0],
+        productName: m.product_id?.[1] || "",
+        lotName: "",
+        reserved: 0,
+        done: 0,
+      });
+    }
+  }
+
+  return {
+    id: order.id,
+    name: order.name || "",
+    state: order.state || "",
+    product: Array.isArray(order.product_id) ? order.product_id[1] : "",
+    qty: order.product_qty || 0,
+    lines,
+    qtyDoneField,
+  };
+}
+
+/**
+ * Pré-remplit la colonne "Fait" = quantité réservée sur toutes les lignes d'un
+ * ordre, SANS valider. L'ordre reste ouvert : tu contrôles puis tu cliques
+ * "Marquer comme fait" dans Odoo. Rien n'est consommé ici.
+ *
+ * Ne touche qu'aux lignes réservées (reserved > 0) : une ligne à 0 réservé n'a
+ * rien à "faire". Retourne le nombre de lignes mises à jour.
+ */
+export async function fillManufacturingDone(
+  session: OdooSession,
+  orderId: number
+): Promise<{ updated: number; skipped: number }> {
+  const detail = await getManufacturingOrderDetail(session, orderId);
+  let updated = 0, skipped = 0;
+  for (const l of detail.lines) {
+    if (!l.moveLineId || l.reserved <= 0) { skipped++; continue; }
+    if (l.done === l.reserved) { updated++; continue; } // déjà rempli
+    await write(session, M("MODEL_MOVE_LINE"), [l.moveLineId], { [detail.qtyDoneField]: l.reserved });
+    updated++;
+  }
+  return { updated, skipped };
+}

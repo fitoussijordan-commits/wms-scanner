@@ -82,6 +82,11 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
   const [compStock, setCompStock] = useState<(odoo.LocationStockItem & { locationId: number; locationName: string })[]>([]);
   const [compLoading, setCompLoading] = useState(false);
 
+  // Ordre ouvert (vue détail) — pour pré-remplir "Fait" sans quitter le WMS.
+  const [openOrder, setOpenOrder] = useState<odoo.ManufactureDetail | null>(null);
+  const [orderLoading, setOrderLoading] = useState(false);
+  const [filling, setFilling] = useState(false);
+
   const [picked, setPicked] = useState<Picked[]>([]);
   const [creating, setCreating] = useState(false);
   const [lastResult, setLastResult] = useState<{ name: string; warning?: string } | null>(null);
@@ -91,6 +96,36 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     odoo.getRecentManufacturingOrders(session, 10).then(setRecent).catch(() => setRecent([]));
   }, [session]);
   useEffect(() => { loadRecent(); }, [loadRecent]);
+
+  // Ouvre un ordre existant (vue détail avec ses composants).
+  const openManufacturingOrder = async (orderId: number) => {
+    setOrderLoading(true);
+    try {
+      setOpenOrder(await odoo.getManufacturingOrderDetail(session, orderId));
+    } catch (e: any) {
+      onToast(`Erreur : ${odoo.safeErrMsg(e)}`, "error");
+    }
+    setOrderLoading(false);
+  };
+
+  // Pré-remplit "Fait" = réservé sur toutes les lignes, sans valider.
+  const fillDone = async () => {
+    if (!openOrder) return;
+    setFilling(true);
+    try {
+      const r = await odoo.fillManufacturingDone(session, openOrder.id);
+      if (r.updated === 0 && r.skipped > 0) {
+        onToast("Aucune ligne réservée à remplir (composants indisponibles)", "info");
+      } else {
+        onToast(`✅ ${r.updated} ligne(s) remplie(s)${r.skipped ? ` · ${r.skipped} ignorée(s)` : ""}`, "success");
+      }
+      // Recharge le détail pour refléter les quantités mises à jour.
+      setOpenOrder(await odoo.getManufacturingOrderDetail(session, openOrder.id));
+    } catch (e: any) {
+      onToast(`Erreur : ${odoo.safeErrMsg(e)}`, "error");
+    }
+    setFilling(false);
+  };
 
   // ── Autocomplétion produit fini ──
   const prodTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -288,8 +323,80 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     setCreating(false);
   };
 
+  // Regroupe les lignes de l'ordre ouvert par produit pour un affichage compact.
+  const openOrderRows = openOrder ? (() => {
+    const map = new Map<number, { productName: string; reserved: number; done: number; lots: string[] }>();
+    for (const l of openOrder.lines) {
+      const cur = map.get(l.productId) || { productName: l.productName, reserved: 0, done: 0, lots: [] };
+      cur.reserved += l.reserved;
+      cur.done += l.done;
+      if (l.lotName) cur.lots.push(l.lotName);
+      map.set(l.productId, cur);
+    }
+    return Array.from(map.values());
+  })() : [];
+
   return (
     <div style={{ minHeight: "100dvh", background: C.bg, display: "flex", flexDirection: "column" }}>
+      {/* ── Vue détail d'un ordre (overlay) ── */}
+      {openOrder && (
+        <div onClick={() => setOpenOrder(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 1000, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: C.white, width: "100%", maxWidth: 620, maxHeight: "88vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 20 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 14 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>{openOrder.name}</div>
+                <div style={{ fontSize: 12.5, color: C.textMuted }}>{openOrder.qty} × {openOrder.product}</div>
+              </div>
+              <span style={{
+                fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 99, flexShrink: 0,
+                background: openOrder.state === "done" ? "#dcfce7" : openOrder.state === "cancel" ? "#fee2e2" : C.blueSoft,
+                color: openOrder.state === "done" ? "#166534" : openOrder.state === "cancel" ? "#991b1b" : C.blue,
+              }}>{STATE_LABELS[openOrder.state] || openOrder.state}</span>
+              <button onClick={() => setOpenOrder(null)}
+                style={{ background: "none", border: "none", color: C.textMuted, fontSize: 20, cursor: "pointer", padding: 2, flexShrink: 0 }}>×</button>
+            </div>
+
+            {/* Composants : réservé / fait */}
+            <div style={{ ...S.card, padding: 0, overflow: "hidden" }}>
+              <div style={{ display: "flex", padding: "8px 12px", background: C.bg, fontSize: 10.5, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                <span style={{ flex: 1 }}>Composant</span>
+                <span style={{ width: 70, textAlign: "right" }}>Réservé</span>
+                <span style={{ width: 60, textAlign: "right" }}>Fait</span>
+              </div>
+              {openOrderRows.map((row, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", padding: "9px 12px", borderTop: `1px solid ${C.border}`, gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.productName}</div>
+                    {row.lots.length > 0 && <div style={{ fontSize: 10.5, color: C.textMuted }}>Lot {row.lots.join(", ")}</div>}
+                  </div>
+                  <span style={{ width: 70, textAlign: "right", fontSize: 12.5, color: C.textSec }}>{row.reserved}</span>
+                  <span style={{ width: 60, textAlign: "right", fontSize: 12.5, fontWeight: 700, color: row.done >= row.reserved && row.reserved > 0 ? C.green : row.done > 0 ? C.amber : C.textMuted }}>{row.done}</span>
+                </div>
+              ))}
+            </div>
+
+            {openOrder.state === "done" || openOrder.state === "cancel" ? (
+              <div style={{ fontSize: 12, color: C.textMuted, marginTop: 12, textAlign: "center" }}>
+                Ordre {STATE_LABELS[openOrder.state]?.toLowerCase()} — plus rien à remplir.
+              </div>
+            ) : (
+              <>
+                <button onClick={fillDone} disabled={filling}
+                  style={{ ...S.btn, marginTop: 14, background: filling ? "#e5e7eb" : C.blue, color: filling ? "#9ca3af" : "#fff" }}>
+                  {filling ? "Remplissage…" : "⤵ Tout mettre en fait (= réservé)"}
+                </button>
+                <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 8, textAlign: "center", lineHeight: 1.5 }}>
+                  Remplit la colonne « Fait » sans valider. Rien n'est consommé : tu contrôles
+                  puis tu cliques « Marquer comme fait » dans Odoo.
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: C.white, borderBottom: `1px solid ${C.border}` }}>
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 6, display: "flex", color: C.textMuted }}>
@@ -299,6 +406,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
           <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>Fabrication</div>
           <div style={{ fontSize: 11.5, color: C.textMuted }}>Crée un ordre confirmé — la finalisation se fait dans Odoo</div>
         </div>
+        {orderLoading && <div style={{ fontSize: 12, color: C.textMuted }}>Ouverture…</div>}
       </div>
 
       <div style={S.body}>
@@ -610,7 +718,8 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
           {recent.length === 0 ? (
             <div style={{ fontSize: 13, color: C.textMuted }}>Aucun ordre récent.</div>
           ) : recent.map(r => (
-            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: `1px solid ${C.border}` }}>
+            <button key={r.id} onClick={() => openManufacturingOrder(r.id)}
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: `1px solid ${C.border}`, width: "100%", background: "none", border: "none", borderBottomStyle: "solid", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.name}</div>
                 <div style={{ fontSize: 11.5, color: C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -624,7 +733,8 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
               }}>
                 {STATE_LABELS[r.state] || r.state}
               </span>
-            </div>
+              <span style={{ fontSize: 14, color: "#d1d5db", flexShrink: 0 }}>›</span>
+            </button>
           ))}
         </div>
       </div>

@@ -1702,6 +1702,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
     { id: "conso_periode", label: "Consommation (période)", key: "conso_periode" },
     { id: "lots_en_stock", label: "Lots en stock", key: "lots_en_stock" },
     { id: "lot_expiry", label: "Date d'expiration (lot)", key: "lot_expiry" },
+    { id: "emplacements", label: "Emplacements", key: "emplacements" },
     { id: "so_client", label: "Client (commande)", key: "so_client" },
     { id: "so_statut", label: "Statut commande", key: "so_statut" },
     { id: "so_montant", label: "Montant commande", key: "so_montant" },
@@ -3047,7 +3048,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       const row: Record<string, any> = { "Référence": ref.raw, "Type": ref.type };
       try {
         if (ref.type === "product" || ref.type === "unknown") {
-          const needsProduct = libreCols.some(c => ["stock_dispo","stock_total","nom_produit","ref_produit","poids","dimensions","ref_fournisseur","lots_en_stock","prix_achat","prix_vente","ean"].includes(c.key));
+          const needsProduct = libreCols.some(c => ["stock_dispo","stock_total","nom_produit","ref_produit","poids","dimensions","ref_fournisseur","lots_en_stock","emplacements","prix_achat","prix_vente","ean"].includes(c.key));
           if (needsProduct) {
             const prods = await odoo.searchRead(session, "product.product",
               ["|", ["default_code", "=", ref.raw], ["barcode", "=", ref.raw]],
@@ -3087,10 +3088,10 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                 const consoTotal = consoLines.reduce((s: number, l: any) => s + (l.qty_done || 0), 0);
                 row["conso_periode"] = Math.round(consoTotal);
               }
-              if (libreCols.some(c => c.key === "stock_dispo" || c.key === "stock_total" || c.key === "lots_en_stock")) {
+              if (libreCols.some(c => c.key === "stock_dispo" || c.key === "stock_total" || c.key === "lots_en_stock" || c.key === "emplacements")) {
                 const quants = await odoo.searchRead(session, "stock.quant",
                   [["product_id","=",p.id],["location_id.usage","=","internal"]],
-                  ["quantity","reserved_quantity","lot_id"], 500);
+                  ["quantity","reserved_quantity","lot_id","location_id"], 500);
                 const total = quants.reduce((s: number, q: any) => s + q.quantity, 0);
                 const reserved = quants.reduce((s: number, q: any) => s + (q.reserved_quantity||0), 0);
                 row["stock_total"] = Math.round(total);
@@ -3105,6 +3106,17 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                   }
                   row["lots_en_stock"] = Object.entries(lotMap).map(([n,qty]) => `${n}: ${Math.round(qty as number)}`).join(" | ") || "";
                 }
+                if (libreCols.some(c => c.key === "emplacements")) {
+                  // Emplacements où le produit est physiquement présent, avec quantité.
+                  const locMap: Record<string, number> = {};
+                  for (const q of quants) {
+                    if (q.location_id && q.quantity > 0) {
+                      const name = q.location_id[1];
+                      locMap[name] = (locMap[name] || 0) + q.quantity;
+                    }
+                  }
+                  row["emplacements"] = Object.entries(locMap).map(([n,qty]) => `${n}: ${Math.round(qty as number)}`).join(" | ") || "";
+                }
               }
             } else {
               row["_error"] = "Introuvable";
@@ -3117,14 +3129,24 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
             const l = lots[0];
             row["lot_produit"] = l.product_id?.[1] || "";
             row["lot_expiry"] = l.expiration_date || l.use_date || "";
-            if (libreCols.some(c => c.key === "stock_dispo" || c.key === "stock_total")) {
+            if (libreCols.some(c => c.key === "stock_dispo" || c.key === "stock_total" || c.key === "emplacements")) {
               const quants = await odoo.searchRead(session, "stock.quant",
                 [["lot_id","=",l.id],["location_id.usage","=","internal"]],
-                ["quantity","reserved_quantity"], 100);
+                ["quantity","reserved_quantity","location_id"], 100);
               const total = quants.reduce((s: number, q: any) => s + q.quantity, 0);
               const reserved = quants.reduce((s: number, q: any) => s + (q.reserved_quantity||0), 0);
               row["stock_total"] = Math.round(total);
               row["stock_dispo"] = Math.round(total - reserved);
+              if (libreCols.some(c => c.key === "emplacements")) {
+                const locMap: Record<string, number> = {};
+                for (const q of quants) {
+                  if (q.location_id && q.quantity > 0) {
+                    const name = q.location_id[1];
+                    locMap[name] = (locMap[name] || 0) + q.quantity;
+                  }
+                }
+                row["emplacements"] = Object.entries(locMap).map(([n,qty]) => `${n}: ${Math.round(qty as number)}`).join(" | ") || "";
+              }
             }
           } else {
             row["_error"] = "Lot introuvable";
