@@ -318,6 +318,32 @@ export async function saveUserPermission(login: string, tools: string[]): Promis
 }
 
 // ══════════════════════════════════════════
+// OUTILS MASQUÉS GLOBALEMENT (visibilité des tuiles du menu)
+// Liste de clés d'outils cachées pour TOUT LE MONDE, gérée depuis Administration.
+// Indépendant des droits par utilisateur : un outil masqué ici ne s'affiche pour
+// personne, même admin, jusqu'à réaffichage. Stocké dans wms_sync_meta.
+// ══════════════════════════════════════════
+
+const HIDDEN_TOOLS_KEY = "wms_hidden_tools";
+
+export async function loadHiddenTools(): Promise<string[]> {
+  const { data, error } = await sb.from("wms_sync_meta")
+    .select("value").eq("key", HIDDEN_TOOLS_KEY).limit(1);
+  if (error) return [];
+  if (!data || !data.length) return [];
+  try {
+    const v = typeof data[0].value === "string" ? JSON.parse(data[0].value) : data[0].value;
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+}
+
+export async function saveHiddenTools(keys: string[]): Promise<void> {
+  const { error } = await sb.from("wms_sync_meta")
+    .upsert({ key: HIDDEN_TOOLS_KEY, value: JSON.stringify(keys), updated_at: new Date().toISOString() }, { onConflict: "key" });
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // PRÉPARATION COLLABORATIVE À 2 (début / fin)
 // Réutilise wms_scan_sessions avec un nom préfixé "COPREP::<picking>".
 // entries[0] porte tout l'état : participants + progression par ligne.

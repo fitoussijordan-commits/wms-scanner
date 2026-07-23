@@ -6,7 +6,7 @@
 // Flux : on scanne l'emplacement où sont stockés les composants, sa liste
 // (produit + lot + dispo) s'affiche, et on tape directement dessus pour ajouter
 // un composant — aucune re-saisie de référence. On indique la quantité PAR PACK,
-// le WMS multiplie par le nombre de packs et crée l'ordre en état "Confirmé"
+// le WMS multiplie par le nombre de packs et crée l'ordre en BROUILLON
 // (composants réservés, rien de consommé). La finalisation se fait dans Odoo.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -313,7 +313,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
       // avertissement Odoo (lot non appliqué, etc.).
       setLastResult({ name: res.name, warning: res.warning });
       if (res.warning) onToast(`⚠️ ${res.name} — voir le détail ci-dessous`, "info");
-      else onToast(`✅ ${res.name} créé et confirmé`, "success");
+      else onToast(`✅ ${res.name} créé (brouillon)`, "success");
       reset();
       loadRecent();
       if (location) loadLocation(location.name); // stock rafraîchi après réservation
@@ -404,7 +404,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
         </button>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>Fabrication</div>
-          <div style={{ fontSize: 11.5, color: C.textMuted }}>Crée un ordre confirmé — la finalisation se fait dans Odoo</div>
+          <div style={{ fontSize: 11.5, color: C.textMuted }}>Crée un ordre en brouillon — confirmation et finalisation dans Odoo</div>
         </div>
         {orderLoading && <div style={{ fontSize: 12, color: C.textMuted }}>Ouverture…</div>}
       </div>
@@ -692,7 +692,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
                   {lastResult.warning ? "⚠️" : "✅"} {lastResult.name}
                 </div>
                 <div style={{ fontSize: 12, color: lastResult.warning ? "#7c2d12" : "#166534", marginTop: 2 }}>
-                  {lastResult.warning || "Ordre créé et confirmé."}
+                  {lastResult.warning || "Ordre créé en brouillon."}
                 </div>
               </div>
               <button onClick={() => setLastResult(null)}
@@ -703,7 +703,7 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
 
         <button onClick={create} disabled={!canCreate}
           style={{ ...S.btn, background: canCreate ? C.green : "#e5e7eb", color: canCreate ? "#fff" : "#9ca3af" }}>
-          {creating ? "Création…" : "✓ Créer et confirmer l'ordre"}
+          {creating ? "Création…" : "✓ Créer l'ordre (brouillon)"}
         </button>
 
         {/* Derniers ordres */}

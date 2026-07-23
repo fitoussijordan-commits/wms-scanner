@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import * as odoo from "@/lib/odoo";
-import { loadUserPermissions, saveUserPermission } from "@/lib/supabase";
+import { loadUserPermissions, saveUserPermission, loadHiddenTools, saveHiddenTools } from "@/lib/supabase";
 import FieldMapEditor from "@/components/FieldMapEditor";
 import ModelMapEditor from "@/components/ModelMapEditor";
 
@@ -52,7 +52,25 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
-  const [tab, setTab] = useState<"perms" | "fields" | "models">("perms");
+  const [tab, setTab] = useState<"perms" | "menu" | "fields" | "models">("perms");
+
+  // Visibilité globale des tuiles du menu (outils masqués pour tout le monde).
+  const [hiddenTools, setHiddenTools] = useState<string[]>([]);
+  const [hiddenLoaded, setHiddenLoaded] = useState(false);
+  const [savingMenu, setSavingMenu] = useState(false);
+  useEffect(() => {
+    loadHiddenTools().then(h => { setHiddenTools(h); setHiddenLoaded(true); }).catch(() => setHiddenLoaded(true));
+  }, []);
+  const toggleHidden = (key: string) =>
+    setHiddenTools(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  const saveMenu = async () => {
+    setSavingMenu(true);
+    try {
+      await saveHiddenTools(hiddenTools);
+      onToast("✓ Menu enregistré — rechargez l'app pour voir les changements", "success");
+    } catch (e: any) { onToast("Erreur : " + (e?.message ?? e), "error"); }
+    setSavingMenu(false);
+  };
 
   const myLogin = (session.login || "").toLowerCase();
 
@@ -112,7 +130,7 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
         </button>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>Administration</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>{tab === "perms" ? "Droits d'accès aux outils, par utilisateur" : tab === "fields" ? "Mapping des champs Odoo" : "Mapping des modèles Odoo"}</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>{tab === "perms" ? "Droits d'accès aux outils, par utilisateur" : tab === "menu" ? "Afficher / masquer les tuiles du menu" : tab === "fields" ? "Mapping des champs Odoo" : "Mapping des modèles Odoo"}</div>
         </div>
         {tab === "perms" && <button onClick={load} title="Recharger" style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", cursor: "pointer", color: C.textSec }}>↻</button>}
       </div>
@@ -121,6 +139,7 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
       <div style={{ display: "flex", gap: 6, marginBottom: 16, background: C.bg, padding: 4, borderRadius: 12 }}>
         {([
           { k: "perms" as const, label: "👤 Droits" },
+          { k: "menu" as const, label: "☰ Menu" },
           { k: "fields" as const, label: "⚙️ Champs" },
           { k: "models" as const, label: "🗂️ Modèles" },
         ]).map(t => (
@@ -133,7 +152,46 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
         ))}
       </div>
 
-      {tab === "fields" ? (
+      {tab === "menu" ? (
+        // ── Visibilité des tuiles du menu (global, tout le monde) ──
+        !hiddenLoaded ? (
+          <div style={{ textAlign: "center", color: C.textMuted, padding: 40 }}>Chargement…</div>
+        ) : (
+          <div>
+            <div style={{ fontSize: 12.5, color: C.textMuted, marginBottom: 14, lineHeight: 1.5 }}>
+              Décoche une tuile pour la <strong>masquer du menu</strong> pour tout le monde. Tu peux la
+              réafficher ici à tout moment. (L'onglet Administration reste toujours visible.)
+            </div>
+            {groups.map(g => (
+              <div key={g} style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>{g}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  {ALL_TOOLS.filter(t => t.group === g).map(t => {
+                    const visible = !hiddenTools.includes(t.key);
+                    return (
+                      <button key={t.key} onClick={() => toggleHidden(t.key)}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 8, padding: "11px 12px",
+                          borderRadius: 10, cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+                          border: `1.5px solid ${visible ? C.green : C.border}`,
+                          background: visible ? C.greenSoft : "#f8fafc",
+                        }}>
+                        <span style={{ fontSize: 16 }}>{visible ? "👁" : "🚫"}</span>
+                        <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: visible ? C.text : C.textMuted }}>{t.label}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: visible ? C.green : C.textMuted }}>{visible ? "Affiché" : "Masqué"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            <button onClick={saveMenu} disabled={savingMenu}
+              style={{ width: "100%", marginTop: 8, padding: "14px 0", background: savingMenu ? C.border : C.blue, color: "#fff", border: "none", borderRadius: 12, fontSize: 14.5, fontWeight: 800, cursor: savingMenu ? "default" : "pointer", fontFamily: "inherit" }}>
+              {savingMenu ? "Enregistrement…" : "Enregistrer le menu"}
+            </button>
+          </div>
+        )
+      ) : tab === "fields" ? (
         <FieldMapEditor session={session} onToast={onToast} />
       ) : tab === "models" ? (
         <ModelMapEditor session={session} onToast={onToast} />

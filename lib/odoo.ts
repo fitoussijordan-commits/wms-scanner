@@ -5553,21 +5553,15 @@ export async function createManufacturingOrder(
 
   const id = await create(session, M("MODEL_MRP_PRODUCTION"), vals) as number;
 
-  // Confirmation : l'OF passe de "draft" à "confirmed" (composants réservés,
-  // rien de consommé). On tolère un échec pour ne pas perdre l'OF déjà créé.
+  // L'ordre est laissé en BROUILLON (draft) : on ne le confirme pas. Rien n'est
+  // réservé ni consommé ; c'est toi qui confirmes/termines dans Odoo quand tu veux.
   let warning: string | undefined;
-  try {
-    await callMethod(session, M("MODEL_MRP_PRODUCTION"), "action_confirm", [[id]]);
-  } catch (e: any) {
-    warning = `Ordre créé mais non confirmé : ${safeErrMsg(e)}`;
-  }
 
   // ── Lots choisis dans le WMS ────────────────────────────────────────────
-  // On les pose APRÈS la confirmation : à ce stade Odoo a créé les mouvements,
-  // et selon la disponibilité il a pu créer des lignes de détail (move.line).
-  // Les imposer à la création échoue quand le lot n'est pas encore disponible
-  // ("unhashable type" / réservation impossible), d'où ce traitement séparé —
-  // et tolérant : un échec ici n'annule pas l'ordre déjà créé.
+  // Les mouvements composants (move_raw_ids) existent dès la création, même en
+  // brouillon. On y attache le lot voulu via une ligne de détail à quantité 0 :
+  // le lot est ainsi déjà inscrit et visible dans l'ordre, sans rien réserver.
+  // Traitement tolérant : un échec ici n'annule pas l'ordre déjà créé.
   const withLots = lines.filter(l => l.lotId);
   if (withLots.length) {
     try {
