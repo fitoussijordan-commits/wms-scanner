@@ -4090,18 +4090,38 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   }, [conso, consoColSort, consoSearch]);
 
   // ── Suivi stock : solde cumulatif chronologique ──
+  // ⚠️ Le solde est ANCRÉ sur le stock Odoo actuel, pas démarré à zéro : sinon,
+  // dès qu'une sortie précède les entrées (fenêtre partielle), le solde plongeait
+  // en négatif à tort et générait des milliers de fausses anomalies.
+  // Méthode : on part du stock réel d'aujourd'hui et on remonte les mouvements à
+  // l'envers (le solde AVANT un mouvement = solde après − delta du mouvement).
   const stockRunningBalance = useMemo(() => {
     if (!moveRef.trim() || !moves.length) return [];
-    // Trier du plus ancien au plus récent
     const sorted = [...moves].sort((a, b) => a.date.localeCompare(b.date));
-    let balance = 0;
-    return sorted.map(m => {
-      const delta = m.type === "Entrée" || m.type === "Ajustement +" ? m.qty
-        : m.type === "Sortie" || m.type === "Ajustement −" ? -m.qty : 0;
-      balance += delta;
-      return { ...m, delta, balance };
-    });
-  }, [moves, moveRef]);
+    const withDelta = sorted.map(m => ({
+      ...m,
+      delta: m.type === "Entrée" || m.type === "Ajustement +" ? m.qty
+        : m.type === "Sortie" || m.type === "Ajustement −" ? -m.qty : 0,
+    }));
+
+    // Point d'ancrage = stock Odoo actuel (fin de la période). Si on ne l'a pas
+    // encore (null), on retombe sur l'ancien comportement (départ à 0) faute de mieux.
+    const anchor = moveProductCurrentStock;
+    if (anchor == null) {
+      let balance = 0;
+      return withDelta.map(m => { balance += m.delta; return { ...m, balance }; });
+    }
+
+    // Solde après le dernier mouvement = stock actuel. On calcule chaque solde en
+    // remontant : balanceAvant(i) = balanceAprès(i) − delta(i).
+    const balances = new Array(withDelta.length);
+    let after = anchor;
+    for (let i = withDelta.length - 1; i >= 0; i--) {
+      balances[i] = Math.round(after * 1000) / 1000; // solde APRÈS le mouvement i
+      after = after - withDelta[i].delta;             // devient le solde APRÈS i-1
+    }
+    return withDelta.map((m, i) => ({ ...m, balance: balances[i] }));
+  }, [moves, moveRef, moveProductCurrentStock]);
 
   // ── Anomalies de stock ──
   const stockAnomalies = useMemo(() => {
@@ -4118,15 +4138,10 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       if (stddev > 0 && Math.abs(m.delta) > mean + 3 * stddev)
         anomalies.push({ date: m.date, label: `Mouvement anormalement élevé (${m.qty} unités — ${Math.round(Math.abs(m.delta) / stddev)}σ)`, severity: "warning", qty: m.qty });
     }
-    // Écart théorique vs stock Odoo actuel
-    if (moveProductCurrentStock !== null) {
-      const theoretical = stockRunningBalance[stockRunningBalance.length - 1].balance;
-      const diff = moveProductCurrentStock - theoretical;
-      if (Math.abs(diff) > 0.5)
-        anomalies.push({ date: "Aujourd'hui", label: `Écart solde théorique (${Math.round(theoretical)}) vs stock Odoo actuel (${Math.round(moveProductCurrentStock)}) : ${diff > 0 ? "+" : ""}${Math.round(diff)} unités non expliquées`, severity: Math.abs(diff) > 10 ? "error" : "warning" });
-    }
+    // (L'écart théorique vs stock actuel n'est plus calculé : le solde est
+    // désormais ancré sur le stock Odoo réel, donc l'écart serait toujours nul.)
     return anomalies;
-  }, [stockRunningBalance, moveProductCurrentStock]);
+  }, [stockRunningBalance]);
 
   // ── Stats livraisons enrichies ──
   const deliveryStatsEnriched = useMemo(() => {
