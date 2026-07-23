@@ -1532,6 +1532,8 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   const [moveSearched, setMoveSearched] = useState(false);
   const [moveStart, setMoveStart] = useState("");
   const [moveEnd, setMoveEnd] = useState("");
+  // Sections d'anomalies dépliées (par clé de catégorie).
+  const [openAnomalyGroups, setOpenAnomalyGroups] = useState<Record<string, boolean>>({});
   // Vrai si la requête a atteint le plafond (historique incomplet).
   const [movesTruncated, setMovesTruncated] = useState(false);
   // Vrai si on a appliqué la fenêtre 12 mois par défaut (aucune date saisie).
@@ -4143,6 +4145,26 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
     return anomalies;
   }, [stockRunningBalance]);
 
+  // Anomalies regroupées par catégorie (pour un affichage en menus dépliables,
+  // au lieu d'une longue liste illisible).
+  const stockAnomalyGroups = useMemo(() => {
+    const cat = (label: string): { key: string; title: string; sev: "error" | "warning" } => {
+      if (label.startsWith("Stock théorique négatif")) return { key: "neg", title: "Stock théorique négatif", sev: "error" };
+      if (label.includes("ajustement manuel")) return { key: "adj", title: "Ajustements manuels de stock", sev: "warning" };
+      if (label.startsWith("Mouvement anormalement")) return { key: "spike", title: "Mouvements anormalement élevés", sev: "warning" };
+      return { key: "other", title: "Autres", sev: "warning" };
+    };
+    const map = new Map<string, { title: string; sev: "error" | "warning"; items: typeof stockAnomalies }>();
+    for (const a of stockAnomalies) {
+      const c = cat(a.label);
+      if (!map.has(c.key)) map.set(c.key, { title: c.title, sev: c.sev, items: [] });
+      map.get(c.key)!.items.push(a);
+    }
+    // Les erreurs d'abord, puis par nombre décroissant.
+    return Array.from(map.values()).sort((x, y) =>
+      x.sev !== y.sev ? (x.sev === "error" ? -1 : 1) : y.items.length - x.items.length);
+  }, [stockAnomalies]);
+
   // ── Stats livraisons enrichies ──
   const deliveryStatsEnriched = useMemo(() => {
     if (!filteredDel.length) return null;
@@ -4895,20 +4917,41 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                     </div>
                   </div>
 
-                  {/* Anomalies */}
+                  {/* Anomalies — regroupées par catégorie, chaque groupe dépliable */}
                   {stockAnomalies.length > 0 && (
                     <div className="wms-card" style={{ padding: "18px 20px" }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>⚠️ Anomalies détectées — {stockAnomalies.length}{stockAnomalies.length > 50 && <span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-muted)" }}> (50 premières affichées)</span>}</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>⚠️ Anomalies détectées — {stockAnomalies.length}</div>
                       <div style={{ display: "grid", gap: 8 }}>
-                        {stockAnomalies.slice(0, 50).map((a, i) => (
-                          <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 16px", background: a.severity === "error" ? "var(--danger-soft)" : "rgba(245,158,11,.08)", borderLeft: `3px solid ${a.severity === "error" ? "var(--danger)" : "var(--warning)"}`, borderRadius: 8 }}>
-                            <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>{a.severity === "error" ? "🔴" : "🟡"}</span>
-                            <div>
-                              <div style={{ fontSize: 13, fontWeight: 600, color: a.severity === "error" ? "var(--danger)" : "#b45309" }}>{a.label}</div>
-                              <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: MONO, marginTop: 2 }}>{fmtDate(a.date)}</div>
+                        {stockAnomalyGroups.map((g) => {
+                          const key = g.title;
+                          const open = !!openAnomalyGroups[key];
+                          const col = g.sev === "error" ? "var(--danger)" : "#b45309";
+                          const bg = g.sev === "error" ? "var(--danger-soft)" : "rgba(245,158,11,.08)";
+                          return (
+                            <div key={key} style={{ borderRadius: 8, overflow: "hidden", border: `1px solid ${g.sev === "error" ? "var(--danger-border)" : "rgba(245,158,11,.25)"}` }}>
+                              <button onClick={() => setOpenAnomalyGroups(p => ({ ...p, [key]: !p[key] }))}
+                                style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", background: bg, border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                                <span style={{ fontSize: 16 }}>{g.sev === "error" ? "🔴" : "🟡"}</span>
+                                <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: col }}>{g.title}</span>
+                                <span style={{ fontSize: 12, fontWeight: 700, color: col, background: "#fff", border: `1px solid ${col}33`, borderRadius: 99, padding: "2px 9px" }}>{g.items.length}</span>
+                                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{open ? "▲" : "▼"}</span>
+                              </button>
+                              {open && (
+                                <div style={{ maxHeight: 320, overflowY: "auto", background: "#fff" }}>
+                                  {g.items.slice(0, 200).map((a, i) => (
+                                    <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "9px 16px", borderTop: "1px solid var(--border)", fontSize: 12.5 }}>
+                                      <span style={{ color: "var(--text-secondary)" }}>{a.label}</span>
+                                      <span style={{ color: "var(--text-muted)", fontFamily: MONO, flexShrink: 0 }}>{fmtDate(a.date)}</span>
+                                    </div>
+                                  ))}
+                                  {g.items.length > 200 && (
+                                    <div style={{ padding: "8px 16px", fontSize: 11.5, color: "var(--text-muted)", borderTop: "1px solid var(--border)" }}>… et {g.items.length - 200} de plus</div>
+                                  )}
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
