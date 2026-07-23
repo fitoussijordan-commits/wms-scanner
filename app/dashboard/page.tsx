@@ -1532,6 +1532,10 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   const [moveSearched, setMoveSearched] = useState(false);
   const [moveStart, setMoveStart] = useState("");
   const [moveEnd, setMoveEnd] = useState("");
+  // Vrai si la requête a atteint le plafond (historique incomplet).
+  const [movesTruncated, setMovesTruncated] = useState(false);
+  // Vrai si on a appliqué la fenêtre 12 mois par défaut (aucune date saisie).
+  const [movesDefaultWindow, setMovesDefaultWindow] = useState(false);
   const [editThresh, setEditThresh] = useState<number | null>(null);
   const [editVal, setEditVal] = useState("");
   const [stockSearch, setStockSearch] = useState("");
@@ -2936,14 +2940,29 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       if (hasRef) {
         let prods = await odoo.searchRead(session, "product.product", [["default_code", "=ilike", moveRef.trim()]], ["id", "name", "default_code"], 5);
         if (!prods.length) prods = await odoo.searchRead(session, "product.product", [["barcode", "=", moveRef.trim()]], ["id", "name", "default_code"], 5);
-        if (!prods.length) { setError(`Référence "${moveRef}" introuvable`); setMoves([]); setLoading(false); return; }
+        if (!prods.length) { setError(`Référence "${moveRef}" introuvable`); setMoves([]); setMovesTruncated(false); setMovesDefaultWindow(false); setLoading(false); return; }
         domain.push(["product_id", "=", prods[0].id]);
       }
       if (moveStart) domain.push(["date", ">=", moveStart + " 00:00:00"]);
       if (moveEnd) domain.push(["date", "<=", moveEnd + " 23:59:59"]);
+      // Aucune date saisie → on borne aux 12 derniers mois. Sinon on chargerait
+      // tout l'historique, souvent tronqué au plafond de la requête, ce qui rend
+      // le solde théorique et le compte d'anomalies faux (historique incomplet).
+      let defaultWindow = false;
+      if (!moveStart && !moveEnd) {
+        const since = new Date();
+        since.setMonth(since.getMonth() - 12);
+        domain.push(["date", ">=", since.toISOString().slice(0, 10) + " 00:00:00"]);
+        defaultWindow = true;
+      }
 
+      const MOVE_LIMIT = 10000;
       const rawMoves = await odoo.searchRead(session, "stock.move", domain,
-        ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids", "name", "product_id"], 10000, "date desc");
+        ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids", "name", "product_id"], MOVE_LIMIT, "date desc");
+      // Plafond atteint → l'historique est incomplet, on le signale (les totaux
+      // seraient faussés sans cet avertissement).
+      setMovesTruncated(rawMoves.length >= MOVE_LIMIT);
+      setMovesDefaultWindow(defaultWindow);
 
       // Get location usages
       const locIds = Array.from(new Set(rawMoves.flatMap((m: any) => [m.location_id?.[0], m.location_dest_id?.[0]]).filter(Boolean))) as number[];
@@ -4747,6 +4766,22 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
               </div>
             </div>
 
+            {/* Avertissements sur le périmètre analysé */}
+            {moveRef.trim() && stockRunningBalance.length > 0 && (movesTruncated || movesDefaultWindow) && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+                {movesTruncated && (
+                  <div style={{ padding: "10px 14px", borderRadius: 8, background: "var(--danger-soft)", border: "1px solid var(--danger-border)", fontSize: 12.5, color: "var(--danger)" }}>
+                    ⚠️ Trop de mouvements : seuls les 10 000 plus récents sont analysés. Le solde théorique et les anomalies sont partiels — restreins la période avec les dates.
+                  </div>
+                )}
+                {movesDefaultWindow && !movesTruncated && (
+                  <div style={{ padding: "10px 14px", borderRadius: 8, background: "var(--accent-soft)", border: "1px solid var(--accent)", fontSize: 12.5, color: "var(--text-secondary)" }}>
+                    Analyse sur les <strong>12 derniers mois</strong> (aucune date saisie). Le solde de départ n'inclut pas l'historique antérieur. Choisis des dates pour une autre période.
+                  </div>
+                )}
+              </div>
+            )}
+
             {moveRef.trim() && stockRunningBalance.length > 0 && (() => {
               const totalEntrees = stockRunningBalance.filter(m => m.type === "Entrée" || m.type === "Ajustement +").reduce((s, m) => s + m.qty, 0);
               const totalSorties = stockRunningBalance.filter(m => m.type === "Sortie" || m.type === "Ajustement −").reduce((s, m) => s + m.qty, 0);
@@ -4818,12 +4853,21 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                               </defs>
                               <polygon points={`0%,${chartH} ${pts.join(" ")} 100%,${chartH}`} fill="url(#stGrad)" />
                               <polyline points={pts.join(" ")} fill="none" stroke="var(--accent)" strokeWidth="2.5" strokeLinejoin="round" />
-                              {stockRunningBalance.map((m, i) => {
-                                if (!m.isInventory && m.balance >= 0) return null;
-                                const x = (i / (stockRunningBalance.length - 1)) * 100;
-                                const y = chartH - ((m.balance - minBalance) / range) * chartH;
-                                return <circle key={i} cx={`${x}%`} cy={y} r={6} fill={m.balance < 0 ? "var(--danger)" : "var(--warning)"} stroke="white" strokeWidth="1.5" />;
-                              })}
+                              {/* Points : uniquement les soldes négatifs (les vraies
+                                  anomalies). Au-delà de 60, on n'affiche plus de points
+                                  pour ne pas noyer le graphe — le détail reste dans la
+                                  liste "Anomalies détectées" et le tableau plus bas. */}
+                              {(() => {
+                                const negatives = stockRunningBalance
+                                  .map((m, i) => ({ m, i }))
+                                  .filter(({ m }) => m.balance < 0);
+                                if (negatives.length > 60) return null;
+                                return negatives.map(({ m, i }) => {
+                                  const x = (i / (stockRunningBalance.length - 1)) * 100;
+                                  const y = chartH - ((m.balance - minBalance) / range) * chartH;
+                                  return <circle key={i} cx={`${x}%`} cy={y} r={5} fill="var(--danger)" stroke="white" strokeWidth="1.5" />;
+                                });
+                              })()}
                             </>
                           );
                         })()}
@@ -4839,9 +4883,9 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                   {/* Anomalies */}
                   {stockAnomalies.length > 0 && (
                     <div className="wms-card" style={{ padding: "18px 20px" }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>⚠️ Anomalies détectées — {stockAnomalies.length}</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>⚠️ Anomalies détectées — {stockAnomalies.length}{stockAnomalies.length > 50 && <span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-muted)" }}> (50 premières affichées)</span>}</div>
                       <div style={{ display: "grid", gap: 8 }}>
-                        {stockAnomalies.map((a, i) => (
+                        {stockAnomalies.slice(0, 50).map((a, i) => (
                           <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 16px", background: a.severity === "error" ? "var(--danger-soft)" : "rgba(245,158,11,.08)", borderLeft: `3px solid ${a.severity === "error" ? "var(--danger)" : "var(--warning)"}`, borderRadius: 8 }}>
                             <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>{a.severity === "error" ? "🔴" : "🟡"}</span>
                             <div>
