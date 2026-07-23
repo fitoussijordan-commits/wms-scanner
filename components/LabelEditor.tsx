@@ -2,14 +2,14 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
 // ─────────────────────────────────────────────────────────────────
-// Types
+// Types (INCHANGÉS — l'impression generateLabelPDF en dépend)
 // ─────────────────────────────────────────────────────────────────
-export type ElementType = "text" | "barcode" | "qrcode" | "line" | "image";
+export type ElementType = "text" | "barcode" | "qrcode" | "line" | "image" | "rect";
 
 export interface LabelElement {
   id: string;
   type: ElementType;
-  x: number; y: number;       // mm from top-left
+  x: number; y: number;       // mm depuis le coin haut-gauche
   w: number; h: number;       // mm
   // text
   text?: string;
@@ -18,8 +18,9 @@ export interface LabelElement {
   align?: "left" | "center" | "right";
   // barcode/qr
   value?: string;
-  // line
+  // line / rect
   thickness?: number;
+  filled?: boolean;           // rectangle plein ou contour
   // image
   dataUrl?: string;
 }
@@ -38,30 +39,22 @@ interface Props {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────
-const PX_PER_MM = 3.78; // screen px per mm at 96dpi
-const SNAP = 2;         // snap to grid mm
-
+const PX_PER_MM = 3.78;
 const C = {
-  blue: "#2563eb", border: "#e2e8f0", bg: "#f8fafc",
+  blue: "#2563eb", blueSoft: "#eff6ff", border: "#e2e8f0", bg: "#f8fafc",
   text: "#1e293b", textMuted: "#94a3b8", white: "#fff",
-  red: "#ef4444", green: "#16a34a", orange: "#f59e0b",
+  red: "#ef4444", green: "#16a34a",
 };
 
 function uid() { return Math.random().toString(36).slice(2, 8); }
-function snap(v: number) { return Math.round(v / SNAP) * SNAP; }
-function mm2px(mm: number) { return mm * PX_PER_MM; }
-function px2mm(px: number) { return px / PX_PER_MM; }
 
 // ─────────────────────────────────────────────────────────────────
-// Barcode renderer (CODE128 via canvas)
+// Barcode Code128B → canvas (INCHANGÉ)
 // ─────────────────────────────────────────────────────────────────
 function renderBarcode128(canvas: HTMLCanvasElement, value: string) {
-  // Minimal Code128B encoding
   const encode: Record<string, number> = {};
   for (let i = 32; i <= 126; i++) encode[String.fromCharCode(i)] = i - 32;
-  const START_B = 104, STOP = 106, CODE_B = 100;
+  const START_B = 104, STOP = 106;
   const bars = [
     "11011001100","11001101100","11001100110","10010011000","10010001100",
     "10001001100","10011001000","10011000100","10001100100","11001001000",
@@ -89,7 +82,6 @@ function renderBarcode128(canvas: HTMLCanvasElement, value: string) {
   const ctx = canvas.getContext("2d")!;
   const w = canvas.width, h = canvas.height;
   ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
-
   const codes: number[] = [START_B];
   let check = START_B;
   for (let i = 0; i < value.length; i++) {
@@ -99,7 +91,6 @@ function renderBarcode128(canvas: HTMLCanvasElement, value: string) {
   }
   codes.push(check % 103);
   codes.push(STOP);
-
   const pattern = codes.map(c => bars[c] || "").join("");
   const barW = w / pattern.length;
   ctx.fillStyle = "#000";
@@ -108,164 +99,90 @@ function renderBarcode128(canvas: HTMLCanvasElement, value: string) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// QR code (simple via API image)
-// ─────────────────────────────────────────────────────────────────
-function QRPreview({ value, size }: { value: string; size: number }) {
-  // Use a data URI approach — simple checkered placeholder in editor
-  return (
-    <div style={{ width: size, height: size, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap" as const }}>
-      {Array.from({ length: 16 }).map((_, i) => (
-        <div key={i} style={{ width: size / 4, height: size / 4, background: (i + Math.floor(i / 4)) % 2 === 0 ? "#000" : "#fff" }} />
-      ))}
-    </div>
-  );
+// QR réel via la lib qrcode (import dynamique → pas alourdir le bundle initial).
+async function makeQrDataUrl(value: string, sizePx: number): Promise<string | null> {
+  try {
+    const QR = (await import("qrcode")).default;
+    return await QR.toDataURL(value || " ", { margin: 0, width: Math.max(40, Math.round(sizePx)) });
+  } catch { return null; }
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Single element renderer (preview)
+// Aperçu d'un élément (rendu à l'échelle du canvas)
 // ─────────────────────────────────────────────────────────────────
 function ElementPreview({ el, scale }: { el: LabelElement; scale: number }) {
   const barcodeRef = useRef<HTMLCanvasElement>(null);
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const w = el.w * scale * PX_PER_MM;
+  const h = el.h * scale * PX_PER_MM;
+
   useEffect(() => {
     if (el.type === "barcode" && barcodeRef.current && el.value) {
       renderBarcode128(barcodeRef.current, el.value);
     }
-  }, [el.type, el.value, el.w, el.h]);
+  }, [el.type, el.value, w, h]);
 
-  const w = el.w * scale * PX_PER_MM;
-  const h = el.h * scale * PX_PER_MM;
+  useEffect(() => {
+    let alive = true;
+    if (el.type === "qrcode") {
+      makeQrDataUrl(el.value || " ", Math.max(60, Math.min(w, h) * 2)).then(u => { if (alive) setQrUrl(u); });
+    }
+    return () => { alive = false; };
+  }, [el.type, el.value, w, h]);
 
   if (el.type === "text") return (
     <div style={{
       width: w, height: h, overflow: "hidden",
-      fontSize: (el.fontSize || 12) * scale * 0.8,
-      fontWeight: el.bold ? 700 : 400,
+      fontSize: (el.fontSize || 12) * scale * 0.85,
+      fontWeight: el.bold ? 800 : 400,
       textAlign: el.align || "left",
-      lineHeight: 1.2,
+      lineHeight: 1.15, color: "#000",
       display: "flex", alignItems: "center",
-      padding: "0 2px",
+      justifyContent: el.align === "center" ? "center" : el.align === "right" ? "flex-end" : "flex-start",
+      padding: "0 2px", boxSizing: "border-box",
     }}>{el.text || "Texte"}</div>
   );
 
-  if (el.type === "barcode") return (
-    <canvas ref={barcodeRef} width={w} height={h} style={{ display: "block" }} />
-  );
+  if (el.type === "barcode") return <canvas ref={barcodeRef} width={Math.max(1, w)} height={Math.max(1, h)} style={{ display: "block", width: w, height: h }} />;
 
-  if (el.type === "qrcode") return (
-    <QRPreview value={el.value || "QR"} size={Math.min(w, h)} />
-  );
+  if (el.type === "qrcode") return qrUrl
+    ? <img src={qrUrl} style={{ width: w, height: h }} alt="" />
+    : <div style={{ width: w, height: h, background: "#000" }} />;
 
   if (el.type === "line") return (
-    <div style={{ width: w, height: Math.max(1, (el.thickness || 0.5) * scale * PX_PER_MM), background: "#000" }} />
-  );
-
-  if (el.type === "image" && el.dataUrl) return (
-    <img src={el.dataUrl} style={{ width: w, height: h, objectFit: "contain" }} alt="" />
-  );
-
-  return <div style={{ width: w, height: h, background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#999" }}>img</div>;
-}
-
-// ─────────────────────────────────────────────────────────────────
-// NumInput — état local pour éviter que la contrainte min/max
-// n'écrase la saisie en cours (ex: taper "100" ne voit pas "6" s'afficher)
-// ─────────────────────────────────────────────────────────────────
-function NumInput({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
-  const [local, setLocal] = useState(String(value));
-  // Sync si la valeur externe change (ex: reset de l'élément)
-  useEffect(() => { setLocal(String(value)); }, [value]);
-  return (
-    <div>
-      <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, textTransform: "uppercase" as const, marginBottom: 3 }}>{label}</div>
-      <input
-        type="number"
-        value={local}
-        onChange={e => setLocal(e.target.value)}
-        onBlur={() => { const n = Number(local); if (!isNaN(n)) onChange(n); }}
-        style={{ width: "100%", padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "inherit", boxSizing: "border-box" as const }}
-      />
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Properties panel
-// ─────────────────────────────────────────────────────────────────
-function PropsPanel({ el, onChange, onDelete }: { el: LabelElement; onChange: (e: LabelElement) => void; onDelete: () => void }) {
-  const inp = (label: string, val: string | number, onCh: (v: string) => void, type = "text") => (
-    <div style={{ marginBottom: 8 }}>
-      <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, textTransform: "uppercase" as const, marginBottom: 3 }}>{label}</div>
-      <input type={type} value={val} onChange={e => onCh(e.target.value)}
-        style={{ width: "100%", padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+    <div style={{ width: w, height: "100%", display: "flex", alignItems: "center" }}>
+      <div style={{ width: "100%", height: Math.max(1, (el.thickness || 0.5) * scale * PX_PER_MM), background: "#000" }} />
     </div>
   );
 
-  const row2 = (a: React.ReactNode, b: React.ReactNode) => (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>{a}{b}</div>
+  if (el.type === "rect") return (
+    <div style={{ width: w, height: h, boxSizing: "border-box", background: el.filled ? "#000" : "transparent", border: el.filled ? "none" : `${Math.max(1, (el.thickness || 0.5) * scale * PX_PER_MM)}px solid #000` }} />
   );
 
-  const numInp = (label: string, val: number, onCh: (v: number) => void) => (
-    <NumInput label={label} value={val} onChange={onCh} />
-  );
+  if (el.type === "image" && el.dataUrl) return <img src={el.dataUrl} style={{ width: w, height: h, objectFit: "contain" }} alt="" />;
 
-  return (
-    <div style={{ padding: 12, background: C.white, borderRadius: 10, border: `1px solid ${C.border}` }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.text, textTransform: "capitalize" as const }}>{el.type}</div>
-        <button onClick={onDelete} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 18, lineHeight: 1 }}>🗑</button>
-      </div>
-
-      {row2(
-        numInp("X (mm)", Math.round(el.x * 10) / 10, v => onChange({ ...el, x: v })),
-        numInp("Y (mm)", Math.round(el.y * 10) / 10, v => onChange({ ...el, y: v }))
-      )}
-      {row2(
-        numInp("Larg. (mm)", Math.round(el.w * 10) / 10, v => onChange({ ...el, w: Math.max(2, v) })),
-        numInp("Haut. (mm)", Math.round(el.h * 10) / 10, v => onChange({ ...el, h: Math.max(1, v) }))
-      )}
-
-      {el.type === "text" && <>
-        {inp("Texte", el.text || "", v => onChange({ ...el, text: v }))}
-        {row2(
-          numInp("Taille (pt)", el.fontSize || 12, v => onChange({ ...el, fontSize: Math.max(6, Math.min(288, v)) })),
-          <div>
-            <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, textTransform: "uppercase" as const, marginBottom: 3 }}>Alignement</div>
-            <select value={el.align || "left"} onChange={e => onChange({ ...el, align: e.target.value as any })}
-              style={{ width: "100%", padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "inherit" }}>
-              <option value="left">Gauche</option>
-              <option value="center">Centre</option>
-              <option value="right">Droite</option>
-            </select>
-          </div>
-        )}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer" }}>
-          <input type="checkbox" checked={el.bold || false} onChange={e => onChange({ ...el, bold: e.target.checked })} />
-          Gras
-        </label>
-      </>}
-
-      {(el.type === "barcode" || el.type === "qrcode") && inp("Valeur", el.value || "", v => onChange({ ...el, value: v }))}
-      {el.type === "line" && numInp("Épaisseur (mm)", el.thickness || 0.5, v => onChange({ ...el, thickness: v }))}
-    </div>
-  );
+  return <div style={{ width: w, height: h, background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#999" }}>image</div>;
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Main Editor
+// Éditeur principal — tactile, drag & resize au doigt
 // ─────────────────────────────────────────────────────────────────
 export default function LabelEditor({ template, onChange, onPrint, printing }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
-  const [dragging, setDragging] = useState<{ id: string; ox: number; oy: number } | null>(null);
-  const [resizing, setResizing] = useState<{ id: string; ox: number; oy: number; ow: number; oh: number } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Auto-scale : le canvas ne dépasse jamais 300px de large (laisse place au panel propriétés)
-  const MAX_CANVAS_PX = 300;
-  const naturalW = template.widthMM * PX_PER_MM;
-  const scale = Math.min(1, MAX_CANVAS_PX / naturalW);
-  const canvasW = naturalW * scale;
+  // Geste en cours (drag ou resize), suivi via pointer events (souris + tactile).
+  const gesture = useRef<
+    | { kind: "drag"; id: string; startX: number; startY: number; elX: number; elY: number }
+    | { kind: "resize"; id: string; startX: number; startY: number; elW: number; elH: number }
+    | null
+  >(null);
+
+  // Canvas large : occupe la largeur dispo (jusqu'à 560px), ratio de l'étiquette.
+  const MAX_W = 560;
+  const scale = Math.min(1.8, MAX_W / (template.widthMM * PX_PER_MM));
+  const canvasW = template.widthMM * PX_PER_MM * scale;
   const canvasH = template.heightMM * PX_PER_MM * scale;
 
   const updateEl = useCallback((id: string, patch: Partial<LabelElement>) => {
@@ -277,62 +194,83 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
     setSelected(null);
   }, [template, onChange]);
 
+  const duplicateEl = useCallback((id: string) => {
+    const el = template.elements.find(e => e.id === id);
+    if (!el) return;
+    const copy = { ...el, id: uid(), x: Math.min(template.widthMM - el.w, el.x + 3), y: Math.min(template.heightMM - el.h, el.y + 3) };
+    onChange({ ...template, elements: [...template.elements, copy] });
+    setSelected(copy.id);
+  }, [template, onChange]);
+
   const addElement = (type: ElementType) => {
+    const cx = template.widthMM / 2, cy = template.heightMM / 2;
     const defaults: Record<ElementType, Partial<LabelElement>> = {
-      text:    { w: 40, h: 8,  text: "Texte", fontSize: 12, align: "left" },
-      barcode: { w: 50, h: 12, value: "123456789" },
-      qrcode:  { w: 15, h: 15, value: "https://wala.fr" },
-      line:    { w: template.widthMM - 10, h: 1, thickness: 0.5 },
-      image:   { w: 20, h: 20 },
+      text:    { w: Math.min(50, template.widthMM - 10), h: 8, text: "Texte", fontSize: 14, align: "left", bold: false },
+      barcode: { w: Math.min(55, template.widthMM - 10), h: 14, value: "123456789" },
+      qrcode:  { w: 20, h: 20, value: "https://wala.fr" },
+      line:    { w: template.widthMM - 12, h: 1, thickness: 0.5 },
+      rect:    { w: Math.min(40, template.widthMM - 10), h: 20, thickness: 0.5, filled: false },
+      image:   { w: 25, h: 25 },
     };
+    const d = defaults[type];
     const el: LabelElement = {
       id: uid(), type,
-      x: 5, y: 5,
-      ...defaults[type],
+      x: Math.max(2, Math.round(cx - (d.w || 20) / 2)),
+      y: Math.max(2, Math.round(cy - (d.h || 10) / 2)),
+      ...d,
     } as LabelElement;
     onChange({ ...template, elements: [...template.elements, el] });
     setSelected(el.id);
   };
 
-  // Drag
-  const onMouseDown = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    e.preventDefault();
-    setSelected(id);
-    const el = template.elements.find(el => el.id === id)!;
-    setDragging({ id, ox: e.clientX - mm2px(el.x) * scale, oy: e.clientY - mm2px(el.y) * scale });
-  };
-
-  const onResizeDown = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    const el = template.elements.find(el => el.id === id)!;
-    setResizing({ id, ox: e.clientX, oy: e.clientY, ow: el.w, oh: el.h });
-  };
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (dragging) {
-        const x = snap(px2mm((e.clientX - dragging.ox) / scale));
-        const y = snap(px2mm((e.clientY - dragging.oy) / scale));
-        updateEl(dragging.id, {
-          x: Math.max(0, Math.min(template.widthMM - 2, x)),
-          y: Math.max(0, Math.min(template.heightMM - 1, y)),
-        });
-      }
-      if (resizing) {
-        const dw = px2mm((e.clientX - resizing.ox) / scale);
-        const dh = px2mm((e.clientY - resizing.oy) / scale);
-        updateEl(resizing.id, {
-          w: Math.max(2, snap(resizing.ow + dw)),
-          h: Math.max(1, snap(resizing.oh + dh)),
-        });
-      }
+  // Position pointeur → mm (dans le repère de l'étiquette).
+  const pointerMM = (clientX: number, clientY: number) => {
+    const rect = canvasRef.current!.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left) / scale / PX_PER_MM,
+      y: (clientY - rect.top) / scale / PX_PER_MM,
     };
-    const onUp = () => { setDragging(null); setResizing(null); };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [dragging, resizing, updateEl, template]);
+  };
+
+  const onPointerDownEl = (e: React.PointerEvent, id: string) => {
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    setSelected(id);
+    const el = template.elements.find(x => x.id === id)!;
+    const p = pointerMM(e.clientX, e.clientY);
+    gesture.current = { kind: "drag", id, startX: p.x, startY: p.y, elX: el.x, elY: el.y };
+  };
+
+  const onPointerDownResize = (e: React.PointerEvent, id: string) => {
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    const el = template.elements.find(x => x.id === id)!;
+    const p = pointerMM(e.clientX, e.clientY);
+    gesture.current = { kind: "resize", id, startX: p.x, startY: p.y, elW: el.w, elH: el.h };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const g = gesture.current;
+    if (!g) return;
+    const p = pointerMM(e.clientX, e.clientY);
+    if (g.kind === "drag") {
+      const el = template.elements.find(x => x.id === g.id);
+      if (!el) return;
+      const nx = g.elX + (p.x - g.startX);
+      const ny = g.elY + (p.y - g.startY);
+      updateEl(g.id, {
+        x: Math.max(0, Math.min(template.widthMM - el.w, Math.round(nx * 2) / 2)),
+        y: Math.max(0, Math.min(template.heightMM - el.h, Math.round(ny * 2) / 2)),
+      });
+    } else {
+      updateEl(g.id, {
+        w: Math.max(3, Math.min(template.widthMM, Math.round((g.elW + (p.x - g.startX)) * 2) / 2)),
+        h: Math.max(2, Math.min(template.heightMM, Math.round((g.elH + (p.y - g.startY)) * 2) / 2)),
+      });
+    }
+  };
+
+  const endGesture = () => { gesture.current = null; };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -340,126 +278,212 @@ export default function LabelEditor({ template, onChange, onPrint, printing }: P
     const reader = new FileReader();
     reader.onload = ev => {
       const dataUrl = ev.target?.result as string;
-      const el: LabelElement = { id: uid(), type: "image", x: 5, y: 5, w: 20, h: 20, dataUrl };
+      const el: LabelElement = { id: uid(), type: "image", x: 4, y: 4, w: 25, h: 25, dataUrl };
       onChange({ ...template, elements: [...template.elements, el] });
       setSelected(el.id);
     };
     reader.readAsDataURL(file);
+    e.target.value = "";
   };
 
   const selEl = template.elements.find(e => e.id === selected);
 
+  const tools: { type: ElementType; label: string; onClick?: () => void }[] = [
+    { type: "text", label: "T  Texte" },
+    { type: "barcode", label: "▐▌ Code-barres" },
+    { type: "qrcode", label: "⊞ QR" },
+    { type: "line", label: "— Ligne" },
+    { type: "rect", label: "▭ Forme" },
+  ];
+
+  // Bouton d'ajout : grand, tactile.
+  const toolBtn = (label: string, onClick: () => void, key: string) => (
+    <button key={key} onClick={onClick}
+      style={{ flex: "1 1 auto", minWidth: 92, padding: "12px 10px", background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", color: C.text, fontFamily: "inherit" }}>
+      {label}
+    </button>
+  );
+
   return (
     <div>
-      {/* Toolbar */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const, marginBottom: 10 }}>
-        {([
-          { type: "text" as ElementType, label: "T Texte" },
-          { type: "barcode" as ElementType, label: "▐▌ Barcode" },
-          { type: "qrcode" as ElementType, label: "⊞ QR" },
-          { type: "line" as ElementType, label: "── Ligne" },
-        ] as const).map(({ type, label }) => (
-          <button key={type} onClick={() => addElement(type)}
-            style={{ padding: "6px 10px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: "pointer", color: C.text, fontFamily: "inherit" }}>
-            {label}
-          </button>
-        ))}
-        <button onClick={() => fileRef.current?.click()}
-          style={{ padding: "6px 10px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: "pointer", color: C.text, fontFamily: "inherit" }}>
-          🖼 Image
-        </button>
+      {/* Barre d'outils — ajout d'éléments */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        {tools.map(t => toolBtn(t.label, () => addElement(t.type), t.type))}
+        {toolBtn("🖼 Image", () => fileRef.current?.click(), "image")}
         <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageUpload} />
       </div>
 
-      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-        {/* Canvas */}
-        <div>
-          <div
-            ref={canvasRef}
-            onClick={() => setSelected(null)}
-            style={{
-              position: "relative",
-              width: canvasW, height: canvasH,
-              background: "#fff",
-              border: "1.5px solid #000",
-              boxShadow: "2px 2px 8px rgba(0,0,0,0.15)",
-              cursor: "default",
-              flexShrink: 0,
-              overflow: "hidden",
-            }}
-          >
-            {/* Grid dots */}
-            <svg style={{ position: "absolute", inset: 0, pointerEvents: "none" }} width={canvasW} height={canvasH}>
-              {Array.from({ length: Math.floor(template.widthMM / SNAP) + 1 }).map((_, xi) =>
-                Array.from({ length: Math.floor(template.heightMM / SNAP) + 1 }).map((_, yi) => (
-                  <circle key={`${xi}-${yi}`} cx={xi * SNAP * PX_PER_MM} cy={yi * SNAP * PX_PER_MM} r={0.5} fill="#e2e8f0" />
-                ))
-              )}
-            </svg>
-
-            {template.elements.map(el => {
-              const isSel = el.id === selected;
-              return (
-                <div
-                  key={el.id}
-                  onMouseDown={e => onMouseDown(e, el.id)}
-                  onClick={e => e.stopPropagation()}
-                  style={{
-                    position: "absolute",
-                    left: el.x * PX_PER_MM * scale,
-                    top: el.y * PX_PER_MM * scale,
-                    width: el.w * PX_PER_MM * scale,
-                    height: el.h * PX_PER_MM * scale,
-                    outline: isSel ? `2px solid ${C.blue}` : "1px dashed transparent",
-                    cursor: "move",
-                    userSelect: "none" as const,
-                    boxSizing: "border-box" as const,
-                  }}
-                >
-                  <ElementPreview el={el} scale={scale} />
-                  {isSel && (
-                    <div
-                      onMouseDown={e => onResizeDown(e, el.id)}
-                      style={{
-                        position: "absolute", right: -4, bottom: -4,
-                        width: 8, height: 8, background: C.blue,
-                        borderRadius: 2, cursor: "se-resize",
-                      }}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ fontSize: 10, color: C.textMuted, marginTop: 4, textAlign: "center" as const }}>
-            {template.widthMM} × {template.heightMM} mm
-          </div>
+      {/* Canevas — grand, centré, avec grille légère */}
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+        <div
+          ref={canvasRef}
+          onPointerMove={onPointerMove}
+          onPointerUp={endGesture}
+          onPointerCancel={endGesture}
+          onPointerDown={() => setSelected(null)}
+          style={{
+            position: "relative", width: canvasW, height: canvasH,
+            background: "#fff", border: "1.5px solid #cbd5e1",
+            boxShadow: "0 4px 16px rgba(15,23,42,0.12)",
+            touchAction: "none", flexShrink: 0, overflow: "hidden",
+            backgroundImage: "radial-gradient(#e2e8f0 0.6px, transparent 0.6px)",
+            backgroundSize: `${5 * PX_PER_MM * scale}px ${5 * PX_PER_MM * scale}px`,
+          }}
+        >
+          {template.elements.map(el => {
+            const isSel = el.id === selected;
+            return (
+              <div key={el.id}
+                onPointerDown={e => onPointerDownEl(e, el.id)}
+                style={{
+                  position: "absolute",
+                  left: el.x * PX_PER_MM * scale,
+                  top: el.y * PX_PER_MM * scale,
+                  width: el.w * PX_PER_MM * scale,
+                  height: el.h * PX_PER_MM * scale,
+                  outline: isSel ? `2px solid ${C.blue}` : "1px dashed rgba(148,163,184,0.5)",
+                  outlineOffset: 0,
+                  cursor: "move", touchAction: "none",
+                  userSelect: "none", boxSizing: "border-box",
+                }}>
+                <ElementPreview el={el} scale={scale} />
+                {isSel && (
+                  <>
+                    {/* Poignée de redimensionnement — large pour le doigt */}
+                    <div onPointerDown={e => onPointerDownResize(e, el.id)}
+                      style={{ position: "absolute", right: -13, bottom: -13, width: 26, height: 26, background: C.blue, border: "2px solid #fff", borderRadius: "50%", cursor: "nwse-resize", touchAction: "none", boxShadow: "0 1px 4px rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M16 21h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+                    </div>
+                    {/* Suppression rapide */}
+                    <div onPointerDown={e => { e.stopPropagation(); deleteEl(el.id); }}
+                      style={{ position: "absolute", left: -13, top: -13, width: 26, height: 26, background: C.red, border: "2px solid #fff", borderRadius: "50%", cursor: "pointer", touchAction: "none", boxShadow: "0 1px 4px rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 16, lineHeight: 1 }}>×</div>
+                  </>
+                )}
+              </div>
+            );
+          })}
         </div>
+      </div>
+      <div style={{ fontSize: 11, color: C.textMuted, textAlign: "center", marginBottom: 14 }}>
+        {template.widthMM} × {template.heightMM} mm · glisse les éléments au doigt
+      </div>
 
-        {/* Properties */}
-        <div style={{ flex: 1, minWidth: 160 }}>
-          {selEl ? (
-            <PropsPanel
-              el={selEl}
-              onChange={el => onChange({ ...template, elements: template.elements.map(e => e.id === el.id ? el : e) })}
-              onDelete={() => deleteEl(selEl.id)}
-            />
-          ) : (
-            <div style={{ fontSize: 12, color: C.textMuted, padding: 12, textAlign: "center" as const, background: C.bg, borderRadius: 10, border: `1px dashed ${C.border}` }}>
-              Clique sur un élément pour l'éditer
-            </div>
-          )}
+      {/* Panneau de propriétés de l'élément sélectionné.
+          (Pas de bouton Imprimer ici : l'écran Étiquettes fournit déjà son bouton
+          d'impression global, qui gère l'imprimante et la quantité.) */}
+      {selEl ? (
+        <ElementProps el={selEl}
+          onChange={el => onChange({ ...template, elements: template.elements.map(e => e.id === el.id ? el : e) })}
+          onDelete={() => deleteEl(selEl.id)}
+          onDuplicate={() => duplicateEl(selEl.id)} />
+      ) : (
+        <div style={{ fontSize: 13, color: C.textMuted, padding: 18, textAlign: "center", background: C.bg, borderRadius: 12, border: `1px dashed ${C.border}` }}>
+          Ajoute un élément ci-dessus, puis touche-le pour l'éditer.
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Panneau propriétés — gros contrôles, lisibles au doigt
+// ─────────────────────────────────────────────────────────────────
+function ElementProps({ el, onChange, onDelete, onDuplicate }: {
+  el: LabelElement; onChange: (e: LabelElement) => void; onDelete: () => void; onDuplicate: () => void;
+}) {
+  const field = (label: string, node: React.ReactNode) => (
+    <div>
+      <div style={{ fontSize: 10.5, color: C.textMuted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{label}</div>
+      {node}
+    </div>
+  );
+  const inputStyle: React.CSSProperties = { width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", boxSizing: "border-box" };
+
+  const NumBox = ({ label, value, onCh, step = 1 }: { label: string; value: number; onCh: (v: number) => void; step?: number }) => {
+    const [local, setLocal] = useState(String(value));
+    useEffect(() => { setLocal(String(value)); }, [value]);
+    return field(label,
+      <input type="number" step={step} inputMode="decimal" value={local}
+        onChange={e => setLocal(e.target.value)}
+        onBlur={() => { const n = Number(local.replace(",", ".")); if (!isNaN(n)) onCh(n); }}
+        style={inputStyle} />
+    );
+  };
+
+  return (
+    <div style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, padding: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: C.text, flex: 1, textTransform: "capitalize" }}>
+          {({ text: "Texte", barcode: "Code-barres", qrcode: "QR code", line: "Ligne", rect: "Forme", image: "Image" } as Record<string, string>)[el.type] || el.type}
+        </div>
+        <button onClick={onDuplicate} style={{ padding: "7px 12px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer", color: C.text, fontFamily: "inherit" }}>Dupliquer</button>
+        <button onClick={onDelete} style={{ padding: "7px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer", color: C.red, fontFamily: "inherit" }}>Supprimer</button>
+      </div>
+
+      {/* Contenu selon le type */}
+      {el.type === "text" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+          {field("Texte", <input value={el.text || ""} onChange={e => onChange({ ...el, text: e.target.value })} style={inputStyle} placeholder="Votre texte…" />)}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <NumBox label="Taille (pt)" value={el.fontSize || 14} onCh={v => onChange({ ...el, fontSize: Math.max(6, Math.min(288, v)) })} />
+            {field("Alignement",
+              <div style={{ display: "flex", gap: 4 }}>
+                {(["left", "center", "right"] as const).map(a => (
+                  <button key={a} onClick={() => onChange({ ...el, align: a })}
+                    style={{ flex: 1, padding: "9px 0", border: `1.5px solid ${el.align === a || (!el.align && a === "left") ? C.blue : C.border}`, background: el.align === a || (!el.align && a === "left") ? C.blueSoft : C.white, borderRadius: 8, cursor: "pointer", fontSize: 15, color: C.text }}>
+                    {a === "left" ? "⯇" : a === "center" ? "≡" : "⯈"}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button onClick={() => onChange({ ...el, bold: !el.bold })}
+            style={{ padding: "10px 0", border: `1.5px solid ${el.bold ? C.blue : C.border}`, background: el.bold ? C.blueSoft : C.white, borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 800, color: C.text, fontFamily: "inherit" }}>
+            {el.bold ? "✓ Gras" : "Gras"}
+          </button>
+        </div>
+      )}
+
+      {(el.type === "barcode" || el.type === "qrcode") && (
+        <div style={{ marginBottom: 12 }}>
+          {field(el.type === "barcode" ? "Valeur du code-barres" : "Contenu du QR", <input value={el.value || ""} onChange={e => onChange({ ...el, value: e.target.value })} style={inputStyle} placeholder={el.type === "barcode" ? "123456789" : "Texte ou lien" } />)}
+        </div>
+      )}
+
+      {el.type === "line" && (
+        <div style={{ marginBottom: 12 }}>
+          <NumBox label="Épaisseur (mm)" value={el.thickness || 0.5} onCh={v => onChange({ ...el, thickness: Math.max(0.1, v) })} step={0.1} />
+        </div>
+      )}
+
+      {el.type === "rect" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => onChange({ ...el, filled: false })}
+              style={{ flex: 1, padding: "10px 0", border: `1.5px solid ${!el.filled ? C.blue : C.border}`, background: !el.filled ? C.blueSoft : C.white, borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700, color: C.text, fontFamily: "inherit" }}>Contour</button>
+            <button onClick={() => onChange({ ...el, filled: true })}
+              style={{ flex: 1, padding: "10px 0", border: `1.5px solid ${el.filled ? C.blue : C.border}`, background: el.filled ? C.blueSoft : C.white, borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700, color: C.text, fontFamily: "inherit" }}>Plein</button>
+          </div>
+          {!el.filled && <NumBox label="Épaisseur (mm)" value={el.thickness || 0.5} onCh={v => onChange({ ...el, thickness: Math.max(0.1, v) })} step={0.1} />}
+        </div>
+      )}
+
+      {/* Position & taille — commun à tous */}
+      <div style={{ fontSize: 10.5, color: C.textMuted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>Position &amp; taille (mm)</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+        <NumBox label="X" value={Math.round(el.x * 10) / 10} onCh={v => onChange({ ...el, x: Math.max(0, v) })} step={0.5} />
+        <NumBox label="Y" value={Math.round(el.y * 10) / 10} onCh={v => onChange({ ...el, y: Math.max(0, v) })} step={0.5} />
+        <NumBox label="Larg." value={Math.round(el.w * 10) / 10} onCh={v => onChange({ ...el, w: Math.max(3, v) })} step={0.5} />
+        <NumBox label="Haut." value={Math.round(el.h * 10) / 10} onCh={v => onChange({ ...el, h: Math.max(2, v) })} step={0.5} />
       </div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────
-// PDF generation via jsPDF
+// Génération PDF via jsPDF (barcode inchangé ; QR réel ; rect ajouté)
 // ─────────────────────────────────────────────────────────────────
 export async function generateLabelPDF(template: LabelTemplate): Promise<string> {
-  // Dynamically import jsPDF
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({
     orientation: template.widthMM > template.heightMM ? "landscape" : "portrait",
@@ -471,15 +495,24 @@ export async function generateLabelPDF(template: LabelTemplate): Promise<string>
     if (el.type === "text") {
       doc.setFontSize(el.fontSize || 12);
       doc.setFont("helvetica", el.bold ? "bold" : "normal");
-      const x = el.type === "text" && el.align === "center" ? el.x + el.w / 2
-        : el.align === "right" ? el.x + el.w : el.x;
+      const x = el.align === "center" ? el.x + el.w / 2 : el.align === "right" ? el.x + el.w : el.x;
       const align = (el.align === "center" ? "center" : el.align === "right" ? "right" : "left") as any;
       doc.text(el.text || "", x, el.y + (el.fontSize || 12) * 0.35, { align, maxWidth: el.w });
     }
 
     if (el.type === "line") {
       doc.setLineWidth(el.thickness || 0.5);
-      doc.line(el.x, el.y, el.x + el.w, el.y);
+      doc.line(el.x, el.y + el.h / 2, el.x + el.w, el.y + el.h / 2);
+    }
+
+    if (el.type === "rect") {
+      if (el.filled) {
+        doc.setFillColor(0, 0, 0);
+        doc.rect(el.x, el.y, el.w, el.h, "F");
+      } else {
+        doc.setLineWidth(el.thickness || 0.5);
+        doc.rect(el.x, el.y, el.w, el.h, "S");
+      }
     }
 
     if (el.type === "image" && el.dataUrl) {
@@ -490,24 +523,22 @@ export async function generateLabelPDF(template: LabelTemplate): Promise<string>
     }
 
     if (el.type === "barcode" && el.value) {
-      // Render barcode to canvas, then add as image
       const canvas = document.createElement("canvas");
       canvas.width = Math.round(el.w * 8);
       canvas.height = Math.round(el.h * 8);
       renderBarcode128(canvas, el.value);
-      const dataUrl = canvas.toDataURL("image/png");
-      doc.addImage(dataUrl, "PNG", el.x, el.y, el.w, el.h);
+      doc.addImage(canvas.toDataURL("image/png"), "PNG", el.x, el.y, el.w, el.h);
     }
 
     if (el.type === "qrcode" && el.value) {
-      // Simple QR placeholder — real QR needs qrcode lib
-      // For now render a black square with text below
-      doc.setFillColor(0, 0, 0);
-      doc.rect(el.x, el.y, el.w, el.h, "F");
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(4);
-      doc.text("QR", el.x + el.w / 2, el.y + el.h / 2, { align: "center" });
-      doc.setTextColor(0, 0, 0);
+      const url = await makeQrDataUrl(el.value, Math.round(Math.min(el.w, el.h) * 12));
+      if (url) {
+        doc.addImage(url, "PNG", el.x, el.y, el.w, el.h);
+      } else {
+        // Fallback si la lib QR est indispo : carré noir (mieux que rien).
+        doc.setFillColor(0, 0, 0);
+        doc.rect(el.x, el.y, el.w, el.h, "F");
+      }
     }
   }
 
