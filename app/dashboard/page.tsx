@@ -4823,10 +4823,6 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
               const totalEntrees = stockRunningBalance.filter(m => m.type === "Entrée" || m.type === "Ajustement +").reduce((s, m) => s + m.qty, 0);
               const totalSorties = stockRunningBalance.filter(m => m.type === "Sortie" || m.type === "Ajustement −").reduce((s, m) => s + m.qty, 0);
               const soldeTheorique = totalEntrees - totalSorties;
-              const maxBalance = Math.max(...stockRunningBalance.map(m => m.balance), 1);
-              const minBalance = Math.min(...stockRunningBalance.map(m => m.balance), 0);
-              const range = maxBalance - minBalance || 1;
-              const chartH = 140;
               return (
                 <div style={{ display: "grid", gap: 16 }}>
                   {/* KPIs */}
@@ -4852,68 +4848,6 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                     <div className="wms-card" style={{ padding: "16px 20px", borderLeft: "3px solid var(--border)" }}>
                       <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 6 }}>Mouvements</div>
                       <div style={{ fontSize: 26, fontWeight: 800, fontFamily: MONO }}>{stockRunningBalance.length}</div>
-                    </div>
-                  </div>
-
-                  {/* Graphique */}
-                  <div className="wms-card" style={{ padding: "20px 24px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 700 }}>Évolution du stock théorique</div>
-                        {moveProductName && <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>{moveProductName}</div>}
-                      </div>
-                      <div style={{ display: "flex", gap: 12, fontSize: 11, color: "var(--text-muted)" }}>
-                        <span>⬤ <span style={{ color: "var(--accent)" }}>Solde</span></span>
-                        {stockAnomalies.length > 0 && <span>⬤ <span style={{ color: "var(--danger)" }}>Anomalie</span></span>}
-                      </div>
-                    </div>
-                    {/* Labels axe Y */}
-                    <div style={{ position: "relative" }}>
-                      <div style={{ position: "absolute", right: "100%", top: 0, paddingRight: 6, fontSize: 10, color: "var(--text-muted)", fontFamily: MONO }}>{Math.round(maxBalance)}</div>
-                      <div style={{ position: "absolute", right: "100%", top: "50%", paddingRight: 6, fontSize: 10, color: "var(--text-muted)", fontFamily: MONO, transform: "translateY(-50%)" }}>{Math.round((maxBalance + minBalance) / 2)}</div>
-                      <div style={{ position: "absolute", right: "100%", bottom: 20, paddingRight: 6, fontSize: 10, color: "var(--text-muted)", fontFamily: MONO }}>{Math.round(minBalance)}</div>
-                      <svg width="100%" height={chartH + 20} style={{ overflow: "visible", display: "block" }}>
-                        <line x1="0" y1={chartH - ((0 - minBalance) / range) * chartH} x2="100%" y2={chartH - ((0 - minBalance) / range) * chartH} stroke="var(--border)" strokeDasharray="4,4" strokeWidth="1" />
-                        {stockRunningBalance.length > 1 && (() => {
-                          const pts = stockRunningBalance.map((m, i) => {
-                            const x = (i / (stockRunningBalance.length - 1)) * 100;
-                            const y = chartH - ((m.balance - minBalance) / range) * chartH;
-                            return `${x}%,${y}`;
-                          });
-                          return (
-                            <>
-                              <defs>
-                                <linearGradient id="stGrad" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.3" />
-                                  <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
-                                </linearGradient>
-                              </defs>
-                              <polygon points={`0%,${chartH} ${pts.join(" ")} 100%,${chartH}`} fill="url(#stGrad)" />
-                              <polyline points={pts.join(" ")} fill="none" stroke="var(--accent)" strokeWidth="2.5" strokeLinejoin="round" />
-                              {/* Points : uniquement les soldes négatifs (les vraies
-                                  anomalies). Au-delà de 60, on n'affiche plus de points
-                                  pour ne pas noyer le graphe — le détail reste dans la
-                                  liste "Anomalies détectées" et le tableau plus bas. */}
-                              {(() => {
-                                const negatives = stockRunningBalance
-                                  .map((m, i) => ({ m, i }))
-                                  .filter(({ m }) => m.balance < 0);
-                                if (negatives.length > 60) return null;
-                                return negatives.map(({ m, i }) => {
-                                  const x = (i / (stockRunningBalance.length - 1)) * 100;
-                                  const y = chartH - ((m.balance - minBalance) / range) * chartH;
-                                  return <circle key={i} cx={`${x}%`} cy={y} r={5} fill="var(--danger)" stroke="white" strokeWidth="1.5" />;
-                                });
-                              })()}
-                            </>
-                          );
-                        })()}
-                      </svg>
-                      {/* Axe X labels (premier et dernier) */}
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--text-muted)", fontFamily: MONO, marginTop: 4 }}>
-                        <span>{fmtDate(stockRunningBalance[0].date)}</span>
-                        <span>{fmtDate(stockRunningBalance[stockRunningBalance.length - 1].date)}</span>
-                      </div>
                     </div>
                   </div>
 
