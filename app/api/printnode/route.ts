@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     const { action } = body;
 
     if (action === "print") {
-      const { printerId, title, content, source, usePdf, labelWidthMM, labelHeightMM, contentType: reqContentType } = body;
+      const { printerId, title, content, source, usePdf, labelWidthMM, labelHeightMM, contentType: reqContentType, qty } = body;
 
       let finalContent = content;
       let contentType = "raw_base64";
@@ -66,6 +66,11 @@ export async function POST(req: NextRequest) {
         contentType = "pdf_base64";
       }
 
+      // Nombre de copies : PrintNode l'accepte via le champ "options.copies".
+      // Sans ça, un template PDF ne sortait qu'en 1 exemplaire quelle que soit
+      // la quantité demandée.
+      const copies = Math.max(1, Math.round(Number(qty) || 1));
+
       const res = await fetchT(`${API_URL}/printjobs`, {
         method: "POST",
         headers: pnHeaders(),
@@ -73,6 +78,7 @@ export async function POST(req: NextRequest) {
           printerId, title, contentType,
           content: finalContent,
           source: source || "WMS Scanner",
+          ...(copies > 1 ? { options: { copies } } : {}),
         }),
       });
 
