@@ -133,13 +133,17 @@ function ElementPreview({ el, scale }: { el: LabelElement; scale: number }) {
   if (el.type === "text") return (
     <div style={{
       width: w, height: h, overflow: "hidden",
-      fontSize: (el.fontSize || 12) * scale * 0.85,
-      fontWeight: el.bold ? 800 : 400,
+      // fontSize est en POINTS (comme le PDF). À l'écran on convertit pt→px
+      // (1pt = 1.3333px) puis on applique l'échelle du canvas, pour que l'aperçu
+      // corresponde à la taille réellement imprimée. Pas de facteur arbitraire.
+      fontSize: (el.fontSize || 12) * 1.3333 * scale,
+      fontWeight: el.bold ? 700 : 400,
       textAlign: el.align || "left",
-      lineHeight: 1.15, color: "#000",
+      lineHeight: 1, color: "#000",
       display: "flex", alignItems: "center",
       justifyContent: el.align === "center" ? "center" : el.align === "right" ? "flex-end" : "flex-start",
-      padding: "0 2px", boxSizing: "border-box",
+      padding: 0, boxSizing: "border-box",
+      whiteSpace: "nowrap",
     }}>{el.text || "Texte"}</div>
   );
 
@@ -493,11 +497,17 @@ export async function generateLabelPDF(template: LabelTemplate): Promise<string>
 
   for (const el of template.elements) {
     if (el.type === "text") {
-      doc.setFontSize(el.fontSize || 12);
+      const fs = el.fontSize || 12;
+      doc.setFontSize(fs);
       doc.setFont("helvetica", el.bold ? "bold" : "normal");
       const x = el.align === "center" ? el.x + el.w / 2 : el.align === "right" ? el.x + el.w : el.x;
       const align = (el.align === "center" ? "center" : el.align === "right" ? "right" : "left") as any;
-      doc.text(el.text || "", x, el.y + (el.fontSize || 12) * 0.35, { align, maxWidth: el.w });
+      // Centrage vertical dans la boîte, comme à l'écran (alignItems:center).
+      // 1 pt = 0.3528 mm ; on place la baseline au milieu + ~un tiers de la hauteur
+      // de casse pour centrer optiquement.
+      const fsMM = fs * 0.3528;
+      const baselineY = el.y + el.h / 2 + fsMM * 0.35;
+      doc.text(el.text || "", x, baselineY, { align, maxWidth: el.w, baseline: "alphabetic" });
     }
 
     if (el.type === "line") {
