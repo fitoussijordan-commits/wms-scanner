@@ -173,9 +173,31 @@ function cleanLotForBarcode(lotName: string): string {
   return part.replace(/\//g, "").trim() || lotName;
 }
 
+// Vrai si le dernier chiffre est le chiffre de contrôle EAN valide des précédents.
+// Sert à ne router vers l'encodage EAN QUE les codes réellement valides : sinon
+// l'imprimante RECALCULE le dernier chiffre (ex. 7061469000000 devient ...0003),
+// ce qui donne un code affiché différent de celui saisi.
+function isValidEanCheckDigit(digits: string): boolean {
+  const n = digits.length;
+  if (n !== 8 && n !== 13) return false;
+  const body = digits.slice(0, n - 1);
+  const given = Number(digits[n - 1]);
+  let sum = 0;
+  // Poids 3/1 en partant de la droite du corps (règle EAN-8 et EAN-13).
+  for (let i = 0; i < body.length; i++) {
+    const d = Number(body[body.length - 1 - i]);
+    sum += d * (i % 2 === 0 ? 3 : 1);
+  }
+  const check = (10 - (sum % 10)) % 10;
+  return check === given;
+}
+
 function barcodeZPL(barcode: string, labelW: number, y: number, height: number, preferredBarW: number = 3): string {
-  const isEAN13 = /^\d{13}$/.test(barcode);
-  const isEAN8 = /^\d{8}$/.test(barcode);
+  // On ne traite comme EAN que si le chiffre de contrôle est déjà bon. Sinon le
+  // code est imprimé en Code128 (^BC), qui affiche les chiffres À L'IDENTIQUE,
+  // sans rien recalculer.
+  const isEAN13 = /^\d{13}$/.test(barcode) && isValidEanCheckDigit(barcode);
+  const isEAN8 = /^\d{8}$/.test(barcode) && isValidEanCheckDigit(barcode);
 
   let barW = preferredBarW;
 
