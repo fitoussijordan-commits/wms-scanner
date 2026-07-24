@@ -3833,28 +3833,17 @@ export default function Page() {
               const printerId = cfg.printerId || pn.getSavedPrinterId();
               if (!printerId) { showToast("⚠️ Aucune imprimante BL configurée"); return; }
               const ids: number[] = picking._groupIds || [picking.id];
-              // Comptage silencieux des autres commandes du même client (sert au
-              // marquage "N/total" du bon). Pas de popup — juste l'info sur l'étiquette.
-              let siblingCount = 0;
-              const partnerId = Array.isArray(picking.partner_id) ? picking.partner_id[0] : null;
-              if (partnerId) {
-                try {
-                  const siblings = await odoo.findSiblingPickingsForPartner(session, partnerId, ids);
-                  siblingCount = siblings.length;
-                } catch { /* en cas d'erreur de vérif, on n'empêche pas l'impression */ }
-              }
               showToast(`🖨️ Impression ${picking.name}…`);
               const pickingDate = picking.shipping_date || picking.date_deadline || picking.scheduled_date;
+              // Marquage N/total : simplement la position dans les bons réellement
+              // imprimés. Un BL seul = 1/1 ; un groupe de 3 = 1/3, 2/3, 3/3.
               const total = ids.length;
-              // Si client avec d'autres commandes en prépa ET impression d'un seul bon →
-              // on note "N/total" (N = cette commande, total = toutes celles du client).
-              const coupleTotal = (total === 1 && siblingCount > 0) ? siblingCount + 1 : 0;
               for (let i = 0; i < ids.length; i++) {
                 const r = await odoo.printPickingReportDirect(session, ids[i], printerId, {
                   title: `Bon_${picking.name}.pdf`,
                   overlayDate: pickingDate,
-                  overlayIndex: coupleTotal ? coupleTotal : i + 1,
-                  overlayTotal: coupleTotal ? coupleTotal : total,
+                  overlayIndex: i + 1,
+                  overlayTotal: total,
                 });
                 if (!r.success) showToast(`❌ ${r.error}`);
                 else showToast(`✅ BL ${picking.name} imprimé`);
