@@ -1690,19 +1690,30 @@ export default function Page() {
     if (packing.status  === "fulfilled") setBadgePacking(packing.value   > 0 ? packing.value   : null);
   }, [session]);
 
+  // Rafraîchit les badges du menu. Le polling tourne EN PERMANENCE (pas seulement
+  // sur l'accueil) : sinon, en emballant ou en préparant, les compteurs restaient
+  // figés à leur ancienne valeur et ne se remettaient à jour qu'au retour sur
+  // l'accueil, après un délai pouvant atteindre 135 s.
   useEffect(() => {
-    if (screen !== "home" || !session) return;
+    if (!session) return;
     loadBadges();
-    // Refresh au focus + polling 45s (au lieu de 2 min figées).
     let timer: any = null; let lastRun = Date.now();
     const visible = () => document.visibilityState === "visible";
     const tick = () => { lastRun = Date.now(); loadBadges(); };
-    const schedule = () => { if (timer) clearTimeout(timer); if (!visible()) return; timer = setTimeout(() => { tick(); schedule(); }, 135_000); };
+    // Rythme plus court quand l'onglet est visible (30 s) — c'est là que l'écart
+    // se voit ; on ne poll pas en arrière-plan pour ménager le réseau.
+    const schedule = () => { if (timer) clearTimeout(timer); if (!visible()) return; timer = setTimeout(() => { tick(); schedule(); }, 30_000); };
     const onWake = () => { if (visible() && Date.now() - lastRun > 3000) tick(); schedule(); };
     schedule();
     window.addEventListener("focus", onWake);
     document.addEventListener("visibilitychange", onWake);
     return () => { if (timer) clearTimeout(timer); window.removeEventListener("focus", onWake); document.removeEventListener("visibilitychange", onWake); };
+  }, [session, loadBadges]);
+
+  // Rafraîchit immédiatement à CHAQUE retour sur l'accueil, quel que soit l'écran
+  // quitté (emballage, préparation…) — pour ne pas attendre le prochain tick.
+  useEffect(() => {
+    if (screen === "home" && session) loadBadges();
   }, [screen, session, loadBadges]);
 
   // Polling nouvelles commandes en attente — desktop uniquement, toutes les 60s
