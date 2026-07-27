@@ -23,8 +23,9 @@ import { fetchT } from "@/lib/fetchTimeout";
 import {
   getEshopMappingOverrides, getEshopMappingCache, saveEshopMappingCache,
   getProcessedEshopOrders, markEshopOrdersProcessed, decrementChariotStock,
-  saveCronRunStatus, getCronRunStatus,
+  saveCronRunStatus, getCronRunStatus, loadFieldOverrides,
 } from "@/lib/supabase";
+import { F, setFieldOverrides } from "@/lib/fieldMap";
 
 // Marge de sécurité (par défaut 10s sur les plans serverless standards) — évite un run
 // tronqué silencieusement si beaucoup de commandes sont à traiter un jour donné.
@@ -35,6 +36,34 @@ function safeErrMsg(e: any): string {
   if (e instanceof Error) return e.message;
   if (typeof e === "string") return e;
   try { return JSON.stringify(e); } catch { return String(e); }
+}
+
+// ─── Dates en heure de Paris ────────────────────────────────────────────────
+// Le cron tourne sur Vercel en UTC, alors que la sortie manuelle tourne dans le
+// navigateur de l'opérateur (Europe/Paris). Sans conversion, un run lancé après
+// 22h/23h UTC daterait les commandes du lendemain (ou de la veille).
+
+function parisParts(d: Date): Record<string, string> {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Paris",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).formatToParts(d);
+  const out: Record<string, string> = {};
+  for (const p of parts) out[p.type] = p.value;
+  return out;
+}
+
+/** "YYYY-MM-DD" du jour, heure de Paris (champ Odoo de type date). */
+function todayParis(d: Date = new Date()): string {
+  const p = parisParts(d);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+/** "YYYY-MM-DD HH:MM:SS" maintenant, heure de Paris (champ Odoo de type datetime). */
+function nowParisDateTime(d: Date = new Date()): string {
+  const p = parisParts(d);
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
 }
 
 // ─── Config ─────────────────────────────────────────────────────────────────
@@ -248,11 +277,14 @@ async function createQuotation(
       name: `${l.name}\nCommandes : ${l.orders}`.trim(),
     }]),
   };
+  // Date d'expédition prévue = aujourd'hui — STRICTEMENT les mêmes champs que la
+  // sortie manuelle (createEshopQuotation dans lib/odoo.ts) : le champ custom Studio
+  // ET commitment_date. C'est x_studio_date_dexpdition_prvue que lisent les écrans
+  // « En attente », Préparation, Emballage et le dashboard : sans lui, les commandes
+  // du cron arrivaient sans date d'expédition prévue.
   try {
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    vals.commitment_date = `${today} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    vals[F("SHIPPING_DATE")] = todayParis();     // champ "date" → YYYY-MM-DD
+    vals.commitment_date = nowParisDateTime();   // champ "datetime" → YYYY-MM-DD HH:MM:SS
   } catch {}
   // Étiquettes de traçabilité (mêmes que l'écran manuel)
   try {
@@ -270,6 +302,23 @@ async function createQuotation(
   try { await odooCall(s, "sale.order", "action_confirm", [[id]]); } catch { /* reste en devis si échec — non bloquant */ }
   const rec = await odooSearch(s, "sale.order", [["id", "=", id]], ["id", "name"], 1);
   return { id, name: rec[0]?.name || String(id) };
+}
+
+// ─── Date d'expédition prévue sur les pickings générés ───────────────────────
+// Filet de sécurité : la date posée sur la sale.order est normalement propagée
+// aux pickings par Studio. Si la propagation ne se fait pas, les commandes du
+// cron ressortent sans date dans « En attente ». On complète donc les pickings
+// dont le champ est vide, AVANT validation (un picking `done` n'est plus
+// modifiable). Purement non bloquant : toute erreur est avalée et loguée.
+async function fillPickingShippingDate(s: OSess, orderId: number, date: string): Promise<number> {
+  const field = F("SHIPPING_DATE");
+  const picks = await odooSearch(s, "stock.picking",
+    [["sale_id", "=", orderId], ["state", "not in", ["done", "cancel"]]],
+    ["id", "name", field], 20);
+  const toFill = picks.filter((p: any) => !p[field]).map((p: any) => p.id);
+  if (!toFill.length) return 0;
+  await odooWrite(s, "stock.picking", toFill, { [field]: date });
+  return toFill.length;
 }
 
 // ─── Validation strict pick + out (identique à validateOrderPickings) ─────
@@ -339,6 +388,18 @@ async function runCron(): Promise<any> {
     return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
   };
   L(`[cron] Fenêtre (heure Paris) : ${fmt(start)} → ${fmt(end)} (lookback ${LOOKBACK_HOURS}h)`);
+
+  // Mapping des champs Odoo : même source que l'app (Supabase), pour que F() résolve
+  // ici exactement comme dans l'écran manuel — y compris si un champ custom a été
+  // renommé via la roue crantée. Sans ça, le cron écrirait sur l'ancien nom.
+  try {
+    const fo = await loadFieldOverrides();
+    setFieldOverrides(fo);
+    const shipField = F("SHIPPING_DATE");
+    L(`[cron] Mapping champs chargé — date d'expédition prévue = "${shipField}"`);
+  } catch (e: any) {
+    L(`[cron] ⚠ Mapping champs non chargé (valeurs par défaut) : ${safeErrMsg(e)}`);
+  }
 
   L(`[cron] Auth Odoo…`);
   const s = await odooAuth();
@@ -437,6 +498,13 @@ async function runCron(): Promise<any> {
       toDeduct.map(a => ({ productId: a.productId, qty: a.qty, name: a.name, orders: a.cmds.join(", ") })),
       origin);
     L(`[cron] ✅ Commande créée : ${quotation.name}`);
+
+    // Complète la date d'expédition prévue sur les pickings si Studio ne l'a pas
+    // propagée depuis la commande. Doit passer AVANT la validation.
+    try {
+      const filled = await fillPickingShippingDate(s, quotation.id, todayParis());
+      if (filled) L(`[cron] Date d'expédition prévue complétée sur ${filled} picking(s)`);
+    } catch (e: any) { L(`[cron] ⚠ Date d'expédition non posée sur les pickings : ${safeErrMsg(e)}`); }
   }
 
   // Garde-fou : marque les commandes réellement incluses comme sorties (source = cron)
