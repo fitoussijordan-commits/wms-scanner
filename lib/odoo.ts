@@ -1596,19 +1596,23 @@ export async function packAndShipOut(
       ["id", "reserved_uom_qty"], 500);
   }
 
-  // ── 3. Créer les N colis en UN SEUL appel, poids inclus dès la création ──────
+  // ── 3. Créer les N colis, poids inclus dès la création ──────────────────────
+  //     Un create par colis, lancés EN PARALLÈLE : c'est déjà une seule vague
+  //     d'allers-retours, exactement comme un multi-create, mais sans dépendre
+  //     du comportement d'Odoo sur create([{...},{...}]) — un multi-create qui
+  //     retourne autre chose qu'une liste d'ids donne 1 seul colis, donc 1 seule
+  //     étiquette transporteur au lieu de N.
   const totalWeight = packageWeights.reduce((s, w) => s + w, 0);
-  let packageIds: number[];
-  try {
-    const created = await create(session, M("MODEL_QUANT_PACKAGE"),
-      packageWeights.map(w => ({ shipping_weight: w })));
-    packageIds = Array.isArray(created) ? created : [created];
-    if (packageIds.length !== nPackages) throw new Error("multi-create incomplet");
-  } catch {
-    // Odoo trop ancien pour le multi-create, ou champ refusé au create → repli
-    packageIds = await Promise.all(
-      packageWeights.map(() => create(session, M("MODEL_QUANT_PACKAGE"), {}) as Promise<number>)
-    );
+  const packageIds: number[] = await Promise.all(
+    packageWeights.map(w =>
+      // shipping_weight au create ; si la version d'Odoo le refuse ici, la vague
+      // 4a le réécrit juste après.
+      (create(session, M("MODEL_QUANT_PACKAGE"), { shipping_weight: w }) as Promise<number>)
+        .catch(() => create(session, M("MODEL_QUANT_PACKAGE"), {}) as Promise<number>)
+    )
+  );
+  if (packageIds.length !== nPackages || packageIds.some(id => !id)) {
+    throw new Error(`Création des colis incomplète (${packageIds.filter(Boolean).length}/${nPackages})`);
   }
 
   // ── 4. Une seule vague parallèle pour tout le reste ──────────────────────────
@@ -1697,21 +1701,33 @@ export async function packAndShipOut(
   // ── 7. Étiquettes transporteur : polling en tâche de fond ───────────────────
   //     Ne bloque plus le retour de la fonction : l'appelant affiche le succès
   //     immédiatement et suit `labelsPromise` pour lancer l'impression.
-  //     Une erreur réseau ponctuelle ne doit pas interrompre le polling : on
-  //     avale l'erreur et on retente au tour suivant.
-  const pollLabels = async (maxMs: number, intervalMs: number): Promise<any[]> => {
+  //     ⚠ On attend N étiquettes, pas une seule. TNT/SendCloud écrit les pièces
+  //     jointes une par une : s'arrêter à la première (ce que faisait la version
+  //     précédente) ne fait imprimer qu'UNE étiquette pour un envoi en 3 colis.
+  //     On continue donc jusqu'à en avoir `expected`, et une fois la première
+  //     arrivée on laisse encore LABEL_SETTLE_MS aux suivantes avant d'abandonner.
+  //     Une erreur réseau ponctuelle n'interrompt pas la boucle.
+  const LABEL_SETTLE_MS = 6000;
+  const pollLabels = async (maxMs: number, intervalMs: number, expected: number): Promise<any[]> => {
     const deadline = Date.now() + maxMs;
+    let best: any[] = [];
+    let firstSeenAt = 0;
     while (Date.now() < deadline) {
       try {
         const atts = await searchRead(session, M("MODEL_ATTACHMENT"),
           [["res_model", "=", M("MODEL_PICKING")], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
           ["id", "name", "datas", "create_date"], 100);
         const fresh = atts.filter((a: any) => !existingIds.has(a.id));
-        if (fresh.length > 0) return fresh;
-      } catch { /* on retente */ }
+        if (fresh.length > best.length) {
+          best = fresh;
+          if (!firstSeenAt) firstSeenAt = Date.now();
+        }
+        if (best.length >= expected) return best;                              // toutes reçues
+        if (firstSeenAt && Date.now() - firstSeenAt > LABEL_SETTLE_MS) return best; // les retardataires ne viendront plus
+      } catch { /* on retente au tour suivant */ }
       await new Promise(r => setTimeout(r, intervalMs));
     }
-    return [];
+    return best;
   };
 
   const labelsPromise: Promise<any[]> = !hasCarrier
@@ -1719,13 +1735,16 @@ export async function packAndShipOut(
     ? Promise.resolve([])
     : (async () => {
         // Odoo appelle normalement send_to_shipper dans button_validate :
-        // l'étiquette est souvent déjà là. Polling serré d'abord (1,5 s / 200 ms).
-        const quick = await pollLabels(1500, 200);
-        if (quick.length > 0) return quick;
-        // Rien reçu → on redéclenche l'envoi au transporteur, puis polling détendu
+        // les étiquettes sont souvent déjà là. Polling serré d'abord.
+        // On attend les nPackages étiquettes, pas seulement la première.
+        const quick = await pollLabels(8000, 300, nPackages);
+        if (quick.length >= nPackages) return quick;
+        // Incomplet → on redéclenche l'envoi au transporteur, puis polling détendu
         // (1,5 s d'intervalle : ~20 requêtes sur 30 s, sous la limite du proxy).
         try { await callMethod(session, M("MODEL_PICKING"), "send_to_shipper", [[outPickingId]]); } catch {}
-        return pollLabels(30_000, 1500);
+        const late = await pollLabels(30_000, 1500, nPackages);
+        // On garde le meilleur des deux passes (send_to_shipper peut échouer).
+        return late.length >= quick.length ? late : quick;
       })();
 
   return {
