@@ -112,6 +112,12 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
 
   const runShipFix = async () => {
     if (shipFixBusy) return;
+    // Sans NEXT_PUBLIC_WMS_TOKEN au build, aucun entête n'est envoyé → 401 opaque.
+    // On le dit clairement plutôt que de laisser un « Non autorisé » inexplicable.
+    if (!writeHeaders["x-wms-token"]) {
+      onToast("Token d'écriture absent de cette build (NEXT_PUBLIC_WMS_TOKEN)", "error");
+      return;
+    }
     setShipFixBusy(true);
     try {
       const r = await fetch("/api/fix-shipping-date", { method: "POST", headers: writeHeaders }).then(x => x.json());

@@ -27,7 +27,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchT } from "@/lib/fetchTimeout";
 import { loadFieldOverrides, getFixShipDateStatus, saveFixShipDateStatus } from "@/lib/supabase";
 import { F, setFieldOverrides } from "@/lib/fieldMap";
-import { requireInternalToken } from "@/lib/apiAuth";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -238,10 +237,20 @@ async function run(orders: string[], dry: boolean, force: boolean): Promise<any>
 // Deux façons de s'authentifier :
 //  - Bearer {CRON_SECRET} → appel depuis un terminal / un job externe
 //  - x-wms-token          → appel depuis l'app (bouton de l'écran E-shop)
+//
+// ⚠ Le token d'écriture de l'app est WMS_WRITE_TOKEN côté serveur (= la valeur de
+// NEXT_PUBLIC_WMS_TOKEN côté client), comme dans cronjob-control et shopware-explore.
+// WMS_INTERNAL_TOKEN (lib/apiAuth) est une AUTRE variable, non configurée sur ce
+// projet : s'en servir ici renvoyait systématiquement « Non autorisé ».
+// On accepte les deux, celle qui est renseignée gagne.
 function checkAuth(req: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET || "";
   if (cronSecret && (req.headers.get("authorization") || "") === `Bearer ${cronSecret}`) return true;
-  return requireInternalToken(req) === null;
+
+  const received = req.headers.get("x-wms-token") || "";
+  if (!received) return false;
+  const accepted = [process.env.WMS_WRITE_TOKEN || "", process.env.WMS_INTERNAL_TOKEN || ""].filter(Boolean);
+  return accepted.some(expected => expected === received);
 }
 
 function parseOpts(req: NextRequest, body?: any) {
@@ -283,6 +292,13 @@ export async function GET(req: NextRequest) {
       done: !!done,
       status: done,
       pending: DEFAULT_ORDERS.length,
+      // Diagnostic non sensible : dit SI un token est configuré, jamais sa valeur.
+      // Permet de comprendre un « Non autorisé » sans fouiller les variables Vercel.
+      auth: {
+        serverWriteToken: !!process.env.WMS_WRITE_TOKEN,
+        serverInternalToken: !!process.env.WMS_INTERNAL_TOKEN,
+        cronSecret: !!process.env.CRON_SECRET,
+      },
     });
   }
 
