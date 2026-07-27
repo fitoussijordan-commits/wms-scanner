@@ -1739,11 +1739,31 @@ export async function packAndShipOut(
         // On attend les nPackages étiquettes, pas seulement la première.
         const quick = await pollLabels(8000, 300, nPackages);
         if (quick.length >= nPackages) return quick;
-        // Incomplet → on redéclenche l'envoi au transporteur, puis polling détendu
-        // (1,5 s d'intervalle : ~20 requêtes sur 30 s, sous la limite du proxy).
-        try { await callMethod(session, M("MODEL_PICKING"), "send_to_shipper", [[outPickingId]]); } catch {}
+
+        // ⚠⚠ NE JAMAIS relancer send_to_shipper si une étiquette existe déjà.
+        // Un 2e appel recrée un envoi TNT COMPLET : sur 8 colis, ça génère 8
+        // étiquettes supplémentaires (donc impression en double) ET un second
+        // numéro de suivi facturé. On ne le déclenche que si RIEN n'est parti :
+        // zéro pièce jointe ET aucun numéro de suivi sur le picking.
+        if (quick.length === 0) {
+          let alreadyShipped = false;
+          try {
+            const [p] = await searchRead(session, M("MODEL_PICKING"),
+              [["id", "=", outPickingId]], ["carrier_tracking_ref"], 1);
+            alreadyShipped = !!p?.carrier_tracking_ref;
+          } catch {
+            // Doute sur l'état → on s'abstient. Mieux vaut aucune étiquette
+            // imprimée qu'un second envoi transporteur facturé.
+            alreadyShipped = true;
+          }
+          if (!alreadyShipped) {
+            try { await callMethod(session, M("MODEL_PICKING"), "send_to_shipper", [[outPickingId]]); } catch {}
+          }
+        }
+
+        // Étiquettes partiellement arrivées (ou envoi relancé) : on attend
+        // simplement les suivantes, sans jamais re-solliciter le transporteur.
         const late = await pollLabels(30_000, 1500, nPackages);
-        // On garde le meilleur des deux passes (send_to_shipper peut échouer).
         return late.length >= quick.length ? late : quick;
       })();
 

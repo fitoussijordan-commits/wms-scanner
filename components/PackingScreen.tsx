@@ -561,7 +561,23 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
       });
 
       // ── 5. Étiquettes transporteur, en tâche de fond ─────────────────────
-      result.labelsPromise.then(async atts => {
+      result.labelsPromise.then(async rawAtts => {
+        // Dédoublonnage avant impression : par id, puis par contenu du PDF.
+        // Si un envoi transporteur a été déclenché deux fois (incident passé),
+        // Odoo porte deux jeux d'étiquettes identiques — on n'en imprime qu'un.
+        const seenIds = new Set<number>();
+        const seenData = new Set<string>();
+        const atts = rawAtts.filter(a => {
+          if (seenIds.has(a.id)) return false;
+          seenIds.add(a.id);
+          const fingerprint = (a.datas || "").slice(0, 512);
+          if (fingerprint && seenData.has(fingerprint)) return false;
+          if (fingerprint) seenData.add(fingerprint);
+          return true;
+        });
+        if (rawAtts.length !== atts.length) {
+          onToast(`⚠ ${rawAtts.length - atts.length} étiquette(s) en double ignorée(s)`, "info");
+        }
         if (!atts.length) {
           setDone(prev => prev ? { ...prev, labelsPending: false } : prev);
           // Ne prévenir que si une étiquette était réellement attendue
