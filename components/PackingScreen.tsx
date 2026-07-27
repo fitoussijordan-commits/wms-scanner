@@ -67,6 +67,7 @@ import FieldSettingsGear from "@/components/FieldSettingsGear";
 const LS_BL_PRINTER    = "wms_packing_bl_printer";
 const LS_LABEL_PRINTER = "wms_packing_label_printer";
 const LS_BL_REPORT     = "wms_packing_bl_report";
+const LS_BL_PARALLEL   = "wms_packing_bl_parallel";
 
 function readLocalPrinter(key: string): number | null {
   try { const v = localStorage.getItem(key); return v ? parseInt(v, 10) : null; } catch { return null; }
@@ -76,6 +77,13 @@ function saveLocalPrinter(key: string, id: number | null) {
 }
 function readLocalStr(key: string, fallback: string): string {
   try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+}
+/** Booléen localStorage — true par défaut si la clé n'a jamais été écrite. */
+function readLocalBool(key: string, fallback: boolean): boolean {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : v === "1"; } catch { return fallback; }
+}
+function saveLocalBool(key: string, val: boolean) {
+  try { localStorage.setItem(key, val ? "1" : "0"); } catch {}
 }
 function saveLocalStr(key: string, val: string) {
   try { localStorage.setItem(key, val); } catch {}
@@ -153,10 +161,12 @@ interface DoneResult {
   pickingName:      string;
   labelCount:       number;
   blPrinted:        boolean;
+  /** BL parti à l'impression, résultat pas encore connu → pastille ⏳ */
+  blPending:        boolean;
   labelPrinted:     boolean;
   labelsPending:    boolean;
   labelAttachments: { id: number; name: string; datas: string }[];
-  groupResults:     { name: string; blPrinted: boolean; blError?: string }[];
+  groupResults:     { name: string; blPrinted: boolean; blPending: boolean; blError?: string }[];
 }
 
 interface PickingReport { id: number; name: string; report_name: string; }
@@ -196,6 +206,10 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   // Guard anti double-exécution
   const packingInProgress = useRef(false);
 
+  // Contexte Odoo pré-chargé à l'ouverture du détail, consommé à la validation.
+  // Pendant que l'opérateur saisit colis + poids, les requêtes sont déjà faites.
+  const prefetchRef = useRef<{ pickingId: number; data: odoo.PackPrefetch } | null>(null);
+
   // (refs conservés pour compatibilité saisie manuelle)
   const scanBufferRef = useRef("");
   const scanTimerRef  = useRef<ReturnType<typeof setTimeout>>();
@@ -204,6 +218,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   const [blPrinterId,      setBlPrinterId]      = useState<number | null>(() => readLocalPrinter(LS_BL_PRINTER));
   const [labelPrinterId,   setLabelPrinterId]   = useState<number | null>(() => readLocalPrinter(LS_LABEL_PRINTER));
   const [blReportName,     setBlReportName]     = useState<string>(() => readLocalStr(LS_BL_REPORT, "stock.report_picking"));
+  const [blParallel,       setBlParallel]       = useState<boolean>(() => readLocalBool(LS_BL_PARALLEL, true));
   const [showPrinterModal, setShowPrinterModal] = useState(false);
   const [printerList,      setPrinterList]      = useState<pn.PrintNodePrinter[]>([]);
   const [reportList,       setReportList]       = useState<PickingReport[]>([]);
@@ -263,6 +278,13 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     setSelectedGroupIds([]);
     setLoadingDetail(true);
     setLoadingGroup(true);
+
+    // Pré-chargement du contexte d'expédition, sans bloquer l'affichage du détail :
+    // il sera prêt bien avant que l'opérateur ait fini de saisir les poids.
+    prefetchRef.current = null;
+    odoo.prefetchPackData(session, pickingId)
+      .then(data => { prefetchRef.current = { pickingId, data }; })
+      .catch(() => { /* la validation refera la requête elle-même */ });
 
     try {
       // Articles + commandes groupées en parallèle
@@ -464,64 +486,99 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
     }
     setPacking(true); setError(""); setBlError("");
     try {
+      const printOpts = {
+        blPrinterId:  blPrinterId ?? undefined,
+        blReportName: blReportName,
+        blParallel,
+      };
+
       // ── 1. Picking principal + satellites EN PARALLÈLE ────────────────────
+      //     Chaque appel ne bloque plus que sur sa validation Odoo : BL et
+      //     étiquettes sont renvoyés sous forme de promesses suivies plus bas.
       const satellitePromises = selectedGroupIds.map(gId =>
-        odoo.validateSatellitePicking(session, gId, {
-          blPrinterId:  blPrinterId ?? undefined,
-          blReportName: blReportName,
-        }).catch((e: any) => ({ name: `OUT-${gId}`, blPrinted: false, blError: e.message }))
+        odoo.validateSatellitePicking(session, gId, printOpts)
+          .catch((e: any) => ({
+            name: `OUT-${gId}`, blPrinted: false, blError: e.message,
+            blPromise: null as any,
+          }))
       );
 
       const [result, ...groupResults] = await Promise.all([
         odoo.packAndShipOut(session, selectedId, parsedWeights, {
-          blPrinterId:  blPrinterId ?? undefined,
-          blReportName: blReportName,
+          ...printOpts,
+          prefetch: prefetchRef.current?.pickingId === selectedId ? prefetchRef.current.data : undefined,
         }),
         ...satellitePromises,
       ]);
 
-      if (result.blError) setBlError(result.blError);
-
-      // ── 2. Afficher succès immédiatement ─────────────────────────────────
+      // ── 2. Succès affiché DÈS que le stock est à jour ────────────────────
+      //     L'impression du BL et l'arrivée de l'étiquette transporteur ne sont
+      //     plus sur le chemin critique : les pastilles ⏳ de l'écran de succès
+      //     passent en 🖨️ toutes seules quand chaque étape se termine.
       const total = 1 + groupResults.length;
       setDone({
         pickingName:      result.pickingName,
-        labelCount:       result.labelAttachments.length,
-        blPrinted:        result.blPrinted ?? false,
+        labelCount:       0,
+        blPrinted:        false,
+        blPending:        !!blPrinterId,
         labelPrinted:     false,
-        labelAttachments: result.labelAttachments,
-        groupResults:     groupResults as any[],
+        labelAttachments: [],
+        groupResults:     groupResults.map((g: any) => ({
+          name: g.name, blPrinted: false, blPending: !!blPrinterId && !!g.blPromise, blError: g.blError,
+        })),
         labelsPending:    result.labelsPending ?? false,
       });
       onToast(`✅ ${total} commande${total > 1 ? "s" : ""} expédiée${total > 1 ? "s" : ""}`, "success");
       setPacking(false);
       packingInProgress.current = false;
+      prefetchRef.current = null;
 
-      // ── 3. Impression étiquettes en arrière-plan ─────────────────────────
-      const printLabels = async (atts: any[]) => {
-        if (!labelPrinterId || !atts.length) return;
+      // ── 3. BL du picking principal, en tâche de fond ─────────────────────
+      result.blPromise.then(r => {
+        setDone(prev => prev ? { ...prev, blPrinted: r.success, blPending: false } : prev);
+        if (!r.success && blPrinterId) setBlError(r.error || "Échec impression BL (raison inconnue)");
+      }).catch((e: any) => {
+        setDone(prev => prev ? { ...prev, blPending: false } : prev);
+        setBlError(e?.message || "Échec impression BL");
+      });
+
+      // ── 4. BL des commandes groupées, en tâche de fond ───────────────────
+      groupResults.forEach((g: any, i: number) => {
+        if (!g.blPromise) return;
+        g.blPromise.then((r: any) => {
+          setDone(prev => prev ? {
+            ...prev,
+            groupResults: prev.groupResults.map((gr, j) =>
+              j === i
+                ? { ...gr, blPrinted: r.success, blPending: false, blError: r.success ? undefined : (r.error || "Échec impression BL") }
+                : gr
+            ),
+          } : prev);
+        }).catch(() => setDone(prev => prev ? {
+          ...prev,
+          groupResults: prev.groupResults.map((gr, j) => j === i ? { ...gr, blPending: false } : gr),
+        } : prev));
+      });
+
+      // ── 5. Étiquettes transporteur, en tâche de fond ─────────────────────
+      result.labelsPromise.then(async atts => {
+        if (!atts.length) {
+          setDone(prev => prev ? { ...prev, labelsPending: false } : prev);
+          // Ne prévenir que si une étiquette était réellement attendue
+          // (picking avec transporteur) — sinon c'est normal.
+          if (result.labelsPending) onToast("⚠ Étiquette non reçue — vérifie SendCloud/TNT", "error");
+          return;
+        }
+        setDone(prev => prev ? { ...prev, labelCount: atts.length, labelAttachments: atts } : prev);
+        if (!labelPrinterId) {
+          setDone(prev => prev ? { ...prev, labelsPending: false } : prev);
+          return;
+        }
         for (const att of atts) {
           if (att.datas) await pn.printPdfLabel(labelPrinterId, att.datas, att.name || "Étiquette");
         }
         setDone(prev => prev ? { ...prev, labelPrinted: true, labelsPending: false } : prev);
-      };
-
-      if (result.labelAttachments.length > 0) {
-        printLabels(result.labelAttachments);
-      } else if (result.labelsPending) {
-        // Étiquette pas encore prête — poll en arrière-plan jusqu'à 30s
-        (async () => {
-          const deadline = Date.now() + 30000;
-          while (Date.now() < deadline) {
-            await new Promise(r => setTimeout(r, 2000));
-            try {
-              const atts = await odoo.getPickingAttachments(session, selectedId);
-              if (atts.length > 0) { printLabels(atts); return; }
-            } catch {}
-          }
-          onToast("⚠ Étiquette non reçue — vérifie SendCloud/TNT", "error");
-        })();
-      }
+      }).catch(() => setDone(prev => prev ? { ...prev, labelsPending: false } : prev));
     } catch (e: any) {
       setError(e.message);
       onToast("Erreur : " + e.message, "error");
@@ -589,11 +646,26 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
               </select>
             )}
           </div>
+          {/* Vitesse d'impression du BL */}
+          <div
+            onClick={() => { const v = !blParallel; setBlParallel(v); saveLocalBool(LS_BL_PARALLEL, v); }}
+            style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", marginBottom: 16, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, cursor: "pointer" }}>
+            <div style={{ width: 20, height: 20, borderRadius: 5, marginTop: 1, flexShrink: 0, border: `2px solid ${blParallel ? C.teal : C.border}`, background: blParallel ? C.teal : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {blParallel && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="#fff" strokeWidth="2" strokeLinecap="round"/></svg>}
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>BL généré en parallèle (plus rapide)</div>
+              <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.5, marginTop: 2 }}>
+                Gagne 1 à 3 s. Décoche si le BL imprimé affiche de mauvaises quantités.
+              </div>
+            </div>
+          </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => {
               setBlPrinterId(null); saveLocalPrinter(LS_BL_PRINTER, null);
               setLabelPrinterId(null); saveLocalPrinter(LS_LABEL_PRINTER, null);
               setBlReportName("stock.report_picking"); saveLocalStr(LS_BL_REPORT, "stock.report_picking");
+              setBlParallel(true); saveLocalBool(LS_BL_PARALLEL, true);
             }} style={{ flex: 1, padding: "10px 0", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 13, fontWeight: 600, color: C.textMuted, cursor: "pointer", fontFamily: "inherit" }}>
               Effacer
             </button>
@@ -629,9 +701,13 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }}>
           <div style={{ fontSize: 13, color: C.textMuted, display: "flex", flexDirection: "column" as const, gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 16 }}>{done.blPrinted ? "🖨️" : "⚠️"}</span>
-              <span style={{ color: done.blPrinted ? C.green : C.warning }}>
-                {done.blPrinted ? "Bon de livraison imprimé" : blError ? `BL non imprimé — ${blError}` : "BL non imprimé (configurer imprimante)"}
+              <span style={{ fontSize: 16 }}>{done.blPrinted ? "🖨️" : done.blPending ? "⏳" : "⚠️"}</span>
+              <span style={{ color: done.blPrinted ? C.green : done.blPending ? C.textMuted : C.warning }}>
+                {done.blPrinted
+                  ? "Bon de livraison imprimé"
+                  : done.blPending
+                    ? "Bon de livraison en cours d'impression…"
+                    : blError ? `BL non imprimé — ${blError}` : "BL non imprimé (configurer imprimante)"}
               </span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -640,7 +716,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
               </span>
               <span style={{ color: done.labelPrinted ? C.green : C.textMuted }}>
                 {done.labelPrinted
-                  ? `${nPackages} étiquette${nPackages > 1 ? "s" : ""} imprimée${nPackages > 1 ? "s" : ""}`
+                  ? `${done.labelCount || nPackages} étiquette${(done.labelCount || nPackages) > 1 ? "s" : ""} imprimée${(done.labelCount || nPackages) > 1 ? "s" : ""}`
                   : done.labelsPending || (done.labelCount === 0 && !!labelPrinterId)
                     ? "Étiquette en cours d'impression…"
                     : done.labelCount > 0 && !labelPrinterId
@@ -659,11 +735,15 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
             </div>
             {done.groupResults.map((gr, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
-                <span style={{ fontSize: 14 }}>{gr.blPrinted ? "🖨️" : gr.blError ? "⚠️" : "✅"}</span>
+                <span style={{ fontSize: 14 }}>{gr.blPrinted ? "🖨️" : gr.blPending ? "⏳" : gr.blError ? "⚠️" : "✅"}</span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{gr.name}</div>
                   <div style={{ fontSize: 11, color: gr.blPrinted ? C.green : gr.blError ? C.danger : C.textMuted }}>
-                    {gr.blPrinted ? "BL imprimé" : gr.blError ? `BL échoué : ${gr.blError}` : "Validé (pas d'imprimante BL)"}
+                    {gr.blPrinted
+                      ? "BL imprimé"
+                      : gr.blPending
+                        ? "Validé — BL en cours d'impression…"
+                        : gr.blError ? `BL échoué : ${gr.blError}` : "Validé (pas d'imprimante BL)"}
                   </div>
                 </div>
               </div>

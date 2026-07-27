@@ -1497,58 +1497,134 @@ export async function syncPickPackagesFromOut(
   return results;
 }
 
+/** Données du picking pré-chargées à l'OUVERTURE du détail Emballage.
+ *  L'opérateur saisit ensuite le nombre de colis et les poids : pendant ces
+ *  quelques secondes, ces allers-retours Odoo sont déjà faits. Au clic sur
+ *  « Valider & Imprimer », packAndShipOut n'a donc plus rien à aller chercher.
+ */
+export interface PackPrefetch {
+  pickingName:           string;
+  hasCarrier:            boolean;
+  state:                 string;
+  existingAttachmentIds: number[];
+  moveLines:             { id: number; reserved_uom_qty: number }[];
+  fetchedAt:             number;
+}
+
+/** Pré-charge le contexte nécessaire à packAndShipOut (3 requêtes en parallèle). */
+export async function prefetchPackData(session: OdooSession, outPickingId: number): Promise<PackPrefetch> {
+  const [before, pickInfo, moveLines] = await Promise.all([
+    searchRead(session, M("MODEL_ATTACHMENT"),
+      [["res_model", "=", M("MODEL_PICKING")], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
+      ["id"], 100),
+    searchRead(session, M("MODEL_PICKING"), [["id", "=", outPickingId]], ["name", "carrier_id", "state"], 1),
+    searchRead(session, M("MODEL_MOVE_LINE"),
+      [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
+      ["id", "reserved_uom_qty"], 500),
+  ]);
+  return {
+    pickingName:           pickInfo[0]?.name || `OUT-${outPickingId}`,
+    hasCarrier:            !!pickInfo[0]?.carrier_id,
+    state:                 pickInfo[0]?.state || "",
+    existingAttachmentIds: before.map((a: any) => a.id),
+    moveLines,
+    fetchedAt:             Date.now(),
+  };
+}
+
+/** Au-delà de ce délai, les move lines pré-chargées sont considérées périmées
+ *  (un autre poste a pu toucher au picking) et sont relues avant validation. */
+const PACK_PREFETCH_TTL_MS = 120_000;
+
+export interface PackShipResult {
+  pickingName:      string;
+  labelAttachments: { id: number; name: string; datas: string }[];
+  labelsPending:    boolean;
+  blPrinted:        boolean;
+  blError?:         string;
+  /** Impression du bon de livraison — à suivre en tâche de fond, ne bloque pas l'UI. */
+  blPromise:        Promise<{ success: boolean; error?: string }>;
+  /** Étiquettes transporteur dès qu'elles arrivent (liste vide si timeout). */
+  labelsPromise:    Promise<{ id: number; name: string; datas: string }[]>;
+}
+
 /** Workflow complet emballage + expédition pour un OUT picking.
- *  1. action_assign  2. qty_done = réservé  3. crée N colis avec poids
- *  4. valide  5. send_to_shipper  6. retourne les pièces jointes PDF (étiquettes)
+ *
+ *  Chemin critique volontairement réduit à la seule étape qui compte vraiment
+ *  (button_validate). Tout le reste est soit pré-chargé, soit parallélisé, soit
+ *  renvoyé sous forme de promesse que l'appelant suit en tâche de fond :
+ *   - contexte du picking → pré-chargé à l'ouverture du détail (`prefetch`)
+ *   - action_assign → seulement si le picking n'est pas déjà réservé
+ *   - N colis → un seul multi-create, poids inclus
+ *   - BL → lancé EN PARALLÈLE de button_validate (option `blParallel`)
+ *   - étiquettes transporteur → polling en tâche de fond via `labelsPromise`
  */
 export async function packAndShipOut(
   session: OdooSession,
   outPickingId: number,
   packageWeights: number[],
-  printOptions?: { blPrinterId?: number; labelPrinterId?: number; blReportName?: string; overlayDate?: string }
-): Promise<{ pickingName: string; labelAttachments: { id: number; name: string; datas: string }[]; labelsPending: boolean; blPrinted: boolean; blError?: string }> {
+  printOptions?: {
+    blPrinterId?: number; labelPrinterId?: number; blReportName?: string; overlayDate?: string;
+    /** false → BL imprimé APRÈS la validation (comportement historique, plus lent
+     *  mais garantit que le PDF reflète l'état `done` du picking). */
+    blParallel?: boolean;
+    prefetch?: PackPrefetch;
+  }
+): Promise<PackShipResult> {
   const nPackages = packageWeights.length;
   if (!nPackages) throw new Error("Au moins un colis requis");
 
-  // 1. Snapshot + pickInfo + action_assign + move lines — tout en parallèle
-  //    Le picking est déjà "assigned" (c'est ainsi qu'on l'a trouvé), action_assign est quasi no-op
-  const [before, pickInfo, , moveLines] = await Promise.all([
-    searchRead(session, M("MODEL_ATTACHMENT"),
-      [["res_model", "=", M("MODEL_PICKING")], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
-      ["id"], 100),
-    searchRead(session, M("MODEL_PICKING"), [["id", "=", outPickingId]], ["name", "carrier_id"], 1),
-    callMethod(session, M("MODEL_PICKING"), "action_assign", [[outPickingId]]).catch(() => null),
-    searchRead(session, M("MODEL_MOVE_LINE"),
+  // ── 1. Contexte du picking : pré-chargé si dispo, sinon récupéré maintenant ──
+  const ctx = printOptions?.prefetch ?? await prefetchPackData(session, outPickingId);
+  const existingIds = new Set(ctx.existingAttachmentIds);
+  const pickingName = ctx.pickingName;
+  const hasCarrier  = ctx.hasCarrier;
+
+  // ── 2. action_assign : inutile si le picking est déjà réservé ────────────────
+  //     Les OUT de la liste Emballage sont en `assigned` par construction. Un OUT
+  //     atteint par scan peut être `confirmed`/`waiting` → là seulement on réserve.
+  //     (l'appel est lourd : le proxy lui accorde un timeout de 45 s)
+  let moveLines = ctx.moveLines;
+  const needsAssign = ctx.state !== "assigned";
+  const isStale     = Date.now() - ctx.fetchedAt > PACK_PREFETCH_TTL_MS;
+  if (needsAssign) {
+    await callMethod(session, M("MODEL_PICKING"), "action_assign", [[outPickingId]]).catch(() => null);
+  }
+  if (needsAssign || isStale) {
+    moveLines = await searchRead(session, M("MODEL_MOVE_LINE"),
       [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
-      ["id", "reserved_uom_qty"], 500),
-  ]);
-  const existingIds  = new Set(before.map((a: any) => a.id));
-  const pickingName  = pickInfo[0]?.name || `OUT-${outPickingId}`;
-  const hasCarrier   = !!pickInfo[0]?.carrier_id;
+      ["id", "reserved_uom_qty"], 500);
+  }
 
-  // 4. Créer les N colis EN PARALLÈLE, puis forcer le poids par write()
-  //    (certaines versions Odoo ignorent shipping_weight au create — le write est obligatoire)
+  // ── 3. Créer les N colis en UN SEUL appel, poids inclus dès la création ──────
   const totalWeight = packageWeights.reduce((s, w) => s + w, 0);
-  const packageIds = await Promise.all(
-    packageWeights.map(() =>
-      create(session, M("MODEL_QUANT_PACKAGE"), {}) as Promise<number>
-    )
-  );
-  // Écriture explicite du poids sur chaque colis
-  await Promise.all(
-    packageIds.map((pkgId, i) =>
-      write(session, M("MODEL_QUANT_PACKAGE"), [pkgId], { shipping_weight: packageWeights[i] }).catch(() => null)
-    )
-  );
+  let packageIds: number[];
+  try {
+    const created = await create(session, M("MODEL_QUANT_PACKAGE"),
+      packageWeights.map(w => ({ shipping_weight: w })));
+    packageIds = Array.isArray(created) ? created : [created];
+    if (packageIds.length !== nPackages) throw new Error("multi-create incomplet");
+  } catch {
+    // Odoo trop ancien pour le multi-create, ou champ refusé au create → repli
+    packageIds = await Promise.all(
+      packageWeights.map(() => create(session, M("MODEL_QUANT_PACKAGE"), {}) as Promise<number>)
+    );
+  }
 
-  // 5+6+7. Tout le reste en parallèle : qty_done sur move lines, result_package sur colis 1,
-  //         package.level pour colis 2..N, mise à jour nb colis + poids total
+  // ── 4. Une seule vague parallèle pour tout le reste ──────────────────────────
   const tasks: Promise<any>[] = [];
 
-  // 5. qty_done = reserved (1 seul write batch au lieu d'un par ligne)
+  // 4a. Filet de sécurité sur le poids : certaines versions Odoo ignorent
+  //     shipping_weight au create. Groupé par valeur pour limiter les appels.
+  const pkgsByWeight: Record<number, number[]> = {};
+  packageIds.forEach((id, i) => { (pkgsByWeight[packageWeights[i]] ||= []).push(id); });
+  for (const [w, ids] of Object.entries(pkgsByWeight)) {
+    tasks.push(write(session, M("MODEL_QUANT_PACKAGE"), ids, { shipping_weight: parseFloat(w) }).catch(() => null));
+  }
+
+  // 4b. qty_done = reserved (groupé par quantité pour batcher les writes)
   const mlsToFill = moveLines.filter((ml: any) => ml.reserved_uom_qty > 0);
   if (mlsToFill.length) {
-    // On groupe par qté pour batcher quand possible
     const byQty: Record<number, number[]> = {};
     for (const ml of mlsToFill) {
       const q = ml.reserved_uom_qty;
@@ -1560,10 +1636,9 @@ export async function packAndShipOut(
     }
   }
 
-  // 6. Distribuer les move lines en round-robin sur les N colis
-  //    → chaque colis reçoit du contenu → TNT génère 1 étiquette par colis
+  // 4c. Distribuer les move lines en round-robin sur les N colis
+  //     → chaque colis reçoit du contenu → TNT génère 1 étiquette par colis
   if (moveLines.length && packageIds.length) {
-    // Grouper par colis cible pour batcher les writes
     const mlsByPkg: Record<number, number[]> = {};
     for (let i = 0; i < moveLines.length; i++) {
       const pkgId = packageIds[i % packageIds.length];
@@ -1575,7 +1650,7 @@ export async function packAndShipOut(
     }
   }
 
-  // 7. Si nPackages > moveLines.length, certains colis n'ont pas de lignes → stock.package.level
+  // 4d. Si nPackages > moveLines.length, certains colis n'ont pas de lignes
   const assignedCount = Math.min(moveLines.length, packageIds.length);
   for (let i = assignedCount; i < packageIds.length; i++) {
     tasks.push(
@@ -1585,94 +1660,114 @@ export async function packAndShipOut(
     );
   }
 
-  // 8. Mettre à jour nb colis + poids total sur le picking
+  // 4e. Nb colis + poids total sur le picking
   tasks.push(
     write(session, M("MODEL_PICKING"), [outPickingId], {
       number_of_packages: nPackages,
       shipping_weight: totalWeight,
     }).catch(() =>
-      // number_of_packages peut ne pas exister — fallback poids seul
       write(session, M("MODEL_PICKING"), [outPickingId], { shipping_weight: totalWeight }).catch(() => null)
     )
   );
 
   await Promise.all(tasks);
 
-  // 9. Valider le picking OUT
-  await validatePicking(session, outPickingId);
-
-  // 10. Polling étiquettes (helper interne) — intervalle 200ms pour réactivité
-  const pollLabels = async (maxMs: number): Promise<any[]> => {
-    const deadline = Date.now() + maxMs;
-    while (Date.now() < deadline) {
-      const atts = await searchRead(session, M("MODEL_ATTACHMENT"),
-        [["res_model", "=", M("MODEL_PICKING")], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
-        ["id", "name", "datas", "create_date"], 100);
-      const fresh = atts.filter((a: any) => !existingIds.has(a.id));
-      if (fresh.length > 0) return fresh;
-      await new Promise(r => setTimeout(r, 200));
-    }
-    return [];
-  };
-
-  // 11. BL en parallèle avec le polling étiquette
-  const blPromise = printOptions?.blPrinterId
+  // ── 5. BL lancé EN PARALLÈLE de la validation ───────────────────────────────
+  //     La génération du PDF côté Odoo (wkhtmltopdf) coûte 1 à 3 s ; la faire
+  //     pendant button_validate au lieu d'après supprime ce temps du ressenti.
+  //     ⚠ Contrepartie : le PDF est rendu juste AVANT le passage en `done`.
+  //     Si le BL imprimé affichait de mauvaises quantités, passer blParallel:false
+  //     rétablit exactement le comportement précédent.
+  const startBl = () => printOptions?.blPrinterId
     ? printPickingReportDirect(session, outPickingId, printOptions.blPrinterId, {
-        reportName: printOptions.blReportName || getSavedPrepReportName(),
-        title: `BL_${pickingName}.pdf`,
+        reportName:  printOptions.blReportName || getSavedPrepReportName(),
+        title:       `BL_${pickingName}.pdf`,
         overlayDate: printOptions.overlayDate,
       })
     : Promise.resolve({ success: false, error: undefined as string | undefined });
 
-  // 12. Étiquettes transporteur — poll rapide (1.5s), si rien → fallback send_to_shipper async
-  //     On ne bloque PAS l'UI sur le polling long : on renvoie labelsPending=true et
-  //     le client relance fetchLabels() en arrière-plan si nécessaire.
-  let labelAttachments: any[] = [];
-  const quickLabels = await pollLabels(1500);
-  if (quickLabels.length > 0) {
-    labelAttachments = quickLabels;
-  } else if (hasCarrier) {
-    // Lancer send_to_shipper + poll en arrière-plan (non-bloquant)
-    // → la fonction retourne tout de suite avec labelsPending=true
-    // → le caller poll via fetchLabelAttachments() séparément
-    (async () => {
-      try { await callMethod(session, M("MODEL_PICKING"), "send_to_shipper", [[outPickingId]]); } catch {}
-    })();
-  }
+  const blParallel   = printOptions?.blParallel !== false;
+  const earlyBl      = blParallel ? startBl() : null;
 
-  const blResultRaw = await blPromise;
-  const blPrinted = blResultRaw.success;
-  const blError: string | undefined = !blResultRaw.success
-    ? (blResultRaw.error || (printOptions?.blPrinterId ? "Échec impression BL (raison inconnue)" : undefined))
-    : undefined;
+  // ── 6. Validation du picking : SEULE étape réellement bloquante ─────────────
+  await validatePicking(session, outPickingId);
+
+  const blPromise = earlyBl ?? startBl();
+
+  // ── 7. Étiquettes transporteur : polling en tâche de fond ───────────────────
+  //     Ne bloque plus le retour de la fonction : l'appelant affiche le succès
+  //     immédiatement et suit `labelsPromise` pour lancer l'impression.
+  //     Une erreur réseau ponctuelle ne doit pas interrompre le polling : on
+  //     avale l'erreur et on retente au tour suivant.
+  const pollLabels = async (maxMs: number, intervalMs: number): Promise<any[]> => {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      try {
+        const atts = await searchRead(session, M("MODEL_ATTACHMENT"),
+          [["res_model", "=", M("MODEL_PICKING")], ["res_id", "=", outPickingId], ["mimetype", "ilike", "pdf"]],
+          ["id", "name", "datas", "create_date"], 100);
+        const fresh = atts.filter((a: any) => !existingIds.has(a.id));
+        if (fresh.length > 0) return fresh;
+      } catch { /* on retente */ }
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+    return [];
+  };
+
+  const labelsPromise: Promise<any[]> = !hasCarrier
+    // Pas de transporteur → aucune étiquette à attendre, on ne poll même pas.
+    ? Promise.resolve([])
+    : (async () => {
+        // Odoo appelle normalement send_to_shipper dans button_validate :
+        // l'étiquette est souvent déjà là. Polling serré d'abord (1,5 s / 200 ms).
+        const quick = await pollLabels(1500, 200);
+        if (quick.length > 0) return quick;
+        // Rien reçu → on redéclenche l'envoi au transporteur, puis polling détendu
+        // (1,5 s d'intervalle : ~20 requêtes sur 30 s, sous la limite du proxy).
+        try { await callMethod(session, M("MODEL_PICKING"), "send_to_shipper", [[outPickingId]]); } catch {}
+        return pollLabels(30_000, 1500);
+      })();
 
   return {
     pickingName,
-    labelAttachments,
-    labelsPending: hasCarrier && labelAttachments.length === 0,
-    blPrinted,
-    blError,
+    labelAttachments: [],
+    labelsPending:    hasCarrier,
+    blPrinted:        false,
+    blPromise,
+    labelsPromise,
   };
 }
 
 /** Valide un picking satellite (commande groupée) SANS transporteur.
- *  Pas de colis créé, pas de send_to_shipper — juste qty_done + validate + impression BL optionnelle.
+ *  Pas de colis créé, pas de send_to_shipper — juste qty_done + validate.
+ *  Le BL part en parallèle de la validation et est renvoyé sous forme de
+ *  promesse : l'appelant affiche le résultat sans attendre l'imprimante.
  */
 export async function validateSatellitePicking(
   session: OdooSession,
   pickingId: number,
-  printOptions?: { blPrinterId?: number; blReportName?: string; overlayDate?: string }
-): Promise<{ name: string; blPrinted: boolean; blError?: string }> {
-  const [info] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", pickingId]], ["name"], 1);
+  printOptions?: { blPrinterId?: number; blReportName?: string; overlayDate?: string; blParallel?: boolean }
+): Promise<{ name: string; blPrinted: boolean; blError?: string; blPromise: Promise<{ success: boolean; error?: string }> }> {
+  // Nom + move lines en parallèle. action_assign est omis : les satellites sont
+  // sélectionnés avec state="assigned", la réservation est donc déjà faite.
+  const [infoList, moveLines] = await Promise.all([
+    searchRead(session, M("MODEL_PICKING"), [["id", "=", pickingId]], ["name", "state"], 1),
+    searchRead(session, M("MODEL_MOVE_LINE"),
+      [["picking_id", "=", pickingId], ["state", "not in", ["done", "cancel"]]],
+      ["id", "reserved_uom_qty"], 500),
+  ]);
+  const info = infoList[0];
   const pickingName = info?.name || `OUT-${pickingId}`;
 
-  await callMethod(session, M("MODEL_PICKING"), "action_assign", [[pickingId]]);
+  let mls = moveLines;
+  if (info?.state && info.state !== "assigned") {
+    await callMethod(session, M("MODEL_PICKING"), "action_assign", [[pickingId]]).catch(() => null);
+    mls = await searchRead(session, M("MODEL_MOVE_LINE"),
+      [["picking_id", "=", pickingId], ["state", "not in", ["done", "cancel"]]],
+      ["id", "reserved_uom_qty"], 500);
+  }
 
-  const moveLines = await searchRead(session, M("MODEL_MOVE_LINE"),
-    [["picking_id", "=", pickingId], ["state", "not in", ["done", "cancel"]]],
-    ["id", "reserved_uom_qty"], 500);
-
-  const mlsToFill = moveLines.filter((ml: any) => ml.reserved_uom_qty > 0);
+  const mlsToFill = mls.filter((ml: any) => ml.reserved_uom_qty > 0);
   if (mlsToFill.length) {
     const byQty: Record<number, number[]> = {};
     for (const ml of mlsToFill) {
@@ -1687,21 +1782,22 @@ export async function validateSatellitePicking(
     );
   }
 
+  const startBl = () => printOptions?.blPrinterId
+    ? printPickingReportDirect(session, pickingId, printOptions.blPrinterId, {
+        reportName:  printOptions.blReportName || getSavedPrepReportName(),
+        title:       `BL_${pickingName}.pdf`,
+        overlayDate: printOptions.overlayDate,
+      })
+    : Promise.resolve({ success: false, error: undefined as string | undefined });
+
+  const earlyBl = printOptions?.blParallel !== false ? startBl() : null;
+
   await validatePicking(session, pickingId);
 
-  let blPrinted = false;
-  let blError: string | undefined;
-  if (printOptions?.blPrinterId) {
-    const blResult = await printPickingReportDirect(session, pickingId, printOptions.blPrinterId, {
-      reportName: printOptions.blReportName || getSavedPrepReportName(),
-      title: `BL_${pickingName}.pdf`,
-      overlayDate: printOptions.overlayDate,
-    });
-    blPrinted = blResult.success;
-    if (!blResult.success) blError = blResult.error || "Échec impression BL";
-  }
+  const blPromise = earlyBl ?? startBl();
+  blPromise.catch(() => ({ success: false }));
 
-  return { name: pickingName, blPrinted, blError };
+  return { name: pickingName, blPrinted: false, blPromise };
 }
 
 // Recherche les OUT validés (state=done) par nom/origine/partenaire
