@@ -97,6 +97,38 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
   const [cronToggleBusy, setCronToggleBusy] = useState(false);
   const [cronFreqBusy, setCronFreqBusy] = useState(false);
 
+  // ── Correction ponctuelle des dates d'expédition prévues ────────────────────
+  // Rattrapage des commandes sorties par le cron AVANT qu'il ne pose la date.
+  // undefined = on ne sait pas encore · true = déjà fait, le bouton disparaît.
+  const [shipFixDone, setShipFixDone] = useState<boolean | undefined>(undefined);
+  const [shipFixBusy, setShipFixBusy] = useState(false);
+
+  const loadShipFixStatus = useCallback(async () => {
+    try {
+      const r = await fetch("/api/fix-shipping-date?status=1").then(x => x.json());
+      setShipFixDone(!!r.done);
+    } catch { setShipFixDone(true); } // en cas de doute on masque plutôt que d'afficher un bouton cassé
+  }, []);
+
+  const runShipFix = async () => {
+    if (shipFixBusy) return;
+    setShipFixBusy(true);
+    try {
+      const r = await fetch("/api/fix-shipping-date", { method: "POST", headers: writeHeaders }).then(x => x.json());
+      if (r.ok) {
+        const s = r.summary || {};
+        const parts = [`${s["écrites"] ?? 0} corrigée(s)`];
+        if (s["déjàRenseignées"]) parts.push(`${s["déjàRenseignées"]} déjà à jour`);
+        if (s["introuvables"]) parts.push(`${s["introuvables"]} introuvable(s)`);
+        onToast(`✓ Dates d'expédition : ${parts.join(", ")}`, "success");
+        setShipFixDone(true);
+      } else {
+        onToast("Erreur : " + (r.error || "échec de la correction"), "error");
+      }
+    } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
+    setShipFixBusy(false);
+  };
+
   const loadCronToggle = useCallback(async () => {
     try {
       const r = await fetch("/api/cronjob-control?action=status").then(x => x.json());
@@ -162,6 +194,7 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
     loadRecentStatus();
     getCronRunHistory().then(setCronHistory).catch(() => setCronHistory([]));
     loadCronToggle();
+    loadShipFixStatus();
   }, [session]);
 
   const load = useCallback(async () => {
@@ -515,6 +548,29 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
 
       {!loading && orders.length === 0 && !error && (
         <div style={{ textAlign: "center", color: C.textMuted, padding: 40, fontSize: 14 }}>Aucune commande ce jour-là</div>
+      )}
+
+      {/* Correction ponctuelle — disparaît définitivement une fois exécutée (état partagé
+          via Supabase, donc masqué sur tous les postes, pas seulement celui qui a cliqué) */}
+      {shipFixDone === false && (
+        <div style={{ marginTop: 24, background: C.orangeSoft, border: "1px solid #fed7aa", borderRadius: 12, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#9a3412", marginBottom: 4 }}>
+            🛠 Dates d&apos;expédition manquantes
+          </div>
+          <div style={{ fontSize: 12, color: "#9a3412", lineHeight: 1.5, marginBottom: 10 }}>
+            72 commandes déjà sorties n&apos;ont pas de date d&apos;expédition prévue : le cron ne la
+            remplissait pas. Ce bouton leur remet leur date de création. À cliquer une seule
+            fois — il disparaîtra ensuite.
+          </div>
+          <button onClick={runShipFix} disabled={shipFixBusy}
+            style={{
+              padding: "10px 16px", background: shipFixBusy ? "#fdba74" : C.orange, color: "#fff",
+              border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700,
+              cursor: shipFixBusy ? "not-allowed" : "pointer", fontFamily: "inherit",
+            }}>
+            {shipFixBusy ? "Correction en cours…" : "Corriger les 72 commandes"}
+          </button>
+        </div>
       )}
 
       {/* Historique du cron automatique — vérifier qu'il tourne, sans perdre un échec écrasé par un run suivant */}

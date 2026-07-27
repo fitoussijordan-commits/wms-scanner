@@ -1026,6 +1026,39 @@ export async function saveAvgMonthlyBulk(input: { odoo_ref: string; avg_monthly:
 // Seuls les champs RÉELLEMENT modifiés (≠ défaut) sont enregistrés.
 // ══════════════════════════════════════════
 
+// ══════════════════════════════════════════
+// CORRECTION PONCTUELLE "date d'expédition prévue" (maintenance à usage unique)
+// Mémorise que le rattrapage des commandes e-shop sorties sans date a été fait,
+// pour que le bouton disparaisse — sur TOUS les postes, pas seulement celui qui
+// a cliqué (d'où wms_sync_meta plutôt que localStorage).
+// ══════════════════════════════════════════
+
+export interface FixShipDateStatus {
+  doneAt:   string;   // ISO
+  updated:  number;   // nb de commandes corrigées
+  skipped?: number;   // nb déjà renseignées
+}
+
+/** null = jamais exécuté → le bouton doit s'afficher. */
+export async function getFixShipDateStatus(): Promise<FixShipDateStatus | null> {
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "fix_shipdate_done").single();
+    if (data?.value) {
+      const parsed = JSON.parse(data.value);
+      if (parsed && typeof parsed === "object") return parsed as FixShipDateStatus;
+    }
+  } catch {}
+  return null;
+}
+
+export async function saveFixShipDateStatus(status: FixShipDateStatus): Promise<void> {
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: "fix_shipdate_done", value: JSON.stringify(status), updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  if (error) throw new Error(error.message);
+}
+
 /** Charge les overrides de champs Odoo (map cléLogique → nom technique). */
 export async function loadFieldOverrides(): Promise<Record<string, string>> {
   try {

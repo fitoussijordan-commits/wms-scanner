@@ -25,8 +25,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { fetchT } from "@/lib/fetchTimeout";
-import { loadFieldOverrides } from "@/lib/supabase";
+import { loadFieldOverrides, getFixShipDateStatus, saveFixShipDateStatus } from "@/lib/supabase";
 import { F, setFieldOverrides } from "@/lib/fieldMap";
+import { requireInternalToken } from "@/lib/apiAuth";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -207,6 +208,20 @@ async function run(orders: string[], dry: boolean, force: boolean): Promise<any>
   };
   L(`Résumé : ${JSON.stringify(summary)}`);
 
+  // Mémorise l'exécution → le bouton disparaît de l'écran E-shop, sur tous les postes.
+  // Uniquement si ce n'était pas une simulation et qu'aucune écriture n'a échoué :
+  // en cas d'échec partiel, le bouton reste pour pouvoir relancer.
+  if (!dry && writeErrors.length === 0) {
+    try {
+      await saveFixShipDateStatus({
+        doneAt:  new Date().toISOString(),
+        updated: summary.écrites,
+        skipped: summary.déjàRenseignées,
+      });
+      L("Correction marquée comme faite — le bouton disparaît de l'écran E-shop.");
+    } catch (e: any) { L(`⚠ Statut non enregistré (le bouton restera visible) : ${safeErrMsg(e)}`); }
+  }
+
   return {
     ok: writeErrors.length === 0,
     dryRun: dry,
@@ -220,10 +235,13 @@ async function run(orders: string[], dry: boolean, force: boolean): Promise<any>
   };
 }
 
+// Deux façons de s'authentifier :
+//  - Bearer {CRON_SECRET} → appel depuis un terminal / un job externe
+//  - x-wms-token          → appel depuis l'app (bouton de l'écran E-shop)
 function checkAuth(req: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET || "";
-  if (!cronSecret) return false;
-  return (req.headers.get("authorization") || "") === `Bearer ${cronSecret}`;
+  if (cronSecret && (req.headers.get("authorization") || "") === `Bearer ${cronSecret}`) return true;
+  return requireInternalToken(req) === null;
 }
 
 function parseOpts(req: NextRequest, body?: any) {
@@ -254,10 +272,24 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+
+  // Statut sans authentification : l'écran E-shop s'en sert pour savoir s'il doit
+  // encore afficher le bouton. Ne divulgue rien de sensible.
+  if (searchParams.get("status") === "1") {
+    const done = await getFixShipDateStatus().catch(() => null);
+    return NextResponse.json({
+      route: "fix-shipping-date",
+      done: !!done,
+      status: done,
+      pending: DEFAULT_ORDERS.length,
+    });
+  }
+
   if (!checkAuth(req)) {
     return NextResponse.json({
       route: "fix-shipping-date",
-      description: "Maintenance à usage unique. Écrit la date d'expédition prévue = date de création sur les sale.order listées. Authorization: Bearer {CRON_SECRET}. ?dry=1 simule, ?force=1 écrase les dates existantes, ?orders=S1,S2 pour une liste custom.",
+      description: "Maintenance à usage unique. Écrit la date d'expédition prévue = date de création sur les sale.order listées. Auth : Bearer {CRON_SECRET} ou entête x-wms-token. ?status=1 pour l'état, ?dry=1 simule, ?force=1 écrase les dates existantes, ?orders=S1,S2 pour une liste custom.",
       commandesParDéfaut: DEFAULT_ORDERS.length,
     });
   }
