@@ -6149,6 +6149,12 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [waveSelectMode,   setWaveSelectMode]   = useState(false);
   const [waveActive,       setWaveActive]       = useState(false);  // liste figée
   const [waveScannedSkus,  setWaveScannedSkus]  = useState<Record<string, number>>({});
+  // ⚠ Photo des commandes prise au DÉMARRAGE de la liste de prélèvement.
+  // Indispensable : imprimer une étiquette annonce le colis dans SendCloud, la
+  // commande sort alors de la liste « à préparer » et disparaît de `parcels` au
+  // rafraîchissement suivant. Si la liste de prélèvement se calculait encore sur
+  // `parcels`, elle se viderait en pleine préparation.
+  const [waveParcels,      setWaveParcels]      = useState<any[]>([]);
   const [waveLocConfirmed, setWaveLocConfirmed] = useState(false);
   const [waveScanError,    setWaveScanError]    = useState("");
   const [wavePrinting,     setWavePrinting]     = useState(false);
@@ -6196,12 +6202,15 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   // ── Persistance wave state (localStorage) ─────────────────────────────────
   const WAVE_KEY = "wms_wave_state";
 
-  const saveWaveState = (orders: Set<string>, scanned: Record<string, number>, active: boolean) => {
+  const saveWaveState = (orders: Set<string>, scanned: Record<string, number>, active: boolean, snapshot: any[] = []) => {
     try {
       localStorage.setItem(WAVE_KEY, JSON.stringify({
         orders: Array.from(orders),
         scanned,
         active,
+        // Photo des commandes : sans elle, un retour sur l'écran après impression
+        // retrouverait une liste vide (les commandes ne sont plus dans SendCloud).
+        parcels: snapshot,
       }));
     } catch {}
   };
@@ -6225,10 +6234,11 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     try {
       const saved = localStorage.getItem(WAVE_KEY);
       if (saved) {
-        const { orders, scanned, active } = JSON.parse(saved);
+        const { orders, scanned, active, parcels: snapshot } = JSON.parse(saved);
         if (active && orders?.length) {
           setWaveOrders(new Set(orders));
           setWaveScannedSkus(scanned || {});
+          if (Array.isArray(snapshot) && snapshot.length) setWaveParcels(snapshot);
           setWaveActive(true);
           setEshopTab("wave");
         }
@@ -6238,8 +6248,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
   // Sauvegarder le wave state à chaque changement
   useEffect(() => {
-    if (waveActive) saveWaveState(waveOrders, waveScannedSkus, true);
-  }, [waveOrders, waveScannedSkus, waveActive]);
+    if (waveActive) saveWaveState(waveOrders, waveScannedSkus, true, waveParcels);
+  }, [waveOrders, waveScannedSkus, waveActive, waveParcels]);
 
   const loadParcels = async () => {
     setLoading(true); setError("");
@@ -6656,7 +6666,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   // ── Construit la liste wave (triée par emplacement, avec flag _isChariot) ──
   const buildWaveItems = useCallback(() => {
     const map = new Map<string, { sku: string; ref: string; name: string; location: string; locationFull: string; totalQty: number; dispatch: { orderNumber: string; qty: number }[]; _isChariot: boolean }>();
-    for (const p of parcels.filter((p: any) => waveOrders.has(p.order_number))) {
+    // Photo figée en priorité ; `parcels` seulement tant que la liste n'a pas démarré.
+    const source = waveParcels.length ? waveParcels : parcels.filter((p: any) => waveOrders.has(p.order_number));
+    for (const p of source) {
       for (const item of (p.parcel_items || [])) {
         const sku = item.sku;
         const match = matchData[sku];
@@ -6684,7 +6696,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       if (!a._isChariot && b._isChariot) return -1;
       return a.location.localeCompare(b.location);
     });
-  }, [parcels, waveOrders, matchData, locationData, chariotSkus]);
+  }, [parcels, waveParcels, waveOrders, matchData, locationData, chariotSkus]);
 
   // ── Wave scan handler ──
   const handleWaveScan = useCallback((code: string) => {
@@ -7107,7 +7119,12 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           <div style={{ display: "flex", gap: 6 }}>
             {waveSelectMode && waveOrders.size > 0 && (
               <button
-                onClick={() => { setWaveActive(true); setWaveScannedSkus({}); setWaveLocConfirmed(false); setWaveScanError(""); setEshopTab("wave"); }}
+                onClick={() => {
+                  // Fige les commandes maintenant : elles sortiront de SendCloud
+                  // dès la première étiquette imprimée.
+                  setWaveParcels(parcels.filter((p: any) => waveOrders.has(p.order_number)));
+                  setWaveActive(true); setWaveScannedSkus({}); setWaveLocConfirmed(false); setWaveScanError(""); setEshopTab("wave");
+                }}
                 style={{ padding: "7px 12px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11V6a3 3 0 016 0v5"/><path d="M5 11h14l-1.2 9.2a2 2 0 01-2 1.8H8.2a2 2 0 01-2-1.8L5 11z"/></svg>
                 Liste de prélèvement ({waveOrders.size})
@@ -7240,7 +7257,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       clearWaveState();
       setWaveOrders(new Set()); setWaveScannedSkus({}); setWaveLocConfirmed(false);
       setWaveSelectMode(false); setWaveActive(false); setWaveScanError("");
-      setWavePrintResult(null); waveSession.current++;
+      setWavePrintResult(null); waveSession.current++; setWaveParcels([]);
       setEshopTab("prep");
     };
 
@@ -7255,7 +7272,9 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       const session = waveSession.current;
       setWavePrinting(true);
       setWavePrintResult(null);
-      const orders = parcels.filter((p: any) => waveOrders.has(p.order_number));
+      // Même source que la liste affichée : après la 1re impression, ces commandes
+      // ne sont plus dans `parcels` et une réimpression ne trouverait plus rien.
+      const orders = waveParcels.length ? waveParcels : parcels.filter((p: any) => waveOrders.has(p.order_number));
       let blOk = 0, labelOk = 0, errors: string[] = [];
       for (let i = 0; i < orders.length; i++) {
         const p = orders[i];
@@ -7288,7 +7307,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       clearWaveState();
       setWaveOrders(new Set()); setWaveScannedSkus({}); setWaveLocConfirmed(false);
       setWaveSelectMode(false); setWaveActive(false); setWaveScanError("");
-      setWavePrintResult(null); waveSession.current++;
+      setWavePrintResult(null); waveSession.current++; setWaveParcels([]);
       setEshopTab("pack"); // → direct vers Emballage
     };
 
