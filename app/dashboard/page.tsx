@@ -337,6 +337,24 @@ const CAT_COL_DEFS = [
 type CatColKey = typeof CAT_COL_DEFS[number]["key"];
 const CAT_DEFAULT_COLS: CatColKey[] = ["default_code","sup_ref","sup_name","categ","weight","qty_available"];
 
+// Mémorisation du choix de colonnes du catalogue, sur ce poste (localStorage).
+const CAT_COLS_LS = "wms_cat_cols";
+function loadCatCols(): CatColKey[] {
+  try {
+    const raw = localStorage.getItem(CAT_COLS_LS);
+    if (!raw) return CAT_DEFAULT_COLS;
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return CAT_DEFAULT_COLS;
+    // Ne garde que les clés encore valides (une colonne renommée/supprimée est ignorée).
+    const valid = new Set(CAT_COL_DEFS.map(c => c.key as string));
+    const kept = arr.filter((k: any) => typeof k === "string" && valid.has(k)) as CatColKey[];
+    return kept.length ? kept : CAT_DEFAULT_COLS;
+  } catch { return CAT_DEFAULT_COLS; }
+}
+function saveCatCols(cols: Set<CatColKey>) {
+  try { localStorage.setItem(CAT_COLS_LS, JSON.stringify(Array.from(cols))); } catch {}
+}
+
 // ─────────────────────────────────────────────
 // COLUMN FILTER DROPDOWN (Excel-like)
 // ─────────────────────────────────────────────
@@ -1737,6 +1755,9 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   const [catMsg, setCatMsg]               = useState("");
   const [catCols, setCatCols]             = useState<Set<CatColKey>>(new Set(CAT_DEFAULT_COLS));
   const [catColsOpen, setCatColsOpen]     = useState(false);
+  // Restaure le choix de colonnes mémorisé sur ce poste (après le montage, localStorage
+  // n'existe pas côté serveur).
+  useEffect(() => { setCatCols(new Set(loadCatCols())); }, []);
   const [catSelected, setCatSelected]     = useState<Set<number>>(new Set());
   const catSearchRef                      = useRef<ReturnType<typeof setTimeout>|null>(null);
   // Inline editing catalogue
@@ -3670,6 +3691,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       const next = new Set(prev);
       next.has(key) ? next.delete(key) : next.add(key);
       catTrigger(catQuery, next);
+      saveCatCols(next);
       return next;
     });
   };
@@ -5032,7 +5054,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                       </div>
                     ))}
                     <div style={{ display:"flex", gap:8, paddingTop:8, borderTop:"1px solid var(--border)", marginTop:4 }}>
-                      <button className="wms-btn wms-btn-ghost" style={{ fontSize:12, padding:"6px 12px" }} onClick={()=>{ setCatCols(new Set(CAT_DEFAULT_COLS)); catTrigger(catQuery, new Set(CAT_DEFAULT_COLS)); }}>Réinitialiser</button>
+                      <button className="wms-btn wms-btn-ghost" style={{ fontSize:12, padding:"6px 12px" }} onClick={()=>{ const d = new Set(CAT_DEFAULT_COLS); setCatCols(d); saveCatCols(d); catTrigger(catQuery, d); }}>Réinitialiser</button>
                       <button className="wms-btn wms-btn-primary" style={{ fontSize:12, padding:"6px 12px", flex:1 }} onClick={()=>setCatColsOpen(false)}>Fermer</button>
                     </div>
                   </div>
