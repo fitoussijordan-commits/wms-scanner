@@ -3349,7 +3349,19 @@ export default function Page() {
                     {new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · voici l'activité de l'entrepôt
                   </p>
                 </div>
-                <WeatherWidget />
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  {/* Accès rapide catalogue — réservé admin, discret à côté de la météo */}
+                  {session && odoo.isAdmin(session) && (
+                    <button
+                      onClick={() => { window.location.href = "/dashboard?tab=catalogue"; }}
+                      title="Catalogue produits"
+                      aria-label="Catalogue produits"
+                      style={{ width: 40, height: 40, borderRadius: 12, border: "1px solid #e8ecf3", background: "#fff", boxShadow: "0 1px 3px rgba(15,23,42,.06)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", flexShrink: 0 }}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+                    </button>
+                  )}
+                  <WeatherWidget />
+                </div>
               </div>
 
               {/* KPI strip — aligné sur la même grille 1fr/360px que le contenu en dessous */}

@@ -318,6 +318,7 @@ const CAT_COL_DEFS = [
   { key: "uom",               label: "Unité de mesure",     group: "Caractéristiques",  w: 100 },
   { key: "packaging_qty",     label: "Colisage",            group: "Caractéristiques",  w: 80  },
   { key: "tracking",          label: "Suivi (lot/série)",   group: "Caractéristiques",  w: 110 },
+  { key: "sale_ok",           label: "Peut être vendu",     group: "Caractéristiques",  w: 110 },
   // Stock
   { key: "qty_available",     label: "Stock disponible",    group: "Stock",             w: 110 },
   { key: "qty_virtual",       label: "Stock prévisionnel",  group: "Stock",             w: 120 },
@@ -3428,20 +3429,74 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   // ── Chargement complet depuis Supabase puis Odoo ──────────────────────────
 
   // ── Catalogue inline edit save ────────────────────────────────────────────
+  // Champs texte libres écrits sur product.template.
+  const CAT_TEXT_TMPL: Record<string,string> = { name: "name", default_code: "default_code" };
+  // Champs numériques écrits sur product.template (valeur nettoyée virgule → point).
+  const CAT_NUM_TMPL: Record<string,string> = {
+    weight: "weight", volume: "volume",
+    length: "x_length", width: "x_width", height: "x_height",
+    list_price: "list_price", standard_price: "standard_price",
+  };
+
   const catSaveField = useCallback(async (row: Record<string,any>, field: string, value: string) => {
     if (!session) return;
     const key = `${row._id}:${field}`;
     setCatSaving(key);
     try {
-      if (field === "name" || field === "weight") {
-        // Écriture sur product.template
-        const writeVal = field === "weight" ? (parseFloat(value.replace(",",".")) || 0) : value.trim();
-        await odoo.write(session, "product.template", [row._tmpl], { [field]: writeVal });
-        setCatRows(prev => prev.map(r => r._id === row._id ? { ...r, [field]: writeVal } : r));
-      } else if (field === "barcode") {
-        // Écriture sur product.product (variant)
+      // ── EAN : sur la variante (product.product) ────────────────────────────
+      if (field === "barcode") {
         await odoo.write(session, "product.product", [row._id], { barcode: value.trim() || false });
         setCatRows(prev => prev.map(r => r._id === row._id ? { ...r, barcode: value.trim() } : r));
+
+      // ── Champs texte de la fiche modèle ────────────────────────────────────
+      } else if (CAT_TEXT_TMPL[field]) {
+        const writeVal = value.trim();
+        await odoo.write(session, "product.template", [row._tmpl], { [CAT_TEXT_TMPL[field]]: writeVal || false });
+        setCatRows(prev => prev.map(r => r._id === row._id ? { ...r, [field]: writeVal } : r));
+
+      // ── Champs numériques de la fiche modèle ───────────────────────────────
+      } else if (CAT_NUM_TMPL[field]) {
+        const shown = parseFloat(value.replace(",",".")) || 0;
+        // Le volume est AFFICHÉ en litres (m³ × 1000) → on reconvertit en m³ pour Odoo.
+        const num = field === "volume" ? shown / 1000 : shown;
+        await odoo.write(session, "product.template", [row._tmpl], { [CAT_NUM_TMPL[field]]: num });
+        // On réaffiche dans la même unité que la colonne (litres pour le volume).
+        setCatRows(prev => prev.map(r => r._id === row._id ? { ...r, [field]: field === "volume" ? shown.toFixed(3) : num } : r));
+
+      // ── « Peut être vendu » : booléen sur la fiche modèle ──────────────────
+      } else if (field === "sale_ok") {
+        const b = /^(1|oui|vrai|true|x|✓)$/i.test(value.trim());
+        await odoo.write(session, "product.template", [row._tmpl], { sale_ok: b });
+        setCatRows(prev => prev.map(r => r._id === row._id ? { ...r, sale_ok: b ? "Oui" : "Non" } : r));
+
+      // ── Catégorie : résolue par nom → categ_id (Many2one) ──────────────────
+      } else if (field === "categ") {
+        const name = value.trim();
+        if (!name) { setCatSaving(""); setCatEdit(null); return; }
+        // Cherche la catégorie exacte, sinon partielle. Ambigu/introuvable → on prévient.
+        let cats = await odoo.searchRead(session, "product.category", [["complete_name","=ilike",name]], ["id","complete_name"], 5);
+        if (!cats.length) cats = await odoo.searchRead(session, "product.category", [["name","=ilike",name]], ["id","complete_name"], 5);
+        if (!cats.length) cats = await odoo.searchRead(session, "product.category", [["complete_name","ilike",name]], ["id","complete_name"], 5);
+        if (!cats.length) { alert(`Catégorie « ${name} » introuvable dans Odoo.`); setCatSaving(""); setCatEdit(null); return; }
+        if (cats.length > 1) {
+          const exact = cats.find((c:any) => String(c.complete_name).toLowerCase() === name.toLowerCase());
+          if (!exact) { alert(`Plusieurs catégories correspondent à « ${name} » :\n- ${cats.map((c:any)=>c.complete_name).join("\n- ")}\nPrécise le nom complet.`); setCatSaving(""); setCatEdit(null); return; }
+          cats = [exact];
+        }
+        await odoo.write(session, "product.template", [row._tmpl], { categ_id: cats[0].id });
+        setCatRows(prev => prev.map(r => r._id === row._id ? { ...r, categ: cats[0].complete_name } : r));
+
+      // ── Réf. fournisseur : sur la ligne product.supplierinfo ───────────────
+      } else if (field === "sup_ref") {
+        if (!row._supinfo_id) { alert("Ce produit n'a pas de ligne fournisseur dans Odoo — à créer d'abord côté Odoo."); setCatSaving(""); setCatEdit(null); return; }
+        await odoo.write(session, "product.supplierinfo", [row._supinfo_id], { product_code: value.trim() || false });
+        setCatRows(prev => prev.map(r => r._id === row._id ? { ...r, sup_ref: value.trim() } : r));
+
+      // ── Nom fournisseur (nom de l'article chez le fournisseur) ─────────────
+      } else if (field === "sup_product_name") {
+        if (!row._supinfo_id) { alert("Ce produit n'a pas de ligne fournisseur dans Odoo — à créer d'abord côté Odoo."); setCatSaving(""); setCatEdit(null); return; }
+        await odoo.write(session, "product.supplierinfo", [row._supinfo_id], { product_name: value.trim() || false });
+        setCatRows(prev => prev.map(r => r._id === row._id ? { ...r, sup_product_name: value.trim() } : r));
       }
     } catch (e: any) {
       alert(`Erreur sauvegarde : ${e?.message || e}`);
@@ -3459,7 +3514,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       // 1. Recherche produits de base
       const needDims = cols.has("length") || cols.has("width") || cols.has("height");
       const baseFields = ["id","name","default_code","barcode","weight","volume","categ_id","uom_id",
-        "qty_available","virtual_available","tracking","list_price","standard_price","product_tmpl_id"];
+        "qty_available","virtual_available","tracking","list_price","standard_price","sale_ok","product_tmpl_id"];
       const query: any[] = ["|", ["name","ilike",q], "|", ["default_code","ilike",q], ["barcode","ilike",q]];
       let prods: any[];
       let hasDims = false;
@@ -3500,6 +3555,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
           tracking: p.tracking==="lot"?"Lot":p.tracking==="serial"?"Série":"Aucun",
           list_price: p.list_price||"",
           standard_price: p.standard_price||"",
+          sale_ok: p.sale_ok ? "Oui" : "Non",
           packaging_qty: pkgByTmpl[tmplId]||"",
           // enriched later:
           sup_ref:"", sup_name:"", sup_product_name:"", sup_code:"",
@@ -3523,7 +3579,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
           const tmplIdsArr = Array.from(new Set(prods.map((p:any)=>Array.isArray(p.product_tmpl_id)?p.product_tmpl_id[0]:p.product_tmpl_id).filter(Boolean)));
           const sis = await odoo.searchRead(session,"product.supplierinfo",
             [["product_tmpl_id","in",tmplIdsArr]],
-            ["product_tmpl_id","product_code","product_name","partner_id","price","delay","min_qty","currency_id"],
+            ["id","product_tmpl_id","product_code","product_name","partner_id","price","delay","min_qty","currency_id"],
             tmplIdsArr.length*3
           );
           // Prendre le premier fournisseur par template
@@ -3536,6 +3592,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
             const si = supByTmpl[row._tmpl];
             if (!si) return row;
             return { ...row,
+              _supinfo_id: si.id,          // pour l'édition inline de la réf/nom fournisseur
               sup_ref: si.product_code||"",
               sup_name: Array.isArray(si.partner_id)?si.partner_id[1]:"",
               sup_product_name: si.product_name||"",
@@ -5011,7 +5068,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                   </thead>
                   <tbody>
                     {catRows.map((row,i)=>{
-                      const mkEditCell = (field: string, value: string, style?: React.CSSProperties) => {
+                      const mkEditCell = (field: string, value: string, style?: React.CSSProperties, display?: string) => {
                         const editKey = `${row._id}:${field}`;
                         const isEditing = catEdit?.rowId === row._id && catEdit?.field === field;
                         const isSavingThis = catSaving === editKey;
@@ -5037,7 +5094,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                             onMouseEnter={e=>(e.currentTarget.style.background="var(--accent-soft)")}
                             onMouseLeave={e=>(e.currentTarget.style.background="transparent")}
                           >
-                            {isSavingThis ? <span style={{opacity:.5}}>…</span> : (value||"—")}
+                            {isSavingThis ? <span style={{opacity:.5}}>…</span> : (display ?? (value||"—"))}
                             {!isSavingThis && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2.5" style={{flexShrink:0,opacity:.5}}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>}
                           </span>
                         );
@@ -5050,14 +5107,39 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                         </td>
                         {CAT_COL_DEFS.filter(c=>catCols.has(c.key)).map(c=>{
                           const v = row[c.key];
-                          // Champs éditables inline
-                          if (c.key==="weight") {
-                            return <td key={c.key}>{mkEditCell("weight", v!==""&&v!==undefined?String(v):"", {fontFamily:"'JetBrains Mono',monospace",fontSize:12})}</td>;
+                          const mono = {fontFamily:"'JetBrains Mono',monospace",fontSize:12};
+                          // ── Champs éditables inline ──
+                          // Texte
+                          if (c.key==="barcode" || c.key==="default_code" || c.key==="sup_ref" || c.key==="sup_product_name") {
+                            return <td key={c.key}>{mkEditCell(c.key, v||"", {fontSize:12})}</td>;
                           }
-                          if (c.key==="barcode") {
-                            return <td key={c.key}>{mkEditCell("barcode", v||"", {fontSize:12})}</td>;
+                          // Numériques (poids, volume, dimensions, prix)
+                          if (c.key==="weight" || c.key==="volume" || c.key==="length" || c.key==="width" || c.key==="height") {
+                            return <td key={c.key}>{mkEditCell(c.key, v!==""&&v!==undefined?String(v):"", mono)}</td>;
                           }
-                          // Mise en forme contextuelle
+                          if (c.key==="list_price" || c.key==="standard_price") {
+                            const disp = v!==""&&v!==undefined ? `${Number(v).toFixed(2)} €` : "";
+                            return <td key={c.key}>{mkEditCell(c.key, v!==""&&v!==undefined?String(v):"", mono, disp)}</td>;
+                          }
+                          // Catégorie (résolue par nom à l'enregistrement)
+                          if (c.key==="categ") {
+                            return <td key={c.key}>{mkEditCell("categ", v||"", {fontSize:12})}</td>;
+                          }
+                          // Peut être vendu (bascule Oui/Non au clic, sans champ texte)
+                          if (c.key==="sale_ok") {
+                            const yes = v==="Oui";
+                            const saving = catSaving===`${row._id}:sale_ok`;
+                            return <td key={c.key}>
+                              <button
+                                onClick={()=>catSaveField(row,"sale_ok", yes?"non":"oui")}
+                                title="Cliquer pour basculer"
+                                style={{ cursor:"pointer", border:"none", borderRadius:12, padding:"2px 10px", fontSize:11, fontWeight:600, fontFamily:"inherit",
+                                  background: yes?"rgba(22,163,74,.12)":"rgba(148,163,184,.15)", color: yes?"var(--success)":"var(--text-muted)" }}>
+                                {saving ? "…" : yes ? "✓ Oui" : "Non"}
+                              </button>
+                            </td>;
+                          }
+                          // ── Mise en forme contextuelle (lecture seule) ──
                           if (c.key==="qty_available"||c.key==="qty_virtual") {
                             const n = Number(v);
                             const col = n<=0?"var(--danger)":n<5?"var(--warning)":"var(--success)";
@@ -5080,7 +5162,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                               })}
                             </td>;
                           }
-                          if ((c.key==="sup_price"||c.key==="list_price"||c.key==="standard_price") && v!=="") {
+                          if (c.key==="sup_price" && v!=="") {
                             return <td key={c.key} style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:12 }}>{Number(v).toFixed(2)} €</td>;
                           }
                           if (c.key==="locations") {
