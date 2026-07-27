@@ -6153,6 +6153,16 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [waveScanError,    setWaveScanError]    = useState("");
   const [wavePrinting,     setWavePrinting]     = useState(false);
   const [wavePrintProgress, setWavePrintProgress] = useState("");
+  // Résultat de l'impression lancée EN FOND pendant le prélèvement : permet de
+  // savoir, en fin de liste, que tout est déjà sorti — et de ne pas réimprimer.
+  const [wavePrintResult, setWavePrintResult] = useState<{ bl: number; labels: number; errors: string[] } | null>(null);
+  // Garde anti double-lancement : `wavePrinting` est un state, il n'est pas encore
+  // à jour entre deux taps rapides sur le bouton — deux séries d'étiquettes
+  // partiraient à l'imprimante. La ref, elle, est synchrone.
+  const wavePrintInProgress = useRef(false);
+  // Incrémenté à chaque annulation/fin de liste : une impression encore en cours
+  // ne doit pas venir écrire son résultat sur la liste SUIVANTE.
+  const waveSession = useRef(0);
 
   // ── Shared data ──
   const [parcels, setParcels] = useState<any[]>([]);
@@ -7230,12 +7240,21 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       clearWaveState();
       setWaveOrders(new Set()); setWaveScannedSkus({}); setWaveLocConfirmed(false);
       setWaveSelectMode(false); setWaveActive(false); setWaveScanError("");
+      setWavePrintResult(null); waveSession.current++;
       setEshopTab("prep");
     };
 
+    // Impression BL + étiquettes de toute la liste.
+    // Lancée SANS await depuis le bouton du bas : l'opérateur continue de scanner
+    // pendant que l'imprimante travaille, et retrouve tout sorti en fin de liste.
+    // Le garde `wavePrinting` empêche un double lancement (bouton du bas + bouton
+    // de fin), et `wavePrintResult` évite de tout réimprimer une seconde fois.
     const printAllWave = async () => {
-      if (wavePrinting) return;
+      if (wavePrintInProgress.current) return;
+      wavePrintInProgress.current = true;
+      const session = waveSession.current;
       setWavePrinting(true);
+      setWavePrintResult(null);
       const orders = parcels.filter((p: any) => waveOrders.has(p.order_number));
       let blOk = 0, labelOk = 0, errors: string[] = [];
       for (let i = 0; i < orders.length; i++) {
@@ -7246,8 +7265,13 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         // Étiquette transport — on utilise printLabelCore qui throw proprement
         try { await printLabelCore(p); labelOk++; } catch (e: any) { errors.push(`Étiq. ${p.order_number}: ${e.message}`); }
       }
+      wavePrintInProgress.current = false;
       setWavePrinting(false);
       setWavePrintProgress("");
+      // La liste a été annulée/terminée entre-temps → on ne touche plus à l'écran,
+      // sinon le bandeau « déjà imprimé » s'afficherait sur la liste suivante.
+      if (waveSession.current !== session) return;
+      setWavePrintResult({ bl: blOk, labels: labelOk, errors });
       if (errors.length) {
         // Affiche la 1ère erreur pour diagnostic
         onToast(`⚠ ${errors.length} erreur(s) — ${blOk} BL, ${labelOk} étiq. OK · ${errors[0]}`);
@@ -7264,6 +7288,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       clearWaveState();
       setWaveOrders(new Set()); setWaveScannedSkus({}); setWaveLocConfirmed(false);
       setWaveSelectMode(false); setWaveActive(false); setWaveScanError("");
+      setWavePrintResult(null); waveSession.current++;
       setEshopTab("pack"); // → direct vers Emballage
     };
 
@@ -7330,11 +7355,24 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             </div>
             <div style={{ fontSize: 18, fontWeight: 700, color: C.green }}>Tout prélevé !</div>
             <div style={{ fontSize: 13, color: C.textSec, marginTop: 4, marginBottom: 16 }}>{items.length} articles pour {waveOrders.size} commandes</div>
-            {/* Impression en masse BL + étiquettes */}
+            {/* Impression en masse BL + étiquettes.
+                Si elle a déjà été lancée depuis la barre du bas pendant le
+                prélèvement, on l'indique et le bouton passe en réimpression. */}
+            {wavePrintResult && !wavePrinting && (
+              <div style={{ fontSize: 12, fontWeight: 600, color: wavePrintResult.errors.length ? C.red : C.green, marginBottom: 10 }}>
+                {wavePrintResult.errors.length
+                  ? `⚠ Déjà imprimé avec ${wavePrintResult.errors.length} erreur(s) — ${wavePrintResult.bl} BL, ${wavePrintResult.labels} étiq.`
+                  : `✓ Déjà imprimé — ${wavePrintResult.bl} BL + ${wavePrintResult.labels} étiquettes`}
+              </div>
+            )}
             <button onClick={printAllWave} disabled={wavePrinting}
-              style={{ width: "100%", padding: "14px 0", borderRadius: 10, border: "none", background: wavePrinting ? C.textMuted : C.blue, color: "#fff", fontSize: 14, fontWeight: 700, cursor: wavePrinting ? "default" : "pointer", fontFamily: "inherit", marginBottom: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              style={{ width: "100%", padding: "14px 0", borderRadius: 10, border: wavePrintResult && !wavePrinting ? `1.5px solid ${C.border}` : "none", background: wavePrinting ? C.textMuted : wavePrintResult ? C.white : C.blue, color: wavePrinting ? "#fff" : wavePrintResult ? C.textSec : "#fff", fontSize: 14, fontWeight: 700, cursor: wavePrinting ? "default" : "pointer", fontFamily: "inherit", marginBottom: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-              {wavePrinting ? wavePrintProgress : `Imprimer BL + étiquettes (${waveOrders.size})`}
+              {wavePrinting
+                ? wavePrintProgress
+                : wavePrintResult
+                  ? `Réimprimer BL + étiquettes (${waveOrders.size})`
+                  : `Imprimer BL + étiquettes (${waveOrders.size})`}
             </button>
             <button onClick={completeWave} disabled={wavePrinting} style={{ width: "100%", padding: "14px 0", borderRadius: 10, border: "none", background: wavePrinting ? C.textMuted : C.green, color: "#fff", fontSize: 14, fontWeight: 700, cursor: wavePrinting ? "default" : "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
@@ -7464,10 +7502,44 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           </div>
         )}
 
-        {/* Annuler */}
-        <button onClick={cancelWave} style={{ width: "100%", padding: "12px 0", borderRadius: 12, border: `1.5px solid ${C.border}`, background: "transparent", color: C.textSec, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginBottom: 24 }}>
+        {/* Annuler — marge basse élargie pour ne pas passer sous la barre fixe */}
+        <button onClick={cancelWave} style={{ width: "100%", padding: "12px 0", borderRadius: 12, border: `1.5px solid ${C.border}`, background: "transparent", color: C.textSec, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginBottom: allDone ? 24 : 96 }}>
           Annuler et libérer les commandes
         </button>
+
+        {/* ── Barre fixe : lancer l'impression PENDANT le prélèvement ───────────
+            L'appel n'est pas attendu (pas de await) : l'imprimante travaille
+            pendant que l'opérateur continue de scanner, et tout est sorti quand
+            il arrive au bout de la liste. Masquée une fois tout prélevé, car la
+            carte verte de fin propose déjà le même bouton. */}
+        {!allDone && (
+          <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: C.white, borderTop: `1px solid ${C.border}`, padding: "10px 16px", boxShadow: "0 -2px 10px rgba(0,0,0,0.06)", zIndex: 50 }}>
+            {wavePrintResult && !wavePrinting ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: wavePrintResult.errors.length ? C.red : C.green }}>
+                  {wavePrintResult.errors.length
+                    ? `⚠ ${wavePrintResult.errors.length} erreur(s) — ${wavePrintResult.bl} BL, ${wavePrintResult.labels} étiq.`
+                    : `✓ ${wavePrintResult.bl} BL + ${wavePrintResult.labels} étiquettes sortis`}
+                </div>
+                <button onClick={() => { void printAllWave(); }}
+                  style={{ padding: "9px 14px", borderRadius: 9, border: `1.5px solid ${C.border}`, background: C.white, color: C.textSec, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const }}>
+                  Réimprimer
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => { void printAllWave(); }} disabled={wavePrinting}
+                style={{ width: "100%", padding: "13px 0", borderRadius: 11, border: "none", background: wavePrinting ? C.textMuted : C.blue, color: "#fff", fontSize: 14, fontWeight: 700, cursor: wavePrinting ? "default" : "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                {wavePrinting ? `Impression… ${wavePrintProgress}` : `Imprimer BL + étiquettes (${waveOrders.size})`}
+              </button>
+            )}
+            {!wavePrinting && !wavePrintResult && (
+              <div style={{ fontSize: 10.5, color: C.textMuted, textAlign: "center" as const, marginTop: 5 }}>
+                L&apos;impression tourne en fond — tu peux continuer à scanner
+              </div>
+            )}
+          </div>
+        )}
       </>
     );
   };
