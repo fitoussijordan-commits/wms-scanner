@@ -3599,13 +3599,13 @@ export default function Page() {
                   <div style={secTitle}>Opérations</div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 28 }}>
                     {visibleOps.map((btn, i) => (
-                      <button key={i} className="dk-op" onClick={btn.onClick} style={{ ...card, padding: 20, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, position: "relative" as const }}>
+                      <button key={i} className="dk-op wms-rise" onClick={btn.onClick}
+                        style={{ ...card, padding: "20px 20px 20px 23px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, position: "relative" as const, overflow: "hidden", animationDelay: `${0.40 + i * 0.045}s` }}>
+                        <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: btn.color }} />
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 14 }}>
                           <div style={{ width: 46, height: 46, borderRadius: 13, background: btn.soft, color: btn.color, display: "flex", alignItems: "center", justifyContent: "center" }}>{btn.icon}</div>
-                          {btn.badge != null ? (
+                          {btn.badge != null && (
                             <span style={{ minWidth: 24, height: 24, padding: "0 7px", borderRadius: 12, background: btn.color, color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{btn.badge}</span>
-                          ) : (
-                            <span style={{ width: 8, height: 8, borderRadius: "50%", background: btn.color, marginTop: 8, animation: "pulse 2s infinite" }} />
                           )}
                         </div>
                         <div style={{ fontSize: 15, fontWeight: 700, color: DK.text }}>{btn.label}</div>
@@ -3617,7 +3617,9 @@ export default function Page() {
                   <div style={secTitle}>Outils</div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
                     {visibleTools.map((btn, i) => (
-                      <button key={i} className="dk-tool" onClick={btn.onClick} style={{ ...card, borderRadius: 13, padding: "14px 8px", display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 8, cursor: "pointer", fontFamily: "inherit", position: "relative" as const, color: DK.text2 }}>
+                      <button key={i} className="dk-tool wms-rise" onClick={btn.onClick}
+                        style={{ ...card, borderRadius: 14, padding: "14px 8px", display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 8, cursor: "pointer", fontFamily: "inherit", position: "relative" as const, overflow: "hidden", color: DK.text2, animationDelay: `${0.55 + i * 0.03}s` }}>
+                        <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: btn.badgeColor || "#cbd5e1" }} />
                         {btn.icon}
                         <span style={{ fontSize: 11.5, fontWeight: 600, color: DK.text2, textAlign: "center" as const }}>{btn.label}</span>
                         {btn.badge != null && (
@@ -3629,10 +3631,10 @@ export default function Page() {
                 </div>
 
                 {/* Centre de contrôle — timeline */}
-                <div style={{ ...card, overflow: "hidden" }}>
+                <div className="wms-rise" style={{ ...card, overflow: "hidden", animationDelay: ".40s" }}>
                   <div style={{ padding: "16px 18px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: `1px solid ${DK.border}` }}>
                     <div style={{ fontSize: 13.5, fontWeight: 700, color: DK.text, display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ width: 7, height: 7, borderRadius: 4, background: ccLoading ? "#f59e0b" : "#10b981", boxShadow: ccLoading ? "0 0 6px #f59e0b" : "0 0 6px #10b981" }} />
+                      <span className="wms-dot" style={{ width: 7, height: 7, background: ccLoading ? "#f59e0b" : "#10b981", boxShadow: ccLoading ? "0 0 6px #f59e0b" : "0 0 6px #10b981" }} />
                       Centre de contrôle
                     </div>
                     <button onClick={() => ccRefreshRef.current && ccRefreshRef.current()} title="Actualiser" style={{ background: "none", border: "none", cursor: "pointer", color: DK.text3, fontSize: 14, padding: 4, fontFamily: "inherit" }}>↻</button>
@@ -4783,7 +4785,7 @@ function Header({ name, onLogout, onHome, onSettings, isAdmin, notifCount = 0, o
 }
 
 function Section({ children, style: s }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  return <div style={{ background: C.white, borderRadius: 14, padding: 16, marginBottom: 12, border: `1px solid ${C.border}`, boxShadow: C.shadow, animation: "slideUp .2s", ...s }}>{children}</div>;
+  return <div className="wms-rise" style={{ background: C.white, borderRadius: 16, padding: 16, marginBottom: 12, border: `1px solid ${C.border}`, boxShadow: C.shadow, ...s }}>{children}</div>;
 }
 
 function SectionHeader({ icon, title, sub }: { icon: React.ReactNode; title: string; sub: string }) {
@@ -4799,16 +4801,20 @@ function SectionHeader({ icon, title, sub }: { icon: React.ReactNode; title: str
 }
 
 function Alert({ type, children }: { type: string; children: React.ReactNode }) {
-  const m: Record<string, { bg: string; border: string; color: string; icon: string }> = {
-    success: { bg: C.greenSoft, border: C.greenBorder, color: C.green, icon: "✓" },
-    warning: { bg: C.orangeSoft, border: C.orangeBorder, color: C.orange, icon: "⚠" },
-    error: { bg: C.redSoft, border: C.redBorder, color: C.red, icon: "✕" },
-    info: { bg: C.blueSoft, border: C.blueBorder, color: C.blue, icon: "ℹ" },
+  const ic = (d: React.ReactNode) => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>{d}</svg>
+  );
+  const m: Record<string, { bg: string; border: string; color: string; icon: React.ReactNode }> = {
+    success: { bg: C.greenSoft, border: C.greenBorder, color: C.green, icon: ic(<><circle cx="12" cy="12" r="9" /><polyline points="8.5 12.5 11 15 15.5 9.5" /></>) },
+    warning: { bg: C.orangeSoft, border: C.orangeBorder, color: C.orange, icon: ic(<><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" /><line x1="12" y1="9" x2="12" y2="13.5" /><line x1="12" y1="17" x2="12.01" y2="17" /></>) },
+    error: { bg: C.redSoft, border: C.redBorder, color: C.red, icon: ic(<><circle cx="12" cy="12" r="9" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></>) },
+    info: { bg: C.blueSoft, border: C.blueBorder, color: C.blue, icon: ic(<><circle cx="12" cy="12" r="9" /><line x1="12" y1="11" x2="12" y2="16.5" /><line x1="12" y1="7.5" x2="12.01" y2="7.5" /></>) },
   };
   const c = m[type] || m.info;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 10, background: c.bg, border: `1px solid ${c.border}`, marginBottom: 12, animation: "slideUp .15s" }}>
-      <span style={{ fontSize: 14, fontWeight: 700, color: c.color }}>{c.icon}</span>
+    <div className="wms-rise" style={{ position: "relative", overflow: "hidden", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px 12px 17px", borderRadius: 12, background: c.bg, border: `1px solid ${c.border}`, marginBottom: 12 }}>
+      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: c.color }} />
+      <span style={{ color: c.color, display: "flex" }}>{c.icon}</span>
       <span style={{ fontSize: 13, fontWeight: 500, color: c.color }}>{children}</span>
     </div>
   );
