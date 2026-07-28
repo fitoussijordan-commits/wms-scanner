@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef, Fragment as Fragment2 } from 
 import * as odoo from "@/lib/odoo";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
 import { useScannerListener } from "@/lib/useScannerListener";
+import ChariotConfigScreen from "@/components/ChariotConfigScreen";
 import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, getLastProcessedEshopOrders, getCronRunHistory, type EshopMappingOverrides, type CronRunStatus } from "@/lib/supabase";
 import { writeHeaders } from "@/lib/writeToken";
 
@@ -25,7 +26,7 @@ interface SaleOrder { id: number; number: string; orderStatusId: number; payment
 const PARTNER_KEY = "wms_eshop_partner_id";
 
 export default function EshopSortiesScreen({ session, onBack, onToast }: Props) {
-  const [tab, setTab] = useState<"sorties" | "stock" | "audit" | "resend" | "reappro">("sorties");
+  const [tab, setTab] = useState<"sorties" | "stock" | "audit" | "resend" | "reappro" | "chariot">("sorties");
   return (
     <div style={{ padding: "16px 16px 0", width: "100%", maxWidth: "100%", boxSizing: "border-box", fontFamily: "'DM Sans', sans-serif" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
@@ -36,7 +37,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
         <FieldSettingsGear session={session} onToast={onToast} screen="eshopSorties" />
       </div>
       <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-        {([["sorties", "Sorties du jour"], ["reappro", "Réappro chariot"], ["stock", "Synchro stock"], ["audit", "Audit catalogue"], ["resend", "Renvoi"]] as const).map(([k, lbl]) => (
+        {([["sorties", "Sorties du jour"], ["reappro", "Réappro chariot"], ["chariot", "Config. chariot"], ["stock", "Synchro stock"], ["audit", "Audit catalogue"], ["resend", "Renvoi"]] as const).map(([k, lbl]) => (
           <button key={k} onClick={() => setTab(k)}
             style={{ padding: "9px 16px", borderRadius: 10, border: `1.5px solid ${tab === k ? C.blue : C.border}`, background: tab === k ? C.blueSoft : C.white, color: tab === k ? C.blue : C.textSec, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
             {lbl}
@@ -48,6 +49,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       <div style={{ display: tab === "stock" ? "block" : "none" }}><StockSyncTab session={session} onToast={onToast} /></div>
       <div style={{ display: tab === "audit" ? "block" : "none" }}><AuditTab session={session} onToast={onToast} /></div>
       <div style={{ display: tab === "reappro" ? "block" : "none" }}><ReapproChariotTab session={session} onToast={onToast} active={tab === "reappro"} /></div>
+      <div style={{ display: tab === "chariot" ? "block" : "none" }}><ChariotConfigScreen session={session} /></div>
       <div style={{ display: tab === "resend" ? "block" : "none" }}><ResendTab onToast={onToast} /></div>
     </div>
   );
