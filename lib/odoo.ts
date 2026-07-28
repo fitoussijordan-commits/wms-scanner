@@ -3238,6 +3238,54 @@ export async function setPackageWeight(session: OdooSession, packageId: number, 
   return write(session, M("MODEL_QUANT_PACKAGE"), [packageId], { shipping_weight: weight });
 }
 
+/**
+ * Préparation multi-lots : l'opérateur a déjà préparé `doneOnOldLot` unités sur
+ * la ligne (lot A) et scanne maintenant un AUTRE lot (B). Au lieu d'écraser le
+ * lot de la ligne (ce qui réattribuait TOUTES les unités au dernier lot scanné),
+ * on scinde : la ligne existante garde `doneOnOldLot` sur son lot, et une NOUVELLE
+ * ligne porte le lot B avec le reliquat réservé.
+ * Renvoie l'id de la nouvelle ligne (à incrémenter ensuite pour le lot B).
+ */
+export async function splitLineForNewLot(
+  session: OdooSession,
+  lineId: number,
+  doneOnOldLot: number,
+  newLotId: number
+): Promise<{ newLineId: number; restReserved: number }> {
+  const [ml] = await searchRead(session, M("MODEL_MOVE_LINE"),
+    [["id", "=", lineId]],
+    ["product_id", "lot_id", "location_id", "location_dest_id", "picking_id", "move_id", "product_uom_id", "reserved_uom_qty"],
+    1);
+  if (!ml) throw new Error("Ligne introuvable");
+
+  const reserved = ml.reserved_uom_qty || 0;
+  const rest = Math.max(0, reserved - doneOnOldLot);
+
+  // 1) Verrouille la ligne d'origine : ses unités faites restent sur son lot,
+  //    sa réservation tombe à ce qui est réellement pris dessus.
+  await write(session, M("MODEL_MOVE_LINE"), [lineId], {
+    qty_done: doneOnOldLot,
+    reserved_uom_qty: doneOnOldLot,
+  });
+
+  // 2) Nouvelle ligne pour le lot scanné, avec le reliquat réservé (qty_done=0,
+  //    l'appelant l'incrémente au fil des scans).
+  const newLineId = await create(session, M("MODEL_MOVE_LINE"), {
+    product_id: ml.product_id?.[0],
+    lot_id: newLotId,
+    location_id: ml.location_id?.[0],
+    location_dest_id: ml.location_dest_id?.[0],
+    picking_id: ml.picking_id?.[0],
+    move_id: ml.move_id?.[0],
+    product_uom_id: ml.product_uom_id?.[0],
+    qty_done: 0,
+    reserved_uom_qty: rest,
+    result_package_id: false,
+  }) as number;
+
+  return { newLineId, restReserved: rest };
+}
+
 // ============================================
 // COLIS TNT — Ajout d'un colis sur un OUT validé + envoi transporteur
 // ============================================

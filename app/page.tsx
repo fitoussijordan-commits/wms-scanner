@@ -2525,6 +2525,67 @@ export default function Page() {
         return;
       }
 
+      // ── Multi-lots : scinder au lieu d'écraser le lot ─────────────────────
+      // L'opérateur a déjà pris des unités sur cette ligne (lot A) et scanne
+      // maintenant un AUTRE lot (B). Avant, on réécrivait le lot de la ligne →
+      // les unités du lot A étaient réattribuées au dernier lot scanné.
+      // Désormais : lot A verrouillé sur sa ligne, nouvelle ligne pour le lot B.
+      const lineLotId: number | null = ml.lot_id?.[0] ?? null;
+      const needLotSplit = !!lotId && !!lineLotId && lotId !== lineLotId && (ml.qty_done || 0) > 0;
+      if (needLotSplit) {
+        const oldLotId: number = lineLotId as number;   // garantis non-null par needLotSplit
+        const newLotId: number = lotId as number;
+        // Le write debounce en attente sur cette ligne écrirait qty=…/lot=A :
+        // on l'annule et on flushe d'abord la vraie quantité du lot A.
+        clearTimeout(debounceTimers.current[ml.id]);
+        const doneOnOldLot = ml.qty_done || 0;
+        try {
+          await odoo.setMoveLineQtyDone(session, ml.id, doneOnOldLot, oldLotId);
+          const { newLineId } = await odoo.splitLineForNewLot(session, ml.id, doneOnOldLot, newLotId);
+          await odoo.setMoveLineQtyDone(session, newLineId, 1, newLotId);
+
+          // Alerte substitution (une fois par couple ligne/lot)
+          const alertKey = `${ml.id}:${newLotId}`;
+          if (!lotAlertedRef.current.has(alertKey)) {
+            lotAlertedRef.current.add(alertKey);
+            notifyLotSubstitution({
+              productName: ml.product_id?.[1] || "—",
+              productCode: ml.product_id?.[1]?.split("]")[0]?.replace("[", "") || "",
+              reservedLotId: oldLotId,
+              reservedLotName: ml.lot_id?.[1] || "—",
+              scannedLotId: newLotId,
+              scannedLotName: lotName || "—",
+            });
+          }
+
+          // Relit l'état réel depuis Odoo (nouvelle ligne incluse) puis recalcule le step.
+          const refreshed = await refreshGroupMoveLines(selectedPicking!);
+          pickingMoveLinesRef.current = refreshed;
+          setPickingMoveLines(refreshed);
+          flashScan("ok");
+          showToast(`✓ Lot ${lotName} — nouvelle ligne (1 unité)`);
+
+          const morePending = getPendingLinesAtLoc(refreshed, currentStep!.locId);
+          if (morePending.length === 0) {
+            updatePrepStep(null);
+            showToast(`✓ Emplacement ${currentStep!.locName} terminé`);
+          } else {
+            const stillCurrent = morePending.find((m: any) => m.product_id?.[0] === productId);
+            const next = stillCurrent || morePending[0];
+            const nextRemaining = getProductRemainingAtLoc(refreshed, currentStep!.locId, next.product_id?.[0]);
+            updatePrepStep({
+              locId: currentStep!.locId, locName: currentStep!.locName,
+              lineId: next.id, productName: next.product_id[1],
+              lotName: next.lot_id?.[1] || undefined, remaining: nextRemaining,
+            });
+          }
+        } catch (e: any) {
+          setError(`Erreur scission lot: ${e.message}`);
+          flashScan("err");
+        }
+        return;
+      }
+
       const newQty = (ml.qty_done || 0) + 1;
       const actualLotName = lotName || ml.lot_id?.[1] || null;
       // Si le lot scanné est différent de celui de la ligne → on le transmet à Odoo
