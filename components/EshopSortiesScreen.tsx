@@ -956,13 +956,17 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
         sb.getServiceRefs().catch(() => [] as string[]),
       ]);
       setChariot(chariotList); setService(serviceList);
-      // 1) Catalogue actif Shopware + emplacements préchargés (1 seul scan)
-      const [catRes, binRes] = await Promise.all([
-        fetch("/api/shopware-explore?action=activeProducts").then(r => r.json()),
-        fetch("/api/shopware-explore?action=binAll").then(r => r.json()).catch(() => ({ byDetail: {} })),
-      ]);
+      // 1) Catalogue actif Shopware. Les emplacements (binAll) sont LOURDS
+      //    (un fetch par emplacement, jusqu'à ~2000) : on ne bloque plus l'audit
+      //    dessus. Ils se chargent en tâche de fond et la colonne emplacement se
+      //    remplit ensuite — l'audit (stock SW vs Odoo) s'affiche tout de suite.
+      setBinMap({});
+      fetch("/api/shopware-explore?action=binAll")
+        .then(r => r.json())
+        .then(b => setBinMap(b.byDetail || {}))
+        .catch(() => {});
+      const catRes = await fetch("/api/shopware-explore?action=activeProducts").then(r => r.json());
       const products: any[] = catRes.products || [];
-      setBinMap(binRes.byDetail || {});
       // 2) Mapping : cache + overrides d'abord, matchEshopSkus seulement pour les manquants
       const [cache, overrides] = await Promise.all([
         (await import("@/lib/supabase")).getEshopMappingCache(),

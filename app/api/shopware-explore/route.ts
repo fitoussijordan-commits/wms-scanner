@@ -2,6 +2,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkRateLimit, getClientIp } from "@/lib/rateLimiter";
 
+// binAll enchaîne beaucoup de fetches Shopware (un par emplacement) : on laisse
+// jusqu'à 60 s pour qu'il finisse (en tâche de fond) au lieu d'être coupé à 10 s.
+export const maxDuration = 60;
+
 // Credentials Shopware : UNIQUEMENT depuis l'environnement serveur.
 // (Plus de lecture depuis l'URL → la clé ne transite plus en query param/logs,
 //  plus de domaine/user en dur dans un dépôt public.)
@@ -369,7 +373,7 @@ export async function GET(req: NextRequest) {
       const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=2000", creds));
       const bins = (blRes.json?.data || []).filter((b: any) => b.code !== "pickware_null_bin_location");
       const byDetail: Record<string, { code: string; stock: number }> = {};
-      const batchSize = 20; // parallélisme accru (chargement audit plus rapide)
+      const batchSize = 40; // parallélisme accru (chargement audit plus rapide)
       for (let i = 0; i < bins.length; i += batchSize) {
         const slice = bins.slice(i, i + batchSize);
         const details = await Promise.all(
