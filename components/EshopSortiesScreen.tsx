@@ -1283,9 +1283,11 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
     if (!confirm(`Créer un renvoi gratuit (0 €) depuis la commande ${pick.number} ?\n\n${lignes.join("\n")}\n\nUne NOUVELLE commande Shopware sera créée.`)) return;
     setCreating(true);
     try {
-      const qs = new URLSearchParams({ action: "duplicateOrder", number: pick.number });
-      if (only) qs.set("only", only);
-      if (add)  qs.set("add", add);
+      // `only` est TOUJOURS envoyé, même vide : sinon le serveur retombe sur son
+      // comportement historique et duplique la commande entière — c'est ce qui
+      // arrivait quand on ajoutait un article sans monter aucune quantité.
+      const qs = new URLSearchParams({ action: "duplicateOrder", number: pick.number, only });
+      if (add) qs.set("add", add);
       const res = await fetch(`/api/shopware-explore?${qs.toString()}`, { headers: writeHeaders }).then(x => x.json());
       if (res.ok) {
         const label = res.newOrderNumber ? `n° ${res.newOrderNumber}` : `id ${res.newOrderId ?? "?"}`;

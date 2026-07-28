@@ -480,10 +480,11 @@ export async function GET(req: NextRequest) {
           const n = parseInt(q, 10);
           if (ref && !isNaN(n) && n > 0) onlyMap.set(ref.trim(), n);
         }
-        if (!onlyMap.size) {
-          return NextResponse.json({ error: "Aucun article sélectionné (quantités toutes à zéro)" }, { status: 400 });
-        }
       }
+      // Sélection ACTIVE dès que le paramètre est présent, même vide : dans ce cas
+      // aucune ligne d'origine n'est reprise (cas « je n'envoie qu'un article ajouté »).
+      // Sans le paramètre du tout → comportement historique : commande entière.
+      const hasSelection = onlyParam !== null;
       // Articles à AJOUTER, absents de la commande d'origine : "ref:qty,ref:qty".
       const addParam = searchParams.get("add");
       const addMap = new Map<string, number>();
@@ -517,7 +518,7 @@ export async function GET(req: NextRequest) {
       const details = (src.details || [])
         .filter((d: any) => d.mode === 0)
         // Sélection : on ne garde que les articles cochés (quantité > 0)
-        .filter((d: any) => !onlyMap.size || onlyMap.has(String(d.articleNumber)))
+        .filter((d: any) => !hasSelection || onlyMap.has(String(d.articleNumber)))
         .map((d: any) => ({
           articleId: d.articleId,
           taxId: d.taxId,
