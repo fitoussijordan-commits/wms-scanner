@@ -1,7 +1,8 @@
 "use client";
-import { useState, useEffect, useCallback, Fragment as Fragment2 } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment as Fragment2 } from "react";
 import * as odoo from "@/lib/odoo";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
+import { useScannerListener } from "@/lib/useScannerListener";
 import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, getLastProcessedEshopOrders, getCronRunHistory, type EshopMappingOverrides, type CronRunStatus } from "@/lib/supabase";
 import { writeHeaders } from "@/lib/writeToken";
 
@@ -24,7 +25,7 @@ interface SaleOrder { id: number; number: string; orderStatusId: number; payment
 const PARTNER_KEY = "wms_eshop_partner_id";
 
 export default function EshopSortiesScreen({ session, onBack, onToast }: Props) {
-  const [tab, setTab] = useState<"sorties" | "stock" | "audit" | "resend">("sorties");
+  const [tab, setTab] = useState<"sorties" | "stock" | "audit" | "resend" | "reappro">("sorties");
   return (
     <div style={{ padding: "16px 16px 0", width: "100%", maxWidth: "100%", boxSizing: "border-box", fontFamily: "'DM Sans', sans-serif" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
@@ -35,7 +36,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
         <FieldSettingsGear session={session} onToast={onToast} screen="eshopSorties" />
       </div>
       <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-        {([["sorties", "Sorties du jour"], ["stock", "Synchro stock"], ["audit", "Audit catalogue"], ["resend", "Renvoi"]] as const).map(([k, lbl]) => (
+        {([["sorties", "Sorties du jour"], ["reappro", "Réappro chariot"], ["stock", "Synchro stock"], ["audit", "Audit catalogue"], ["resend", "Renvoi"]] as const).map(([k, lbl]) => (
           <button key={k} onClick={() => setTab(k)}
             style={{ padding: "9px 16px", borderRadius: 10, border: `1.5px solid ${tab === k ? C.blue : C.border}`, background: tab === k ? C.blueSoft : C.white, color: tab === k ? C.blue : C.textSec, fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
             {lbl}
@@ -46,6 +47,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       <div style={{ display: tab === "sorties" ? "block" : "none" }}><SortiesTab session={session} onToast={onToast} /></div>
       <div style={{ display: tab === "stock" ? "block" : "none" }}><StockSyncTab session={session} onToast={onToast} /></div>
       <div style={{ display: tab === "audit" ? "block" : "none" }}><AuditTab session={session} onToast={onToast} /></div>
+      <div style={{ display: tab === "reappro" ? "block" : "none" }}><ReapproChariotTab session={session} onToast={onToast} active={tab === "reappro"} /></div>
       <div style={{ display: tab === "resend" ? "block" : "none" }}><ResendTab onToast={onToast} /></div>
     </div>
   );
@@ -1563,4 +1565,192 @@ function chip(active: boolean): React.CSSProperties {
 }
 function badge(bg: string, color: string): React.CSSProperties {
   return { background: bg, color, borderRadius: 8, padding: "6px 12px", fontWeight: 700, fontSize: 13 };
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Onglet Réappro chariot
+//  Le chariot e-shop est un stock qui vit dans Shopware, hors Odoo.
+//  Processus : le service client crée la commande e-shop dans Odoo, les
+//  préparateurs la préparent et posent physiquement les articles sur le chariot.
+//  Ici, ils scannent le numéro S de cette commande : le WMS valide la sortie
+//  Odoo, incrémente le stock chariot et met Shopware à jour — sans qu'ils aient
+//  à faire le moindre rapprochement de références.
+// ════════════════════════════════════════════════════════════════
+interface ReapproLine {
+  productId: number; defaultCode: string; name: string; qty: number;
+  sku: string | null;        // SKU chariot correspondant (null = non rattaché)
+  swBefore: number | null;   // stock chariot avant
+}
+
+function ReapproChariotTab({ session, onToast, active }: { session: odoo.OdooSession; onToast: Props["onToast"]; active: boolean }) {
+  const [ref, setRef] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [found, setFound] = useState<null | {
+    orderName: string; pickingId: number; pickingName: string; lines: ReapproLine[];
+  }>(null);
+  const [done, setDone] = useState<null | { picking: string; pushed: number; failed: string[] }>(null);
+
+  // Rapprochement produit Odoo → SKU chariot, fait UNE fois et gardé en mémoire.
+  const skuByProduct = useRef<Map<number, string> | null>(null);
+  const buildSkuMap = async (): Promise<Map<number, string>> => {
+    if (skuByProduct.current) return skuByProduct.current;
+    const map = new Map<number, string>();
+    try {
+      const skus = await odoo.loadChariotSkus(session);
+      if (skus.length) {
+        const matches = await odoo.matchEshopSkus(session, skus);
+        for (const [sku, m] of Object.entries(matches)) {
+          const pid = (m as any)?.product_id;
+          if (pid && !map.has(pid)) map.set(pid, sku);
+        }
+      }
+    } catch { /* on renverra des lignes non rattachées, signalées à l'écran */ }
+    skuByProduct.current = map;
+    return map;
+  };
+
+  const search = async (raw?: string) => {
+    const q = (raw ?? ref).trim();
+    if (!q || loading) return;
+    setLoading(true); setDone(null);
+    try {
+      const [r, map, stock] = await Promise.all([
+        odoo.findChariotReappro(session, q),
+        buildSkuMap(),
+        (await import("@/lib/supabase")).getChariotStock(),
+      ]);
+      setFound({
+        orderName: r.orderName, pickingId: r.pickingId, pickingName: r.pickingName,
+        lines: r.lines.map(l => {
+          const sku = map.get(l.productId) || null;
+          return { ...l, sku, swBefore: sku ? (stock[sku] ?? 0) : null };
+        }),
+      });
+      setRef("");
+    } catch (e: any) { onToast(e.message || "Commande introuvable", "error"); setFound(null); }
+    setLoading(false);
+  };
+
+  // Écouteur actif UNIQUEMENT quand l'onglet est visible : les onglets restent
+  // montés (display:none), sans ce garde un scan fait ailleurs déclencherait
+  // une recherche de réappro.
+  useScannerListener(useCallback((code: string) => { setRef(code); search(code); }, [loading, ref]), active);
+
+  const unmatched = found ? found.lines.filter(l => !l.sku) : [];
+  const matched   = found ? found.lines.filter(l => l.sku) : [];
+
+  const validate = async () => {
+    if (!found || validating || !matched.length) return;
+    const recap = matched.map(l => `${l.defaultCode || l.name} ×${l.qty}`).join("\n");
+    if (!confirm(`Valider le réappro chariot ?\n\n${recap}\n\n· Sortie Odoo ${found.pickingName} validée\n· Stock chariot incrémenté\n· Shopware mis à jour`)) return;
+    setValidating(true);
+    try {
+      const sb = await import("@/lib/supabase");
+      // 1. Sortie Odoo — si elle échoue, on n'écrit RIEN ailleurs.
+      await odoo.validatePicking(session, found.pickingId);
+      // 2. Stock chariot
+      const { stock } = await sb.incrementChariotStock(matched.map(l => ({ sku: l.sku!, qty: l.qty })));
+      // 3. Shopware
+      const failed: string[] = [];
+      for (const l of matched) {
+        try {
+          const r = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(l.sku!)}&qty=${stock[l.sku!] ?? 0}`,
+                                { headers: writeHeaders }).then(x => x.json());
+          if (!r.ok) failed.push(`${l.sku} : ${r.error || "échec"}`);
+        } catch (e: any) { failed.push(`${l.sku} : ${e.message}`); }
+      }
+      setDone({ picking: found.pickingName, pushed: matched.length - failed.length, failed });
+      setFound(null);
+      if (failed.length) onToast(`⚠ Réappro fait, mais ${failed.length} envoi(s) Shopware en échec`, "error");
+      else onToast(`✓ Réappro validé — ${matched.length} article(s) sur le chariot`, "success");
+    } catch (e: any) {
+      onToast("Erreur : " + (e.message || "échec"), "error");
+    }
+    setValidating(false);
+  };
+
+  return (
+    <div style={{ paddingBottom: 80 }}>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12, lineHeight: 1.6 }}>
+        Le chariot e-shop est un stock qui vit dans <strong>Shopware</strong>, en dehors d&apos;Odoo.
+        Une fois les articles physiquement posés sur le chariot, scanne le <strong>numéro S</strong> de
+        la commande e-shop correspondante : la sortie Odoo est validée, le stock chariot augmenté et
+        Shopware mis à jour. Aucun rapprochement de référence à faire à la main.
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <input value={ref} onChange={e => setRef(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") search(); }}
+          placeholder="Scanne ou saisis le numéro S — ex : S71596"
+          style={{ flex: 1, padding: "11px 13px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", fontWeight: 600 }} />
+        <button onClick={() => search()} disabled={loading || !ref.trim()}
+          style={{ padding: "11px 18px", background: loading || !ref.trim() ? "#cbd5e1" : C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: loading || !ref.trim() ? "default" : "pointer" }}>
+          {loading ? "…" : "→"}
+        </button>
+      </div>
+
+      {done && (
+        <div style={{ background: C.greenSoft, border: `1px solid #6ee7b7`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.green, marginBottom: 4 }}>✓ Réappro terminé</div>
+          <div style={{ fontSize: 12.5, color: "#065f46" }}>
+            Sortie {done.picking} validée · {done.pushed} article(s) mis à jour dans Shopware
+          </div>
+          {done.failed.length > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, color: C.red }}>
+              <strong>À reprendre à la main :</strong>
+              {done.failed.map((f, i) => <div key={i}>· {f}</div>)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {found && (
+        <div style={{ background: C.white, border: `1.5px solid ${C.blue}`, borderRadius: 12, padding: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingBottom: 9, borderBottom: `1px solid ${C.border}` }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{found.orderName}</div>
+              <div style={{ fontSize: 11.5, color: C.textMuted }}>{found.pickingName} · {found.lines.length} article(s)</div>
+            </div>
+            <button onClick={() => setFound(null)}
+              style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 11px", fontSize: 12, color: C.textMuted, cursor: "pointer", fontFamily: "inherit" }}>
+              Annuler
+            </button>
+          </div>
+
+          {matched.map(l => (
+            <div key={l.productId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</div>
+                <div style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace" }}>
+                  {l.sku} · chariot {l.swBefore} → <strong style={{ color: C.green }}>{(l.swBefore ?? 0) + l.qty}</strong>
+                </div>
+              </div>
+              <span style={{ fontSize: 14, fontWeight: 800, color: C.blue, flexShrink: 0 }}>+{l.qty}</span>
+            </div>
+          ))}
+
+          {unmatched.length > 0 && (
+            <div style={{ marginTop: 10, background: C.orangeSoft, border: "1px solid #fed7aa", borderRadius: 9, padding: 11 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: "#9a3412", marginBottom: 5 }}>
+                {unmatched.length} article(s) hors chariot — ignorés
+              </div>
+              {unmatched.map(l => (
+                <div key={l.productId} style={{ fontSize: 11.5, color: "#9a3412" }}>· {l.defaultCode || l.name} ×{l.qty}</div>
+              ))}
+              <div style={{ fontSize: 11, color: "#9a3412", marginTop: 5, lineHeight: 1.5 }}>
+                Ces références ne font pas partie du chariot e-shop. Elles sortiront bien du stock Odoo,
+                mais ne seront pas ajoutées au chariot ni envoyées à Shopware.
+              </div>
+            </div>
+          )}
+
+          <button onClick={validate} disabled={validating || !matched.length}
+            style={{ width: "100%", marginTop: 12, padding: "13px 0", background: validating || !matched.length ? "#e5e7eb" : C.green, color: validating || !matched.length ? C.textMuted : "#fff", border: "none", borderRadius: 10, fontSize: 14.5, fontWeight: 700, cursor: validating || !matched.length ? "default" : "pointer", fontFamily: "inherit" }}>
+            {validating ? "Validation…" : matched.length ? `Valider le réappro — ${matched.reduce((s, l) => s + l.qty, 0)} article(s)` : "Aucun article du chariot dans cette commande"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

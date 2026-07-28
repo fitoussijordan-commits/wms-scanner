@@ -632,6 +632,24 @@ export async function setChariotStock(sku: string, qty: number): Promise<Chariot
   return stock;
 }
 
+// Incrémente plusieurs SKU d'un coup (réappro du chariot depuis le stock Odoo).
+// Renvoie le stock à jour, avec l'avant/après par SKU pour l'affichage.
+export async function incrementChariotStock(
+  additions: { sku: string; qty: number }[]
+): Promise<{ stock: ChariotStock; applied: { sku: string; avant: number; apres: number }[] }> {
+  const stock = await getChariotStock();
+  const applied: { sku: string; avant: number; apres: number }[] = [];
+  for (const { sku, qty } of additions) {
+    if (!sku || !(qty > 0)) continue;
+    const avant = stock[sku] ?? 0;
+    const apres = avant + Math.round(qty);
+    stock[sku] = apres;
+    applied.push({ sku, avant, apres });
+  }
+  await saveChariotStock(stock);
+  return { stock, applied };
+}
+
 // Décrémente plusieurs SKU d'un coup (lors d'une sortie e-shop).
 // Renvoie { stock, shortages } — shortages = SKU dont le stock était insuffisant.
 export async function decrementChariotStock(

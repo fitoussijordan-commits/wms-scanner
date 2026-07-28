@@ -3234,6 +3234,88 @@ export async function splitMoveLine(session: OdooSession, moveLineId: number, ke
   return newId;
 }
 
+/** Une ligne de réappro chariot : produit Odoo + quantité à basculer sur le chariot. */
+export interface ChariotReapproLine {
+  productId:    number;
+  defaultCode:  string;
+  name:         string;
+  qty:          number;
+}
+
+/** Commande e-shop trouvée pour un réappro chariot. */
+export interface ChariotReappro {
+  orderName:   string;   // S71596
+  pickingId:   number;   // le OUT à valider
+  pickingName: string;   // WH/OUT/…
+  state:       string;
+  lines:       ChariotReapproLine[];
+}
+
+/**
+ * Réappro chariot : retrouve la commande e-shop (numéro S ou WH/OUT/…) et son
+ * bon de sortie NON validé, avec les lignes à basculer sur le chariot.
+ * Le service client crée la commande, les préparateurs la préparent : ici on ne
+ * crée rien, on se contente de lire ce qui existe.
+ */
+export async function findChariotReappro(session: OdooSession, ref: string): Promise<ChariotReappro> {
+  const q = ref.trim();
+  if (!q) throw new Error("Référence vide");
+
+  const picks = await searchPickingByCommande(session, q);
+  if (!picks.length) throw new Error(`Aucune commande trouvée pour « ${q} »`);
+
+  // On veut un OUT encore à valider. S'il n'y en a pas, on le dit clairement
+  // (souvent : la commande a déjà été traitée).
+  const open = picks.filter((p: any) => p.state !== "done" && p.state !== "cancel");
+  if (!open.length) {
+    const done = picks.find((p: any) => p.state === "done");
+    throw new Error(done
+      ? `La commande ${done.origin || q} est déjà validée (${done.name}) — réappro déjà fait ?`
+      : `Aucun bon de sortie à valider pour « ${q} »`);
+  }
+  const pick = open[0];
+
+  // Quantités : ce qui est réservé/fait sur les lignes de mouvement.
+  const mls = await searchRead(session, M("MODEL_MOVE_LINE"),
+    [["picking_id", "=", pick.id], ["state", "not in", ["cancel"]]],
+    ["product_id", "reserved_uom_qty", "qty_done"], 500);
+
+  const byProduct = new Map<number, ChariotReapproLine>();
+  for (const ml of mls) {
+    const pid = Array.isArray(ml.product_id) ? ml.product_id[0] : ml.product_id;
+    if (!pid) continue;
+    const qty = (ml.qty_done || 0) > 0 ? ml.qty_done : (ml.reserved_uom_qty || 0);
+    if (!(qty > 0)) continue;
+    const cur = byProduct.get(pid);
+    if (cur) cur.qty += qty;
+    else byProduct.set(pid, {
+      productId: pid,
+      defaultCode: "",
+      name: Array.isArray(ml.product_id) ? ml.product_id[1] : String(pid),
+      qty,
+    });
+  }
+  if (!byProduct.size) throw new Error(`Aucun article à réapprovisionner sur ${pick.name}`);
+
+  // Références internes (utiles pour le rapprochement avec les SKU du chariot)
+  const ids = Array.from(byProduct.keys());
+  try {
+    const prods = await searchRead(session, M("MODEL_PRODUCT"), [["id", "in", ids]], ["id", "default_code"], ids.length);
+    for (const p of prods) {
+      const l = byProduct.get(p.id);
+      if (l) l.defaultCode = p.default_code || "";
+    }
+  } catch { /* non bloquant */ }
+
+  return {
+    orderName:   pick.origin || q,
+    pickingId:   pick.id,
+    pickingName: pick.name,
+    state:       pick.state,
+    lines:       Array.from(byProduct.values()),
+  };
+}
+
 export async function setPackageWeight(session: OdooSession, packageId: number, weight: number) {
   return write(session, M("MODEL_QUANT_PACKAGE"), [packageId], { shipping_weight: weight });
 }
