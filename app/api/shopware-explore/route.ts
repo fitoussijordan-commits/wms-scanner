@@ -418,9 +418,82 @@ export async function GET(req: NextRequest) {
     // ?number=20001 — copie client + adresses + lignes produit de la commande source, montant à 0€
     // (invoiceAmount/invoiceShipping = 0), paymentStatusId=12 (payée) pour que ça remonte normalement
     // dans le flux e-shop du WMS. La nouvelle commande a un NOUVEAU numéro Shopware généré par Shopware.
+    // ── orderLines: lignes ARTICLE d'une commande (LECTURE SEULE) ──
+    // Sert à l'écran Renvoi : on affiche les articles pour que l'opérateur
+    // choisisse lesquels renvoyer, au lieu de tout dupliquer aveuglément.
+    if (action === "orderLines") {
+      const number = searchParams.get("number");
+      if (!number) return NextResponse.json({ error: "number requis" }, { status: 400 });
+      const searchRes = await swFetch(
+        `/orders?filter[0][property]=number&filter[0][value]=${encodeURIComponent(number)}&limit=1`, creds);
+      const searchR = await safeJson(searchRes);
+      if (!searchR.json?.data?.length) {
+        return NextResponse.json({ error: `Commande ${number} introuvable` }, { status: 404 });
+      }
+      const orderId = searchR.json.data[0].id;
+      const detailR = await safeJson(await swFetch(`/orders/${orderId}`, creds));
+      const src = detailR.json?.data;
+      if (!src) return NextResponse.json({ error: "Détail commande introuvable" }, { status: 404 });
+      // mode 0 = article réel (on exclut frais de port et remises)
+      const lines = (src.details || []).filter((d: any) => d.mode === 0).map((d: any) => ({
+        articleNumber: d.articleNumber,
+        articleName: d.articleName,
+        quantity: d.quantity,
+      }));
+      const addr = src.shipping || src.billing || {};
+      return NextResponse.json({
+        ok: true, orderId, number: src.number,
+        customer: [addr.firstName, addr.lastName].filter(Boolean).join(" "),
+        city: addr.city || "",
+        lines,
+      });
+    }
+
+    // ── lookupArticle: retrouve un article par sa référence (LECTURE SEULE) ──
+    // Sert à ajouter au renvoi un article absent de la commande d'origine.
+    if (action === "lookupArticle") {
+      const an = (searchParams.get("articleNumber") || "").trim();
+      if (!an) return NextResponse.json({ error: "articleNumber requis" }, { status: 400 });
+      const vr = await safeJson(await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds));
+      const v = vr.json?.data;
+      if (!v) return NextResponse.json({ error: `Référence ${an} introuvable dans Shopware` }, { status: 404 });
+      return NextResponse.json({
+        ok: true,
+        articleNumber: v.number,
+        articleName: v.article?.name || v.additionalText || v.number,
+        inStock: v.inStock ?? null,
+      });
+    }
+
     if (action === "duplicateOrder") {
       const number = searchParams.get("number");
       if (!number) return NextResponse.json({ error: "number requis" }, { status: 400 });
+      // Sélection d'articles (écran Renvoi) : "ref:qty,ref:qty".
+      // Absent → on duplique toute la commande (comportement historique).
+      // `!== null` et non `if (onlyParam)` : un paramètre PRÉSENT mais VIDE doit
+      // être refusé, pas interprété comme « dupliquer toute la commande ».
+      const onlyParam = searchParams.get("only");
+      const onlyMap = new Map<string, number>();
+      if (onlyParam !== null) {
+        for (const part of onlyParam.split(",")) {
+          const [ref, q] = part.split(":");
+          const n = parseInt(q, 10);
+          if (ref && !isNaN(n) && n > 0) onlyMap.set(ref.trim(), n);
+        }
+        if (!onlyMap.size) {
+          return NextResponse.json({ error: "Aucun article sélectionné (quantités toutes à zéro)" }, { status: 400 });
+        }
+      }
+      // Articles à AJOUTER, absents de la commande d'origine : "ref:qty,ref:qty".
+      const addParam = searchParams.get("add");
+      const addMap = new Map<string, number>();
+      if (addParam) {
+        for (const part of addParam.split(",")) {
+          const [ref, q] = part.split(":");
+          const n = parseInt(q, 10);
+          if (ref && !isNaN(n) && n > 0) addMap.set(ref.trim(), n);
+        }
+      }
 
       // 1) Retrouver la commande source par numéro.
       const searchRes = await swFetch(
@@ -443,6 +516,8 @@ export async function GET(req: NextRequest) {
       // sinon on redemande de la port/remise sans raison sur un renvoi gratuit).
       const details = (src.details || [])
         .filter((d: any) => d.mode === 0)
+        // Sélection : on ne garde que les articles cochés (quantité > 0)
+        .filter((d: any) => !onlyMap.size || onlyMap.has(String(d.articleNumber)))
         .map((d: any) => ({
           articleId: d.articleId,
           taxId: d.taxId,
@@ -450,13 +525,38 @@ export async function GET(req: NextRequest) {
           statusId: 0,
           articleNumber: d.articleNumber,
           price: 0,
-          quantity: d.quantity,
+          // Quantité choisie par l'opérateur, sinon celle d'origine
+          quantity: onlyMap.get(String(d.articleNumber)) ?? d.quantity,
           articleName: d.articleName,
           shipped: 0,
           shippedGroup: 0,
           mode: 0,
           esdArticle: d.esdArticle || 0,
         }));
+
+      // Articles ajoutés manuellement (absents de la commande d'origine).
+      // On récupère leur id/taxe depuis Shopware ; une réf inconnue fait échouer
+      // l'opération AVANT toute création, plutôt que de créer une commande bancale.
+      for (const [ref, qty] of Array.from(addMap.entries())) {
+        const vr = await safeJson(await swFetch(`/variants/${encodeURIComponent(ref)}?useNumberAsId=true`, creds));
+        const v = vr.json?.data;
+        if (!v) return NextResponse.json({ error: `Référence ajoutée introuvable : ${ref}` }, { status: 404 });
+        details.push({
+          articleId: v.articleId ?? v.article?.id,
+          taxId: v.article?.taxId ?? src.details?.[0]?.taxId ?? 1,
+          taxRate: src.details?.[0]?.taxRate ?? 20,
+          statusId: 0,
+          articleNumber: v.number,
+          price: 0,
+          quantity: qty,
+          articleName: v.article?.name || v.number,
+          shipped: 0,
+          shippedGroup: 0,
+          mode: 0,
+          esdArticle: 0,
+        });
+      }
+
       if (!details.length) return NextResponse.json({ error: "Aucune ligne article à dupliquer (commande vide ?)" }, { status: 400 });
 
       const stripAddr = (a: any) => a ? ({

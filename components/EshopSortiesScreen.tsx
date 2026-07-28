@@ -1217,6 +1217,85 @@ interface ResendRow {
 function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
   const [input, setInput] = useState("");
   const [rows, setRows] = useState<ResendRow[]>([]);
+
+  // ── Renvoi partiel : on choisit les articles au lieu de tout dupliquer ──────
+  // Quantités À ZÉRO par défaut : on ne renvoie que ce qu'on monte explicitement.
+  const [pick, setPick] = useState<null | {
+    number: string; customer: string; city: string;
+    lines: { articleNumber: string; articleName: string; quantity: number }[];
+    qty: Record<string, number>;                     // réf → qté à renvoyer
+    extra: { articleNumber: string; articleName: string; qty: number }[]; // articles ajoutés
+  }>(null);
+  const [pickLoading, setPickLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [addRef, setAddRef] = useState("");
+  const [addBusy, setAddBusy] = useState(false);
+
+  const openPicker = async (number: string) => {
+    const n = number.trim();
+    if (!n) return;
+    setPickLoading(true);
+    try {
+      const r = await fetch(`/api/shopware-explore?action=orderLines&number=${encodeURIComponent(n)}`).then(x => x.json());
+      if (!r.ok) { onToast(r.error || "Commande introuvable", "error"); setPickLoading(false); return; }
+      setPick({
+        number: r.number || n, customer: r.customer || "", city: r.city || "",
+        lines: r.lines || [], qty: {}, extra: [],
+      });
+      setInput("");
+    } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
+    setPickLoading(false);
+  };
+
+  const setQty = (ref: string, v: number, max: number) => {
+    const q = Math.max(0, Math.min(max, v));
+    setPick(p => p ? { ...p, qty: { ...p.qty, [ref]: q } } : p);
+  };
+
+  const addArticle = async () => {
+    const ref = addRef.trim();
+    if (!ref || !pick) return;
+    if (pick.lines.some(l => l.articleNumber === ref) || pick.extra.some(e => e.articleNumber === ref)) {
+      onToast("Cette référence est déjà dans la liste", "info"); return;
+    }
+    setAddBusy(true);
+    try {
+      const r = await fetch(`/api/shopware-explore?action=lookupArticle&articleNumber=${encodeURIComponent(ref)}`).then(x => x.json());
+      if (!r.ok) { onToast(r.error || "Référence introuvable", "error"); setAddBusy(false); return; }
+      setPick(p => p ? { ...p, extra: [...p.extra, { articleNumber: r.articleNumber, articleName: r.articleName, qty: 1 }] } : p);
+      setAddRef("");
+    } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
+    setAddBusy(false);
+  };
+
+  const totalPicked = pick
+    ? Object.values(pick.qty).reduce((s, n) => s + n, 0) + pick.extra.reduce((s, e) => s + e.qty, 0)
+    : 0;
+
+  const createPartial = async () => {
+    if (!pick || !totalPicked) return;
+    const only = Object.entries(pick.qty).filter(([, q]) => q > 0).map(([r, q]) => `${r}:${q}`).join(",");
+    const add  = pick.extra.filter(e => e.qty > 0).map(e => `${e.articleNumber}:${e.qty}`).join(",");
+    const lignes = [
+      ...Object.entries(pick.qty).filter(([, q]) => q > 0).map(([r, q]) => `${r} ×${q}`),
+      ...pick.extra.filter(e => e.qty > 0).map(e => `${e.articleNumber} ×${e.qty} (ajouté)`),
+    ];
+    if (!confirm(`Créer un renvoi gratuit (0 €) depuis la commande ${pick.number} ?\n\n${lignes.join("\n")}\n\nUne NOUVELLE commande Shopware sera créée.`)) return;
+    setCreating(true);
+    try {
+      const qs = new URLSearchParams({ action: "duplicateOrder", number: pick.number });
+      if (only) qs.set("only", only);
+      if (add)  qs.set("add", add);
+      const res = await fetch(`/api/shopware-explore?${qs.toString()}`, { headers: writeHeaders }).then(x => x.json());
+      if (res.ok) {
+        const label = res.newOrderNumber ? `n° ${res.newOrderNumber}` : `id ${res.newOrderId ?? "?"}`;
+        onToast(`✓ Renvoi créé (${label})`, "success");
+        setRows(prev => [...prev, { number: pick.number, status: "done", newOrderId: res.newOrderId, newOrderNumber: res.newOrderNumber, message: `Renvoi partiel créé (${label})` }]);
+        setPick(null);
+      } else onToast("Erreur : " + (res.error || "échec"), "error");
+    } catch (e: any) { onToast("Erreur : " + e.message, "error"); }
+    setCreating(false);
+  };
   const [diag, setDiag] = useState<{ loading: boolean; scanned: number; matches: any[] } | null>(null);
   const [diagNumbers, setDiagNumbers] = useState("");
 
@@ -1297,8 +1376,97 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
   return (
     <div style={{ paddingBottom: 80 }}>
       <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>
-        Recrée une commande Shopware existante (mêmes articles, même client) à 0€, pour un renvoi gratuit (colis perdu, erreur de préparation…).
-        La nouvelle commande remonte normalement dans Shopware → SendCloud, où tu pourras générer l'étiquette.
+        Recrée une commande Shopware existante (même client) à 0€, pour un renvoi gratuit (colis perdu, erreur de préparation…).
+        La nouvelle commande remonte normalement dans Shopware → SendCloud, où tu pourras générer l&apos;étiquette.
+      </div>
+
+      {/* ── Renvoi partiel : choisir les articles ─────────────────────────── */}
+      <div style={{ background: C.white, border: `1.5px solid ${C.blue}`, borderRadius: 12, padding: 14, marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 3 }}>Renvoi partiel — choisir les articles</div>
+        <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 10, lineHeight: 1.5 }}>
+          Saisis un numéro de commande pour voir ses articles. Les quantités sont <strong>à zéro</strong> :
+          monte seulement celles que tu veux renvoyer. Tu peux aussi ajouter une référence absente de la commande.
+        </div>
+
+        {!pick ? (
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={input} onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") openPicker(input); }}
+              placeholder="Numéro de commande — ex : ECDE2644068"
+              style={{ flex: 1, padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit" }} />
+            <button onClick={() => openPicker(input)} disabled={pickLoading || !input.trim()}
+              style={{ padding: "9px 16px", background: pickLoading || !input.trim() ? "#cbd5e1" : C.blue, color: "#fff", border: "none", borderRadius: 9, fontWeight: 700, fontSize: 13, cursor: pickLoading || !input.trim() ? "default" : "pointer", whiteSpace: "nowrap" }}>
+              {pickLoading ? "…" : "Voir les articles"}
+            </button>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingBottom: 8, borderBottom: `1px solid ${C.border}` }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{pick.number}</div>
+                <div style={{ fontSize: 11.5, color: C.textMuted }}>{[pick.customer, pick.city].filter(Boolean).join(" · ") || "—"}</div>
+              </div>
+              <button onClick={() => setPick(null)}
+                style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 11px", fontSize: 12, color: C.textMuted, cursor: "pointer", fontFamily: "inherit" }}>
+                Changer
+              </button>
+            </div>
+
+            {pick.lines.map(l => {
+              const q = pick.qty[l.articleNumber] ?? 0;
+              return (
+                <div key={l.articleNumber} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: q > 0 ? C.text : C.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.articleName}</div>
+                    <div style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace" }}>{l.articleNumber} · commandé ×{l.quantity}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                    <button onClick={() => setQty(l.articleNumber, q - 1, l.quantity)} disabled={q <= 0}
+                      style={{ width: 28, height: 28, borderRadius: 7, border: `1px solid ${C.border}`, background: C.white, cursor: q <= 0 ? "default" : "pointer", fontSize: 15, fontWeight: 700, color: q <= 0 ? "#cbd5e1" : C.text }}>−</button>
+                    <span style={{ minWidth: 26, textAlign: "center", fontSize: 14, fontWeight: 800, color: q > 0 ? C.blue : "#cbd5e1" }}>{q}</span>
+                    <button onClick={() => setQty(l.articleNumber, q + 1, l.quantity)} disabled={q >= l.quantity}
+                      style={{ width: 28, height: 28, borderRadius: 7, border: `1px solid ${C.border}`, background: C.white, cursor: q >= l.quantity ? "default" : "pointer", fontSize: 15, fontWeight: 700, color: q >= l.quantity ? "#cbd5e1" : C.text }}>+</button>
+                  </div>
+                </div>
+              );
+            })}
+
+            {pick.extra.map(e => (
+              <div key={e.articleNumber} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: `1px solid ${C.border}`, background: C.greenSoft }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.articleName}</div>
+                  <div style={{ fontSize: 11, color: C.green, fontFamily: "monospace" }}>{e.articleNumber} · ajouté</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                  <button onClick={() => setPick(p => p ? { ...p, extra: p.extra.map(x => x.articleNumber === e.articleNumber ? { ...x, qty: Math.max(1, x.qty - 1) } : x) } : p)}
+                    style={{ width: 28, height: 28, borderRadius: 7, border: `1px solid ${C.border}`, background: C.white, cursor: "pointer", fontSize: 15, fontWeight: 700 }}>−</button>
+                  <span style={{ minWidth: 26, textAlign: "center", fontSize: 14, fontWeight: 800, color: C.green }}>{e.qty}</span>
+                  <button onClick={() => setPick(p => p ? { ...p, extra: p.extra.map(x => x.articleNumber === e.articleNumber ? { ...x, qty: x.qty + 1 } : x) } : p)}
+                    style={{ width: 28, height: 28, borderRadius: 7, border: `1px solid ${C.border}`, background: C.white, cursor: "pointer", fontSize: 15, fontWeight: 700 }}>+</button>
+                  <button onClick={() => setPick(p => p ? { ...p, extra: p.extra.filter(x => x.articleNumber !== e.articleNumber) } : p)}
+                    title="Retirer" style={{ marginLeft: 2, background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 14, fontWeight: 700 }}>✕</button>
+                </div>
+              </div>
+            ))}
+
+            {/* Ajouter une référence absente de la commande */}
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <input value={addRef} onChange={e => setAddRef(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") addArticle(); }}
+                placeholder="Ajouter une référence absente de la commande…"
+                style={{ flex: 1, padding: "8px 11px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 12.5, fontFamily: "inherit" }} />
+              <button onClick={addArticle} disabled={addBusy || !addRef.trim()}
+                style={{ padding: "8px 14px", background: addBusy || !addRef.trim() ? "#cbd5e1" : C.text, color: "#fff", border: "none", borderRadius: 9, fontWeight: 700, fontSize: 12.5, cursor: addBusy || !addRef.trim() ? "default" : "pointer", whiteSpace: "nowrap" }}>
+                {addBusy ? "…" : "+ Ajouter"}
+              </button>
+            </div>
+
+            <button onClick={createPartial} disabled={creating || !totalPicked}
+              style={{ width: "100%", marginTop: 12, padding: "12px 0", background: creating || !totalPicked ? "#e5e7eb" : C.green, color: creating || !totalPicked ? C.textMuted : "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: creating || !totalPicked ? "default" : "pointer", fontFamily: "inherit" }}>
+              {creating ? "Création…" : totalPicked ? `Créer le renvoi — ${totalPicked} article${totalPicked > 1 ? "s" : ""}` : "Sélectionne au moins un article"}
+            </button>
+          </>
+        )}
       </div>
 
       {/* Diagnostic (lecture seule) : retrouve les duplicatas déjà créés, sans rien recréer */}
