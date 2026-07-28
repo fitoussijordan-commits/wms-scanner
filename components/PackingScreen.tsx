@@ -975,10 +975,15 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   // ────────────────────────────────────────────────────────────────────────────
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <div>
-          <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, margin: 0 }}>Emballage</h2>
-          <p style={{ fontSize: 12, color: C.textMuted, margin: 0, marginTop: 2 }}>{pickings.length} commande{pickings.length > 1 ? "s" : ""} prête{pickings.length > 1 ? "s" : ""} à expédier</p>
+      <div className="wms-rise" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: "#ccfbf1", color: C.teal, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="8" width="18" height="13" rx="1.5"/><path d="M3 12h18M12 8v13"/><path d="M12 8S9.5 3.5 7.5 5.5 12 8 12 8zM12 8s2.5-4.5 4.5-2.5S12 8 12 8z"/></svg>
+          </div>
+          <div>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, margin: 0 }}>Emballage</h2>
+            <p style={{ fontSize: 12, color: C.textMuted, margin: 0, marginTop: 2 }}>{pickings.length} commande{pickings.length > 1 ? "s" : ""} prête{pickings.length > 1 ? "s" : ""} à expédier</p>
+          </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button onClick={openPrinterModal} title="Configurer imprimantes"
@@ -1038,8 +1043,9 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         </div>
       )}
 
-      {!loadingList && pickings.map(p => (
-        <div key={p.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 10, boxShadow: C.shadow }}>
+      {!loadingList && pickings.map((p, i) => (
+        <div key={p.id} className="wms-rise" style={{ position: "relative", overflow: "hidden", background: C.white, border: `1px solid ${C.border}`, borderRadius: 14, padding: "16px 16px 16px 19px", marginBottom: 10, boxShadow: C.shadow, animationDelay: `${Math.min(i * 0.04, 0.4)}s` }}>
+          <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: C.teal }} />
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
             <span style={{ fontSize: 18, fontWeight: 800, color: C.text, letterSpacing: -0.3 }}>{p.name}</span>
             <span style={{ fontSize: 10, fontWeight: 700, color: C.teal, background: C.teal + "18", borderRadius: 6, padding: "2px 8px" }}>Prêt</span>

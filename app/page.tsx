@@ -3702,11 +3702,19 @@ export default function Page() {
 
         {/* ===== TRANSFER ===== */}
         {screen === "transfer" && <>
-          {session && odoo.isAdmin(session) && (
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
-              <FieldSettingsGear session={session} onToast={showToast} screen="transfer" />
+          {/* En-tête — l'écran n'en avait pas, seulement la roue crantée flottante */}
+          <div className="wms-rise" style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 14 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 12, background: "#eff6ff", color: C.blue, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>
             </div>
-          )}
+            <div style={{ flex: 1 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Transfert</h2>
+              <p style={{ fontSize: 12, color: C.textMuted }}>Déplacer du stock entre emplacements</p>
+            </div>
+            {session && odoo.isAdmin(session) && (
+              <FieldSettingsGear session={session} onToast={showToast} screen="transfer" />
+            )}
+          </div>
           {/* Mode toggle */}
           <div style={{ display: "flex", background: C.bg, borderRadius: 10, padding: 3, marginBottom: 16 }}>
             {(["classic", "quick"] as const).map(m => (
@@ -7866,10 +7874,13 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   return (
     <>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+      <div className="wms-rise" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
         <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
+        <div style={{ width: 40, height: 40, borderRadius: 12, background: "#fce7f3", color: "#db2777", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.4 12.3a1.7 1.7 0 001.7 1.4h8.4a1.7 1.7 0 001.7-1.4L21 7H6"/></svg>
+        </div>
         <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text, margin: 0 }}>E-shop</h2>
       </div>
 
@@ -8807,10 +8818,13 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+      <div className="wms-rise" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
         <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
+        <div style={{ width: 40, height: 40, borderRadius: 12, background: "#ecfdf5", color: "#059669", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg>
+        </div>
         <div style={{ flex: 1 }}>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Arrivage</h2>
           <p style={{ fontSize: 12, color: C.textMuted }}>Importer une packing list WALA</p>
