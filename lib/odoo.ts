@@ -2047,6 +2047,28 @@ export interface EshopMatchResult {
   match_method: "supplier_ref" | "ref" | "barcode" | "name";
 }
 
+// Cache en mémoire des SKU déjà reconnus (vidé au rechargement de la page).
+// Évite de relancer tout le matching Odoo à chaque poll (toutes les 90 s) et à
+// chaque ouverture de la roue crantée / du chariot pour des SKU inchangés.
+// On ne cache QUE les matchs positifs : un SKU non trouvé sera réessayé (il peut
+// être corrigé côté Odoo entre-temps).
+const _eshopMatchCache = new Map<string, EshopMatchResult>();
+export function clearEshopMatchCache() { _eshopMatchCache.clear(); }
+
+// Exécute des tâches asynchrones en parallèle avec une concurrence limitée.
+// Remplace les boucles `for … await` séquentielles (1 requête à la fois) sans
+// pour autant saturer le proxy Odoo (limite 300 req/60 s) : ~10 en vol max.
+async function parallelLimit<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      await worker(items[idx]);
+    }
+  });
+  await Promise.all(runners);
+}
+
 export async function matchEshopSkus(
   session: OdooSession,
   skus: string[],
@@ -2059,7 +2081,14 @@ export async function matchEshopSkus(
   const result: Record<string, EshopMatchResult> = {};
   const remaining = new Set(skus);
 
-  // Helper — enrichit un product.product et le met dans result
+  // Cache mémoire : sert immédiatement les SKU déjà reconnus, sans requête Odoo.
+  for (const sku of skus) {
+    const hit = _eshopMatchCache.get(sku);
+    if (hit) { result[sku] = hit; remaining.delete(sku); }
+  }
+  if (remaining.size === 0) return result; // tout servi depuis le cache
+
+  // Helper — enrichit un product.product et le met dans result (+ cache)
   const addMatch = (sku: string, prod: any, method: EshopMatchResult["match_method"]) => {
     result[sku] = {
       product_id: prod.id,
@@ -2071,12 +2100,22 @@ export async function matchEshopSkus(
     remaining.delete(sku);
   };
 
+  // Mémorise les matchs trouvés (positifs) avant de renvoyer, pour que les
+  // prochains appels les servent depuis le cache mémoire sans requête Odoo.
+  const finalize = (): Record<string, EshopMatchResult> => {
+    for (const [sku, m] of Object.entries(result)) {
+      if (m && m.product_id) _eshopMatchCache.set(sku, m);
+    }
+    return finalize();
+  };
+
   // ── Stratégie 1 : référence fournisseur ──────────────────────────────────
+  const skusToMatch = Array.from(remaining);
   const supplierInfos = await searchRead(
     session, M("MODEL_PRODUCT_SUPPLIER"),
-    [["product_code", "in", skus]],
+    [["product_code", "in", skusToMatch]],
     ["id", "product_code", "product_id", "product_tmpl_id"],
-    skus.length * 3
+    skusToMatch.length * 3
   );
 
   const tmplIds: number[] = [];
@@ -2123,7 +2162,7 @@ export async function matchEshopSkus(
     }
   }
 
-  if (remaining.size === 0) return result;
+  if (remaining.size === 0) return finalize();
 
   // ── Stratégie 1bis : référence Odoo (default_code) ───────────────────────
   // Si la réf fournisseur n'a rien donné, on tente la réf interne Odoo.
@@ -2139,7 +2178,7 @@ export async function matchEshopSkus(
     if (sku && remaining.has(sku)) addMatch(sku, p, "ref");
   }
 
-  if (remaining.size === 0) return result;
+  if (remaining.size === 0) return finalize();
 
   // ── Stratégie 2 : EAN / barcode ──────────────────────────────────────────
   const remainingArr = Array.from(remaining);
@@ -2154,13 +2193,14 @@ export async function matchEshopSkus(
     if (sku) addMatch(sku, p, "barcode");
   }
 
-  if (remaining.size === 0) return result;
+  if (remaining.size === 0) return finalize();
 
   // ── Stratégie 2bis : réf fournisseur / réf Odoo insensible casse-format ───
   // Repli quand "=" exact a raté (casse, espaces parasites, zéro initial…).
-  for (const sku of Array.from(remaining)) {
+  // Parallélisé (concurrence limitée) : avant, chaque SKU était traité en série.
+  await parallelLimit(Array.from(remaining), 10, async (sku) => {
     const s = sku.trim();
-    if (!s) continue;
+    if (!s) return;
     // a) réf fournisseur (product.supplierinfo.product_code) en =ilike
     const si = await searchRead(
       session, M("MODEL_PRODUCT_SUPPLIER"),
@@ -2182,16 +2222,15 @@ export async function matchEshopSkus(
       if (ps.length) prod = ps[0];
     }
     if (prod) addMatch(sku, prod, "ref");
-  }
+  });
 
-  if (remaining.size === 0) return result;
+  if (remaining.size === 0) return finalize();
 
   // ── Stratégie 3 : nom similaire (ilike) ──────────────────────────────────
-  // On cherche chaque SKU restant comme fragment de nom — on prend le meilleur match
-  for (const sku of Array.from(remaining)) {
-    // Nettoyer le SKU pour en faire un fragment de nom utilisable
+  // On cherche chaque SKU restant comme fragment de nom — parallélisé aussi.
+  await parallelLimit(Array.from(remaining), 10, async (sku) => {
     const fragment = sku.replace(/[-_]/g, " ").replace(/\s+/g, " ").trim();
-    if (fragment.length < 3) continue;
+    if (fragment.length < 3) return;
     const found = await searchRead(
       session, M("MODEL_PRODUCT"),
       [["name", "ilike", fragment], ["active", "in", [true, false]]],
@@ -2199,9 +2238,9 @@ export async function matchEshopSkus(
       1
     );
     if (found.length > 0) addMatch(sku, found[0], "name");
-  }
+  });
 
-  if (remaining.size === 0) return result;
+  if (remaining.size === 0) return finalize();
 
   // ── Stratégie 4 : SKU "avantage fidélité" préfixé LR ──────────────────────
   // Certains produits Shopware ont pour code : "LR" + référence fournisseur
@@ -2266,9 +2305,9 @@ export async function matchEshopSkus(
 
     // b) secours : réf interne (default_code) puis barcode sur le code nettoyé
     const stillLr = lrSkus.filter(s => remaining.has(s));
-    for (const sku of stillLr) {
+    await parallelLimit(stillLr, 10, async (sku) => {
       const clean = sku.trim().replace(/^LR/i, "");
-      if (!clean) continue;
+      if (!clean) return;
       let found = await searchRead(
         session, M("MODEL_PRODUCT"),
         [["default_code", "=ilike", clean], ["active", "in", [true, false]]],
@@ -2282,7 +2321,7 @@ export async function matchEshopSkus(
         );
       }
       if (found.length > 0) addMatch(sku, found[0], "supplier_ref");
-    }
+    });
 
     // Conserver le libellé Shopware d'origine (ex: "… (avantage fidélité)")
     // pour les articles LR qui ont matché — on garde la réf/barcode Odoo mais le nom Shopware.
@@ -2295,7 +2334,7 @@ export async function matchEshopSkus(
     }
   }
 
-  return result;
+  return finalize();
 }
 
 // Get main stock location for product IDs (where most qty is stored)
