@@ -713,22 +713,23 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
     domain.push([F("ORDER_TAGS"), "in", transmiseTagIds]);
   }
 
-  const pickings = await searchRead(
+  // TOUTES les commandes en attente, sans plafond : la limite fixe de 200
+  // coupait silencieusement les plus récentes dès que le volume dépassait 200
+  // (elles n'entraient jamais dans la fenêtre triée par scheduled_date).
+  const pickings = await searchReadAll(
     session, M("MODEL_PICKING"),
     domain,
     PICKING_FIELDS(),
-    200,
     "scheduled_date asc, date_deadline asc, id asc"
   );
 
   // Enrichissement date depuis OUT lié + sale.order
   const groupIds = Array.from(new Set(pickings.map((p: any) => p.group_id?.[0]).filter(Boolean)));
   if (groupIds.length > 0 && outTypeIds.length > 0) {
-    const outPickings = await searchRead(
+    const outPickings = await searchReadAll(
       session, M("MODEL_PICKING"),
       [["group_id", "in", groupIds], ["picking_type_id", "in", outTypeIds]],
-      ["id", "group_id", "scheduled_date", "date_deadline", "origin"],
-      500
+      ["id", "group_id", "scheduled_date", "date_deadline", "origin"]
     );
     const outByGroup: Record<number, any> = {};
     for (const op of outPickings) { if (op.group_id) outByGroup[op.group_id[0]] = op; }
@@ -782,11 +783,12 @@ export async function getWaitingPickingsLight(session: OdooSession): Promise<{ i
     domain.push([F("ORDER_TAGS"), "in", transmiseTagIds]);
   }
 
-  const pickings = await searchRead(
+  // Sans plafond : même raison que getWaitingPickings — au-delà de 200 commandes
+  // en attente, la détection de nouvelles commandes ratait les plus récentes.
+  const pickings = await searchReadAll(
     session, M("MODEL_PICKING"),
     domain,
-    ["id", "name", "scheduled_date", "date_deadline", F("SHIPPING_DATE"), "origin"],
-    200
+    ["id", "name", "scheduled_date", "date_deadline", F("SHIPPING_DATE"), "origin"]
   );
 
   for (const p of pickings) {
