@@ -2106,7 +2106,7 @@ export async function matchEshopSkus(
     for (const [sku, m] of Object.entries(result)) {
       if (m && m.product_id) _eshopMatchCache.set(sku, m);
     }
-    return finalize();
+    return result;
   };
 
   // ── Stratégie 1 : référence fournisseur ──────────────────────────────────
