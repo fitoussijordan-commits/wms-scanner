@@ -1095,6 +1095,39 @@ const WMO_LABELS: Record<number, string> = {
   61:"Pluie légère",63:"Pluie",65:"Pluie forte",71:"Neige légère",73:"Neige",75:"Neige forte",
   80:"Averses légères",81:"Averses",82:"Averses fortes",95:"Orage",96:"Orage+grêle",99:"Orage fort",
 };
+/** Icônes tracées des 4 KPI de l'accueil (remplacent les emojis ⏳📦🎁🛒). */
+const KPI_ICONS = [
+  <svg key="w" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>,
+  <svg key="p" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M20 7L12 3 4 7l8 4 8-4z"/><path d="M4 7v10l8 4 8-4V7"/><path d="M12 11v10"/></svg>,
+  <svg key="e" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="8" width="18" height="13" rx="1.5"/><path d="M3 12h18M12 8v13"/><path d="M12 8S9.5 3.5 7.5 5.5 12 8 12 8zM12 8s2.5-4.5 4.5-2.5S12 8 12 8z"/></svg>,
+  <svg key="s" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.4 12.3a1.7 1.7 0 001.7 1.4h8.4a1.7 1.7 0 001.7-1.4L21 7H6"/></svg>,
+];
+
+/** Compteur qui s'anime de 0 jusqu'à `value` au montage (et à chaque changement).
+ *  `null` → affiche « — » sans animer. Respecte prefers-reduced-motion. */
+function CountUp({ value, style }: { value: number | null; style?: React.CSSProperties }) {
+  const [shown, setShown] = useState(value ?? 0);
+  const fromRef = useRef(0);
+  useEffect(() => {
+    if (value == null) return;
+    const reduce = typeof window !== "undefined"
+      && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const from = fromRef.current;
+    if (reduce || from === value) { setShown(value); fromRef.current = value; return; }
+    let raf = 0; const t0 = performance.now(); const dur = 900;
+    const step = (ts: number) => {
+      const p = Math.min((ts - t0) / dur, 1);
+      const eased = 1 - Math.pow(1 - p, 3); // ralenti en fin de course
+      setShown(Math.round(from + (value - from) * eased));
+      if (p < 1) raf = requestAnimationFrame(step); else fromRef.current = value;
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  if (value == null) return <span style={style}>—</span>;
+  return <span className="wms-num" style={style}>{shown}</span>;
+}
+
 function WeatherWidget() {
   const [w, setW] = useState<{ temp: number; code: number } | null>(null);
   useEffect(() => {
@@ -3341,13 +3374,14 @@ export default function Page() {
             <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginBottom: 10, paddingLeft: 2 }}>Opérations</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {visibleOps.map((btn, i) => (
-                <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 8, padding: "18px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, cursor: "pointer", fontFamily: "inherit", boxShadow: C.shadow, position: "relative" as const }}>
+                <button key={i} onClick={btn.onClick} className="wms-rise" style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 8, padding: "18px 10px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, cursor: "pointer", fontFamily: "inherit", boxShadow: C.shadow, position: "relative" as const, overflow: "hidden", animationDelay: `${i * 0.045}s` }}>
+                  <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: btn.color }} />
                   <div style={{ width: 40, height: 40, borderRadius: 10, background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", color: "#374151" }}>{btn.icon}</div>
                   <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{btn.label}</span>
-                  {btn.badge !== null ? (
+                  {/* Pastille de couleur remplacée par le liseré gauche ; on ne garde
+                      que le badge chiffré quand il y en a un. */}
+                  {btn.badge !== null && (
                     <div style={{ position: "absolute" as const, top: 7, right: 7, minWidth: 20, height: 20, borderRadius: 10, background: btn.color, color: "#fff", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 5px" }}>{btn.badge}</div>
-                  ) : (
-                    <div style={{ position: "absolute" as const, top: 8, right: 8, width: 6, height: 6, borderRadius: 3, background: btn.color }} />
                   )}
                 </button>
               ))}
@@ -3356,7 +3390,7 @@ export default function Page() {
             <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: 1, marginTop: 20, marginBottom: 10, paddingLeft: 2 }}>Outils</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
               {visibleTools.map((btn, i) => (
-                <button key={i} onClick={btn.onClick} style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 6, padding: "14px 6px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", position: "relative" as const, color: "#6b7280" }}>
+                <button key={i} onClick={btn.onClick} className="wms-rise" style={{ display: "flex", flexDirection: "column" as const, alignItems: "center", gap: 6, padding: "14px 6px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", position: "relative" as const, color: "#6b7280", animationDelay: `${0.2 + i * 0.03}s` }}>
                   {btn.icon}
                   <span style={{ fontSize: 11, fontWeight: 600, color: C.textSec }}>{btn.label}</span>
                   {(btn as any).badge != null && (
@@ -3402,87 +3436,57 @@ export default function Page() {
           ];
           return (
             <div style={{ animation: "fadeIn .2s" }}>
-              {/* Greeting */}
-              <div style={{ marginBottom: 22, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
-                <div>
-                  <h1 style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.4, color: DK.text }}>Bonjour {(session?.name || "").split(" ")[0]} 👋</h1>
-                  <p style={{ fontSize: 13, color: DK.text2, marginTop: 3, textTransform: "capitalize" as const }}>
-                    {new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · voici l'activité de l'entrepôt
-                  </p>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                  {/* Accès rapide catalogue — réservé admin, discret à côté de la météo */}
-                  {session && odoo.isAdmin(session) && (
-                    <button
-                      onClick={() => { window.location.href = "/dashboard?tab=catalogue"; }}
-                      title="Catalogue produits"
-                      aria-label="Catalogue produits"
-                      style={{ width: 40, height: 40, borderRadius: 12, border: "1px solid #e8ecf3", background: "#fff", boxShadow: "0 1px 3px rgba(15,23,42,.06)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", flexShrink: 0 }}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-                    </button>
-                  )}
-                  <WeatherWidget />
+              {/* Bandeau salutation — reflet animé + pastille synchro */}
+              <div className="wms-rise" style={{ position: "relative", overflow: "hidden", borderRadius: 18, padding: "20px 24px", marginBottom: 18, background: "linear-gradient(120deg,#0F172A 0%,#1E2A4A 55%,#26335C 100%)", color: "#fff", boxShadow: "0 12px 32px -14px rgba(15,23,42,.45)" }}>
+                <div className="wms-shine" />
+                <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" as const }}>
+                  <div>
+                    <h1 style={{ fontSize: 20, fontWeight: 600, letterSpacing: -0.3 }}>Bonjour {(session?.name || "").split(" ")[0]}</h1>
+                    <p style={{ fontSize: 12.5, color: "#94a3b8", marginTop: 3, textTransform: "capitalize" as const }}>
+                      {new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · activité de l'entrepôt
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7, background: "rgba(255,255,255,.09)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 20, padding: "5px 12px" }}>
+                      <span className="wms-dot" style={{ width: 6, height: 6, background: "#5DCAA5" }} />
+                      <span style={{ fontSize: 11.5, color: "#CBD5E1" }}>Synchro Odoo active</span>
+                    </div>
+                    {session && odoo.isAdmin(session) && (
+                      <button
+                        onClick={() => { window.location.href = "/dashboard?tab=catalogue"; }}
+                        title="Catalogue produits"
+                        aria-label="Catalogue produits"
+                        style={{ width: 38, height: 38, borderRadius: 11, border: "1px solid rgba(255,255,255,.16)", background: "rgba(255,255,255,.08)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#CBD5E1", flexShrink: 0 }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+                      </button>
+                    )}
+                    <WeatherWidget />
+                  </div>
                 </div>
               </div>
 
-              {/* KPI strip — aligné sur la même grille 1fr/360px que le contenu en dessous */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 26, marginBottom: 26 }}>
-                {/* 3 KPI gauche */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
-                  {kpis.slice(0, 3).map((k, i) => (
-                    <button key={i} className="dk-kpi" onClick={k.onClick} style={{ ...card, padding: "16px 18px", display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
-                      <div style={{ width: 42, height: 42, borderRadius: 12, background: k.soft, color: k.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, flexShrink: 0 }}>
-                        {k.count == null ? "·" : ""}
-                        {k.count != null && <span style={{ fontSize: 17 }}>{["⏳", "📦", "🎁", "🛒"][i]}</span>}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.6, lineHeight: 1, color: (k.count ?? 0) > 0 ? DK.text : DK.text3 }}>{k.count ?? "—"}</div>
-                        <div style={{ fontSize: 11.5, fontWeight: 600, color: DK.text2, marginTop: 4, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{k.label}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-                {/* 1 KPI droite — aligné avec le Centre de contrôle */}
-                {kpis.slice(3).map((k, i) => (
-                  <button key={i} className="dk-kpi" onClick={k.onClick} style={{ ...card, padding: "16px 18px", display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
-                    <div style={{ width: 42, height: 42, borderRadius: 12, background: k.soft, color: k.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, flexShrink: 0 }}>
-                      {k.count == null ? "·" : ""}
-                      {k.count != null && <span style={{ fontSize: 17 }}>🛒</span>}
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.6, lineHeight: 1, color: (k.count ?? 0) > 0 ? DK.text : DK.text3 }}>{k.count ?? "—"}</div>
-                      <div style={{ fontSize: 11.5, fontWeight: 600, color: DK.text2, marginTop: 4, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{k.label}</div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-
-              {/* Search hero */}
-              <div style={{ background: "linear-gradient(120deg,#0f172a 0%,#1e2a4a 60%,#26335c 100%)", borderRadius: 20, padding: "24px 28px", marginBottom: 26, color: "#fff", boxShadow: "0 12px 32px -12px rgba(15,23,42,.4)" }}>
-                <div style={{ fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 9 }}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
-                  Recherche rapide
-                </div>
-                <p style={{ fontSize: 12.5, color: "#94a3b8", margin: "3px 0 14px" }}>Scanne ou tape un code — barres, réf, lot, emplacement, Pal-X</p>
-                <div style={{ display: "flex", gap: 10 }}>
-                  <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 11, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 13, padding: "0 16px", height: 50 }}>
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.8"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              {/* Recherche — remontée tout en haut, version claire et compacte */}
+              <div className="wms-rise" style={{ ...card, padding: "12px 14px", marginBottom: 18, animationDelay: ".05s" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 11, background: "#f8fafc", border: `1px solid ${DK.border}`, borderRadius: 12, padding: "0 14px", height: 46 }}>
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.8" style={{ flexShrink: 0 }}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                     <input
                       value={homeQuery}
                       onChange={e => onHomeQueryChange(e.target.value)}
                       onKeyDown={e => { if (e.key === "Enter") submitHomeQuery(); }}
-                      placeholder="Code-barres, réf, lot, emplacement, Pal-XXXX…"
-                      style={{ flex: 1, background: "none", border: "none", outline: "none", color: "#fff", fontSize: 14.5, fontFamily: "inherit" }}
+                      placeholder="Scanne ou tape un code — barres, réf, lot, emplacement, Pal-X…"
+                      style={{ flex: 1, background: "none", border: "none", outline: "none", color: DK.text, fontSize: 14, fontFamily: "inherit" }}
                     />
+                    <kbd style={{ fontSize: 10, color: DK.text3, border: `1px solid ${DK.border}`, borderRadius: 5, padding: "2px 6px", flexShrink: 0 }}>↵</kbd>
                   </div>
-                  <button onClick={submitHomeQuery} style={{ height: 50, padding: "0 22px", borderRadius: 13, border: "none", background: "#2563eb", color: "#fff", fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
+                  <button onClick={submitHomeQuery} style={{ height: 46, padding: "0 20px", borderRadius: 12, border: "none", background: "#2563eb", color: "#fff", fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                     Rechercher
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
                   </button>
                 </div>
-                {homeSearching && <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 8 }}>Recherche en cours…</div>}
+                {homeSearching && <div style={{ fontSize: 12, color: DK.text3, marginTop: 8 }}>Recherche en cours…</div>}
                 {homeResults.length > 0 && (
-                  <div style={{ marginTop: 10, background: "#fff", borderRadius: 13, padding: 6, maxHeight: 280, overflowY: "auto" as const }}>
+                  <div style={{ marginTop: 10, maxHeight: 280, overflowY: "auto" as const }}>
                     {homeResults.map((r: any, i: number) => (
                       <div key={i} className="dk-row" style={{ display: "flex", alignItems: "center", borderRadius: 9 }}>
                         <button
@@ -3507,7 +3511,6 @@ export default function Page() {
                           </div>
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={DK.text3} strokeWidth="2" style={{ flexShrink: 0 }}><polyline points="9 18 15 12 9 6"/></svg>
                         </button>
-                        {/* Édition rapide — admin uniquement */}
                         {r.productId && session && odoo.isAdmin(session) && (
                           <button
                             onClick={e => { e.stopPropagation(); setQuickEditProductId(r.productId); }}
@@ -3521,6 +3524,68 @@ export default function Page() {
                   </div>
                 )}
               </div>
+
+              {/* KPI — icônes tracées, compteur animé, liseré de couleur, apparition en cascade */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 26, marginBottom: 22 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
+                  {kpis.slice(0, 3).map((k, i) => (
+                    <button key={i} className="dk-kpi wms-rise" onClick={k.onClick}
+                      style={{ ...card, position: "relative", overflow: "hidden", padding: "15px 16px 15px 19px", display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, animationDelay: `${0.10 + i * 0.06}s` }}>
+                      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: k.color }} />
+                      <div style={{ width: 42, height: 42, borderRadius: 12, background: k.soft, color: k.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        {KPI_ICONS[i]}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: -0.6, lineHeight: 1, color: (k.count ?? 0) > 0 ? DK.text : DK.text3 }}>
+                          <CountUp value={k.count} />
+                        </div>
+                        <div style={{ fontSize: 11.5, fontWeight: 600, color: DK.text2, marginTop: 4, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{k.label}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                {kpis.slice(3).map((k, i) => (
+                  <button key={i} className="dk-kpi wms-rise" onClick={k.onClick}
+                    style={{ ...card, position: "relative", overflow: "hidden", padding: "15px 16px 15px 19px", display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, animationDelay: ".28s" }}>
+                    <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: k.color }} />
+                    <div style={{ width: 42, height: 42, borderRadius: 12, background: k.soft, color: k.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      {KPI_ICONS[3]}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: -0.6, lineHeight: 1, color: (k.count ?? 0) > 0 ? DK.text : DK.text3 }}>
+                        <CountUp value={k.count} />
+                      </div>
+                      <div style={{ fontSize: 11.5, fontWeight: 600, color: DK.text2, marginTop: 4, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{k.label}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Flux de la journée — proportions réelles, bande « en attente » animée */}
+              {(() => {
+                const seg = [
+                  { n: ccData?.waitingToday.count ?? 0, c: "#EF9F27", lbl: "attente", flow: true },
+                  { n: ccData?.inPrep.count ?? 0, c: "#7F77DD", lbl: "prépa" },
+                  { n: ccData?.outToPackToday.count ?? 0, c: "#5DCAA5", lbl: "emballage" },
+                  { n: ccData?.eshopWaiting.count ?? 0, c: "#ED93B1", lbl: "e-shop" },
+                ];
+                const total = seg.reduce((s, x) => s + x.n, 0);
+                if (!total) return null;
+                return (
+                  <div className="wms-rise" style={{ ...card, padding: "14px 16px", marginBottom: 22, animationDelay: ".34s" }}>
+                    <div style={{ fontSize: 11, letterSpacing: 0.7, textTransform: "uppercase" as const, color: DK.text3, marginBottom: 10 }}>Flux de la journée</div>
+                    <div style={{ display: "flex", height: 11, borderRadius: 6, overflow: "hidden", gap: 2 }}>
+                      {seg.filter(s => s.n > 0).map((s, i) => (
+                        <div key={i} className={s.flow ? "wms-flow" : undefined}
+                          style={{ flex: s.n, background: s.flow ? undefined : s.c }} title={`${s.n} ${s.lbl}`} />
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: DK.text2, marginTop: 9, flexWrap: "wrap" as const, gap: 8 }}>
+                      {seg.filter(s => s.n > 0).map((s, i) => <span key={i}>{s.n} {s.lbl}</span>)}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {error && <Alert type="error">{error}</Alert>}
               {lookupType === "product" && lookupResult && <ProductResult product={lookupResult} stock={lookupStock} onRename={rename} />}
@@ -4658,6 +4723,23 @@ function Shell({ children, toast, flash, desktop }: { children: React.ReactNode;
         .dk-chip:hover { border-color: #c7d2e3 !important; color: #0f172a !important; }
         .dk-row { transition: background .12s; }
         .dk-row:hover { background: #fafbfd; }
+        /* ── Habillage animé de l'accueil (desktop + mobile) ── */
+        @keyframes wmsRise { from { opacity:0; transform: translateY(10px) } to { opacity:1; transform:none } }
+        @keyframes wmsPulse { 0%,100% { opacity:.55 } 50% { opacity:1 } }
+        @keyframes wmsShine { 0% { background-position:-200% 0 } 100% { background-position:200% 0 } }
+        @keyframes wmsFlow { from { background-position:0 0 } to { background-position:28px 0 } }
+        .wms-rise { animation: wmsRise .5s both; }
+        .wms-dot { display:inline-block; border-radius:50%; animation: wmsPulse 1.8s infinite; }
+        .wms-shine { position:absolute; inset:0; pointer-events:none;
+          background:linear-gradient(90deg,transparent,rgba(255,255,255,.07),transparent);
+          background-size:200% 100%; animation: wmsShine 3.5s infinite; }
+        .wms-flow { background:repeating-linear-gradient(115deg,#EF9F27 0 10px,#F0AC48 10px 14px);
+          background-size:28px 100%; animation: wmsFlow 1.1s linear infinite; }
+        .wms-num { font-variant-numeric: tabular-nums; }
+        /* Respecte le réglage système « réduire les animations » */
+        @media (prefers-reduced-motion: reduce) {
+          .wms-rise, .wms-dot, .wms-shine, .wms-flow { animation: none !important; }
+        }
       `}</style>
       {flash && (
         <div key={flash + Date.now()} style={{
