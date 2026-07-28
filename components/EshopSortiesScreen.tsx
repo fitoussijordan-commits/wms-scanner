@@ -49,7 +49,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
       <div style={{ display: tab === "stock" ? "block" : "none" }}><StockSyncTab session={session} onToast={onToast} /></div>
       <div style={{ display: tab === "audit" ? "block" : "none" }}><AuditTab session={session} onToast={onToast} /></div>
       <div style={{ display: tab === "reappro" ? "block" : "none" }}><ReapproChariotTab session={session} onToast={onToast} active={tab === "reappro"} /></div>
-      <div style={{ display: tab === "chariot" ? "block" : "none" }}><ChariotConfigScreen session={session} /></div>
+      <div style={{ display: tab === "chariot" ? "block" : "none" }}><ChariotConfigScreen session={session} onToast={onToast} /></div>
       <div style={{ display: tab === "resend" ? "block" : "none" }}><ResendTab onToast={onToast} /></div>
     </div>
   );
@@ -1601,10 +1601,21 @@ function ReapproChariotTab({ session, onToast, active }: { session: odoo.OdooSes
     try {
       const skus = await odoo.loadChariotSkus(session);
       if (skus.length) {
-        const matches = await odoo.matchEshopSkus(session, skus);
+        const [matches, ov] = await Promise.all([
+          odoo.matchEshopSkus(session, skus),
+          getEshopMappingOverrides().catch(() => ({} as EshopMappingOverrides)),
+        ]);
+        // Détection automatique d'abord…
         for (const [sku, m] of Object.entries(matches)) {
           const pid = (m as any)?.product_id;
           if (pid && !map.has(pid)) map.set(pid, sku);
+        }
+        // …puis les rattachements MANUELS, qui priment (mêmes overrides que
+        // l'audit catalogue et la config chariot). Sans ça, une correction faite
+        // à la main n'aurait aucun effet sur le réappro.
+        for (const sku of skus) {
+          const o = ov[sku];
+          if (o?.productId) map.set(o.productId, sku);
         }
       }
     } catch { /* on renverra des lignes non rattachées, signalées à l'écran */ }
