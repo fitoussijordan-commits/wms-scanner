@@ -10352,10 +10352,14 @@ function WaitingOrdersScreen({
     const card: React.CSSProperties = { background: "#fff", border: `1px solid ${D.border}`, borderRadius: 16, boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -8px rgba(15,23,42,.08)" };
     const cols = "minmax(220px,1.4fr) minmax(170px,1fr) 64px 120px 120px 200px";
     const stats = [
-      { label: "Total", value: pickings.length, color: D.text, soft: "#f4f6fb" },
-      { label: "Aujourd'hui", value: todayCount, color: "#2563eb", soft: "#eff6ff" },
-      { label: "En retard", value: lateCount, color: "#dc2626", soft: "#fef2f2" },
-      { label: "Prêtes", value: readyCount, color: "#16a34a", soft: "#dcfce7" },
+      { label: "Total", value: pickings.length, color: D.text, soft: "#f4f6fb", icon: KPI_ICONS[1] },
+      { label: "Aujourd'hui", value: todayCount, color: "#2563eb", soft: "#eff6ff", icon: KPI_ICONS[0] },
+      { label: "En retard", value: lateCount, color: "#dc2626", soft: "#fef2f2", icon: (
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13.5"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      ) },
+      { label: "Prêtes", value: readyCount, color: "#16a34a", soft: "#dcfce7", icon: (
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="8.5 12.5 11 15 15.5 9.5"/></svg>
+      ) },
     ];
     return (
       <div style={{ animation: "fadeIn .2s" }}>
@@ -10382,13 +10386,16 @@ function WaitingOrdersScreen({
         {/* Bandeau stats */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 22 }}>
           {stats.map((s, i) => (
-            <div key={i} style={{ ...card, padding: "14px 18px", display: "flex", alignItems: "center", gap: 13 }}>
-              <div style={{ width: 38, height: 38, borderRadius: 11, background: s.soft, color: s.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 800, flexShrink: 0 }}>
-                {loading ? "·" : s.value}
+            <div key={i} className="wms-rise" style={{ ...card, position: "relative", overflow: "hidden", padding: "14px 18px 14px 21px", display: "flex", alignItems: "center", gap: 13, animationDelay: `${0.05 + i * 0.06}s` }}>
+              <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: s.color }} />
+              <div style={{ width: 38, height: 38, borderRadius: 11, background: s.soft, color: s.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                {s.icon}
               </div>
               <div>
-                <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, lineHeight: 1, color: s.value > 0 ? s.color : D.t3 }}>{loading ? "—" : s.value}</div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: D.t2, marginTop: 3, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{s.label}</div>
+                <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: -0.5, lineHeight: 1, color: s.value > 0 ? s.color : D.t3 }}>
+                  <CountUp value={loading ? null : s.value} />
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: D.t2, marginTop: 4, textTransform: "uppercase" as const, letterSpacing: 0.5 }}>{s.label}</div>
               </div>
             </div>
           ))}
@@ -12796,10 +12803,17 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenCollab, onOpen
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <div>
-          <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Préparation</h2>
-          <p style={{ fontSize: 12, color: C.textMuted }}>{pickings.length} commande(s) prête(s)</p>
+      <div className="wms-rise" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: "#f3e8ff", color: "#7c3aed", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            {KPI_ICONS[1]}
+          </div>
+          <div>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Préparation</h2>
+            <p style={{ fontSize: 12, color: C.textMuted }}>
+              <CountUp value={pickings.length} /> commande{pickings.length > 1 ? "s" : ""} prête{pickings.length > 1 ? "s" : ""}
+            </p>
+          </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <button onClick={onRefresh} disabled={loading} style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
@@ -12809,15 +12823,20 @@ function PrepListScreen({ pickings, loading, error, onOpen, onOpenCollab, onOpen
         </div>
       </div>
 
-      {/* Onglets */}
+      {/* Onglets — icônes tracées (plus d'emojis), même langage que le reste */}
       <div style={{ display: "flex", gap: 6, marginBottom: 16, background: C.bg, borderRadius: 12, padding: 4 }}>
-        {([["list","📋 Par date"],["multiscan","🔀 Multi-scan"],["groups","✨ Groupes"]] as [string,string][]).map(([key, label]) => (
+        {([
+          ["list", "Par date", <svg key="a" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><rect x="3" y="4.5" width="18" height="17" rx="2"/><line x1="3" y1="9.5" x2="21" y2="9.5"/><line x1="8" y1="2.5" x2="8" y2="6.5"/><line x1="16" y1="2.5" x2="16" y2="6.5"/></svg>],
+          ["multiscan", "Multi-scan", <svg key="b" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>],
+          ["groups", "Groupes", <svg key="c" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg>],
+        ] as [string, string, React.ReactNode][]).map(([key, label, icon]) => (
           <button key={key} onClick={() => setPrepTab(key as any)}
             style={{ flex: 1, padding: "9px 4px", border: "none", borderRadius: 9, fontFamily: "inherit", fontSize: 12, fontWeight: 700, cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
               background: prepTab === key ? C.white : "transparent",
               color: prepTab === key ? C.blue : C.textMuted,
-              boxShadow: prepTab === key ? C.shadow : "none" }}>
-            {label}
+              boxShadow: prepTab === key ? C.shadow : "none", transition: "background .15s, color .15s" }}>
+            {icon}{label}
           </button>
         ))}
       </div>
