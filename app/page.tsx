@@ -3094,10 +3094,14 @@ export default function Page() {
       {isDesktopUI && session && (() => {
         const DK = { text: "#0f172a", text2: "#64748b", text3: "#94a3b8", border: "#e8ecf3", primary: "#2563eb" };
         const navItem = (active: boolean): React.CSSProperties => ({
-          display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 9,
+          display: "flex", alignItems: "center", gap: 10, padding: "8px 12px 8px 14px", borderRadius: 10,
           fontSize: 13, fontWeight: active ? 600 : 500, color: active ? DK.primary : DK.text2,
           background: active ? "#eef2ff" : "none", border: "none", cursor: "pointer",
           fontFamily: "inherit", width: "100%", textAlign: "left" as const,
+          position: "relative" as const, overflow: "hidden",
+          // Barre verticale à gauche sur l'élément actif — même langage que les
+          // cartes de l'accueil (liseré de couleur), au lieu du simple fond bleu.
+          boxShadow: active ? `inset 3px 0 0 ${DK.primary}` : "none",
         });
         const navBadge = (color: string): React.CSSProperties => ({
           marginLeft: "auto", minWidth: 20, height: 20, padding: "0 6px", borderRadius: 10,
@@ -3107,19 +3111,19 @@ export default function Page() {
         const label: React.CSSProperties = { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase" as const, color: DK.text3, padding: "12px 12px 4px" };
         return (
           <aside className="dk-sidebar" style={{ position: "fixed", left: 0, top: 0, bottom: 0, width: 248, height: "100vh", maxHeight: "100vh", background: "#fff", borderRight: `1px solid ${DK.border}`, padding: "14px 10px 12px", display: "flex", flexDirection: "column" as const, zIndex: 200, overflowY: "auto" as const, boxSizing: "border-box" as const }}>
-            <button onClick={goHome} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 10px 12px", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
+            <button onClick={goHome} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px 12px", margin: "0 0 6px", background: "none", border: "none", borderBottom: `1px solid ${DK.border}`, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const }}>
               <img src={DH_LOGO} alt="Dr. Hauschka" style={{ height: 30, objectFit: "contain" }} />
-              <span style={{ fontSize: 9, color: DK.primary, fontWeight: 700, background: "#eef2ff", padding: "2px 6px", borderRadius: 5 }}>WMS</span>
+              <span style={{ fontSize: 9, color: DK.primary, fontWeight: 700, background: "#eef2ff", padding: "2px 6px", borderRadius: 5, letterSpacing: 0.5 }}>WMS</span>
             </button>
 
-            <button className="dk-nav" onClick={goHome} style={navItem(screen === "home")}>
+            <button className="dk-nav" data-active={screen === "home" ? "1" : undefined} onClick={goHome} style={navItem(screen === "home")}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
               Accueil
             </button>
 
             <div style={label}>Opérations</div>
             {visibleOps.map(it => (
-              <button key={it.key} className="dk-nav" onClick={it.onClick} style={navItem(screen === it.key)}>
+              <button key={it.key} className="dk-nav" data-active={screen === it.key ? "1" : undefined} onClick={it.onClick} style={navItem(screen === it.key)}>
                 <span style={{ display: "flex", color: screen === it.key ? DK.primary : DK.text2 }}>{it.icon}</span>
                 {it.label}
                 {it.badge != null && <span style={navBadge(it.color)}>{it.badge}</span>}
@@ -3128,14 +3132,14 @@ export default function Page() {
 
             <div style={label}>Outils</div>
             {visibleTools.map(it => (
-              <button key={it.key} className="dk-nav" onClick={it.onClick} style={navItem(screen === it.key)}>
+              <button key={it.key} className="dk-nav" data-active={screen === it.key ? "1" : undefined} onClick={it.onClick} style={navItem(screen === it.key)}>
                 <span style={{ display: "flex", color: screen === it.key ? DK.primary : DK.text2 }}>{it.icon}</span>
                 {it.label}
                 {it.badge != null && <span style={navBadge(it.badgeColor || "#6b7280")}>{it.badge}</span>}
               </button>
             ))}
             {history.length > 0 && (
-              <button className="dk-nav" onClick={() => setScreen("history")} style={navItem(screen === "history")}>
+              <button className="dk-nav" data-active={screen === "history" ? "1" : undefined} onClick={() => setScreen("history")} style={navItem(screen === "history")}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 Historique
                 <span style={{ marginLeft: "auto", fontSize: 11, color: DK.text3, fontWeight: 600 }}>{history.length}</span>
@@ -3149,7 +3153,7 @@ export default function Page() {
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: DK.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{session?.name}</div>
-                  <div style={{ fontSize: 11, color: "#10b981", fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981", display: "inline-block" }} />En ligne</div>
+                  <div style={{ fontSize: 11, color: "#10b981", fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}><span className="wms-dot" style={{ width: 6, height: 6, background: "#10b981" }} />En ligne</div>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 6, padding: "0 4px" }}>
@@ -3157,7 +3161,7 @@ export default function Page() {
                   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
                   {notifUnread > 0 && <span style={{ position: "absolute" as const, top: 4, right: 14, minWidth: 15, height: 15, padding: "0 4px", borderRadius: 8, background: "#ef4444", color: "#fff", fontSize: 9.5, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>{notifUnread > 9 ? "9+" : notifUnread}</span>}
                 </button>
-                <button className="dk-nav" onClick={() => setScreen("settings")} title="Paramètres" style={{ ...navItem(screen === "settings"), width: "auto", flex: 1, justifyContent: "center" }}>
+                <button className="dk-nav" data-active={screen === "settings" ? "1" : undefined} onClick={() => setScreen("settings")} title="Paramètres" style={{ ...navItem(screen === "settings"), width: "auto", flex: 1, justifyContent: "center" }}>
                   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
                 </button>
                 <button className="dk-nav" onClick={logout} title="Déconnexion" style={{ ...navItem(false), width: "auto", flex: 1, justifyContent: "center" }}>
@@ -4707,8 +4711,13 @@ function Shell({ children, toast, flash, desktop }: { children: React.ReactNode;
         input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         input[type=number] { -moz-appearance: textfield; }
         /* ── Refonte desktop ── */
-        .dk-nav { transition: background .15s, color .15s; flex-shrink: 0; }
+        .dk-nav { transition: background .15s, color .15s, box-shadow .15s; flex-shrink: 0; }
+        /* Au survol d'un item inactif : léger liseré gris, pour préfigurer
+           le liseré bleu de l'item actif (même langage que les cartes). */
         .dk-nav:hover { background: #f1f5f9 !important; color: #0f172a !important; }
+        .dk-nav:not([data-active="1"]):hover { box-shadow: inset 3px 0 0 #cbd5e1 !important; }
+        .dk-nav svg { transition: transform .15s; }
+        .dk-nav:hover svg { transform: scale(1.08); }
         /* Sidebar : défile si l'écran est trop court, scrollbar discrète */
         .dk-sidebar { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
         .dk-sidebar::-webkit-scrollbar { width: 6px; }
