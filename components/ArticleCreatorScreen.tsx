@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import * as odoo from "@/lib/odoo";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
+import { useScannerListener } from "@/lib/useScannerListener";
 
 // ─── Données de codification (extraites du fichier Excel _Listes) ─────────────
 
@@ -1768,6 +1769,27 @@ export function LogistiqueTab({ session, onToast }: { session: odoo.OdooSession;
     setLoading(false);
   };
 
+  // ── Scanner physique ────────────────────────────────────────────────────────
+  // Le scan marche SANS avoir à cliquer dans le champ (pas de clavier virtuel
+  // qui s'ouvre sur PDA). Deux comportements selon l'endroit où on se trouve :
+  //  · curseur dans le champ « Code-barres EAN » → le scan REMPLIT ce champ,
+  //    c'est le cas où on attribue un nouvel EAN à l'article affiché ;
+  //  · partout ailleurs → le scan RECHERCHE l'article à modifier.
+  const onScan = useCallback((code: string) => {
+    const c = code.trim();
+    if (!c) return;
+    if (typeof document !== "undefined" && document.activeElement === barcodeRef.current) {
+      setBarcode(c);
+      onToast(`Code-barres scanné : ${c}`, "info");
+      return;
+    }
+    setQuery(c);
+    doSearch(c);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  useScannerListener(onScan, true);
+
   const num = (s: string): number | undefined => {
     const t = s.trim().replace(",", ".");
     if (t === "") return undefined;
@@ -1847,8 +1869,9 @@ export function LogistiqueTab({ session, onToast }: { session: odoo.OdooSession;
             {loading ? "…" : "→"}
           </button>
         </div>
-        <div style={{ fontSize: 11.5, color: "#9ca3af", marginTop: 6 }}>
-          Astuce : si l'article n'a pas encore d'EAN, scanne son <strong>numéro de lot</strong> — ça retrouve la référence.
+        <div style={{ fontSize: 11.5, color: "#9ca3af", marginTop: 6, lineHeight: 1.55 }}>
+          <strong style={{ color: "#2563eb" }}>Scanne directement</strong> — pas besoin de cliquer dans le champ.
+          Si l&apos;article n&apos;a pas encore d&apos;EAN, scanne son <strong>numéro de lot</strong> : ça retrouve la référence.
         </div>
       </div>
 
