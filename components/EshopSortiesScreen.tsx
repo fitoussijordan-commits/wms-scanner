@@ -1553,10 +1553,53 @@ function ReapproChariotTab({ session, onToast, active }: { session: odoo.OdooSes
   const unmatched = found ? found.lines.filter(l => !l.sku) : [];
   const matched   = found ? found.lines.filter(l => l.sku) : [];
 
+  // ── Rattacher un article au chariot SANS quitter l'écran ────────────────────
+  // Cas critique : un article devrait aller sur le chariot mais n'y est pas
+  // encore déclaré. Si on validait tel quel, il sortirait du stock Odoo sans
+  // jamais arriver sur le chariot — et le bon étant validé, impossible de
+  // recommencer. On permet donc de le rattacher AVANT validation.
+  const [addFor, setAddFor] = useState<number | null>(null);  // productId en cours
+  const [addSku, setAddSku] = useState("");
+  const [addBusy2, setAddBusy2] = useState(false);
+
+  const attachToChariot = async (line: ReapproLine) => {
+    const sku = addSku.trim();
+    if (!sku || addBusy2) return;
+    setAddBusy2(true);
+    try {
+      // 1. La référence Shopware doit exister — sinon on ne déclare rien.
+      const chk = await fetch(`/api/shopware-explore?action=lookupArticle&articleNumber=${encodeURIComponent(sku)}`).then(x => x.json());
+      if (!chk.ok) { onToast(chk.error || `Référence ${sku} introuvable dans Shopware`, "error"); setAddBusy2(false); return; }
+      const sb = await import("@/lib/supabase");
+      // 2. Déclarer le SKU comme article du chariot
+      await odoo.addChariotSku(session, sku);
+      // 3. Fixer la correspondance avec CE produit Odoo (mapping manuel, prioritaire)
+      await sb.saveEshopMappingOverride(sku, line.productId, line.defaultCode || "", line.name || "");
+      // 4. Rafraîchir l'écran : la ligne bascule côté « rattaché »
+      skuByProduct.current = null;                       // le cache doit être refait
+      const stock = await sb.getChariotStock();
+      setFound(prev => prev ? {
+        ...prev,
+        lines: prev.lines.map(l => l.productId === line.productId
+          ? { ...l, sku, swBefore: stock[sku] ?? 0 } : l),
+      } : prev);
+      setAddFor(null); setAddSku("");
+      onToast(`✓ ${line.defaultCode || line.name} rattaché à ${sku}`, "success");
+    } catch (e: any) {
+      onToast("Erreur : " + (e.message || "échec"), "error");
+    }
+    setAddBusy2(false);
+  };
+
   const validate = async () => {
     if (!found || validating || !matched.length) return;
     const recap = matched.map(l => `${l.defaultCode || l.name} ×${l.qty}`).join("\n");
-    if (!confirm(`Valider le réappro chariot ?\n\n${recap}\n\n· Sortie Odoo ${found.pickingName} validée\n· Stock chariot incrémenté\n· Shopware mis à jour`)) return;
+    // Les articles ignorés sont rappelés NOMMÉMENT : après validation le bon est
+    // consommé, ils ne pourront plus être rattachés ni rejoués.
+    const skipped = unmatched.length
+      ? `\n\n⚠ IGNORÉS — ils ne seront PAS mis sur le chariot :\n${unmatched.map(l => `${l.defaultCode || l.name} ×${l.qty}`).join("\n")}\n\nSi l'un d'eux doit y aller, annule et rattache-le d'abord : ce sera irrattrapable ensuite.`
+      : "";
+    if (!confirm(`Valider le réappro chariot ?\n\n${recap}${skipped}\n\n· Sortie Odoo ${found.pickingName} validée\n· Stock chariot incrémenté\n· Shopware mis à jour`)) return;
     setValidating(true);
     try {
       const sb = await import("@/lib/supabase");
@@ -1649,11 +1692,40 @@ function ReapproChariotTab({ session, onToast, active }: { session: odoo.OdooSes
                 {unmatched.length} article(s) hors chariot — ignorés
               </div>
               {unmatched.map(l => (
-                <div key={l.productId} style={{ fontSize: 11.5, color: "#9a3412" }}>· {l.defaultCode || l.name} ×{l.qty}</div>
+                <div key={l.productId} style={{ borderTop: "1px solid #fed7aa", paddingTop: 7, marginTop: 7 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: "#9a3412" }}>
+                      {l.defaultCode || l.name} ×{l.qty}
+                    </div>
+                    <button onClick={() => { setAddFor(addFor === l.productId ? null : l.productId); setAddSku(""); }}
+                      style={{ flexShrink: 0, padding: "4px 10px", background: "#fff", border: "1px solid #fdba74", borderRadius: 7, fontSize: 11, fontWeight: 700, color: "#9a3412", cursor: "pointer", fontFamily: "inherit" }}>
+                      {addFor === l.productId ? "Annuler" : "Ajouter au chariot"}
+                    </button>
+                  </div>
+                  {addFor === l.productId && (
+                    <div style={{ marginTop: 7, background: "#fff", border: "1px solid #fed7aa", borderRadius: 8, padding: 9 }}>
+                      <div style={{ fontSize: 11, color: "#9a3412", marginBottom: 6, lineHeight: 1.5 }}>
+                        Saisis la <strong>référence Shopware</strong> de cet article. Si tu ne la connais pas,
+                        demande-la au service e-shop et ne valide pas en attendant.
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <input value={addSku} onChange={e => setAddSku(e.target.value)}
+                          onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") attachToChariot(l); }}
+                          placeholder="Référence Shopware…"
+                          style={{ flex: 1, padding: "7px 10px", border: "1.5px solid #fdba74", borderRadius: 7, fontSize: 12, fontFamily: "inherit", outline: "none" }} />
+                        <button onClick={() => attachToChariot(l)} disabled={addBusy2 || !addSku.trim()}
+                          style={{ padding: "7px 13px", background: addBusy2 || !addSku.trim() ? "#e5e7eb" : C.green, color: addBusy2 || !addSku.trim() ? C.textMuted : "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: addBusy2 || !addSku.trim() ? "default" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const }}>
+                          {addBusy2 ? "…" : "Rattacher"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               ))}
-              <div style={{ fontSize: 11, color: "#9a3412", marginTop: 5, lineHeight: 1.5 }}>
-                Ces références ne font pas partie du chariot e-shop. Elles sortiront bien du stock Odoo,
-                mais ne seront pas ajoutées au chariot ni envoyées à Shopware.
+              <div style={{ fontSize: 11, color: "#9a3412", marginTop: 8, lineHeight: 1.5 }}>
+                Si un article <strong>doit</strong> aller sur le chariot, rattache-le maintenant avec le bouton
+                ci-dessus. Une fois le réappro validé, il sera trop tard : l&apos;article sortira du stock Odoo
+                sans jamais arriver sur le chariot, et le bon ne pourra plus être rejoué.
               </div>
             </div>
           )}
