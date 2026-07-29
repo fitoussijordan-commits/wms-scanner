@@ -89,7 +89,9 @@ function EshopChariotSkus({ session, onToast }: { session: any; onToast: Toast }
     setMapSearching(true);
     mapTimer.current = setTimeout(async () => {
       try {
-        const r = await odoo.globalSearch(session, q.trim());
+        // includeArchived : les articles du chariot sont souvent d'anciens
+        // produits archivés dans Odoo — sans ça ils ne remontent jamais.
+        const r = await odoo.globalSearch(session, q.trim(), { includeArchived: true });
         setMapResults(r.filter((x: any) => x.type === "product").slice(0, 8));
       } catch { setMapResults([]); }
       setMapSearching(false);
@@ -294,7 +296,7 @@ function EshopChariotSkus({ session, onToast }: { session: any; onToast: Toast }
                     value={mapQuery}
                     onChange={e => searchOdoo(e.target.value)}
                     onKeyDown={e => { e.stopPropagation(); if (e.key === "Escape") setMapOpen(null); }}
-                    placeholder="Tape les premières lettres — nom, réf ou EAN…"
+                    placeholder="Tape les premières lettres — nom, réf ou EAN (archivés inclus)…"
                     style={{ width: "100%", padding: "7px 10px", border: `1.5px solid ${C.blue}`, borderRadius: 7, fontSize: 12, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
                   />
                   {mapSearching && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 5 }}>Recherche…</div>}
@@ -304,7 +306,12 @@ function EshopChariotSkus({ session, onToast }: { session: any; onToast: Toast }
                   {mapResults.map((r: any, k: number) => (
                     <button key={k} onClick={() => chooseProduct(sku, r.data)}
                       style={{ width: "100%", textAlign: "left", marginTop: 5, padding: "6px 9px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer", fontFamily: "inherit", display: "block" }}>
-                      <div style={{ fontSize: 11.5, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.data.name}</div>
+                      <div style={{ fontSize: 11.5, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {r.data.name}
+                        {r.data.active === false && (
+                          <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, color: C.orange, background: "#FEF3C7", padding: "1px 5px", borderRadius: 4 }}>archivé</span>
+                        )}
+                      </div>
                       {r.data.default_code && <div style={{ fontSize: 10.5, color: C.blue, fontFamily: "monospace" }}>{r.data.default_code}</div>}
                     </button>
                   ))}

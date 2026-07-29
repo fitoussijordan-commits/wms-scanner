@@ -1259,17 +1259,22 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
 
   return (
     <div style={{ paddingBottom: 80 }}>
-      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>
-        Recrée une commande Shopware existante (même client) à 0€, pour un renvoi gratuit (colis perdu, erreur de préparation…).
-        La nouvelle commande remonte normalement dans Shopware → SendCloud, où tu pourras générer l&apos;étiquette.
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12, lineHeight: 1.6 }}>
+        Un renvoi crée une <strong>nouvelle commande Shopware à 0 €</strong>, sur le même client.
+        Elle remonte normalement dans Shopware → SendCloud, où tu génères l&apos;étiquette comme d&apos;habitude.
+        Le stock est bien décrémenté : ce n&apos;est pas un envoi fictif.
       </div>
 
       {/* ── Renvoi partiel : choisir les articles ─────────────────────────── */}
-      <div style={{ background: C.white, border: `1.5px solid ${C.blue}`, borderRadius: 12, padding: 14, marginBottom: 14 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 3 }}>Renvoi partiel — choisir les articles</div>
+      <div style={{ background: C.white, border: `1.5px solid ${C.blue}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+          <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: C.blue, borderRadius: 5, padding: "2px 6px" }}>1</span>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Renvoyer une partie d&apos;une commande</div>
+          <span style={{ fontSize: 10, fontWeight: 700, color: C.blue, background: C.blueSoft, borderRadius: 5, padding: "2px 7px" }}>le plus courant</span>
+        </div>
         <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 10, lineHeight: 1.5 }}>
-          Saisis un numéro de commande pour voir ses articles. Les quantités sont <strong>à zéro</strong> :
-          monte seulement celles que tu veux renvoyer. Tu peux aussi ajouter une référence absente de la commande.
+          Pour renvoyer <strong>seulement certains articles</strong> : un produit cassé, oublié ou remplacé.
+          Les quantités partent à zéro, tu montes celles que tu veux. Tu peux ajouter une référence absente de la commande.
         </div>
 
         {!pick ? (
@@ -1354,9 +1359,15 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
       </div>
 
       {/* Diagnostic (lecture seule) : retrouve les duplicatas déjà créés, sans rien recréer */}
-      <div style={{ background: C.blueSoft, border: `1px solid #bfdbfe`, borderRadius: 10, padding: 12, marginBottom: 14 }}>
-        <div style={{ fontSize: 12, color: C.textSec, marginBottom: 8 }}>
-          Vérifier qu'un duplicata existe bien, sans rien recréer. Laisse vide pour scanner les 50 dernières commandes, ou précise les numéros exacts à vérifier.
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+          <span style={{ fontSize: 10, fontWeight: 800, color: C.textMuted, background: C.bg, borderRadius: 5, padding: "2px 6px" }}>2</span>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Vérifier qu&apos;un renvoi existe déjà</div>
+          <span style={{ fontSize: 10, fontWeight: 700, color: C.green, background: C.greenSoft, borderRadius: 5, padding: "2px 7px" }}>ne crée rien</span>
+        </div>
+        <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 9, lineHeight: 1.5 }}>
+          Avant de recréer un renvoi, contrôle qu&apos;il n&apos;a pas déjà été fait — ça évite les doublons.
+          Laisse vide pour balayer les 50 dernières commandes, ou saisis des numéros précis.
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: diag ? 8 : 0 }}>
           <input value={diagNumbers} onChange={e => setDiagNumbers(e.target.value)} onKeyDown={e => { if (e.key === "Enter") runDiagnostic(); }}
@@ -1395,15 +1406,25 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
         )}
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addNumbers(); }}
-          placeholder="Numéro(s) de commande Shopware (ex: ECDE2643350) — séparés par espace/virgule"
-          style={{ flex: 1, padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit" }} />
-        <button onClick={addNumbers} style={{ padding: "9px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>+ Ajouter</button>
-      </div>
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+          <span style={{ fontSize: 10, fontWeight: 800, color: C.textMuted, background: C.bg, borderRadius: 5, padding: "2px 6px" }}>3</span>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Renvoyer des commandes entières</div>
+        </div>
+        <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 10, lineHeight: 1.5 }}>
+          Pour renvoyer <strong>tout le contenu</strong> d&apos;une ou plusieurs commandes — typiquement un colis
+          perdu par le transporteur. Ajoute les numéros, puis lance la duplication.
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addNumbers(); }}
+            placeholder="Un ou plusieurs numéros, séparés par un espace ou une virgule"
+            style={{ flex: 1, padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13.5, fontFamily: "inherit" }} />
+          <button onClick={addNumbers} style={{ padding: "9px 16px", background: C.text, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13.5, cursor: "pointer", whiteSpace: "nowrap" }}>+ Ajouter</button>
+        </div>
 
       {rows.length === 0 ? (
-        <div style={{ textAlign: "center", color: C.textMuted, padding: 40, fontSize: 14 }}>Ajoute les numéros de commande à renvoyer</div>
+        <div style={{ textAlign: "center", color: C.textMuted, padding: "26px 0", fontSize: 12.5 }}>Aucune commande dans la liste</div>
       ) : (
         <>
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
@@ -1436,6 +1457,7 @@ function ResendTab({ onToast }: { onToast: Props["onToast"] }) {
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

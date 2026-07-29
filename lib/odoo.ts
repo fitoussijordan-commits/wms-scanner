@@ -410,9 +410,22 @@ export type GlobalSearchResult =
   | { type: "lot"; data: { lot: any; product: any } }
   | { type: "supplier_ref"; data: any; supplierRef: string };
 
-export async function globalSearch(session: OdooSession, query: string): Promise<GlobalSearchResult[]> {
+export async function globalSearch(
+  session: OdooSession,
+  query: string,
+  opts?: {
+    /** Inclut les produits ARCHIVÉS d'Odoo. Par défaut false : Odoo les masque,
+     *  et on ne veut pas les voir remonter dans la recherche courante (scan,
+     *  accueil…). Utile en revanche pour rattacher un SKU chariot à un ancien
+     *  produit archivé. */
+    includeArchived?: boolean;
+  }
+): Promise<GlobalSearchResult[]> {
   const trimmed = query.trim();
   if (!trimmed || trimmed.length < 2) return [];
+
+  // `active in [true,false]` = la façon Odoo de lever le masquage des archivés.
+  const arch: any[] = opts?.includeArchived ? [["active", "in", [true, false]]] : [];
 
   // Fire all searches in parallel — limits kept small to reduce Odoo response time
   const [locs, productsByRefOrName, productsByBarcode, lots, supplierInfos] = await Promise.all([
@@ -422,11 +435,11 @@ export async function globalSearch(session: OdooSession, query: string): Promise
       ["id", "name", "complete_name", "barcode", "usage"], 20),
     // Products by internal ref OR name
     searchRead(session, M("MODEL_PRODUCT"),
-      ["|", ["default_code", "ilike", trimmed], ["name", "ilike", trimmed]],
+      [...arch, "|", ["default_code", "ilike", trimmed], ["name", "ilike", trimmed]],
       PRODUCT_FIELDS, 50),
     // Products by barcode (exact — only if query looks like a barcode)
     trimmed.length >= 6 ? searchRead(session, M("MODEL_PRODUCT"),
-      [["barcode", "=", trimmed]], PRODUCT_FIELDS, 5) : Promise.resolve([]),
+      [...arch, ["barcode", "=", trimmed]], PRODUCT_FIELDS, 5) : Promise.resolve([]),
     // Lots by name
     searchRead(session, M("MODEL_LOT"),
       [["name", "ilike", trimmed]],
@@ -467,7 +480,7 @@ export async function globalSearch(session: OdooSession, query: string): Promise
   let tmplProducts: any[] = [];
   if (tmplIds.length > 0) {
     tmplProducts = await searchRead(session, M("MODEL_PRODUCT"),
-      [["product_tmpl_id", "in", tmplIds]],
+      [...arch, ["product_tmpl_id", "in", tmplIds]],
       [...PRODUCT_FIELDS, "product_tmpl_id"],   // ← include product_tmpl_id for matching
       tmplIds.length * 3);
   }
