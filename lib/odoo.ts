@@ -736,16 +736,20 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
     "scheduled_date asc, date_deadline asc, id asc"
   );
 
-  // Enrichissement date depuis OUT lié + sale.order
-  const groupIds = Array.from(new Set(pickings.map((p: any) => p.group_id?.[0]).filter(Boolean)));
-  if (groupIds.length > 0 && outTypeIds.length > 0) {
+  // Enrichissement date depuis OUT lié + sale.order.
+  // ⚠ Le groupe de procurement n'existe plus sur stock.picking en Odoo 19. Cet
+  // enrichissement est un CONFORT (date d'expédition plus précise) : s'il échoue,
+  // on doit continuer avec les dates du picking, pas faire tomber tout l'écran.
+  const _grp = F("PICKING_GROUP_ID");
+  const groupIds = Array.from(new Set(pickings.map((p: any) => p[_grp]?.[0]).filter(Boolean)));
+  if (groupIds.length > 0 && outTypeIds.length > 0) try {
     const outPickings = await searchReadAll(
       session, M("MODEL_PICKING"),
-      [["group_id", "in", groupIds], ["picking_type_id", "in", outTypeIds]],
-      ["id", "group_id", "scheduled_date", "date_deadline", "origin"]
+      [[_grp, "in", groupIds], ["picking_type_id", "in", outTypeIds]],
+      ["id", _grp, "scheduled_date", "date_deadline", "origin"]
     );
     const outByGroup: Record<number, any> = {};
-    for (const op of outPickings) { if (op.group_id) outByGroup[op.group_id[0]] = op; }
+    for (const op of outPickings) { if (op[_grp]) outByGroup[op[_grp][0]] = op; }
 
     const soNames = Array.from(new Set(outPickings.map((op: any) => op.origin).filter(Boolean)));
     const salesMap: Record<string, any> = {};
@@ -755,7 +759,7 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
       for (const s of sales) salesMap[s.name] = s;
     }
     for (const p of pickings) {
-      const gid = p.group_id?.[0];
+      const gid = p[_grp]?.[0];
       if (gid && outByGroup[gid]) {
         const outP = outByGroup[gid];
         const sale = outP.origin ? salesMap[outP.origin] : null;
@@ -763,6 +767,9 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
         if (!p.origin && outP.origin) p.origin = outP.origin;
       }
     }
+  } catch (e) {
+    // Champ absent (Odoo 19) ou inaccessible : on garde les dates du picking.
+    console.warn("[WMS] Enrichissement par groupe de procurement indisponible :", e);
   }
 
   for (const p of pickings) {
@@ -954,7 +961,7 @@ export async function printPickingReportDirect(
 // du module capturerait les valeurs par défaut avant l'application des overrides.
 const PICKING_FIELDS = () => [
   "id", "name", "state", "scheduled_date", "date_deadline", F("PICKING_DATE"),
-  "partner_id", "origin", "picking_type_id", "group_id",
+  "partner_id", "origin", "picking_type_id", F("PICKING_GROUP_ID"),
   F("PICKING_MOVE_IDS"), "location_id", "location_dest_id",
   F("SHIPPING_DATE"), F("ORDER_TAGS"), "carrier_id",
   "user_id",
@@ -1019,23 +1026,27 @@ export async function getOutgoingPickings(session: OdooSession) {
     "date_deadline asc, scheduled_date asc, id asc"
   );
 
-  // Enrich with shipping date from related OUT picking (via group_id) or sale order
-  const groupIds = Array.from(new Set(pickings.map((p: any) => p.group_id?.[0]).filter(Boolean)));
-  if (groupIds.length > 0) {
+  // Enrich with shipping date from related OUT picking (via group_id) or sale order.
+  // ⚠ Confort uniquement : le groupe de procurement n'existe plus sur
+  // stock.picking en Odoo 19. En cas d'échec on garde les dates du picking
+  // plutôt que de faire tomber tout l'écran Préparation.
+  const _grp2 = F("PICKING_GROUP_ID");
+  const groupIds = Array.from(new Set(pickings.map((p: any) => p[_grp2]?.[0]).filter(Boolean)));
+  if (groupIds.length > 0) try {
     // Find outgoing pickings with same group_id
     const outTypes = await searchRead(session, M("MODEL_PICKING_TYPE"), [["code", "=", "outgoing"]], ["id"], 10);
     const outTypeIds = outTypes.map((t: any) => t.id);
     if (outTypeIds.length > 0) {
       const outPickings = await searchRead(
         session, M("MODEL_PICKING"),
-        [["group_id", "in", groupIds], ["picking_type_id", "in", outTypeIds]],
-        ["id", "group_id", "scheduled_date", "date_deadline", "origin"],
+        [[_grp2, "in", groupIds], ["picking_type_id", "in", outTypeIds]],
+        ["id", _grp2, "scheduled_date", "date_deadline", "origin"],
         500
       );
       // Map group_id → OUT picking
       const outByGroup: Record<number, any> = {};
       for (const op of outPickings) {
-        if (op.group_id) outByGroup[op.group_id[0]] = op;
+        if (op[_grp2]) outByGroup[op[_grp2][0]] = op;
       }
       // Also try to get sale order dates from OUT picking origins
       const soNames = Array.from(new Set(outPickings.map((op: any) => op.origin).filter(Boolean)));
@@ -1051,7 +1062,7 @@ export async function getOutgoingPickings(session: OdooSession) {
       }
 
       for (const p of pickings) {
-        const gid = p.group_id?.[0];
+        const gid = p[_grp2]?.[0];
         if (gid && outByGroup[gid]) {
           const outP = outByGroup[gid];
           const sale = outP.origin ? salesMap[outP.origin] : null;
@@ -1061,6 +1072,9 @@ export async function getOutgoingPickings(session: OdooSession) {
         }
       }
     }
+  } catch (e) {
+    // Champ absent (Odoo 19) ou inaccessible : on garde les dates du picking.
+    console.warn("[WMS] Enrichissement par groupe de procurement indisponible :", e);
   }
 
   // Filter out pickings tagged "En attente" via le champ tags de commande
@@ -1371,13 +1385,19 @@ export async function getPackablePickings(session: OdooSession): Promise<any[]> 
   );
 }
 
-/** Trouve le OUT picking lié à un PICK picking via group_id */
+/** Trouve le OUT picking lié à un PICK picking via le groupe de procurement.
+ *  Renvoie null si le champ n'existe pas (Odoo 19) plutôt que de propager
+ *  l'erreur : l'appelant sait déjà gérer l'absence de OUT lié. */
 export async function findOutPickingFromPick(session: OdooSession, pickId: number): Promise<any | null> {
-  const [pick] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", pickId]], ["group_id"], 1);
-  if (!pick?.group_id) return null;
-  const groupId = Array.isArray(pick.group_id) ? pick.group_id[0] : pick.group_id;
+  const _grp = F("PICKING_GROUP_ID");
+  let pick: any;
+  try {
+    [pick] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", pickId]], [_grp], 1);
+  } catch { return null; }
+  if (!pick?.[_grp]) return null;
+  const groupId = Array.isArray(pick[_grp]) ? pick[_grp][0] : pick[_grp];
   const outs = await searchRead(session, M("MODEL_PICKING"),
-    [["group_id", "=", groupId], ["picking_type_code", "=", "outgoing"],
+    [[_grp, "=", groupId], ["picking_type_code", "=", "outgoing"],
      ["state", "in", ["assigned", "confirmed", "waiting", "partially_available"]]],
     ["id", "name", "state", "origin", "partner_id", "scheduled_date", "date_deadline",
      "carrier_id", F("PICKING_MOVE_IDS")],
@@ -1386,13 +1406,18 @@ export async function findOutPickingFromPick(session: OdooSession, pickId: numbe
   return outs[0] || null;
 }
 
-/** Trouve le(s) PICK picking(s) (internal, déjà "done") liés à un OUT via group_id */
+/** Trouve le(s) PICK picking(s) (internal, déjà "done") liés à un OUT.
+ *  Liste vide si le champ n'existe pas (Odoo 19), au lieu d'une erreur. */
 export async function findPickPickingsFromOut(session: OdooSession, outPickingId: number): Promise<any[]> {
-  const [out] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", outPickingId]], ["group_id"], 1);
-  if (!out?.group_id) return [];
-  const groupId = Array.isArray(out.group_id) ? out.group_id[0] : out.group_id;
+  const _grp = F("PICKING_GROUP_ID");
+  let out: any;
+  try {
+    [out] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", outPickingId]], [_grp], 1);
+  } catch { return []; }
+  if (!out?.[_grp]) return [];
+  const groupId = Array.isArray(out[_grp]) ? out[_grp][0] : out[_grp];
   return searchRead(session, M("MODEL_PICKING"),
-    [["group_id", "=", groupId], ["picking_type_code", "=", "internal"]],
+    [[_grp, "=", groupId], ["picking_type_code", "=", "internal"]],
     ["id", "name", "state"], 10
   );
 }
