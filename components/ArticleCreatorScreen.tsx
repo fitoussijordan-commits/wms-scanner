@@ -911,22 +911,29 @@ export function NonVendableTab({ session, onToast }: { session: odoo.OdooSession
     try {
       // product.product : sale_ok est sur product.template, on passe par product.product
       // qty_available est calculé — disponible directement via fields_get / search_read
+      // virtual_available est un champ CALCULÉ non stocké : Odoo 19 refuse de
+      // l'utiliser dans un domaine ou un tri (« Cannot convert ... to SQL because
+      // it is not stored »). On filtre donc sur ce qui est stocké (sale_ok, active)
+      // et on écarte les quantités nulles côté navigateur. Le lot est petit —
+      // seuls les articles non vendables — donc l'impact est négligeable.
       const data = await odoo.searchRead(
         session,
         "product.product",
-        [["sale_ok", "=", false], ["virtual_available", ">", 0], ["active", "=", true]],
+        [["sale_ok", "=", false], ["active", "=", true]],
         ["id", "name", "default_code", "virtual_available", "product_tmpl_id"],
-        0,
-        "virtual_available desc"
+        0
       );
-      setRows(data.map((r: any) => ({
-        id: r.id,
-        default_code: r.default_code || "",
-        name: r.name || "",
-        qty_available: r.virtual_available ?? 0,
-        product_tmpl_id: Array.isArray(r.product_tmpl_id) ? r.product_tmpl_id[0] : r.product_tmpl_id,
-        enabling: false,
-      })));
+      setRows(data
+        .filter((r: any) => (Number(r.virtual_available) || 0) > 0)
+        .sort((a: any, b: any) => (Number(b.virtual_available) || 0) - (Number(a.virtual_available) || 0))
+        .map((r: any) => ({
+          id: r.id,
+          default_code: r.default_code || "",
+          name: r.name || "",
+          qty_available: r.virtual_available ?? 0,
+          product_tmpl_id: Array.isArray(r.product_tmpl_id) ? r.product_tmpl_id[0] : r.product_tmpl_id,
+          enabling: false,
+        })));
     } catch (e: any) {
       onToast("Erreur chargement : " + (e?.message ?? e), "error");
     } finally {
@@ -1177,14 +1184,18 @@ export function ABloquerTab({ session, onToast }: { session: odoo.OdooSession; o
     setLoading(true);
     try {
       // Vendable coché mais rien de dispo à la vente (free_qty = physique - réservé <= 0).
-      const data = await odoo.searchRead(
+      // free_qty est calculé non stocké : impossible à filtrer en SQL sur Odoo 19
+      // (même limite que virtual_available). On récupère les articles vendables
+      // puis on garde ceux sans disponible côté navigateur.
+      const raw = await odoo.searchRead(
         session,
         "product.product",
-        [["sale_ok", "=", true], ["free_qty", "<=", 0], ["active", "=", true]],
+        [["sale_ok", "=", true], ["active", "=", true]],
         ["id", "name", "default_code", "free_qty", "qty_available", "product_tmpl_id"],
         0,
         "default_code asc"
       );
+      const data = raw.filter((r: any) => (Number(r.free_qty) || 0) <= 0);
       setRows(data.map((r: any) => ({
         id: r.id,
         default_code: r.default_code || "",

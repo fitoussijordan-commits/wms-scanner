@@ -1058,6 +1058,40 @@ export async function resolveModel(
 }
 
 /**
+ * Valeurs d'un mouvement de stock à créer, adaptées à la version.
+ *
+ * Deux champs varient :
+ *  - `name` (la description de la ligne) a disparu de stock.move en Odoo 19 ;
+ *    l'écrire fait échouer la création de tout le transfert.
+ *  - l'unité de mesure s'appelle `product_uom` ou `product_uom_id` selon la
+ *    version.
+ *
+ * On construit donc les valeurs à partir de ce que le modèle expose réellement,
+ * plutôt que de supposer des noms qui changent d'une version à l'autre.
+ */
+export async function moveVals(
+  session: OdooSession,
+  v: { description?: string; productId: number; qty: number; uomId?: number | null;
+       locationId?: number; locationDestId?: number },
+): Promise<Record<string, any>> {
+  const f = await knownFields(session, M("MODEL_MOVE"));
+  const has = (n: string) => !f || f.has(n);
+
+  const out: Record<string, any> = {
+    product_id: v.productId,
+    product_uom_qty: v.qty,
+  };
+  if (v.description && has("name")) out.name = v.description;
+  if (v.uomId) {
+    if (has("product_uom")) out.product_uom = v.uomId;
+    else if (has("product_uom_id")) out.product_uom_id = v.uomId;
+  }
+  if (v.locationId != null) out.location_id = v.locationId;
+  if (v.locationDestId != null) out.location_dest_id = v.locationDestId;
+  return out;
+}
+
+/**
  * Modèle des colis. Renommé en stock.package dans les versions récentes ;
  * c'est ce qui faisait échouer la validation d'emballage avec un 404.
  */
@@ -1424,14 +1458,12 @@ export async function createInternalTransfer(
     picking_type_id: pickingTypes[0].id,
     location_id: sourceLocationId,
     location_dest_id: destLocationId,
-    [F("PICKING_MOVE_IDS")]: lines.map((line) => [0, 0, {
-      name: line.productName,
-      product_id: line.productId,
-      product_uom_qty: line.qty,
-      product_uom: line.uomId,
-      location_id: sourceLocationId,
-      location_dest_id: destLocationId,
-    }]),
+    [F("PICKING_MOVE_IDS")]: await Promise.all(lines.map(async (line) => [0, 0,
+      await moveVals(session, {
+        description: line.productName, productId: line.productId, qty: line.qty,
+        uomId: line.uomId, locationId: sourceLocationId, locationDestId: destLocationId,
+      }),
+    ])),
   });
 
   // Confirm moves (state: draft → confirmed)
@@ -1508,14 +1540,13 @@ export async function createMultiDestTransfer(
     picking_type_id: pickingTypes[0].id,
     location_id: sourceLocationId,
     location_dest_id: fallbackDestLocationId,
-    [F("PICKING_MOVE_IDS")]: lines.map((line) => [0, 0, {
-      name: line.productName,
-      product_id: line.productId,
-      product_uom_qty: line.qty,
-      product_uom: line.uomId,
-      location_id: sourceLocationId,
-      location_dest_id: line.destLocationId,  // destination spécifique par produit
-    }]),
+    [F("PICKING_MOVE_IDS")]: await Promise.all(lines.map(async (line) => [0, 0,
+      await moveVals(session, {
+        description: line.productName, productId: line.productId, qty: line.qty,
+        uomId: line.uomId, locationId: sourceLocationId,
+        locationDestId: line.destLocationId,  // destination spécifique par produit
+      }),
+    ])),
   });
 
   await callMethod(session, M("MODEL_PICKING"), "action_confirm", [[pickingId]]);
