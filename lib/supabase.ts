@@ -1,10 +1,28 @@
 // lib/supabase.ts
 import { createClient } from "@supabase/supabase-js";
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+// ⚠ Le client est créé au CHARGEMENT du module. Si les variables manquent,
+// createClient lève « supabaseUrl is required » et Next.js échoue au build en
+// collectant les routes API — message cryptique, très loin de la cause réelle.
+// On utilise donc des valeurs de repli pour laisser le build passer, et on
+// signale explicitement le problème (console + erreur claire à l'usage).
+const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+const key = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
 
-export const sb = createClient(url, key);
+export const supabaseConfigured = !!(url && key);
+
+if (!supabaseConfigured && typeof window !== "undefined") {
+  console.error(
+    "[WMS] Supabase non configuré : NEXT_PUBLIC_SUPABASE_URL et/ou " +
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY manquent dans les variables d'environnement. " +
+    "Seuils, stock chariot, mappings e-shop et configuration des champs seront indisponibles."
+  );
+}
+
+export const sb = createClient(
+  url || "https://placeholder.invalid",
+  key || "placeholder"
+);
 
 // ── Helper: paginated select pour contourner le cap 1000 lignes de Supabase ─────
 // Usage: await fetchAllPaginated(() => sb.from("wms_conso_cache").select("..."))
