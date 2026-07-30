@@ -125,25 +125,49 @@ export default function FieldMapEditor({ session, onToast, onlyKeys, onSaved, co
 
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-  /** Propose un champ de remplacement parmi ceux réellement présents sur le modèle. */
+  // Champs trop génériques pour constituer une correspondance : ils existent sur
+  // TOUS les modèles et matcheraient n'importe quoi (« group_id » contient « id »…).
+  const GENERIC = new Set([
+    "id", "name", "state", "active", "display_name", "sequence", "note", "date",
+    "create_date", "write_date", "create_uid", "write_uid", "company_id", "user_id",
+    "__last_update", "message_ids", "activity_ids",
+  ]);
+
+  /** Propose un champ de remplacement parmi ceux réellement présents sur le modèle.
+   *  Mieux vaut ne rien proposer qu'une correspondance hasardeuse : une mauvaise
+   *  suggestion appliquée sans réfléchir est pire que pas de suggestion du tout. */
   const suggestFor = (tech: string, label: string, available: Record<string, any>) => {
     const names = Object.keys(available);
     // 1. Renommage connu, confirmé présent dans CETTE base
     for (const cand of (KNOWN_RENAMES[tech] || [])) {
       if (names.includes(cand)) return { name: cand, why: "renommage Odoo connu", strong: true };
     }
-    // 2. Nom quasi identique (ponctuation/underscores ignorés)
+    // 2. Nom identique à la ponctuation près
     const nt = norm(tech);
     const same = names.find(n => norm(n) === nt);
     if (same) return { name: same, why: "même nom à la ponctuation près", strong: true };
-    // 3. Nom contenu dans l'autre, dans un sens ou dans l'autre
-    const partial = names.filter(n => norm(n).includes(nt) || nt.includes(norm(n)))
-                         .sort((a, b) => a.length - b.length);
-    if (partial.length) return { name: partial[0], why: "nom proche", strong: false };
-    // 4. Libellé Odoo identique au libellé attendu
+
+    // 3. Libellé Odoo identique — plus fiable qu'une ressemblance de nom
     const lb = norm(label);
-    const byLabel = names.find(n => norm(String(available[n]?.string || "")) === lb);
+    const byLabel = names.find(n => !GENERIC.has(n) && norm(String(available[n]?.string || "")) === lb);
     if (byLabel) return { name: byLabel, why: "même libellé dans Odoo", strong: false };
+
+    // 4. Ressemblance de nom — uniquement si elle est SIGNIFICATIVE.
+    //    Un nom court (« date ») se retrouve dans trop de champs pour conclure,
+    //    et un candidat bien plus court que la cible n'est pas un renommage.
+    if (nt.length >= 6) {
+      const partial = names
+        .filter(n => !GENERIC.has(n))
+        .filter(n => {
+          const nn = norm(n);
+          if (nn.length < 4) return false;
+          // Le candidat doit couvrir l'essentiel du nom cherché, dans un sens ou l'autre
+          const ratio = Math.min(nn.length, nt.length) / Math.max(nn.length, nt.length);
+          return (nn.includes(nt) || nt.includes(nn)) && ratio >= 0.6;
+        })
+        .sort((a, b) => Math.abs(norm(a).length - nt.length) - Math.abs(norm(b).length - nt.length));
+      if (partial.length) return { name: partial[0], why: "nom proche", strong: false };
+    }
     return null;
   };
 
