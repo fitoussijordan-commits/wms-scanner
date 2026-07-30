@@ -1056,6 +1056,49 @@ function clearSess() { try { sessionStorage.removeItem("wms_s"); } catch {} }
 function saveCfg(u: string, d: string) { try { localStorage.setItem("wms_c", JSON.stringify({ u, d })); } catch {} }
 function loadCfg(): { u: string; d: string } | null { try { const c = localStorage.getItem("wms_c"); return c ? JSON.parse(c) : null; } catch { return null; } }
 
+// ══════════════════════════════════════════
+// BASCULE ENTRE BASES ODOO (v16 → v19)
+// ══════════════════════════════════════════
+// Le code du WMS est version-agnostique : il détecte à l'exécution la forme des
+// champs, le nom des modèles et la structure des quantités. Il n'y a donc AUCUNE
+// « configuration v16 » ou « configuration v19 » à basculer — la seule question
+// est : à quelle base est-on connecté.
+//
+// D'où ce sélecteur. Les bases disponibles sont déclarées dans une variable
+// d'environnement, pour ne pas figer d'URL dans le code :
+//
+//   NEXT_PUBLIC_ODOO_BASES="Odoo 16|https://ancienne.odoo.com|base16;Odoo 19|https://nouvelle.odoo.com|base19"
+//
+// Chaque entrée = Libellé|URL|Base, séparées par des points-virgules. La PREMIÈRE
+// est considérée comme la base de référence (pas de bandeau d'avertissement).
+//
+// Rappel : l'URL doit aussi figurer dans ODOO_URL ou ODOO_URL_EXTRA côté serveur,
+// sinon le proxy la refuse (protection SSRF). C'est volontaire : déclarer une base
+// dans l'interface ne doit jamais suffire à ouvrir un accès réseau.
+//
+// Si la variable est absente, aucun sélecteur n'apparaît et le comportement est
+// exactement celui d'aujourd'hui.
+export interface OdooBase { label: string; url: string; db: string }
+
+const ODOO_BASES: OdooBase[] = (process.env.NEXT_PUBLIC_ODOO_BASES || "")
+  .split(";")
+  .map(s => s.trim())
+  .filter(Boolean)
+  .map(entry => {
+    const [label, url, db] = entry.split("|").map(x => (x || "").trim());
+    return { label: label || url, url: url || "", db: db || "" };
+  })
+  .filter(b => b.url && b.db);
+
+/** Base actuellement utilisée, d'après la config enregistrée. */
+function currentBase(): OdooBase | null {
+  if (!ODOO_BASES.length) return null;
+  const cfg = typeof window !== "undefined" ? loadCfg() : null;
+  if (!cfg) return null;
+  const norm = (u: string) => u.replace(/\/$/, "").toLowerCase();
+  return ODOO_BASES.find(b => norm(b.url) === norm(cfg.u) && b.db === cfg.d) || null;
+}
+
 // ── Helpers déviation lot ────────────────────────────────────────────────────
 // Retourne les lignes "vraiment en attente" à un emplacement, en tenant compte
 // des déviations : on compare le total done (tous lots confondus) au total reserved.
@@ -3118,6 +3161,38 @@ export default function Page() {
           </span>
         </div>
       )}
+      {/* Bandeau de BASE ODOO — visible dès que plusieurs bases sont déclarées.
+          Pendant une bascule de version, savoir sur quelle base on travaille est
+          plus important que tout le reste : les deux interfaces sont identiques et
+          une erreur de base passe inaperçue jusqu'à ce qu'un stock soit faux.
+          La première base déclarée est la référence (vert) ; les autres sont
+          signalées en orange. */}
+      {ODOO_BASES.length > 1 && session && (() => {
+        const cur = currentBase();
+        const isRef = !!cur && cur.url === ODOO_BASES[0].url && cur.db === ODOO_BASES[0].db;
+        const bg = !cur ? "#475569" : isRef ? "#047857" : "#c2410c";
+        return (
+          <div style={{ position: "fixed", top: WMS_ENV ? 22 : 0, left: 0, right: 0, zIndex: 10000, background: bg, color: "#fff", fontSize: 11.5, fontWeight: 700, textAlign: "center" as const, padding: "3px 8px", letterSpacing: 0.3, display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+            <span>BASE ODOO · {cur ? cur.label.toUpperCase() : "NON RECONNUE"}</span>
+            <button
+              onClick={() => {
+                const next = ODOO_BASES.find(b => !cur || b.url !== cur.url || b.db !== cur.db);
+                if (!next) return;
+                if (!confirm(`Basculer vers « ${next.label} » ?\n\nTu seras déconnecté et devras saisir ton mot de passe sur cette base.`)) return;
+                // La session Odoo est propre à une base : impossible de la réutiliser
+                // ailleurs. On enregistre la cible, on efface la session, on repasse
+                // par la connexion — avec la bonne base déjà sélectionnée.
+                saveCfg(next.url, next.db);
+                clearSess();
+                setSession(null);
+                setScreen("login");
+              }}
+              style={{ background: "rgba(255,255,255,0.22)", color: "#fff", border: "none", borderRadius: 6, padding: "1px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+              Changer de base
+            </button>
+          </div>
+        );
+      })()}
       {!isDesktopUI && <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} />}
 
       {/* ── Sidebar desktop (refonte) ── */}
@@ -14769,6 +14844,31 @@ function Login({ onLogin, loading, error }: { onLogin: (u: string, d: string, l:
             <p style={{ fontSize: 14, color: C.textMuted, marginTop: 4 }}>Connexion à votre entrepôt</p>
           </div>
           <Section>
+            {/* Choix de la base — n'apparaît que si NEXT_PUBLIC_ODOO_BASES est renseignée.
+                Évite de retaper URL et nom de base à chaque bascule, et surtout d'en
+                saisir une de travers un lundi matin. */}
+            {ODOO_BASES.length > 1 && (
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: C.textSec, marginBottom: 6, display: "block" }}>Base Odoo</label>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" as const }}>
+                  {ODOO_BASES.map(b => {
+                    const active = b.url.replace(/\/$/, "") === url.replace(/\/$/, "") && b.db === db;
+                    return (
+                      <button key={b.url + b.db}
+                        onClick={() => { setUrl(b.url); setDb(b.db); }}
+                        style={{
+                          padding: "9px 14px", borderRadius: 9, fontSize: 13, fontWeight: active ? 700 : 500,
+                          fontFamily: "inherit", cursor: "pointer",
+                          background: active ? C.blue : C.bg, color: active ? "#fff" : C.text,
+                          border: `1.5px solid ${active ? C.blue : C.border}`,
+                        }}>
+                        {b.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <button onClick={() => setShowCfg(!showCfg)} style={{ ...secondaryBtn, marginBottom: showCfg ? 12 : 0, fontSize: 12 }}>{showCfg ? "Masquer" : "Afficher"} la config serveur</button>
             {showCfg && <>
               <Field label="URL Odoo" value={url} onChange={setUrl} placeholder="https://monentreprise.odoo.com" />
