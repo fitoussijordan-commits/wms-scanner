@@ -838,14 +838,17 @@ export async function checkAvailabilityAndGetResult(
   // On compare la demande (product_uom_qty) à ce qui est vraiment réservé (reserved_availability).
   const moves = await searchRead(session, M("MODEL_MOVE"),
     [["picking_id", "=", pickingId], ["state", "!=", "cancel"]],
-    ["product_id", "product_uom_qty", "reserved_availability"], 200);
+    await availableFields(session, M("MODEL_MOVE"),
+      ["product_id", "product_uom_qty", "reserved_availability", "quantity"]), 200);
+  // Reserve cote mouvement : reserved_availability (<=v16) ou quantity (v17+)
+  const _resv = (m: any) => Number(m.reserved_availability ?? m.quantity ?? 0) || 0;
   const missingLines = moves.filter((m: any) =>
-    Math.round(((m.product_uom_qty || 0) - (m.reserved_availability || 0)) * 1000) > 0
+    Math.round(((m.product_uom_qty || 0) - _resv(m)) * 1000) > 0
   ).map((m: any) => ({
     product: m.product_id[1],
     needed: m.product_uom_qty,
-    available: m.reserved_availability || 0,
-    missing: Math.round(((m.product_uom_qty || 0) - (m.reserved_availability || 0)) * 100) / 100,
+    available: _resv(m),
+    missing: Math.round(((m.product_uom_qty || 0) - _resv(m)) * 100) / 100,
   }));
 
   // Si Odoo dit "assigned" mais qu'on détecte des manquants → corriger le state
@@ -1610,7 +1613,7 @@ export async function prefetchPackData(session: OdooSession, outPickingId: numbe
     searchRead(session, M("MODEL_PICKING"), [["id", "=", outPickingId]], ["name", "carrier_id", "state"], 1),
     searchRead(session, M("MODEL_MOVE_LINE"),
       [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
-      ["id", "reserved_uom_qty"], 500),
+      await availableFields(session, M("MODEL_MOVE_LINE"), ["id", "reserved_uom_qty", "quantity", "picked"]), 500),
   ]);
   return {
     pickingName:           pickInfo[0]?.name || `OUT-${outPickingId}`,
@@ -1683,7 +1686,7 @@ export async function packAndShipOut(
   if (needsAssign || isStale) {
     moveLines = await searchRead(session, M("MODEL_MOVE_LINE"),
       [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
-      ["id", "reserved_uom_qty"], 500);
+      await availableFields(session, M("MODEL_MOVE_LINE"), ["id", "reserved_uom_qty", "quantity", "picked"]), 500);
   }
 
   // ── 3. Créer les N colis, poids inclus dès la création ──────────────────────
@@ -1716,17 +1719,21 @@ export async function packAndShipOut(
     tasks.push(write(session, M("MODEL_QUANT_PACKAGE"), ids, { shipping_weight: parseFloat(w) }).catch(() => null));
   }
 
-  // 4b. qty_done = reserved (groupé par quantité pour batcher les writes)
-  const mlsToFill = moveLines.filter((ml: any) => ml.reserved_uom_qty > 0);
+  // 4b. fait = attendu (groupé par quantité pour batcher les writes).
+  //     Version-agnostique : en Odoo 17+ on écrit quantity + picked.
+  const _shape = await compat.detectStockShape(m =>
+    call(session, "/web/dataset/call_kw", { model: m, method: "fields_get", args: [], kwargs: { attributes: ["type"] } }),
+    M("MODEL_MOVE_LINE"));
+  const mlsToFill = moveLines.filter((ml: any) => compat.lineExpected(ml, _shape) > 0);
   if (mlsToFill.length) {
     const byQty: Record<number, number[]> = {};
     for (const ml of mlsToFill) {
-      const q = ml.reserved_uom_qty;
+      const q = compat.lineExpected(ml, _shape);
       if (!byQty[q]) byQty[q] = [];
       byQty[q].push(ml.id);
     }
     for (const [qtyStr, ids] of Object.entries(byQty)) {
-      tasks.push(write(session, M("MODEL_MOVE_LINE"), ids, { qty_done: parseFloat(qtyStr) }));
+      tasks.push(write(session, M("MODEL_MOVE_LINE"), ids, compat.doneVals(parseFloat(qtyStr), _shape)));
     }
   }
 
@@ -1883,7 +1890,7 @@ export async function validateSatellitePicking(
     searchRead(session, M("MODEL_PICKING"), [["id", "=", pickingId]], ["name", "state"], 1),
     searchRead(session, M("MODEL_MOVE_LINE"),
       [["picking_id", "=", pickingId], ["state", "not in", ["done", "cancel"]]],
-      ["id", "reserved_uom_qty"], 500),
+      await availableFields(session, M("MODEL_MOVE_LINE"), ["id", "reserved_uom_qty", "quantity", "picked"]), 500),
   ]);
   const info = infoList[0];
   const pickingName = info?.name || `OUT-${pickingId}`;
@@ -1893,20 +1900,23 @@ export async function validateSatellitePicking(
     await callMethod(session, M("MODEL_PICKING"), "action_assign", [[pickingId]]).catch(() => null);
     mls = await searchRead(session, M("MODEL_MOVE_LINE"),
       [["picking_id", "=", pickingId], ["state", "not in", ["done", "cancel"]]],
-      ["id", "reserved_uom_qty"], 500);
+      await availableFields(session, M("MODEL_MOVE_LINE"), ["id", "reserved_uom_qty", "quantity", "picked"]), 500);
   }
 
-  const mlsToFill = mls.filter((ml: any) => ml.reserved_uom_qty > 0);
+  const _shapeSat = await compat.detectStockShape(m =>
+    call(session, "/web/dataset/call_kw", { model: m, method: "fields_get", args: [], kwargs: { attributes: ["type"] } }),
+    M("MODEL_MOVE_LINE"));
+  const mlsToFill = mls.filter((ml: any) => compat.lineExpected(ml, _shapeSat) > 0);
   if (mlsToFill.length) {
     const byQty: Record<number, number[]> = {};
     for (const ml of mlsToFill) {
-      const q = ml.reserved_uom_qty;
+      const q = compat.lineExpected(ml, _shapeSat);
       if (!byQty[q]) byQty[q] = [];
       byQty[q].push(ml.id);
     }
     await Promise.all(
       Object.entries(byQty).map(([qtyStr, ids]) =>
-        write(session, M("MODEL_MOVE_LINE"), ids, { qty_done: parseFloat(qtyStr) })
+        write(session, M("MODEL_MOVE_LINE"), ids, compat.doneVals(parseFloat(qtyStr), _shapeSat))
       )
     );
   }
