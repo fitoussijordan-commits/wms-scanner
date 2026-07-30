@@ -1029,6 +1029,17 @@ async function knownFields(session: OdooSession, model: string): Promise<Set<str
   return _modelFieldsCache[model];
 }
 
+/**
+ * Clause de domaine « produit stockable », valable dans toutes les versions.
+ * Jusqu'en Odoo 17 : type = "product". Depuis la v18 : is_storable = true, et
+ * plus aucun produit n'a type = "product" — le filtre d'origine renverrait donc
+ * zéro résultat sans erreur, ce qui viderait silencieusement les écrans.
+ */
+export async function storableClause(session: OdooSession, model: string): Promise<any[]> {
+  const f = await knownFields(session, model);
+  return f && f.has("is_storable") ? ["is_storable", "=", true] : ["type", "=", "product"];
+}
+
 /** Retire d'une liste de champs ceux qui n'existent pas sur le modèle. */
 export async function availableFields(session: OdooSession, model: string, wanted: string[]): Promise<string[]> {
   const known = await knownFields(session, model);
@@ -3172,7 +3183,7 @@ export async function collectAlerts(session: OdooSession, opts?: { returnDays?: 
     try {
       // Produits non vendables ayant du stock physique. On croise product.template(sale_ok=false)
       // avec les quants > 0.
-      const tmpls = await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), [["sale_ok", "=", false], ["type", "=", "product"]], ["id", "name", "default_code", "qty_available"], 500);
+      const tmpls = await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), [["sale_ok", "=", false], await storableClause(session, M("MODEL_PRODUCT_TEMPLATE"))], ["id", "name", "default_code", "qty_available"], 500);
       const withStock = (tmpls as any[]).filter(t => (t.qty_available ?? 0) > 0);
       return {
         key: "nonsellable", title: "Stock non vendable (Odoo)", icon: "🚫", severity: "info", screen: "productImport", count: withStock.length,
@@ -3197,7 +3208,7 @@ export async function collectAlerts(session: OdooSession, opts?: { returnDays?: 
       const withRule = new Set<number>();
       for (const r of rules) { const pid = Array.isArray(r.product_id) ? r.product_id[0] : r.product_id; if (pid) withRule.add(pid); }
       // Produits stockables actifs et vendables → devraient avoir une règle.
-      const prods = await searchRead(session, M("MODEL_PRODUCT"), [["type", "=", "product"], ["active", "=", true], ["sale_ok", "=", true]], ["id", "default_code", "name"], 3000);
+      const prods = await searchRead(session, M("MODEL_PRODUCT"), [await storableClause(session, M("MODEL_PRODUCT")), ["active", "=", true], ["sale_ok", "=", true]], ["id", "default_code", "name"], 3000);
       const missing = (prods as any[]).filter(p => !withRule.has(p.id));
       return {
         key: "putaway", title: "Stratégie de rangement à régler", icon: "📦", severity: "info", screen: "locationManager", count: missing.length,
@@ -4505,16 +4516,31 @@ export async function createProductTemplate(session: OdooSession, data: {
   categId?: number;         // Famille (categ_id → product.category)
   typeProduitId?: number;   // Type de produit (x_type_de_produit_id)
 }): Promise<number> {
+  // Deux champs ont changé côté produit selon la version d'Odoo :
+  //
+  // 1. uom_po_id (« unité d'achat ») a disparu en v19 — il n'y a plus qu'une
+  //    seule unité de mesure. On ne l'envoie que s'il existe.
+  // 2. Le type « stockable » : jusqu'en v17 c'était type = "product". Depuis la
+  //    v18, type ne vaut plus que consu/service/combo et le caractère stockable
+  //    est porté par le booléen is_storable. Envoyer "product" y serait refusé.
+  const tmplFields = await knownFields(session, M("MODEL_PRODUCT_TEMPLATE"));
+  const has = (f: string) => !tmplFields || tmplFields.has(f);
+
   const vals: any = {
     name: data.name,
     default_code: data.default_code,
-    type: "product",          // storable
     uom_id: data.uom_id,
-    uom_po_id: data.uom_id,
     tracking: data.tracking,
     sale_ok: data.sale_ok ?? true,
     purchase_ok: data.purchase_ok ?? true,
   };
+  if (has("is_storable")) {
+    vals.type = "consu";
+    vals.is_storable = true;
+  } else {
+    vals.type = "product";
+  }
+  if (has("uom_po_id")) vals.uom_po_id = data.uom_id;
   if (data.barcode) vals.barcode = data.barcode;
   if (data.weight) vals.weight = data.weight;
   if (data.list_price != null) vals.list_price = data.list_price;
