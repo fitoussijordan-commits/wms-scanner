@@ -269,10 +269,19 @@ function translateMlFields(fields: string[], shape: compat.StockShape): string[]
  * colis existent).
  *
  * Correspondances retenues :
- *   qty_done > 0  /  != 0   →  picked = true    (la ligne a été prélevée)
+ *   qty_done > 0  /  != 0   →  picked = true  OU  state = done
  *   qty_done = 0            →  picked = false
  *   qty_done <autre>        →  quantity <même comparaison>
  *   reserved_uom_qty ...    →  quantity <même comparaison>
+ *
+ * Le « OU state = done » n'est pas un détail : sur une ligne déjà terminée,
+ * `picked` n'est pas nécessairement resté à vrai. Sans cette branche, toute
+ * requête portant sur de l'historique reviendrait vide — un écran sans données
+ * plutôt qu'une erreur. C'est la même raison que dans lineDone.
+ *
+ * Un domaine Odoo est en notation préfixée avec ET implicite entre les termes :
+ * remplacer un terme par la séquence ["|", A, B] est donc correct, d'où le
+ * flatMap plutôt qu'un map.
  *
  * Limite assumée : sur le modèle fusionné, « fait » est un booléen. Un test du
  * type « fait > 3 » n'a plus d'équivalent exact et devient un test sur la
@@ -280,16 +289,18 @@ function translateMlFields(fields: string[], shape: compat.StockShape): string[]
  */
 function translateMlDomain(domain: any[], shape: compat.StockShape): any[] {
   if (!shape.merged || !Array.isArray(domain)) return domain;
-  return domain.map((leaf: any) => {
-    if (!Array.isArray(leaf) || leaf.length !== 3) return leaf;   // "&", "|", "!"
+  return domain.flatMap((leaf: any) => {
+    if (!Array.isArray(leaf) || leaf.length !== 3) return [leaf];   // "&", "|", "!"
     const [field, op, val] = leaf;
     if (field === "qty_done") {
-      if (val === 0 && (op === ">" || op === "!=")) return ["picked", "=", true];
-      if (val === 0 && op === "=") return ["picked", "=", false];
-      return ["quantity", op, val];
+      if (val === 0 && (op === ">" || op === "!=")) {
+        return ["|", ["picked", "=", true], ["state", "=", "done"]];
+      }
+      if (val === 0 && op === "=") return [["picked", "=", false]];
+      return [["quantity", op, val]];
     }
-    if (field === "reserved_uom_qty") return ["quantity", op, val];
-    return leaf;
+    if (field === "reserved_uom_qty") return [["quantity", op, val]];
+    return [leaf];
   });
 }
 
