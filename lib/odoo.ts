@@ -1,5 +1,6 @@
 // lib/odoo.ts
 import { F, M } from "@/lib/fieldMap";
+import * as compat from "./odooCompat";
 
 export interface OdooConfig { url: string; db: string; }
 export interface OdooSession { uid: number; name: string; login: string; sessionId: string; config: OdooConfig; }
@@ -732,7 +733,7 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
   const pickings = await searchReadAll(
     session, M("MODEL_PICKING"),
     domain,
-    PICKING_FIELDS(),
+    await availableFields(session, M("MODEL_PICKING"), PICKING_FIELDS()),
     "scheduled_date asc, date_deadline asc, id asc"
   );
 
@@ -953,6 +954,39 @@ export async function printPickingReportDirect(
 }
 
 // ============================================
+// TOLÉRANCE AUX CHAMPS ABSENTS
+// ────────────────────────────────────────────
+// Un champ disparu d'une version d'Odoo (ex. group_id sur stock.picking en v19)
+// fait échouer TOUTE la requête, donc l'écran entier — même si le champ n'était
+// qu'un confort. On filtre donc la liste demandée sur ce qui existe réellement.
+// La liste des champs d'un modèle est lue une fois puis mémorisée.
+// ============================================
+const _modelFieldsCache: Record<string, Set<string> | null> = {};
+
+async function knownFields(session: OdooSession, model: string): Promise<Set<string> | null> {
+  if (model in _modelFieldsCache) return _modelFieldsCache[model];
+  try {
+    const f = await call(session, "/web/dataset/call_kw", {
+      model, method: "fields_get", args: [], kwargs: { attributes: ["type"] },
+    });
+    _modelFieldsCache[model] = f && typeof f === "object" ? new Set(Object.keys(f)) : null;
+  } catch {
+    _modelFieldsCache[model] = null; // en cas d'échec : on ne filtre rien
+  }
+  return _modelFieldsCache[model];
+}
+
+/** Retire d'une liste de champs ceux qui n'existent pas sur le modèle. */
+export async function availableFields(session: OdooSession, model: string, wanted: string[]): Promise<string[]> {
+  const known = await knownFields(session, model);
+  if (!known) return wanted;               // inconnu → comportement d'origine
+  const kept = wanted.filter(f => known.has(f));
+  const dropped = wanted.filter(f => !known.has(f));
+  if (dropped.length) console.warn(`[WMS] Champs absents de ${model}, ignorés :`, dropped.join(", "));
+  return kept.length ? kept : wanted;
+}
+
+// ============================================
 // PREPARATION — Outgoing pickings
 // ============================================
 
@@ -1021,7 +1055,7 @@ export async function getOutgoingPickings(session: OdooSession) {
       ["picking_type_id", "in", typeIds],
       ["state", "=", "assigned"],
     ],
-    PICKING_FIELDS(),
+    await availableFields(session, M("MODEL_PICKING"), PICKING_FIELDS()),
     200,
     "date_deadline asc, scheduled_date asc, id asc"
   );
@@ -1115,7 +1149,13 @@ export async function getPickingMoveLines(session: OdooSession, pickingId: numbe
   return searchRead(
     session, M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId]],
-    ["id", "product_id", "lot_id", "location_id", "location_dest_id", "qty_done", "reserved_uom_qty", "picking_id", "move_id", "product_uom_id"],
+    // Champs de quantité filtrés sur ce qui existe : qty_done/reserved_uom_qty
+    // n'existent plus en Odoo 17+. Le reste du code lit via compat.*
+    await availableFields(session, M("MODEL_MOVE_LINE"), [
+      "id", "product_id", "lot_id", "location_id", "location_dest_id",
+      "qty_done", "reserved_uom_qty", "quantity", "picked",
+      "picking_id", "move_id", "product_uom_id",
+    ]),
     200,
     "product_id"
   );
@@ -1131,17 +1171,22 @@ export async function getPickingsProgress(
   if (!pickingIds.length) return out;
   for (const id of pickingIds) out[id] = { done: 0, total: 0, doneLines: 0, totalLines: 0 };
 
+  // Version-agnostique : en Odoo 17+ les champs reserved_uom_qty / qty_done
+  // n'existent plus (fusionnes en quantity + picked).
+  const shape = await compat.detectStockShape(m =>
+    call(session, "/web/dataset/call_kw", { model: m, method: "fields_get", args: [], kwargs: { attributes: ["type"] } }),
+    M("MODEL_MOVE_LINE"));
   const lines = await searchRead(
     session, M("MODEL_MOVE_LINE"),
-    [["picking_id", "in", pickingIds], ["reserved_uom_qty", ">", 0]],
-    ["picking_id", "qty_done", "reserved_uom_qty"],
+    [["picking_id", "in", pickingIds], ...compat.pendingDomain(shape)],
+    compat.moveLineFields(shape, ["picking_id"]),
     5000
   );
   for (const ml of lines) {
     const pid = Array.isArray(ml.picking_id) ? ml.picking_id[0] : ml.picking_id;
     if (!pid || !out[pid]) continue;
-    const reserved = ml.reserved_uom_qty || 0;
-    const done = Math.min(ml.qty_done || 0, reserved); // borne : pas plus que réservé
+    const reserved = compat.lineExpected(ml, shape);
+    const done = Math.min(compat.lineDone(ml, shape), reserved); // borne : pas plus que réservé
     out[pid].total += reserved;
     out[pid].done += done;
     out[pid].totalLines += 1;
@@ -1175,7 +1220,12 @@ export async function getPickingMoves(session: OdooSession, pickingId: number) {
   return searchRead(
     session, M("MODEL_MOVE"),
     [["picking_id", "=", pickingId]],
-    ["id", "product_id", "product_uom_qty", "quantity_done", "product_uom", "state", "location_id", "location_dest_id", "move_line_ids"],
+    // quantity_done n'existe plus sur stock.move en Odoo 17+ (remplace par
+    // quantity + picked). On demande les deux jeux, filtres sur l'existant.
+    await availableFields(session, M("MODEL_MOVE"), [
+      "id", "product_id", "product_uom_qty", "quantity_done", "quantity", "picked",
+      "product_uom", "state", "location_id", "location_dest_id", "move_line_ids",
+    ]),
     200,
     "product_id"
   );
