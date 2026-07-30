@@ -25,6 +25,10 @@ import ImparfaiteImportScreen from "@/components/ImparfaiteImportScreen";
 import FefoAnalysisScreen from "@/components/FefoAnalysisScreen";
 import { writeHeaders } from "@/lib/writeToken";
 import { getChariotSkusLocal, setChariotSkusLocal } from "@/lib/chariotLocal";
+
+// Nom de l'environnement WMS ("" = production). Sert au bandeau d'avertissement
+// et à l'isolation des clés de configuration (cf. lib/supabase.ts).
+const WMS_ENV = (process.env.NEXT_PUBLIC_WMS_ENV || "").trim();
 import ReturnsScreen from "@/components/ReturnsScreen";
 import PackingScreen from "@/components/PackingScreen";
 import OrderScreen from "@/components/OrderScreen";
@@ -3089,6 +3093,13 @@ export default function Page() {
 
   return (
     <Shell toast={toast} flash={scanFlash} desktop={isDesktopUI}>
+      {/* Bandeau d'environnement — n'apparaît QUE hors production (NEXT_PUBLIC_WMS_ENV
+          renseigné). Évite de croire qu'on travaille sur la prod et inversement. */}
+      {WMS_ENV && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 10001, background: "#7c3aed", color: "#fff", fontSize: 11.5, fontWeight: 700, textAlign: "center" as const, padding: "3px 8px", letterSpacing: 0.3 }}>
+          ENVIRONNEMENT DE TEST · {WMS_ENV.toUpperCase()} — les données et la configuration sont séparées de la production
+        </div>
+      )}
       {!isDesktopUI && <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} />}
 
       {/* ── Sidebar desktop (refonte) ── */}

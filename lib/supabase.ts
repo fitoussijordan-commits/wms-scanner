@@ -1077,10 +1077,27 @@ export async function saveFixShipDateStatus(status: FixShipDateStatus): Promise<
   if (error) throw new Error(error.message);
 }
 
+// ══════════════════════════════════════════
+// ISOLATION DE LA CONFIGURATION PAR ENVIRONNEMENT
+// ──────────────────────────────────────────
+// Les mappings de champs/modèles vivent dans wms_sync_meta, une table PARTAGÉE.
+// Sans précaution, une instance de test (Odoo 19) écraserait la configuration de
+// la production dès le premier réglage.
+// NEXT_PUBLIC_WMS_ENV permet de suffixer les clés : on laisse la valeur VIDE en
+// production (clés historiques inchangées, aucune migration) et on met par ex.
+// "v19" sur le déploiement de test → clé "odoo_field_map_v19".
+// ══════════════════════════════════════════
+const CFG_ENV = (process.env.NEXT_PUBLIC_WMS_ENV || "").trim();
+function cfgKey(base: string): string {
+  return CFG_ENV ? `${base}_${CFG_ENV}` : base;
+}
+/** Nom d'environnement de config actif ("" = production). Pour l'afficher dans l'UI. */
+export function getConfigEnv(): string { return CFG_ENV; }
+
 /** Charge les overrides de champs Odoo (map cléLogique → nom technique). */
 export async function loadFieldOverrides(): Promise<Record<string, string>> {
   try {
-    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "odoo_field_map").single();
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", cfgKey("odoo_field_map")).single();
     if (data?.value) {
       const parsed = JSON.parse(data.value);
       if (parsed && typeof parsed === "object") return parsed as Record<string, string>;
@@ -1092,7 +1109,7 @@ export async function loadFieldOverrides(): Promise<Record<string, string>> {
 /** Enregistre l'intégralité des overrides (écrase). Passer {} pour tout réinitialiser. */
 export async function saveFieldOverrides(overrides: Record<string, string>): Promise<void> {
   const { error } = await sb.from("wms_sync_meta").upsert(
-    { key: "odoo_field_map", value: JSON.stringify(overrides), updated_at: new Date().toISOString() },
+    { key: cfgKey("odoo_field_map"), value: JSON.stringify(overrides), updated_at: new Date().toISOString() },
     { onConflict: "key" }
   );
   if (error) throw new Error(error.message);
@@ -1105,7 +1122,7 @@ export async function saveFieldOverrides(overrides: Record<string, string>): Pro
 
 export async function loadModelOverrides(): Promise<Record<string, string>> {
   try {
-    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "odoo_model_map").single();
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", cfgKey("odoo_model_map")).single();
     if (data?.value) {
       const parsed = JSON.parse(data.value);
       if (parsed && typeof parsed === "object") return parsed as Record<string, string>;
@@ -1116,7 +1133,7 @@ export async function loadModelOverrides(): Promise<Record<string, string>> {
 
 export async function saveModelOverrides(overrides: Record<string, string>): Promise<void> {
   const { error } = await sb.from("wms_sync_meta").upsert(
-    { key: "odoo_model_map", value: JSON.stringify(overrides), updated_at: new Date().toISOString() },
+    { key: cfgKey("odoo_model_map"), value: JSON.stringify(overrides), updated_at: new Date().toISOString() },
     { onConflict: "key" }
   );
   if (error) throw new Error(error.message);
