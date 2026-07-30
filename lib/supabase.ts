@@ -1129,11 +1129,35 @@ export async function saveFixShipDateStatus(status: FixShipDateStatus): Promise<
 // des identifiants produits. Ne pas lancer leur synchronisation depuis le
 // déploiement de test.
 const CFG_ENV = (process.env.NEXT_PUBLIC_WMS_ENV || "").trim();
+
+// SUFFIXE DÉTERMINÉ PAR LA BASE CONNECTÉE, PAS PAR LE BUILD.
+//
+// NEXT_PUBLIC_WMS_ENV est figée à la construction : elle convient quand un
+// déploiement ne parle qu'à une seule base. Dès qu'on peut BASCULER de base
+// depuis la même application, elle devient fausse — l'app de production
+// connectée à la base de test écrirait dans les clés de production, et un audit
+// catalogue y déposerait des identifiants produits de la base de test.
+//
+// L'override est posé à la connexion, d'après la base choisie. Il n'existe que
+// côté navigateur : les traitements serveur (crons) gardent NEXT_PUBLIC_WMS_ENV,
+// puisqu'ils ne changent jamais de base.
+let _cfgEnvOverride: string | null = null;
+
+/** Fixe l'environnement de config d'après la base connectée. `""` = production. */
+export function setConfigEnvOverride(env: string | null) {
+  _cfgEnvOverride = env === null ? null : env.trim();
+}
+
+function activeCfgEnv(): string {
+  return _cfgEnvOverride !== null ? _cfgEnvOverride : CFG_ENV;
+}
+
 function cfgKey(base: string): string {
-  return CFG_ENV ? `${base}_${CFG_ENV}` : base;
+  const env = activeCfgEnv();
+  return env ? `${base}_${env}` : base;
 }
 /** Nom d'environnement de config actif ("" = production). Pour l'afficher dans l'UI. */
-export function getConfigEnv(): string { return CFG_ENV; }
+export function getConfigEnv(): string { return activeCfgEnv(); }
 
 /** Charge les overrides de champs Odoo (map cléLogique → nom technique). */
 export async function loadFieldOverrides(): Promise<Record<string, string>> {

@@ -1078,17 +1078,34 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 //
 // Si la variable est absente, aucun sélecteur n'apparaît et le comportement est
 // exactement celui d'aujourd'hui.
-export interface OdooBase { label: string; url: string; db: string }
+export interface OdooBase { label: string; url: string; db: string; cfgEnv: string }
 
 const ODOO_BASES: OdooBase[] = (process.env.NEXT_PUBLIC_ODOO_BASES || "")
   .split(";")
   .map(s => s.trim())
   .filter(Boolean)
   .map(entry => {
-    const [label, url, db] = entry.split("|").map(x => (x || "").trim());
-    return { label: label || url, url: url || "", db: db || "" };
+    // Libellé|URL|Base[|cléConfig]
+    // Le 4e champ, optionnel, suffixe les données de configuration stockées dans
+    // Supabase (mappings, chariot, cache e-shop). Le laisser VIDE sur la base de
+    // production conserve les clés historiques ; mettre par ex. "v19" sur une
+    // base de test empêche que le travail fait dessus n'écrase la production.
+    const [label, url, db, cfgEnv] = entry.split("|").map(x => (x || "").trim());
+    return { label: label || url, url: url || "", db: db || "", cfgEnv: cfgEnv || "" };
   })
   .filter(b => b.url && b.db);
+
+/**
+ * Aligne l'environnement de configuration Supabase sur la base connectée.
+ * Sans correspondance déclarée, on ne force rien : on retombe sur la variable
+ * de build, c'est-à-dire le comportement d'avant.
+ */
+function applyCfgEnvForBase(u: string, d: string) {
+  if (!ODOO_BASES.length) return;
+  const norm = (x: string) => x.replace(/\/$/, "").toLowerCase();
+  const b = ODOO_BASES.find(x => norm(x.url) === norm(u) && x.db === d);
+  sbase.setConfigEnvOverride(b ? b.cfgEnv : null);
+}
 
 /** Base actuellement utilisée, d'après la config enregistrée. */
 function currentBase(): OdooBase | null {
@@ -1630,6 +1647,10 @@ export default function Page() {
     const s = loadSess();
     if (s) {
       setSession(s); setHistory(loadHistory());
+      // Reprise de session : réaligner la clé de configuration sur la base de la
+      // session restaurée. Sans cela, un simple rechargement de page repartirait
+      // sur la clé du build, donc potentiellement sur celle de la production.
+      applyCfgEnvForBase(s.config.url, s.config.db);
       // Deep-link : ?screen=<écran> — restauré soit après un lien externe (tableau de
       // bord alertes p.ex.), soit après un simple refresh de la page (on y écrit nous-
       // mêmes l'écran courant, voir l'effet de synchronisation juste après).
@@ -1684,6 +1705,11 @@ export default function Page() {
       const cfg = { url: url.replace(/\/$/, ""), db };
       const s = await odoo.authenticate(cfg, user, pw);
       setSession(s); saveSession(s); saveCfg(url, db);
+      // La configuration Supabase (mappings, chariot, cache e-shop) suit la base
+      // à laquelle on vient de se connecter — pas la variable figée au build.
+      // Sans cela, l'app de production branchée sur une base de test écrirait
+      // dans les clés de production.
+      applyCfgEnvForBase(url, db);
       setLocations(await odoo.getLocations(s));
       setHistory(loadHistory());
       setScreen("home");
