@@ -103,6 +103,66 @@ export default function FieldMapEditor({ session, onToast, onlyKeys, onSaved, co
     }
   };
 
+  // ── Test global : contrôle TOUS les champs d'un coup ────────────────────────
+  // Indispensable pour un changement de version Odoo : tester 101 champs un par
+  // un est intenable. On regroupe par modèle → une seule requête fields_get par
+  // modèle (une dizaine au total) au lieu d'une par champ.
+  const [auditing, setAuditing] = useState(false);
+  const [auditDone, setAuditDone] = useState<null | {
+    ok: number;
+    missing: { key: string; label: string; model: string; tech: string }[];
+    badModels: string[];
+  }>(null);
+
+  const auditAll = async () => {
+    if (auditing) return;
+    setAuditing(true); setAuditDone(null);
+    try {
+      const all = fieldMap.listFields();
+      // Regroupe les champs par modèle Odoo
+      const byModel = new Map<string, typeof all>();
+      for (const f of all) {
+        const m = f.def.model;
+        if (!byModel.has(m)) byModel.set(m, [] as any);
+        (byModel.get(m) as any).push(f);
+      }
+      const missing: { key: string; label: string; model: string; tech: string }[] = [];
+      const badModels: string[] = [];
+      let ok = 0;
+      const next: Record<string, TestState> = {};
+
+      await Promise.all(Array.from(byModel.entries()).map(async ([model, fields]) => {
+        let available: Record<string, any> | null = null;
+        try {
+          available = await odoo.callMethod(session, model, "fields_get", [], { attributes: ["string", "type"] });
+        } catch {
+          // Modèle inexistant/inaccessible : tous ses champs sont indéterminés
+          badModels.push(model);
+          for (const f of fields) next[f.key] = "error";
+          return;
+        }
+        for (const f of fields) {
+          const tech = (values[f.key] ?? f.effective ?? "").trim();
+          const exists = !!tech && !!available && tech in available;
+          next[f.key] = exists ? "ok" : "missing";
+          if (exists) ok++;
+          else missing.push({ key: f.key, label: f.def.label, model, tech: tech || "(vide)" });
+        }
+      }));
+
+      setTests(prev => ({ ...prev, ...next }));
+      setAuditDone({ ok, missing, badModels });
+      if (missing.length === 0 && badModels.length === 0) {
+        onToast(`✓ Les ${ok} champs existent dans cette base Odoo`, "success");
+      } else {
+        onToast(`⚠ ${missing.length} champ(s) à corriger`, "error");
+      }
+    } catch (e: any) {
+      onToast("Audit échoué : " + (e?.message ?? e), "error");
+    }
+    setAuditing(false);
+  };
+
   // « Scan » : récupère la liste des champs réellement disponibles sur le modèle Odoo
   // (fields_get) et ouvre le menu déroulant sous le champ. Mis en cache par modèle.
   const scanModel = async (key: fieldMap.FieldKey) => {
@@ -194,6 +254,56 @@ export default function FieldMapEditor({ session, onToast, onlyKeys, onSaved, co
           ⚙️ Ici tu remappes les <b>noms techniques des champs Odoo</b> sans toucher au code.
           Utile quand un champ est renommé (ex. passage à Odoo 19). Modifie, teste avec <b>Tester</b>,
           puis <b>Enregistre</b>. Les champs custom (Studio) sont marqués <span style={{ color: C.purple, fontWeight: 700 }}>Studio</span>.
+        </div>
+      )}
+
+      {/* Audit global — contrôle tous les champs contre la base Odoo connectée */}
+      {!compact && (
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" as const }}>
+            <button onClick={auditAll} disabled={auditing}
+              style={{ padding: "9px 16px", background: auditing ? "#cbd5e1" : "#2563eb", color: "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: auditing ? "default" : "pointer", fontFamily: "inherit" }}>
+              {auditing ? "Contrôle en cours…" : "Contrôler tous les champs"}
+            </button>
+            <div style={{ fontSize: 11.5, color: C.textMuted, flex: 1, minWidth: 180, lineHeight: 1.45 }}>
+              Vérifie d&apos;un coup que chaque champ existe dans la base Odoo connectée.
+              À lancer après un changement de version.
+            </div>
+          </div>
+
+          {auditDone && (
+            <div style={{ marginTop: 11 }}>
+              {auditDone.missing.length === 0 && auditDone.badModels.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: "#15803d", fontWeight: 700 }}>
+                  ✓ Les {auditDone.ok} champs existent dans cette base — rien à corriger.
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: "#9a3412", marginBottom: 6 }}>
+                    {auditDone.ok} champ(s) valides · {auditDone.missing.length} à corriger
+                  </div>
+                  {auditDone.badModels.length > 0 && (
+                    <div style={{ fontSize: 11.5, color: "#b91c1c", marginBottom: 6 }}>
+                      Modèles inaccessibles : {auditDone.badModels.join(", ")} — à remapper dans l&apos;onglet Modèles.
+                    </div>
+                  )}
+                  <div style={{ maxHeight: 220, overflowY: "auto" as const }}>
+                    {auditDone.missing.map(m => (
+                      <div key={m.key} style={{ fontSize: 11.5, color: C.text, padding: "4px 0", borderTop: `1px solid ${C.border}` }}>
+                        <b>{m.label}</b>
+                        <span style={{ color: C.textMuted }}> — {m.model}</span>
+                        <span style={{ color: "#b91c1c", fontFamily: "monospace" }}> · {m.tech} introuvable</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 7, lineHeight: 1.5 }}>
+                    Pour chaque ligne : utilise <b>Scanner</b> à côté du champ concerné pour voir les noms
+                    réellement disponibles sur ce modèle, choisis le bon, puis <b>Enregistre</b>.
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 
