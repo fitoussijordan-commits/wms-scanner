@@ -233,10 +233,73 @@ async function call(session: OdooSession, endpoint: string, params: any) {
   return result;
 }
 
+/** Le modèle visé est-il celui des lignes de mouvement ? */
+function isMoveLineModel(model: string) {
+  return model === "stock.move.line" || model === M("MODEL_MOVE_LINE");
+}
+
+/**
+ * TRADUCTION D'UNE LISTE DE CHAMPS DEMANDÉS.
+ * qty_done / reserved_uom_qty n'existent plus sur le modèle fusionné. Les
+ * demander fait échouer la requête ENTIÈRE, donc vide l'écran appelant. On les
+ * remplace par les champs réels ; normalizeMoveLines rétablit ensuite les
+ * anciens noms sur les objets renvoyés, si bien que le code appelant ne change
+ * pas.
+ */
+function translateMlFields(fields: string[], shape: compat.StockShape): string[] {
+  if (!shape.merged) return fields;
+  const out = new Set<string>();
+  let touched = false;
+  for (const f of fields) {
+    if (f === "qty_done" || f === "reserved_uom_qty") { touched = true; continue; }
+    out.add(f);
+  }
+  if (touched) { out.add("quantity"); out.add("picked"); }
+  return Array.from(out);
+}
+
+/**
+ * TRADUCTION D'UN DOMAINE DE RECHERCHE.
+ *
+ * Plus insidieux que les champs : un nom inconnu dans un domaine fait échouer la
+ * requête sans que rien n'indique la cause côté écran (« 0 colis » alors que les
+ * colis existent).
+ *
+ * Correspondances retenues :
+ *   qty_done > 0  /  != 0   →  picked = true    (la ligne a été prélevée)
+ *   qty_done = 0            →  picked = false
+ *   qty_done <autre>        →  quantity <même comparaison>
+ *   reserved_uom_qty ...    →  quantity <même comparaison>
+ *
+ * Limite assumée : sur le modèle fusionné, « fait » est un booléen. Un test du
+ * type « fait > 3 » n'a plus d'équivalent exact et devient un test sur la
+ * quantité de la ligne. Aucun appel du WMS ne fait ça aujourd'hui.
+ */
+function translateMlDomain(domain: any[], shape: compat.StockShape): any[] {
+  if (!shape.merged || !Array.isArray(domain)) return domain;
+  return domain.map((leaf: any) => {
+    if (!Array.isArray(leaf) || leaf.length !== 3) return leaf;   // "&", "|", "!"
+    const [field, op, val] = leaf;
+    if (field === "qty_done") {
+      if (val === 0 && (op === ">" || op === "!=")) return ["picked", "=", true];
+      if (val === 0 && op === "=") return ["picked", "=", false];
+      return ["quantity", op, val];
+    }
+    if (field === "reserved_uom_qty") return ["quantity", op, val];
+    return leaf;
+  });
+}
+
 export async function searchRead(session: OdooSession, model: string, domain: any[], fields: string[], limit = 0, order = "") {
-  const rows = await call(session, "/web/dataset/call_kw", { model, method: "search_read", args: [domain], kwargs: { fields, limit, order } });
+  let d = domain, f = fields;
+  if (isMoveLineModel(model)) {
+    const shape = await stockShape(session);
+    d = translateMlDomain(domain, shape);
+    f = translateMlFields(fields, shape);
+  }
+  const rows = await call(session, "/web/dataset/call_kw", { model, method: "search_read", args: [d], kwargs: { fields: f, limit, order } });
   // Lignes de mouvement : on rétablit les noms historiques (voir normalizeMoveLines).
-  if (model === "stock.move.line" || model === M("MODEL_MOVE_LINE")) {
+  if (isMoveLineModel(model)) {
     return normalizeMoveLines(rows, await stockShape(session));
   }
   return rows;
@@ -249,9 +312,14 @@ export async function searchReadAll(
 ): Promise<any[]> {
   const out: any[] = [];
   let offset = 0;
+  // Même traduction que searchRead : cette fonction contourne searchRead, donc
+  // sans cela elle resterait la seule porte ouverte aux noms de champs disparus.
+  const mlShape = isMoveLineModel(model) ? await stockShape(session) : null;
+  const d = mlShape ? translateMlDomain(domain, mlShape) : domain;
+  const f = mlShape ? translateMlFields(fields, mlShape) : fields;
   while (true) {
     const batch = await call(session, "/web/dataset/call_kw", {
-      model, method: "search_read", args: [domain], kwargs: { fields, limit: chunk, offset, order },
+      model, method: "search_read", args: [d], kwargs: { fields: f, limit: chunk, offset, order },
     });
     if (!batch || !batch.length) break;
     out.push(...batch);
@@ -259,7 +327,7 @@ export async function searchReadAll(
     offset += chunk;
     if (offset > 1_000_000) break;   // garde-fou absolu
   }
-  return out;
+  return mlShape ? normalizeMoveLines(out, mlShape) : out;
 }
 
 export async function callMethod(session: OdooSession, model: string, method: string, args: any[] = [], kwargs: any = {}) {
@@ -3384,7 +3452,13 @@ export async function getPickingPackages(session: OdooSession, pickingId: number
     session,
     M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId], ["result_package_id", "!=", false]],
-    ["result_package_id", "product_id", "lot_id", "qty_done", "reserved_uom_qty"],
+    // qty_done / reserved_uom_qty n'existent plus en Odoo 19 : les demander tels
+    // quels faisait échouer TOUTE la requête, d'où « 0 colis » alors que les colis
+    // existent bien dans Odoo. searchRead rétablit ensuite les deux noms.
+    await availableFields(session, M("MODEL_MOVE_LINE"), [
+      "result_package_id", "product_id", "lot_id",
+      "qty_done", "reserved_uom_qty", "quantity", "picked",
+    ]),
     200
   );
   // Group by package
@@ -3406,10 +3480,19 @@ export async function getPickingPackages(session: OdooSession, pickingId: number
  * Sert à repérer et réparer ces lignes sans repasser par Odoo directement.
  */
 export async function getOrphanMoveLines(session: OdooSession, pickingId: number): Promise<any[]> {
+  // « Quelque chose a été fait sur la ligne » ne s'exprime pas pareil selon la
+  // version : qty_done > 0 avant la v17, picked = true ensuite. Le champ figure
+  // ici dans le DOMAINE, donc un mauvais nom fait échouer la requête entière.
+  const shape = await stockShape(session);
+  const doneClause = shape.merged ? ["picked", "=", true] : ["qty_done", ">", 0];
   const lines = await searchRead(
     session, M("MODEL_MOVE_LINE"),
-    [["picking_id", "=", pickingId], ["qty_done", ">", 0]],
-    ["id", "product_id", "lot_id", "qty_done", "reserved_uom_qty", "location_id", "location_dest_id", "result_package_id"],
+    [["picking_id", "=", pickingId], doneClause],
+    await availableFields(session, M("MODEL_MOVE_LINE"), [
+      "id", "product_id", "lot_id",
+      "qty_done", "reserved_uom_qty", "quantity", "picked",
+      "location_id", "location_dest_id", "result_package_id",
+    ]),
     200
   );
   return lines.filter((ml: any) =>
