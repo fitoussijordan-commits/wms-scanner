@@ -2928,12 +2928,16 @@ export default function Page() {
       playSuccessJingle(); // 🎵 petit son de satisfaction à la validation
       showToast(`✅ ${selectedPicking.name} validé — ouverture emballage...`);
 
-      // Trouver le OUT picking lié via group_id
+      // Trouver le OUT picking lié. group_id (groupe d'approvisionnement) n'existe
+      // plus sur stock.picking en Odoo 19 : on retombe alors sur `origin`, le
+      // numéro de commande, que le PICK et le OUT partagent.
       const groupId = selectedPicking.group_id?.[0] ?? null;
+      const origin  = selectedPicking.origin || "";
       let outPickingId: number | null = null;
-      if (groupId) {
+      if (groupId || origin) {
         const outs = await odoo.searchRead(session, "stock.picking",
-          [["group_id", "=", groupId], ["picking_type_code", "=", "outgoing"],
+          [groupId ? ["group_id", "=", groupId] : ["origin", "=", origin],
+           ["picking_type_code", "=", "outgoing"],
            ["state", "in", ["assigned", "confirmed", "waiting", "partially_available"]]],
           ["id"], 1);
         if (outs.length) outPickingId = outs[0].id;

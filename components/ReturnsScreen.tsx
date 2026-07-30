@@ -424,23 +424,33 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
     const outName = origin.replace(/^Return\s+of\s+/i, "").trim();
     if (!outName) return result;
 
-    // Find the OUT picking by name
+    // Find the OUT picking by name.
+    // group_id (groupe d'approvisionnement) a disparu de stock.picking en Odoo 19.
+    // On le demande donc seulement s'il existe, et on retombe sinon sur `origin`
+    // — le numéro de commande, partagé par le OUT et les PICK associés. C'est
+    // très légèrement moins précis mais disponible dans toutes les versions.
+    const outFields = await odoo.availableFields(session, "stock.picking", ["id", "name", "group_id", "origin"]);
     const outPickings = await odoo.searchRead(
       session, "stock.picking",
       [["name", "=", outName]],
-      ["id", "name", "group_id"],
+      outFields,
       1
     );
     if (!outPickings.length) return result;
 
-    const groupIdVal = outPickings[0].group_id;
+    const groupIdVal = outFields.includes("group_id") ? outPickings[0].group_id : null;
     const groupId: number | null = Array.isArray(groupIdVal) ? groupIdVal[0] : (groupIdVal || null);
-    if (!groupId) return result;
+    const outOrigin: string = outPickings[0].origin || "";
+    if (!groupId && !outOrigin) return result;
 
-    // Find done PICK (internal) pickings in the same procurement group
+    // Find done PICK (internal) pickings for the same order
     const pickPickings = await odoo.searchRead(
       session, "stock.picking",
-      [["group_id", "=", groupId], ["state", "=", "done"], ["picking_type_code", "=", "internal"]],
+      [
+        groupId ? ["group_id", "=", groupId] : ["origin", "=", outOrigin],
+        ["state", "=", "done"],
+        ["picking_type_code", "=", "internal"],
+      ],
       ["id"],
       20
     );

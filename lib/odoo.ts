@@ -3814,6 +3814,13 @@ export async function createAndConfirmPO(
   }
   const groupedLines = Object.values(grouped);
 
+  // L'unité de mesure sur une ligne de commande fournisseur s'appelle
+  // product_uom jusqu'à Odoo 16, product_uom_id à partir de la 17. On lit le
+  // nom réellement présent : écrire le mauvais fait échouer tout l'import.
+  const polFields = await knownFields(session, "purchase.order.line");
+  const uomField = polFields && !polFields.has("product_uom") && polFields.has("product_uom_id")
+    ? "product_uom_id" : "product_uom";
+
   const poValues: any = {
     partner_id: partnerId,
     order_line: groupedLines.map(l => [0, 0, {
@@ -3822,7 +3829,7 @@ export async function createAndConfirmPO(
       price_unit: l.price || 0,
       name: l.name,
       date_planned: today,
-      product_uom: l.uomId,
+      [uomField]: l.uomId,
     }]),
   };
   if (options.partnerRef) poValues.partner_ref = options.partnerRef;

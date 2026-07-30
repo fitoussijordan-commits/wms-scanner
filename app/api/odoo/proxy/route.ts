@@ -126,7 +126,17 @@ export async function POST(req: NextRequest) {
 
     if (data.error) {
       const msg = data.error.data?.message || data.error.message || JSON.stringify(data.error);
-      return NextResponse.json({ error: msg }, { status: 400 });
+      // Odoo renvoie parfois un 404 werkzeug brut, sans dire QUOI est introuvable :
+      // typiquement un modèle ou une méthode absente parce que le module n'est pas
+      // installé. Sans le nom du modèle appelé, l'erreur est inexploitable — on
+      // l'ajoute donc systématiquement quand le message ne le contient pas déjà.
+      const ctx = params?.model
+        ? `${params.model}.${params.method || "?"}`
+        : endpoint;
+      const enriched = msg.includes("404") && !msg.includes(ctx)
+        ? `${msg}\n(appel : ${ctx})`
+        : msg;
+      return NextResponse.json({ error: enriched }, { status: 400 });
     }
 
     // Injecter le session_id dans le résultat si c'est une auth
