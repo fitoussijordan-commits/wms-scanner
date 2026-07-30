@@ -238,6 +238,44 @@ function isMoveLineModel(model: string) {
   return model === "stock.move.line" || model === M("MODEL_MOVE_LINE");
 }
 
+function isPickingModel(model: string) {
+  return model === "stock.picking" || model === M("MODEL_PICKING");
+}
+
+/**
+ * NOM DU CHAMP « MOUVEMENTS DU TRANSFERT ».
+ *
+ * `move_ids_without_package` a été retiré de stock.picking en Odoo 19 ; il ne
+ * reste que `move_ids`. Ce champ était jusqu'ici corrigé à la main dans l'écran
+ * Champs — ce qui suppose de penser à le faire, et ne survit pas à un changement
+ * de base. On le résout donc automatiquement, comme les autres renommages.
+ */
+let _pickingMoveField: string | null = null;
+
+async function pickingMoveField(session: OdooSession): Promise<string> {
+  if (_pickingMoveField) return _pickingMoveField;
+  const declared = F("PICKING_MOVE_IDS");
+  const known = await knownFields(session, M("MODEL_PICKING"));
+  if (!known) return declared;                       // inconnu : comportement d'origine
+  if (known.has(declared)) { _pickingMoveField = declared; return declared; }
+  for (const alt of ["move_ids", "move_ids_without_package"]) {
+    if (known.has(alt)) {
+      console.warn(`[WMS] Champ ${declared} absent de stock.picking, utilisation de ${alt}`);
+      _pickingMoveField = alt;
+      return alt;
+    }
+  }
+  return declared;
+}
+
+/** Réinitialise les résolutions mémorisées — indispensable au changement de base. */
+export function resetSchemaCache() {
+  _pickingMoveField = null;
+  for (const k of Object.keys(_modelFieldsCache)) delete _modelFieldsCache[k];
+  for (const k of Object.keys(_modelResolveCache)) delete _modelResolveCache[k];
+  compat.setStockShape(null);
+}
+
 /**
  * TRADUCTION D'UNE LISTE DE CHAMPS DEMANDÉS.
  * qty_done / reserved_uom_qty n'existent plus sur le modèle fusionné. Les
@@ -311,10 +349,33 @@ export async function searchRead(session: OdooSession, model: string, domain: an
     d = translateMlDomain(domain, shape);
     f = translateMlFields(fields, shape);
   }
+
+  // Transferts : le champ « mouvements » a changé de nom. On demande celui qui
+  // existe, et on réexpose ensuite le nom attendu par le reste du code — ainsi
+  // aucun appelant ne change, et surtout aucun réglage manuel n'est nécessaire.
+  //
+  // L'alias est posé que l'appelant ait passé l'ancien nom OU le nouveau : selon
+  // qu'il soit passé ou non par availableFields, ce n'est pas le même. Ne traiter
+  // qu'un seul des deux cas laisserait l'autre silencieusement sans données.
+  let moveAlias: { from: string; to: string } | null = null;
+  if (isPickingModel(model)) {
+    const declared = F("PICKING_MOVE_IDS");
+    const real = await pickingMoveField(session);
+    if (real !== declared && (f.includes(declared) || f.includes(real))) {
+      f = f.map(x => (x === declared ? real : x));
+      moveAlias = { from: real, to: declared };
+    }
+  }
+
   const rows = await call(session, "/web/dataset/call_kw", { model, method: "search_read", args: [d], kwargs: { fields: f, limit, order } });
   // Lignes de mouvement : on rétablit les noms historiques (voir normalizeMoveLines).
   if (isMoveLineModel(model)) {
     return normalizeMoveLines(rows, await stockShape(session));
+  }
+  if (moveAlias && Array.isArray(rows)) {
+    for (const r of rows) {
+      if (r && typeof r === "object" && moveAlias.from in r) r[moveAlias.to] = r[moveAlias.from];
+    }
   }
   return rows;
 }

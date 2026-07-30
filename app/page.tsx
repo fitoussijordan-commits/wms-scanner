@@ -1710,6 +1710,19 @@ export default function Page() {
       // Sans cela, l'app de production branchée sur une base de test écrirait
       // dans les clés de production.
       applyCfgEnvForBase(url, db);
+      // Puis RECHARGER cette configuration : les correspondances de champs ont été
+      // lues au démarrage, donc sous l'environnement précédent. Sans ce rechargement,
+      // se connecter à une autre base garde les noms techniques de l'ancienne — d'où
+      // des « Invalid field » alors que la correspondance est bien enregistrée.
+      // On vide aussi les schémas mémorisés : ils décrivent la base d'avant.
+      odoo.resetSchemaCache();
+      try {
+        const [fo2, mo2] = await Promise.all([sbase.loadFieldOverrides(), sbase.loadModelOverrides()]);
+        fieldMap.setFieldOverrides(fo2);
+        fieldMap.setModelOverrides(mo2);
+      } catch (e) {
+        console.warn("Rechargement du mapping après changement de base échoué.", e);
+      }
       setLocations(await odoo.getLocations(s));
       setHistory(loadHistory());
       setScreen("home");
@@ -1717,7 +1730,10 @@ export default function Page() {
     setLoading(false);
   };
 
-  const logout = () => { setSession(null); clearSess(); setScreen("login"); resetTransfer(); };
+  // Déconnexion : on oublie aussi la structure de la base. La prochaine connexion
+  // peut viser une autre base, et un schéma hérité produit des erreurs de champs
+  // incompréhensibles (« Invalid field 'quantity' » sur une base qui ne l'a jamais eu).
+  const logout = () => { odoo.resetSchemaCache(); setSession(null); clearSess(); setScreen("login"); resetTransfer(); };
   const goHome = () => { setScreen("home"); resetTransfer(); clearLookup(); setInventoryInitProduct(null); };
 
   // Charge le compteur de prépas en arrière-plan dès que la home est affichée
@@ -3209,6 +3225,11 @@ export default function Page() {
                 // ailleurs. On enregistre la cible, on efface la session, on repasse
                 // par la connexion — avec la bonne base déjà sélectionnée.
                 saveCfg(next.url, next.db);
+                // Vider les schémas mémorisés AVANT tout appel sur la nouvelle base :
+                // ils décrivent la précédente (structure des quantités, champs
+                // existants, modèles renommés). Les conserver ferait interroger la
+                // v16 avec les noms de champs de la v19.
+                odoo.resetSchemaCache();
                 clearSess();
                 setSession(null);
                 setScreen("login");

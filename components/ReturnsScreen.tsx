@@ -120,7 +120,12 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           ["picking_type_id", "in", typeIds],
           ["state", "in", ["confirmed", "assigned", "waiting", "partially_available"]],
         ],
-        ["id", "name", "state", "origin", "partner_id", "scheduled_date", F("PICKING_DATE"), F("PICKING_MOVE_IDS"), "location_id", "location_dest_id"],
+        // `date` a disparu de stock.picking en Odoo 19 et n'est qu'un confort ici
+        // (scheduled_date suffit). Le demander tel quel faisait échouer la requête
+        // entière, donc vidait l'écran Retours. availableFields écarte l'absent.
+        await odoo.availableFields(session, "stock.picking",
+          ["id", "name", "state", "origin", "partner_id", "scheduled_date",
+           F("PICKING_DATE"), F("PICKING_MOVE_IDS"), "location_id", "location_dest_id"]),
         100,
         "scheduled_date asc, id desc"
       );
