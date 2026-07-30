@@ -29,6 +29,12 @@ import { getChariotSkusLocal, setChariotSkusLocal } from "@/lib/chariotLocal";
 // Nom de l'environnement WMS ("" = production). Sert au bandeau d'avertissement
 // et à l'isolation des clés de configuration (cf. lib/supabase.ts).
 const WMS_ENV = (process.env.NEXT_PUBLIC_WMS_ENV || "").trim();
+
+// Branche et commit réellement déployés (injectés automatiquement par Vercel).
+// Affichés dans le bandeau de test : plusieurs URL coexistent pendant la
+// migration et rien à l'écran ne permettait de savoir laquelle on regardait.
+const BUILD_REF = (process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_REF || "local").trim();
+const BUILD_SHA = (process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || "dev").trim().slice(0, 7);
 import ReturnsScreen from "@/components/ReturnsScreen";
 import PackingScreen from "@/components/PackingScreen";
 import OrderScreen from "@/components/OrderScreen";
@@ -3102,6 +3108,14 @@ export default function Page() {
       {WMS_ENV && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 10001, background: "#7c3aed", color: "#fff", fontSize: 11.5, fontWeight: 700, textAlign: "center" as const, padding: "3px 8px", letterSpacing: 0.3 }}>
           ENVIRONNEMENT DE TEST · {WMS_ENV.toUpperCase()} — les données et la configuration sont séparées de la production
+          {" · "}
+          {/* Branche + commit déployés. Indispensable pendant la migration : plusieurs
+              URL Vercel coexistent (production, branche odoo19), elles sont visuellement
+              identiques, et on ne peut pas diagnostiquer une erreur sans savoir quelle
+              version du code on a réellement sous les yeux. */}
+          <span style={{ opacity: 0.85, fontWeight: 500 }}>
+            {BUILD_REF}@{BUILD_SHA}
+          </span>
         </div>
       )}
       {!isDesktopUI && <Header name={session?.name} onLogout={logout} onHome={goHome} onSettings={() => setScreen("settings")} isAdmin={session ? odoo.isAdmin(session) : false} notifCount={notifUnread} onNotifs={openNotifs} />}
@@ -9198,7 +9212,7 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
       let pkgsEnriched = pkgs;
       if (pkgs.length > 0) {
         try {
-          const pkgDetails = await odoo.searchRead(session, "stock.quant.package",
+          const pkgDetails = await odoo.searchRead(session, await odoo.packageModel(session),
             [["id", "in", pkgs.map((pk: any) => pk.id)]],
             ["id", "name", "shipping_weight"], pkgs.length);
           const pkgMap: Record<number, any> = {};
@@ -9433,7 +9447,7 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
       let pkgsEnriched = pkgs;
       if (pkgs.length > 0) {
         try {
-          const pkgDetails = await odoo.searchRead(session, "stock.quant.package",
+          const pkgDetails = await odoo.searchRead(session, await odoo.packageModel(session),
             [["id", "in", pkgs.map((pk: any) => pk.id)]],
             ["id", "name", "shipping_weight"],
             pkgs.length
@@ -9494,7 +9508,7 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
       // pack_weight n'existe pas dans toutes les versions → on l'exclut pour éviter une erreur
       let pkgWeight: number | null = null;
       try {
-        const pkgData = await odoo.searchRead(session, "stock.quant.package",
+        const pkgData = await odoo.searchRead(session, await odoo.packageModel(session),
           [["id", "=", pkg.id]], ["id", "name", "shipping_weight"], 1);
         if (pkgData.length > 0) {
           const sw = pkgData[0].shipping_weight;

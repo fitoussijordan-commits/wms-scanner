@@ -1030,6 +1030,42 @@ async function knownFields(session: OdooSession, model: string): Promise<Set<str
 }
 
 /**
+ * RÉSOLUTION DU NOM D'UN MODÈLE RENOMMÉ ENTRE VERSIONS.
+ *
+ * Odoo renomme parfois un modèle entier. Appeler l'ancien nom ne donne PAS une
+ * erreur de champ mais un 404 werkzeug brut — un message qui ne dit rien et fait
+ * perdre un temps considérable à diagnostiquer.
+ *
+ * On essaie donc les noms candidats dans l'ordre et on retient le premier qui
+ * existe réellement dans la base connectée. Résultat mémorisé : un seul
+ * fields_get par modèle et par session.
+ */
+const _modelResolveCache: Record<string, string> = {};
+
+export async function resolveModel(
+  session: OdooSession, primary: string, alternatives: string[],
+): Promise<string> {
+  if (_modelResolveCache[primary]) return _modelResolveCache[primary];
+  for (const cand of [primary, ...alternatives]) {
+    const f = await knownFields(session, cand);
+    if (f && f.size > 0) {
+      if (cand !== primary) console.warn(`[WMS] Modèle ${primary} introuvable, utilisation de ${cand}`);
+      _modelResolveCache[primary] = cand;
+      return cand;
+    }
+  }
+  return primary; // aucun candidat trouvé : on laisse remonter l'erreur d'origine
+}
+
+/**
+ * Modèle des colis. Renommé en stock.package dans les versions récentes ;
+ * c'est ce qui faisait échouer la validation d'emballage avec un 404.
+ */
+export async function packageModel(session: OdooSession): Promise<string> {
+  return resolveModel(session, M("MODEL_QUANT_PACKAGE"), ["stock.package", "stock.quant.package"]);
+}
+
+/**
  * Clause de domaine « produit stockable », valable dans toutes les versions.
  * Jusqu'en Odoo 17 : type = "product". Depuis la v18 : is_storable = true, et
  * plus aucun produit n'a type = "product" — le filtre d'origine renverrait donc
@@ -1804,12 +1840,15 @@ export async function packAndShipOut(
   //     retourne autre chose qu'une liste d'ids donne 1 seul colis, donc 1 seule
   //     étiquette transporteur au lieu de N.
   const totalWeight = packageWeights.reduce((s, w) => s + w, 0);
+  // Résolu une fois avant la vague parallèle : le nom du modèle colis change
+  // selon la version d'Odoo (voir packageModel).
+  const pkgModel = await packageModel(session);
   const packageIds: number[] = await Promise.all(
     packageWeights.map(w =>
       // shipping_weight au create ; si la version d'Odoo le refuse ici, la vague
       // 4a le réécrit juste après.
-      (create(session, M("MODEL_QUANT_PACKAGE"), { shipping_weight: w }) as Promise<number>)
-        .catch(() => create(session, M("MODEL_QUANT_PACKAGE"), {}) as Promise<number>)
+      (create(session, pkgModel, { shipping_weight: w }) as Promise<number>)
+        .catch(() => create(session, pkgModel, {}) as Promise<number>)
     )
   );
   if (packageIds.length !== nPackages || packageIds.some(id => !id)) {
@@ -1824,7 +1863,7 @@ export async function packAndShipOut(
   const pkgsByWeight: Record<number, number[]> = {};
   packageIds.forEach((id, i) => { (pkgsByWeight[packageWeights[i]] ||= []).push(id); });
   for (const [w, ids] of Object.entries(pkgsByWeight)) {
-    tasks.push(write(session, M("MODEL_QUANT_PACKAGE"), ids, { shipping_weight: parseFloat(w) }).catch(() => null));
+    tasks.push(write(session, pkgModel, ids, { shipping_weight: parseFloat(w) }).catch(() => null));
   }
 
   // 4b. fait = attendu (groupé par quantité pour batcher les writes).
@@ -3284,13 +3323,13 @@ export async function putInPack(session: OdooSession, pickingId: number, moveLin
  */
 export async function createPackage(session: OdooSession): Promise<{ id: number; name: string }> {
   const pkgId = await call(session, "/web/dataset/call_kw", {
-    model: M("MODEL_QUANT_PACKAGE"),
+    model: await packageModel(session),
     method: "create",
     args: [{}],
     kwargs: {},
   });
   // Read back name (Odoo auto-generates it)
-  const pkgs = await searchRead(session, M("MODEL_QUANT_PACKAGE"), [["id", "=", pkgId]], ["name"], 1);
+  const pkgs = await searchRead(session, await packageModel(session), [["id", "=", pkgId]], ["name"], 1);
   const name = pkgs[0]?.name || `PACK${pkgId}`;
   return { id: pkgId, name };
 }
@@ -3353,7 +3392,7 @@ export async function getOrphanMoveLines(session: OdooSession, pickingId: number
  * plus dans getPickingPackages, pour pouvoir le réutiliser au lieu d'en créer un nouveau.
  */
 export async function findPackageByName(session: OdooSession, name: string): Promise<{ id: number; name: string } | null> {
-  const res = await searchRead(session, M("MODEL_QUANT_PACKAGE"), [["name", "=", name.trim()]], ["id", "name"], 1);
+  const res = await searchRead(session, await packageModel(session), [["name", "=", name.trim()]], ["id", "name"], 1);
   return res.length ? { id: res[0].id, name: res[0].name } : null;
 }
 
@@ -3523,7 +3562,7 @@ export async function findChariotReappro(session: OdooSession, ref: string): Pro
 }
 
 export async function setPackageWeight(session: OdooSession, packageId: number, weight: number) {
-  return write(session, M("MODEL_QUANT_PACKAGE"), [packageId], { shipping_weight: weight });
+  return write(session, await packageModel(session), [packageId], { shipping_weight: weight });
 }
 
 /**
@@ -3603,7 +3642,7 @@ export async function addPackageAndSendToShipper(
   const existingIds = new Set(attachmentsBefore.map((a: any) => a.id));
 
   // 2. Créer le package avec le poids
-  const packageId = await create(session, M("MODEL_QUANT_PACKAGE"), {
+  const packageId = await create(session, await packageModel(session), {
     shipping_weight: weightKg,
   }) as number;
 
