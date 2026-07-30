@@ -103,6 +103,50 @@ export default function FieldMapEditor({ session, onToast, onlyKeys, onSaved, co
     }
   };
 
+  // ── Assistant de correspondance ─────────────────────────────────────────────
+  // Renommages connus d'Odoo entre versions. Sert de première piste, vérifiée
+  // ensuite contre les champs réellement présents dans la base connectée.
+  const KNOWN_RENAMES: Record<string, string[]> = {
+    move_ids_without_package: ["move_ids"],
+    move_line_ids_without_package: ["move_line_ids"],
+    reserved_uom_qty: ["quantity"],
+    qty_done: ["quantity"],
+    product_qty: ["product_uom_qty", "quantity"],
+    x_studio_date_dexpdition_prvue: ["x_studio_date_expedition_prevue"],
+  };
+
+  // Champs pour lesquels un simple remappage NE SUFFIT PAS : la sémantique a
+  // changé côté Odoo (fusion réservé/fait + booléen picked). Proposer un nom ici
+  // donnerait une comparaison toujours fausse, sans aucune erreur visible.
+  const SEMANTIC_CHANGE: Record<string, string> = {
+    reserved_uom_qty: "Odoo a fusionné « réservé » et « fait » en un seul champ quantity, avec un booléen picked. Remapper le nom rendrait la comparaison « fait < réservé » toujours fausse : la préparation considérerait tout comme déjà prélevé, sans erreur visible. Adaptation du code nécessaire.",
+    qty_done: "Même fusion que la quantité réservée. Le remappage seul créerait une panne silencieuse en préparation.",
+  };
+
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  /** Propose un champ de remplacement parmi ceux réellement présents sur le modèle. */
+  const suggestFor = (tech: string, label: string, available: Record<string, any>) => {
+    const names = Object.keys(available);
+    // 1. Renommage connu, confirmé présent dans CETTE base
+    for (const cand of (KNOWN_RENAMES[tech] || [])) {
+      if (names.includes(cand)) return { name: cand, why: "renommage Odoo connu", strong: true };
+    }
+    // 2. Nom quasi identique (ponctuation/underscores ignorés)
+    const nt = norm(tech);
+    const same = names.find(n => norm(n) === nt);
+    if (same) return { name: same, why: "même nom à la ponctuation près", strong: true };
+    // 3. Nom contenu dans l'autre, dans un sens ou dans l'autre
+    const partial = names.filter(n => norm(n).includes(nt) || nt.includes(norm(n)))
+                         .sort((a, b) => a.length - b.length);
+    if (partial.length) return { name: partial[0], why: "nom proche", strong: false };
+    // 4. Libellé Odoo identique au libellé attendu
+    const lb = norm(label);
+    const byLabel = names.find(n => norm(String(available[n]?.string || "")) === lb);
+    if (byLabel) return { name: byLabel, why: "même libellé dans Odoo", strong: false };
+    return null;
+  };
+
   // ── Test global : contrôle TOUS les champs d'un coup ────────────────────────
   // Indispensable pour un changement de version Odoo : tester 101 champs un par
   // un est intenable. On regroupe par modèle → une seule requête fields_get par
@@ -110,7 +154,9 @@ export default function FieldMapEditor({ session, onToast, onlyKeys, onSaved, co
   const [auditing, setAuditing] = useState(false);
   const [auditDone, setAuditDone] = useState<null | {
     ok: number;
-    missing: { key: string; label: string; model: string; tech: string }[];
+    missing: { key: string; label: string; model: string; tech: string;
+               suggest: { name: string; why: string; strong: boolean } | null;
+               danger: string | null }[];
     badModels: string[];
   }>(null);
 
@@ -126,7 +172,11 @@ export default function FieldMapEditor({ session, onToast, onlyKeys, onSaved, co
         if (!byModel.has(m)) byModel.set(m, [] as any);
         (byModel.get(m) as any).push(f);
       }
-      const missing: { key: string; label: string; model: string; tech: string }[] = [];
+      const missing: {
+        key: string; label: string; model: string; tech: string;
+        suggest: { name: string; why: string; strong: boolean } | null;
+        danger: string | null;
+      }[] = [];
       const badModels: string[] = [];
       let ok = 0;
       const next: Record<string, TestState> = {};
@@ -146,7 +196,13 @@ export default function FieldMapEditor({ session, onToast, onlyKeys, onSaved, co
           const exists = !!tech && !!available && tech in available;
           next[f.key] = exists ? "ok" : "missing";
           if (exists) ok++;
-          else missing.push({ key: f.key, label: f.def.label, model, tech: tech || "(vide)" });
+          else {
+            const danger = SEMANTIC_CHANGE[tech] || null;
+            // On ne propose RIEN quand la sémantique a changé : une suggestion
+            // ici inviterait à un remappage qui casse en silence.
+            const suggest = danger ? null : suggestFor(tech, f.def.label, available || {});
+            missing.push({ key: f.key, label: f.def.label, model, tech: tech || "(vide)", suggest, danger });
+          }
         }
       }));
 
@@ -287,18 +343,72 @@ export default function FieldMapEditor({ session, onToast, onlyKeys, onSaved, co
                       Modèles inaccessibles : {auditDone.badModels.join(", ")} — à remapper dans l&apos;onglet Modèles.
                     </div>
                   )}
-                  <div style={{ maxHeight: 220, overflowY: "auto" as const }}>
+                  {/* Application groupée des correspondances sûres */}
+                  {auditDone.missing.some(m => m.suggest?.strong) && (
+                    <button
+                      onClick={() => {
+                        const safe = auditDone.missing.filter(m => m.suggest?.strong && !m.danger);
+                        setValues(prev => {
+                          const next = { ...prev };
+                          for (const m of safe) next[m.key] = m.suggest!.name;
+                          return next;
+                        });
+                        setTests(prev => {
+                          const next = { ...prev };
+                          for (const m of safe) next[m.key] = "idle";
+                          return next;
+                        });
+                        onToast(`${safe.length} correspondance(s) appliquée(s) — pense à Enregistrer`, "success");
+                      }}
+                      style={{ marginBottom: 9, padding: "7px 13px", background: C.green, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                      Appliquer les {auditDone.missing.filter(m => m.suggest?.strong && !m.danger).length} correspondance(s) sûre(s)
+                    </button>
+                  )}
+
+                  <div style={{ maxHeight: 300, overflowY: "auto" as const }}>
                     {auditDone.missing.map(m => (
-                      <div key={m.key} style={{ fontSize: 11.5, color: C.text, padding: "4px 0", borderTop: `1px solid ${C.border}` }}>
-                        <b>{m.label}</b>
-                        <span style={{ color: C.textMuted }}> — {m.model}</span>
-                        <span style={{ color: "#b91c1c", fontFamily: "monospace" }}> · {m.tech} introuvable</span>
+                      <div key={m.key} style={{ fontSize: 11.5, color: C.text, padding: "6px 0", borderTop: `1px solid ${C.border}` }}>
+                        <div>
+                          <b>{m.label}</b>
+                          <span style={{ color: C.textMuted }}> — {m.model}</span>
+                          <span style={{ color: "#b91c1c", fontFamily: "monospace" }}> · {m.tech} introuvable</span>
+                        </div>
+
+                        {/* Changement de sens : on refuse volontairement de proposer */}
+                        {m.danger && (
+                          <div style={{ marginTop: 4, background: C.redSoft, border: `1px solid #fecaca`, borderRadius: 7, padding: "7px 9px", fontSize: 11, color: "#991b1b", lineHeight: 1.5 }}>
+                            <b>Aucune correspondance proposée — ce n&apos;est pas un simple renommage.</b><br />
+                            {m.danger}
+                          </div>
+                        )}
+
+                        {/* Proposition applicable en un clic */}
+                        {!m.danger && m.suggest && (
+                          <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
+                            <span style={{ fontSize: 11, color: C.textMuted }}>Proposition :</span>
+                            <span style={{ fontFamily: "monospace", fontSize: 11.5, color: C.green, fontWeight: 700 }}>{m.suggest.name}</span>
+                            <span style={{ fontSize: 10.5, color: m.suggest.strong ? C.green : C.amber, background: m.suggest.strong ? C.greenSoft : C.amberSoft, borderRadius: 5, padding: "1px 6px", fontWeight: 700 }}>
+                              {m.suggest.strong ? "fiable" : "à vérifier"} · {m.suggest.why}
+                            </span>
+                            <button onClick={() => { setValue(m.key, m.suggest!.name); onToast(`${m.label} → ${m.suggest!.name}`, "info"); }}
+                              style={{ padding: "3px 10px", background: C.blue, color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                              Appliquer
+                            </button>
+                          </div>
+                        )}
+
+                        {!m.danger && !m.suggest && (
+                          <div style={{ marginTop: 3, fontSize: 11, color: C.amber }}>
+                            Aucune correspondance trouvée — champ probablement absent de cette base (Studio à recréer ?).
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
                   <div style={{ fontSize: 11, color: C.textMuted, marginTop: 7, lineHeight: 1.5 }}>
-                    Pour chaque ligne : utilise <b>Scanner</b> à côté du champ concerné pour voir les noms
-                    réellement disponibles sur ce modèle, choisis le bon, puis <b>Enregistre</b>.
+                    Les propositions ne sont <b>pas</b> enregistrées automatiquement : applique, vérifie avec
+                    <b> Tester</b>, puis <b>Enregistre</b>. Pour les cas sans proposition, utilise <b>Scanner</b>
+                    à côté du champ pour voir les noms réellement disponibles.
                   </div>
                 </>
               )}
