@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import * as odoo from "@/lib/odoo";
 import { loadUserPermissions, saveUserPermission, loadHiddenTools, saveHiddenTools } from "@/lib/supabase";
 import FieldMapEditor from "@/components/FieldMapEditor";
+import OdooDiagnosticScreen from "@/components/OdooDiagnosticScreen";
 import ModelMapEditor from "@/components/ModelMapEditor";
 
 const C = {
@@ -52,7 +53,7 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
-  const [tab, setTab] = useState<"perms" | "menu" | "fields" | "models">("perms");
+  const [tab, setTab] = useState<"perms" | "menu" | "fields" | "models" | "diag">("perms");
 
   // Visibilité globale des tuiles du menu (outils masqués pour tout le monde).
   const [hiddenTools, setHiddenTools] = useState<string[]>([]);
@@ -142,6 +143,7 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
           { k: "menu" as const, label: "☰ Menu" },
           { k: "fields" as const, label: "⚙️ Champs" },
           { k: "models" as const, label: "🗂️ Modèles" },
+          { k: "diag" as const, label: "🩺 Diagnostic" },
         ]).map(t => (
           <button key={t.k} onClick={() => setTab(t.k)}
             style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
@@ -193,6 +195,8 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
         )
       ) : tab === "fields" ? (
         <FieldMapEditor session={session} onToast={onToast} />
+      ) : tab === "diag" ? (
+        <OdooDiagnosticScreen session={session} onBack={onBack} />
       ) : tab === "models" ? (
         <ModelMapEditor session={session} onToast={onToast} />
       ) : loading ? (

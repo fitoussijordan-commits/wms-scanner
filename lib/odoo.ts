@@ -1,5 +1,6 @@
 // lib/odoo.ts
 import { F, M } from "@/lib/fieldMap";
+import * as compat from "./odooCompat";
 
 export interface OdooConfig { url: string; db: string; }
 export interface OdooSession { uid: number; name: string; login: string; sessionId: string; config: OdooConfig; }
@@ -232,8 +233,90 @@ async function call(session: OdooSession, endpoint: string, params: any) {
   return result;
 }
 
+/** Le modèle visé est-il celui des lignes de mouvement ? */
+function isMoveLineModel(model: string) {
+  return model === "stock.move.line" || model === M("MODEL_MOVE_LINE");
+}
+
+/**
+ * TRADUCTION D'UNE LISTE DE CHAMPS DEMANDÉS.
+ * qty_done / reserved_uom_qty n'existent plus sur le modèle fusionné. Les
+ * demander fait échouer la requête ENTIÈRE, donc vide l'écran appelant. On les
+ * remplace par les champs réels ; normalizeMoveLines rétablit ensuite les
+ * anciens noms sur les objets renvoyés, si bien que le code appelant ne change
+ * pas.
+ */
+function translateMlFields(fields: string[], shape: compat.StockShape): string[] {
+  if (!shape.merged) return fields;
+  const out = new Set<string>();
+  let touched = false;
+  for (const f of fields) {
+    if (f === "qty_done" || f === "reserved_uom_qty") { touched = true; continue; }
+    out.add(f);
+  }
+  // `state` est ajouté d'office : sur une ligne terminée, la quantité réalisée se
+  // lit directement dans `quantity` (voir lineDone). Sans lui, tout l'historique
+  // serait compté à zéro.
+  if (touched) { out.add("quantity"); out.add("picked"); out.add("state"); }
+  return Array.from(out);
+}
+
+/**
+ * TRADUCTION D'UN DOMAINE DE RECHERCHE.
+ *
+ * Plus insidieux que les champs : un nom inconnu dans un domaine fait échouer la
+ * requête sans que rien n'indique la cause côté écran (« 0 colis » alors que les
+ * colis existent).
+ *
+ * Correspondances retenues :
+ *   qty_done > 0  /  != 0   →  picked = true  OU  state = done
+ *   qty_done = 0            →  picked = false
+ *   qty_done <autre>        →  quantity <même comparaison>
+ *   reserved_uom_qty ...    →  quantity <même comparaison>
+ *
+ * Le « OU state = done » n'est pas un détail : sur une ligne déjà terminée,
+ * `picked` n'est pas nécessairement resté à vrai. Sans cette branche, toute
+ * requête portant sur de l'historique reviendrait vide — un écran sans données
+ * plutôt qu'une erreur. C'est la même raison que dans lineDone.
+ *
+ * Un domaine Odoo est en notation préfixée avec ET implicite entre les termes :
+ * remplacer un terme par la séquence ["|", A, B] est donc correct, d'où le
+ * flatMap plutôt qu'un map.
+ *
+ * Limite assumée : sur le modèle fusionné, « fait » est un booléen. Un test du
+ * type « fait > 3 » n'a plus d'équivalent exact et devient un test sur la
+ * quantité de la ligne. Aucun appel du WMS ne fait ça aujourd'hui.
+ */
+function translateMlDomain(domain: any[], shape: compat.StockShape): any[] {
+  if (!shape.merged || !Array.isArray(domain)) return domain;
+  return domain.flatMap((leaf: any) => {
+    if (!Array.isArray(leaf) || leaf.length !== 3) return [leaf];   // "&", "|", "!"
+    const [field, op, val] = leaf;
+    if (field === "qty_done") {
+      if (val === 0 && (op === ">" || op === "!=")) {
+        return ["|", ["picked", "=", true], ["state", "=", "done"]];
+      }
+      if (val === 0 && op === "=") return [["picked", "=", false]];
+      return [["quantity", op, val]];
+    }
+    if (field === "reserved_uom_qty") return [["quantity", op, val]];
+    return [leaf];
+  });
+}
+
 export async function searchRead(session: OdooSession, model: string, domain: any[], fields: string[], limit = 0, order = "") {
-  return call(session, "/web/dataset/call_kw", { model, method: "search_read", args: [domain], kwargs: { fields, limit, order } });
+  let d = domain, f = fields;
+  if (isMoveLineModel(model)) {
+    const shape = await stockShape(session);
+    d = translateMlDomain(domain, shape);
+    f = translateMlFields(fields, shape);
+  }
+  const rows = await call(session, "/web/dataset/call_kw", { model, method: "search_read", args: [d], kwargs: { fields: f, limit, order } });
+  // Lignes de mouvement : on rétablit les noms historiques (voir normalizeMoveLines).
+  if (isMoveLineModel(model)) {
+    return normalizeMoveLines(rows, await stockShape(session));
+  }
+  return rows;
 }
 
 // Récupère TOUS les enregistrements en paginant (par lots de `chunk`), sans plafond.
@@ -243,9 +326,14 @@ export async function searchReadAll(
 ): Promise<any[]> {
   const out: any[] = [];
   let offset = 0;
+  // Même traduction que searchRead : cette fonction contourne searchRead, donc
+  // sans cela elle resterait la seule porte ouverte aux noms de champs disparus.
+  const mlShape = isMoveLineModel(model) ? await stockShape(session) : null;
+  const d = mlShape ? translateMlDomain(domain, mlShape) : domain;
+  const f = mlShape ? translateMlFields(fields, mlShape) : fields;
   while (true) {
     const batch = await call(session, "/web/dataset/call_kw", {
-      model, method: "search_read", args: [domain], kwargs: { fields, limit: chunk, offset, order },
+      model, method: "search_read", args: [d], kwargs: { fields: f, limit: chunk, offset, order },
     });
     if (!batch || !batch.length) break;
     out.push(...batch);
@@ -253,7 +341,7 @@ export async function searchReadAll(
     offset += chunk;
     if (offset > 1_000_000) break;   // garde-fou absolu
   }
-  return out;
+  return mlShape ? normalizeMoveLines(out, mlShape) : out;
 }
 
 export async function callMethod(session: OdooSession, model: string, method: string, args: any[] = [], kwargs: any = {}) {
@@ -324,12 +412,57 @@ export async function getImparfaiteTrackings(
   return out;
 }
 
+/**
+ * TRADUCTION DES QUANTITÉS À L'ÉCRITURE.
+ *
+ * Le code écrit `qty_done` et `reserved_uom_qty` sur les lignes de mouvement à
+ * une vingtaine d'endroits. Ces champs n'existent plus en Odoo 17+ : chaque
+ * écriture y échouerait avec « Invalid field ». Plutôt que de modifier vingt
+ * appels, on traduit ici, au seul point de passage.
+ *
+ * Règles :
+ *   qty_done: q          → quantity: q, picked: q > 0
+ *   reserved_uom_qty: r  → quantity: r si r > 0 ; ignoré si r vaut 0
+ *
+ * Le cas `reserved_uom_qty: 0` servait à empêcher Odoo 16 de re-réserver une
+ * ligne pendant l'emballage. Cette mécanique n'existe plus en 17+ (c'est
+ * `picked` qui tranche) et écrire quantity: 0 effacerait la quantité préparée.
+ * On l'ignore donc volontairement.
+ */
+function translateMlVals(values: any, shape: compat.StockShape): any {
+  if (!shape.merged || !values || typeof values !== "object") return values;
+  const hasDone = "qty_done" in values;
+  const hasResv = "reserved_uom_qty" in values;
+  if (!hasDone && !hasResv) return values;
+
+  const out: any = { ...values };
+  delete out.qty_done;
+  delete out.reserved_uom_qty;
+
+  if (hasDone) {
+    const q = Number(values.qty_done) || 0;
+    out.quantity = q;
+    out.picked = q > 0;
+  } else {
+    const r = Number(values.reserved_uom_qty) || 0;
+    if (r > 0) out.quantity = r;
+  }
+  return out;
+}
+
+async function maybeTranslate(session: OdooSession, model: string, values: any) {
+  if (model !== M("MODEL_MOVE_LINE") && model !== "stock.move.line") return values;
+  return translateMlVals(values, await stockShape(session));
+}
+
 export async function create(session: OdooSession, model: string, values: any) {
-  return call(session, "/web/dataset/call_kw", { model, method: "create", args: [values], kwargs: {} });
+  const vals = await maybeTranslate(session, model, values);
+  return call(session, "/web/dataset/call_kw", { model, method: "create", args: [vals], kwargs: {} });
 }
 
 export async function write(session: OdooSession, model: string, ids: number[], values: any) {
-  return call(session, "/web/dataset/call_kw", { model, method: "write", args: [ids, values], kwargs: {} });
+  const vals = await maybeTranslate(session, model, values);
+  return call(session, "/web/dataset/call_kw", { model, method: "write", args: [ids, vals], kwargs: {} });
 }
 export async function unlink(session: OdooSession, model: string, ids: number[]) {
   return call(session, "/web/dataset/call_kw", { model, method: "unlink", args: [ids], kwargs: {} });
@@ -732,7 +865,7 @@ export async function getWaitingPickings(session: OdooSession): Promise<any[]> {
   const pickings = await searchReadAll(
     session, M("MODEL_PICKING"),
     domain,
-    PICKING_FIELDS(),
+    await availableFields(session, M("MODEL_PICKING"), PICKING_FIELDS()),
     "scheduled_date asc, date_deadline asc, id asc"
   );
 
@@ -837,14 +970,17 @@ export async function checkAvailabilityAndGetResult(
   // On compare la demande (product_uom_qty) à ce qui est vraiment réservé (reserved_availability).
   const moves = await searchRead(session, M("MODEL_MOVE"),
     [["picking_id", "=", pickingId], ["state", "!=", "cancel"]],
-    ["product_id", "product_uom_qty", "reserved_availability"], 200);
+    await availableFields(session, M("MODEL_MOVE"),
+      ["product_id", "product_uom_qty", "reserved_availability", "quantity"]), 200);
+  // Reserve cote mouvement : reserved_availability (<=v16) ou quantity (v17+)
+  const _resv = (m: any) => Number(m.reserved_availability ?? m.quantity ?? 0) || 0;
   const missingLines = moves.filter((m: any) =>
-    Math.round(((m.product_uom_qty || 0) - (m.reserved_availability || 0)) * 1000) > 0
+    Math.round(((m.product_uom_qty || 0) - _resv(m)) * 1000) > 0
   ).map((m: any) => ({
     product: m.product_id[1],
     needed: m.product_uom_qty,
-    available: m.reserved_availability || 0,
-    missing: Math.round(((m.product_uom_qty || 0) - (m.reserved_availability || 0)) * 100) / 100,
+    available: _resv(m),
+    missing: Math.round(((m.product_uom_qty || 0) - _resv(m)) * 100) / 100,
   }));
 
   // Si Odoo dit "assigned" mais qu'on détecte des manquants → corriger le state
@@ -953,6 +1089,134 @@ export async function printPickingReportDirect(
 }
 
 // ============================================
+// TOLÉRANCE AUX CHAMPS ABSENTS
+// ────────────────────────────────────────────
+// Un champ disparu d'une version d'Odoo (ex. group_id sur stock.picking en v19)
+// fait échouer TOUTE la requête, donc l'écran entier — même si le champ n'était
+// qu'un confort. On filtre donc la liste demandée sur ce qui existe réellement.
+// La liste des champs d'un modèle est lue une fois puis mémorisée.
+// ============================================
+const _modelFieldsCache: Record<string, Set<string> | null> = {};
+
+async function knownFields(session: OdooSession, model: string): Promise<Set<string> | null> {
+  if (model in _modelFieldsCache) return _modelFieldsCache[model];
+  try {
+    const f = await call(session, "/web/dataset/call_kw", {
+      model, method: "fields_get", args: [], kwargs: { attributes: ["type"] },
+    });
+    _modelFieldsCache[model] = f && typeof f === "object" ? new Set(Object.keys(f)) : null;
+  } catch {
+    _modelFieldsCache[model] = null; // en cas d'échec : on ne filtre rien
+  }
+  return _modelFieldsCache[model];
+}
+
+/**
+ * RÉSOLUTION DU NOM D'UN MODÈLE RENOMMÉ ENTRE VERSIONS.
+ *
+ * Odoo renomme parfois un modèle entier. Appeler l'ancien nom ne donne PAS une
+ * erreur de champ mais un 404 werkzeug brut — un message qui ne dit rien et fait
+ * perdre un temps considérable à diagnostiquer.
+ *
+ * On essaie donc les noms candidats dans l'ordre et on retient le premier qui
+ * existe réellement dans la base connectée. Résultat mémorisé : un seul
+ * fields_get par modèle et par session.
+ */
+const _modelResolveCache: Record<string, string> = {};
+
+export async function resolveModel(
+  session: OdooSession, primary: string, alternatives: string[],
+): Promise<string> {
+  if (_modelResolveCache[primary]) return _modelResolveCache[primary];
+  for (const cand of [primary, ...alternatives]) {
+    const f = await knownFields(session, cand);
+    if (f && f.size > 0) {
+      if (cand !== primary) console.warn(`[WMS] Modèle ${primary} introuvable, utilisation de ${cand}`);
+      _modelResolveCache[primary] = cand;
+      return cand;
+    }
+  }
+  return primary; // aucun candidat trouvé : on laisse remonter l'erreur d'origine
+}
+
+/**
+ * Valeurs d'un mouvement de stock à créer, adaptées à la version.
+ *
+ * Deux champs varient :
+ *  - `name` (la description de la ligne) a disparu de stock.move en Odoo 19 ;
+ *    l'écrire fait échouer la création de tout le transfert.
+ *  - l'unité de mesure s'appelle `product_uom` ou `product_uom_id` selon la
+ *    version.
+ *
+ * On construit donc les valeurs à partir de ce que le modèle expose réellement,
+ * plutôt que de supposer des noms qui changent d'une version à l'autre.
+ */
+export async function moveVals(
+  session: OdooSession,
+  v: { description?: string; productId: number; qty: number; uomId?: number | null;
+       locationId?: number; locationDestId?: number },
+): Promise<Record<string, any>> {
+  const f = await knownFields(session, M("MODEL_MOVE"));
+  const has = (n: string) => !f || f.has(n);
+
+  const out: Record<string, any> = {
+    product_id: v.productId,
+    product_uom_qty: v.qty,
+  };
+  if (v.description && has("name")) out.name = v.description;
+  if (v.uomId) {
+    if (has("product_uom")) out.product_uom = v.uomId;
+    else if (has("product_uom_id")) out.product_uom_id = v.uomId;
+  }
+  if (v.locationId != null) out.location_id = v.locationId;
+  if (v.locationDestId != null) out.location_dest_id = v.locationDestId;
+  return out;
+}
+
+/**
+ * Modèle des colis. Renommé en stock.package dans les versions récentes ;
+ * c'est ce qui faisait échouer la validation d'emballage avec un 404.
+ */
+export async function packageModel(session: OdooSession): Promise<string> {
+  return resolveModel(session, M("MODEL_QUANT_PACKAGE"), ["stock.package", "stock.quant.package"]);
+}
+
+/**
+ * Clause de domaine « produit stockable », valable dans toutes les versions.
+ * Jusqu'en Odoo 17 : type = "product". Depuis la v18 : is_storable = true, et
+ * plus aucun produit n'a type = "product" — le filtre d'origine renverrait donc
+ * zéro résultat sans erreur, ce qui viderait silencieusement les écrans.
+ */
+export async function storableClause(session: OdooSession, model: string): Promise<any[]> {
+  const f = await knownFields(session, model);
+  return f && f.has("is_storable") ? ["is_storable", "=", true] : ["type", "=", "product"];
+}
+
+/** Retire d'une liste de champs ceux qui n'existent pas sur le modèle. */
+export async function availableFields(session: OdooSession, model: string, wanted: string[]): Promise<string[]> {
+  const known = await knownFields(session, model);
+  if (!known) return wanted;               // inconnu → comportement d'origine
+  const kept = wanted.filter(f => known.has(f));
+  const dropped = wanted.filter(f => !known.has(f));
+  if (dropped.length) console.warn(`[WMS] Champs absents de ${model}, ignorés :`, dropped.join(", "));
+  return kept.length ? kept : wanted;
+}
+
+/**
+ * Structure des quantités de stock de la base connectée (Odoo 16 vs 17+).
+ * Exportée pour que les écrans n'aient pas à réécrire l'appel fields_get.
+ * Le résultat est mémorisé par odooCompat : appeler ceci est quasi gratuit.
+ */
+export async function stockShape(session: OdooSession) {
+  return compat.detectStockShape(
+    m => call(session, "/web/dataset/call_kw", {
+      model: m, method: "fields_get", args: [], kwargs: { attributes: ["type"] },
+    }),
+    M("MODEL_MOVE_LINE"),
+  );
+}
+
+// ============================================
 // PREPARATION — Outgoing pickings
 // ============================================
 
@@ -1021,7 +1285,7 @@ export async function getOutgoingPickings(session: OdooSession) {
       ["picking_type_id", "in", typeIds],
       ["state", "=", "assigned"],
     ],
-    PICKING_FIELDS(),
+    await availableFields(session, M("MODEL_PICKING"), PICKING_FIELDS()),
     200,
     "date_deadline asc, scheduled_date asc, id asc"
   );
@@ -1112,13 +1376,52 @@ export async function getOutgoingPickings(session: OdooSession) {
 
 // Get move lines for a picking (what needs to be prepared)
 export async function getPickingMoveLines(session: OdooSession, pickingId: number) {
-  return searchRead(
+  const rows = await searchRead(
     session, M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId]],
-    ["id", "product_id", "lot_id", "location_id", "location_dest_id", "qty_done", "reserved_uom_qty", "picking_id", "move_id", "product_uom_id"],
+    // Champs de quantité filtrés sur ce qui existe : qty_done/reserved_uom_qty
+    // n'existent plus en Odoo 17+. Le reste du code lit via compat.*
+    await availableFields(session, M("MODEL_MOVE_LINE"), [
+      "id", "product_id", "lot_id", "location_id", "location_dest_id",
+      "qty_done", "reserved_uom_qty", "quantity", "picked",
+      "picking_id", "move_id", "product_uom_id",
+    ]),
     200,
     "product_id"
   );
+  return normalizeMoveLines(rows, await stockShape(session));
+}
+
+/**
+ * NORMALISATION DES LIGNES — pourquoi elle existe.
+ *
+ * L'écran de préparation lit `reserved_uom_qty` et `qty_done` à plus de
+ * quatre-vingts endroits. En Odoo 17+ ces champs n'existent plus : les lignes
+ * arrivent sans eux, toutes les comparaisons valent 0 < 0, et l'écran affiche
+ * « 0 article à préparer » sans la moindre erreur — exactement le bug constaté.
+ *
+ * Réécrire ces quatre-vingts comparaisons serait long et risqué. On rétablit
+ * donc les deux noms historiques sur les objets renvoyés, calculés depuis
+ * `quantity` / `picked`. Le code d'affichage reste inchangé et garde un sens
+ * correct ; seules les ÉCRITURES passent par compat.doneVals, qui elles
+ * connaissent la vraie version.
+ *
+ * Limite assumée : en modèle fusionné une ligne est prélevée ou ne l'est pas.
+ * Le « fait » relu depuis Odoo est donc 0 ou la quantité complète — la
+ * progression à l'unité en cours de préparation reste locale au WMS.
+ */
+export function normalizeMoveLines<T = any>(rows: any[], shape: compat.StockShape): T[] {
+  if (!shape.merged || !Array.isArray(rows)) return rows as T[];
+  return rows.map((ml: any) => {
+    // Si `quantity` n'a pas été demandé, on n'invente rien : ajouter des clés à 0
+    // serait pire que leur absence pour le code qui teste leur présence.
+    if (!ml || typeof ml !== "object" || !("quantity" in ml)) return ml;
+    return {
+      ...ml,
+      reserved_uom_qty: compat.lineExpected(ml, shape),
+      qty_done:         compat.lineDone(ml, shape),
+    };
+  }) as T[];
 }
 
 // Progression réelle (partagée, lue depuis Odoo) pour PLUSIEURS pickings d'un coup.
@@ -1131,17 +1434,22 @@ export async function getPickingsProgress(
   if (!pickingIds.length) return out;
   for (const id of pickingIds) out[id] = { done: 0, total: 0, doneLines: 0, totalLines: 0 };
 
+  // Version-agnostique : en Odoo 17+ les champs reserved_uom_qty / qty_done
+  // n'existent plus (fusionnes en quantity + picked).
+  const shape = await compat.detectStockShape(m =>
+    call(session, "/web/dataset/call_kw", { model: m, method: "fields_get", args: [], kwargs: { attributes: ["type"] } }),
+    M("MODEL_MOVE_LINE"));
   const lines = await searchRead(
     session, M("MODEL_MOVE_LINE"),
-    [["picking_id", "in", pickingIds], ["reserved_uom_qty", ">", 0]],
-    ["picking_id", "qty_done", "reserved_uom_qty"],
+    [["picking_id", "in", pickingIds], ...compat.pendingDomain(shape)],
+    compat.moveLineFields(shape, ["picking_id"]),
     5000
   );
   for (const ml of lines) {
     const pid = Array.isArray(ml.picking_id) ? ml.picking_id[0] : ml.picking_id;
     if (!pid || !out[pid]) continue;
-    const reserved = ml.reserved_uom_qty || 0;
-    const done = Math.min(ml.qty_done || 0, reserved); // borne : pas plus que réservé
+    const reserved = compat.lineExpected(ml, shape);
+    const done = Math.min(compat.lineDone(ml, shape), reserved); // borne : pas plus que réservé
     out[pid].total += reserved;
     out[pid].done += done;
     out[pid].totalLines += 1;
@@ -1175,7 +1483,12 @@ export async function getPickingMoves(session: OdooSession, pickingId: number) {
   return searchRead(
     session, M("MODEL_MOVE"),
     [["picking_id", "=", pickingId]],
-    ["id", "product_id", "product_uom_qty", "quantity_done", "product_uom", "state", "location_id", "location_dest_id", "move_line_ids"],
+    // quantity_done n'existe plus sur stock.move en Odoo 17+ (remplace par
+    // quantity + picked). On demande les deux jeux, filtres sur l'existant.
+    await availableFields(session, M("MODEL_MOVE"), [
+      "id", "product_id", "product_uom_qty", "quantity_done", "quantity", "picked",
+      "product_uom", "state", "location_id", "location_dest_id", "move_line_ids",
+    ]),
     200,
     "product_id"
   );
@@ -1227,14 +1540,12 @@ export async function createInternalTransfer(
     picking_type_id: pickingTypes[0].id,
     location_id: sourceLocationId,
     location_dest_id: destLocationId,
-    [F("PICKING_MOVE_IDS")]: lines.map((line) => [0, 0, {
-      name: line.productName,
-      product_id: line.productId,
-      product_uom_qty: line.qty,
-      product_uom: line.uomId,
-      location_id: sourceLocationId,
-      location_dest_id: destLocationId,
-    }]),
+    [F("PICKING_MOVE_IDS")]: await Promise.all(lines.map(async (line) => [0, 0,
+      await moveVals(session, {
+        description: line.productName, productId: line.productId, qty: line.qty,
+        uomId: line.uomId, locationId: sourceLocationId, locationDestId: destLocationId,
+      }),
+    ])),
   });
 
   // Confirm moves (state: draft → confirmed)
@@ -1311,14 +1622,13 @@ export async function createMultiDestTransfer(
     picking_type_id: pickingTypes[0].id,
     location_id: sourceLocationId,
     location_dest_id: fallbackDestLocationId,
-    [F("PICKING_MOVE_IDS")]: lines.map((line) => [0, 0, {
-      name: line.productName,
-      product_id: line.productId,
-      product_uom_qty: line.qty,
-      product_uom: line.uomId,
-      location_id: sourceLocationId,
-      location_dest_id: line.destLocationId,  // destination spécifique par produit
-    }]),
+    [F("PICKING_MOVE_IDS")]: await Promise.all(lines.map(async (line) => [0, 0,
+      await moveVals(session, {
+        description: line.productName, productId: line.productId, qty: line.qty,
+        uomId: line.uomId, locationId: sourceLocationId,
+        locationDestId: line.destLocationId,  // destination spécifique par produit
+      }),
+    ])),
   });
 
   await callMethod(session, M("MODEL_PICKING"), "action_confirm", [[pickingId]]);
@@ -1560,7 +1870,7 @@ export async function prefetchPackData(session: OdooSession, outPickingId: numbe
     searchRead(session, M("MODEL_PICKING"), [["id", "=", outPickingId]], ["name", "carrier_id", "state"], 1),
     searchRead(session, M("MODEL_MOVE_LINE"),
       [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
-      ["id", "reserved_uom_qty"], 500),
+      await availableFields(session, M("MODEL_MOVE_LINE"), ["id", "reserved_uom_qty", "quantity", "picked"]), 500),
   ]);
   return {
     pickingName:           pickInfo[0]?.name || `OUT-${outPickingId}`,
@@ -1633,7 +1943,7 @@ export async function packAndShipOut(
   if (needsAssign || isStale) {
     moveLines = await searchRead(session, M("MODEL_MOVE_LINE"),
       [["picking_id", "=", outPickingId], ["state", "not in", ["done", "cancel"]]],
-      ["id", "reserved_uom_qty"], 500);
+      await availableFields(session, M("MODEL_MOVE_LINE"), ["id", "reserved_uom_qty", "quantity", "picked"]), 500);
   }
 
   // ── 3. Créer les N colis, poids inclus dès la création ──────────────────────
@@ -1643,12 +1953,15 @@ export async function packAndShipOut(
   //     retourne autre chose qu'une liste d'ids donne 1 seul colis, donc 1 seule
   //     étiquette transporteur au lieu de N.
   const totalWeight = packageWeights.reduce((s, w) => s + w, 0);
+  // Résolu une fois avant la vague parallèle : le nom du modèle colis change
+  // selon la version d'Odoo (voir packageModel).
+  const pkgModel = await packageModel(session);
   const packageIds: number[] = await Promise.all(
     packageWeights.map(w =>
       // shipping_weight au create ; si la version d'Odoo le refuse ici, la vague
       // 4a le réécrit juste après.
-      (create(session, M("MODEL_QUANT_PACKAGE"), { shipping_weight: w }) as Promise<number>)
-        .catch(() => create(session, M("MODEL_QUANT_PACKAGE"), {}) as Promise<number>)
+      (create(session, pkgModel, { shipping_weight: w }) as Promise<number>)
+        .catch(() => create(session, pkgModel, {}) as Promise<number>)
     )
   );
   if (packageIds.length !== nPackages || packageIds.some(id => !id)) {
@@ -1663,20 +1976,24 @@ export async function packAndShipOut(
   const pkgsByWeight: Record<number, number[]> = {};
   packageIds.forEach((id, i) => { (pkgsByWeight[packageWeights[i]] ||= []).push(id); });
   for (const [w, ids] of Object.entries(pkgsByWeight)) {
-    tasks.push(write(session, M("MODEL_QUANT_PACKAGE"), ids, { shipping_weight: parseFloat(w) }).catch(() => null));
+    tasks.push(write(session, pkgModel, ids, { shipping_weight: parseFloat(w) }).catch(() => null));
   }
 
-  // 4b. qty_done = reserved (groupé par quantité pour batcher les writes)
-  const mlsToFill = moveLines.filter((ml: any) => ml.reserved_uom_qty > 0);
+  // 4b. fait = attendu (groupé par quantité pour batcher les writes).
+  //     Version-agnostique : en Odoo 17+ on écrit quantity + picked.
+  const _shape = await compat.detectStockShape(m =>
+    call(session, "/web/dataset/call_kw", { model: m, method: "fields_get", args: [], kwargs: { attributes: ["type"] } }),
+    M("MODEL_MOVE_LINE"));
+  const mlsToFill = moveLines.filter((ml: any) => compat.lineExpected(ml, _shape) > 0);
   if (mlsToFill.length) {
     const byQty: Record<number, number[]> = {};
     for (const ml of mlsToFill) {
-      const q = ml.reserved_uom_qty;
+      const q = compat.lineExpected(ml, _shape);
       if (!byQty[q]) byQty[q] = [];
       byQty[q].push(ml.id);
     }
     for (const [qtyStr, ids] of Object.entries(byQty)) {
-      tasks.push(write(session, M("MODEL_MOVE_LINE"), ids, { qty_done: parseFloat(qtyStr) }));
+      tasks.push(write(session, M("MODEL_MOVE_LINE"), ids, compat.doneVals(parseFloat(qtyStr), _shape)));
     }
   }
 
@@ -1833,7 +2150,7 @@ export async function validateSatellitePicking(
     searchRead(session, M("MODEL_PICKING"), [["id", "=", pickingId]], ["name", "state"], 1),
     searchRead(session, M("MODEL_MOVE_LINE"),
       [["picking_id", "=", pickingId], ["state", "not in", ["done", "cancel"]]],
-      ["id", "reserved_uom_qty"], 500),
+      await availableFields(session, M("MODEL_MOVE_LINE"), ["id", "reserved_uom_qty", "quantity", "picked"]), 500),
   ]);
   const info = infoList[0];
   const pickingName = info?.name || `OUT-${pickingId}`;
@@ -1843,20 +2160,23 @@ export async function validateSatellitePicking(
     await callMethod(session, M("MODEL_PICKING"), "action_assign", [[pickingId]]).catch(() => null);
     mls = await searchRead(session, M("MODEL_MOVE_LINE"),
       [["picking_id", "=", pickingId], ["state", "not in", ["done", "cancel"]]],
-      ["id", "reserved_uom_qty"], 500);
+      await availableFields(session, M("MODEL_MOVE_LINE"), ["id", "reserved_uom_qty", "quantity", "picked"]), 500);
   }
 
-  const mlsToFill = mls.filter((ml: any) => ml.reserved_uom_qty > 0);
+  const _shapeSat = await compat.detectStockShape(m =>
+    call(session, "/web/dataset/call_kw", { model: m, method: "fields_get", args: [], kwargs: { attributes: ["type"] } }),
+    M("MODEL_MOVE_LINE"));
+  const mlsToFill = mls.filter((ml: any) => compat.lineExpected(ml, _shapeSat) > 0);
   if (mlsToFill.length) {
     const byQty: Record<number, number[]> = {};
     for (const ml of mlsToFill) {
-      const q = ml.reserved_uom_qty;
+      const q = compat.lineExpected(ml, _shapeSat);
       if (!byQty[q]) byQty[q] = [];
       byQty[q].push(ml.id);
     }
     await Promise.all(
       Object.entries(byQty).map(([qtyStr, ids]) =>
-        write(session, M("MODEL_MOVE_LINE"), ids, { qty_done: parseFloat(qtyStr) })
+        write(session, M("MODEL_MOVE_LINE"), ids, compat.doneVals(parseFloat(qtyStr), _shapeSat))
       )
     );
   }
@@ -3015,7 +3335,7 @@ export async function collectAlerts(session: OdooSession, opts?: { returnDays?: 
     try {
       // Produits non vendables ayant du stock physique. On croise product.template(sale_ok=false)
       // avec les quants > 0.
-      const tmpls = await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), [["sale_ok", "=", false], ["type", "=", "product"]], ["id", "name", "default_code", "qty_available"], 500);
+      const tmpls = await searchRead(session, M("MODEL_PRODUCT_TEMPLATE"), [["sale_ok", "=", false], await storableClause(session, M("MODEL_PRODUCT_TEMPLATE"))], ["id", "name", "default_code", "qty_available"], 500);
       const withStock = (tmpls as any[]).filter(t => (t.qty_available ?? 0) > 0);
       return {
         key: "nonsellable", title: "Stock non vendable (Odoo)", icon: "🚫", severity: "info", screen: "productImport", count: withStock.length,
@@ -3040,7 +3360,7 @@ export async function collectAlerts(session: OdooSession, opts?: { returnDays?: 
       const withRule = new Set<number>();
       for (const r of rules) { const pid = Array.isArray(r.product_id) ? r.product_id[0] : r.product_id; if (pid) withRule.add(pid); }
       // Produits stockables actifs et vendables → devraient avoir une règle.
-      const prods = await searchRead(session, M("MODEL_PRODUCT"), [["type", "=", "product"], ["active", "=", true], ["sale_ok", "=", true]], ["id", "default_code", "name"], 3000);
+      const prods = await searchRead(session, M("MODEL_PRODUCT"), [await storableClause(session, M("MODEL_PRODUCT")), ["active", "=", true], ["sale_ok", "=", true]], ["id", "default_code", "name"], 3000);
       const missing = (prods as any[]).filter(p => !withRule.has(p.id));
       return {
         key: "putaway", title: "Stratégie de rangement à régler", icon: "📦", severity: "info", screen: "locationManager", count: missing.length,
@@ -3116,13 +3436,13 @@ export async function putInPack(session: OdooSession, pickingId: number, moveLin
  */
 export async function createPackage(session: OdooSession): Promise<{ id: number; name: string }> {
   const pkgId = await call(session, "/web/dataset/call_kw", {
-    model: M("MODEL_QUANT_PACKAGE"),
+    model: await packageModel(session),
     method: "create",
     args: [{}],
     kwargs: {},
   });
   // Read back name (Odoo auto-generates it)
-  const pkgs = await searchRead(session, M("MODEL_QUANT_PACKAGE"), [["id", "=", pkgId]], ["name"], 1);
+  const pkgs = await searchRead(session, await packageModel(session), [["id", "=", pkgId]], ["name"], 1);
   const name = pkgs[0]?.name || `PACK${pkgId}`;
   return { id: pkgId, name };
 }
@@ -3146,7 +3466,13 @@ export async function getPickingPackages(session: OdooSession, pickingId: number
     session,
     M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId], ["result_package_id", "!=", false]],
-    ["result_package_id", "product_id", "lot_id", "qty_done", "reserved_uom_qty"],
+    // qty_done / reserved_uom_qty n'existent plus en Odoo 19 : les demander tels
+    // quels faisait échouer TOUTE la requête, d'où « 0 colis » alors que les colis
+    // existent bien dans Odoo. searchRead rétablit ensuite les deux noms.
+    await availableFields(session, M("MODEL_MOVE_LINE"), [
+      "result_package_id", "product_id", "lot_id",
+      "qty_done", "reserved_uom_qty", "quantity", "picked",
+    ]),
     200
   );
   // Group by package
@@ -3168,10 +3494,19 @@ export async function getPickingPackages(session: OdooSession, pickingId: number
  * Sert à repérer et réparer ces lignes sans repasser par Odoo directement.
  */
 export async function getOrphanMoveLines(session: OdooSession, pickingId: number): Promise<any[]> {
+  // « Quelque chose a été fait sur la ligne » ne s'exprime pas pareil selon la
+  // version : qty_done > 0 avant la v17, picked = true ensuite. Le champ figure
+  // ici dans le DOMAINE, donc un mauvais nom fait échouer la requête entière.
+  const shape = await stockShape(session);
+  const doneClause = shape.merged ? ["picked", "=", true] : ["qty_done", ">", 0];
   const lines = await searchRead(
     session, M("MODEL_MOVE_LINE"),
-    [["picking_id", "=", pickingId], ["qty_done", ">", 0]],
-    ["id", "product_id", "lot_id", "qty_done", "reserved_uom_qty", "location_id", "location_dest_id", "result_package_id"],
+    [["picking_id", "=", pickingId], doneClause],
+    await availableFields(session, M("MODEL_MOVE_LINE"), [
+      "id", "product_id", "lot_id",
+      "qty_done", "reserved_uom_qty", "quantity", "picked",
+      "location_id", "location_dest_id", "result_package_id",
+    ]),
     200
   );
   return lines.filter((ml: any) =>
@@ -3185,7 +3520,7 @@ export async function getOrphanMoveLines(session: OdooSession, pickingId: number
  * plus dans getPickingPackages, pour pouvoir le réutiliser au lieu d'en créer un nouveau.
  */
 export async function findPackageByName(session: OdooSession, name: string): Promise<{ id: number; name: string } | null> {
-  const res = await searchRead(session, M("MODEL_QUANT_PACKAGE"), [["name", "=", name.trim()]], ["id", "name"], 1);
+  const res = await searchRead(session, await packageModel(session), [["name", "=", name.trim()]], ["id", "name"], 1);
   return res.length ? { id: res[0].id, name: res[0].name } : null;
 }
 
@@ -3355,7 +3690,7 @@ export async function findChariotReappro(session: OdooSession, ref: string): Pro
 }
 
 export async function setPackageWeight(session: OdooSession, packageId: number, weight: number) {
-  return write(session, M("MODEL_QUANT_PACKAGE"), [packageId], { shipping_weight: weight });
+  return write(session, await packageModel(session), [packageId], { shipping_weight: weight });
 }
 
 /**
@@ -3435,7 +3770,7 @@ export async function addPackageAndSendToShipper(
   const existingIds = new Set(attachmentsBefore.map((a: any) => a.id));
 
   // 2. Créer le package avec le poids
-  const packageId = await create(session, M("MODEL_QUANT_PACKAGE"), {
+  const packageId = await create(session, await packageModel(session), {
     shipping_weight: weightKg,
   }) as number;
 
@@ -3657,6 +3992,13 @@ export async function createAndConfirmPO(
   }
   const groupedLines = Object.values(grouped);
 
+  // L'unité de mesure sur une ligne de commande fournisseur s'appelle
+  // product_uom jusqu'à Odoo 16, product_uom_id à partir de la 17. On lit le
+  // nom réellement présent : écrire le mauvais fait échouer tout l'import.
+  const polFields = await knownFields(session, "purchase.order.line");
+  const uomField = polFields && !polFields.has("product_uom") && polFields.has("product_uom_id")
+    ? "product_uom_id" : "product_uom";
+
   const poValues: any = {
     partner_id: partnerId,
     order_line: groupedLines.map(l => [0, 0, {
@@ -3665,7 +4007,7 @@ export async function createAndConfirmPO(
       price_unit: l.price || 0,
       name: l.name,
       date_planned: today,
-      product_uom: l.uomId,
+      [uomField]: l.uomId,
     }]),
   };
   if (options.partnerRef) poValues.partner_ref = options.partnerRef;
@@ -4341,16 +4683,31 @@ export async function createProductTemplate(session: OdooSession, data: {
   categId?: number;         // Famille (categ_id → product.category)
   typeProduitId?: number;   // Type de produit (x_type_de_produit_id)
 }): Promise<number> {
+  // Deux champs ont changé côté produit selon la version d'Odoo :
+  //
+  // 1. uom_po_id (« unité d'achat ») a disparu en v19 — il n'y a plus qu'une
+  //    seule unité de mesure. On ne l'envoie que s'il existe.
+  // 2. Le type « stockable » : jusqu'en v17 c'était type = "product". Depuis la
+  //    v18, type ne vaut plus que consu/service/combo et le caractère stockable
+  //    est porté par le booléen is_storable. Envoyer "product" y serait refusé.
+  const tmplFields = await knownFields(session, M("MODEL_PRODUCT_TEMPLATE"));
+  const has = (f: string) => !tmplFields || tmplFields.has(f);
+
   const vals: any = {
     name: data.name,
     default_code: data.default_code,
-    type: "product",          // storable
     uom_id: data.uom_id,
-    uom_po_id: data.uom_id,
     tracking: data.tracking,
     sale_ok: data.sale_ok ?? true,
     purchase_ok: data.purchase_ok ?? true,
   };
+  if (has("is_storable")) {
+    vals.type = "consu";
+    vals.is_storable = true;
+  } else {
+    vals.type = "product";
+  }
+  if (has("uom_po_id")) vals.uom_po_id = data.uom_id;
   if (data.barcode) vals.barcode = data.barcode;
   if (data.weight) vals.weight = data.weight;
   if (data.list_price != null) vals.list_price = data.list_price;

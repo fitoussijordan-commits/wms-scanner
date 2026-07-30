@@ -314,7 +314,8 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           productName: ml.product_id[1] || "",
           productRef:  refMap[ml.product_id[0]] || "",
           lotName:     ml.lot_id ? ml.lot_id[1] : "",
-          qty:         ml.reserved_uom_qty || 0,
+          // Version-agnostique : reserved_uom_qty (<=v16) ou quantity (v17+)
+          qty:         Number(ml.reserved_uom_qty ?? ml.quantity ?? 0) || 0,
           uomName:     move ? (Array.isArray(move.product_uom) ? move.product_uom[1] : "") : "",
         };
       }).filter((l: PackingLine) => l.qty > 0);

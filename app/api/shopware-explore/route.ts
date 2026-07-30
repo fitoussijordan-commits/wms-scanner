@@ -68,6 +68,22 @@ export async function GET(req: NextRequest) {
   }
 
   const creds = getCreds();
+
+  // Identifiants absents = cas le plus courant sur un nouveau déploiement (les
+  // variables ne sont pas héritées d'un autre projet Vercel). On le dit
+  // explicitement, en nommant les variables : sinon l'appel part vers "/api" et
+  // l'erreur qui remonte n'a aucun rapport avec la cause réelle.
+  if (!creds.url || !creds.user || !creds.key) {
+    const missing = [
+      !creds.url && "SHOPWARE_URL",
+      !creds.user && "SHOPWARE_USER",
+      !creds.key && "SHOPWARE_API_KEY",
+    ].filter(Boolean).join(", ");
+    return NextResponse.json(
+      { error: `Identifiants Shopware non configurés sur ce déploiement (${missing} manquante·s)` },
+      { status: 503 },
+    );
+  }
   if (!creds.url || !creds.key) {
     return NextResponse.json({ error: "Shopware non configuré (env serveur)" }, { status: 500 });
   }

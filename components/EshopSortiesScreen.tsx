@@ -847,8 +847,17 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
         .then(r => r.json())
         .then(b => setBinMap(b.byDetail || {}))
         .catch(() => {});
+      // Ne JAMAIS retomber silencieusement sur une liste vide : sans ce contrôle,
+      // un Shopware injoignable (identifiants absents sur ce déploiement, panne
+      // réseau, 401) donnait un audit à zéro ligne et aucun message — impossible
+      // de distinguer « catalogue vide » de « appel échoué ».
       const catRes = await fetch("/api/shopware-explore?action=activeProducts").then(r => r.json());
-      const products: any[] = catRes.products || [];
+      if (catRes?.error) throw new Error(`Shopware : ${catRes.error}`);
+      if (!Array.isArray(catRes?.products)) {
+        throw new Error("Shopware n'a pas renvoyé de catalogue (réponse inattendue)");
+      }
+      const products: any[] = catRes.products;
+      if (!products.length) throw new Error("Shopware a répondu, mais aucun article actif");
       // 2) Mapping : cache + overrides d'abord, matchEshopSkus seulement pour les manquants
       const [cache, overrides] = await Promise.all([
         (await import("@/lib/supabase")).getEshopMappingCache(),

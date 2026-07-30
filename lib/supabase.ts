@@ -585,7 +585,7 @@ export type EshopMappingOverrides = Record<string, { productId: number; odooRef:
 
 export async function getEshopMappingOverrides(): Promise<EshopMappingOverrides> {
   try {
-    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_mapping").single();
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", cfgKey("eshop_mapping")).single();
     if (data?.value) return JSON.parse(data.value);
   } catch {}
   return {};
@@ -595,7 +595,7 @@ export async function saveEshopMappingOverride(ref: string, productId: number, o
   const current = await getEshopMappingOverrides();
   current[ref] = { productId, odooRef, productName };
   const { error } = await sb.from("wms_sync_meta").upsert(
-    { key: "eshop_mapping", value: JSON.stringify(current), updated_at: new Date().toISOString() },
+    { key: cfgKey("eshop_mapping"), value: JSON.stringify(current), updated_at: new Date().toISOString() },
     { onConflict: "key" }
   );
   if (error) throw new Error(error.message);
@@ -628,7 +628,7 @@ export type ChariotStock = Record<string, number>; // sku → quantité restante
 
 export async function getChariotStock(): Promise<ChariotStock> {
   try {
-    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_chariot_stock").single();
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", cfgKey("eshop_chariot_stock")).single();
     if (data?.value) return JSON.parse(data.value);
   } catch {}
   return {};
@@ -636,7 +636,7 @@ export async function getChariotStock(): Promise<ChariotStock> {
 
 export async function saveChariotStock(stock: ChariotStock): Promise<void> {
   const { error } = await sb.from("wms_sync_meta").upsert(
-    { key: "eshop_chariot_stock", value: JSON.stringify(stock), updated_at: new Date().toISOString() },
+    { key: cfgKey("eshop_chariot_stock"), value: JSON.stringify(stock), updated_at: new Date().toISOString() },
     { onConflict: "key" }
   );
   if (error) throw new Error(error.message);
@@ -691,7 +691,7 @@ export type EshopMappingCache = Record<string, { product_id: number; default_cod
 
 export async function getEshopMappingCache(): Promise<EshopMappingCache> {
   try {
-    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_mapping_cache").single();
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", cfgKey("eshop_mapping_cache")).single();
     if (data?.value) return JSON.parse(data.value);
   } catch {}
   return {};
@@ -699,7 +699,7 @@ export async function getEshopMappingCache(): Promise<EshopMappingCache> {
 
 export async function saveEshopMappingCache(cache: EshopMappingCache): Promise<void> {
   const { error } = await sb.from("wms_sync_meta").upsert(
-    { key: "eshop_mapping_cache", value: JSON.stringify(cache), updated_at: new Date().toISOString() },
+    { key: cfgKey("eshop_mapping_cache"), value: JSON.stringify(cache), updated_at: new Date().toISOString() },
     { onConflict: "key" }
   );
   if (error) throw new Error(error.message);
@@ -814,7 +814,7 @@ export async function getLastProcessedEshopOrders(limit = 5): Promise<RecentEsho
 // ══════════════════════════════════════════
 export async function getHiddenEshopOrders(): Promise<string[]> {
   try {
-    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "eshop_hidden_orders").single();
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", cfgKey("eshop_hidden_orders")).single();
     if (data?.value) return JSON.parse(data.value);
   } catch {}
   return [];
@@ -823,7 +823,7 @@ export async function hideEshopOrder(orderNumber: string): Promise<string[]> {
   const list = await getHiddenEshopOrders();
   if (!list.includes(orderNumber)) list.push(orderNumber);
   const { error } = await sb.from("wms_sync_meta").upsert(
-    { key: "eshop_hidden_orders", value: JSON.stringify(list), updated_at: new Date().toISOString() },
+    { key: cfgKey("eshop_hidden_orders"), value: JSON.stringify(list), updated_at: new Date().toISOString() },
     { onConflict: "key" }
   );
   if (error) throw new Error(error.message);
@@ -833,7 +833,7 @@ export async function unhideEshopOrder(orderNumber: string): Promise<string[]> {
   let list = await getHiddenEshopOrders();
   list = list.filter(n => n !== orderNumber);
   const { error } = await sb.from("wms_sync_meta").upsert(
-    { key: "eshop_hidden_orders", value: JSON.stringify(list), updated_at: new Date().toISOString() },
+    { key: cfgKey("eshop_hidden_orders"), value: JSON.stringify(list), updated_at: new Date().toISOString() },
     { onConflict: "key" }
   );
   if (error) throw new Error(error.message);
@@ -1105,6 +1105,29 @@ export async function saveFixShipDateStatus(status: FixShipDateStatus): Promise<
 // production (clés historiques inchangées, aucune migration) et on met par ex.
 // "v19" sur le déploiement de test → clé "odoo_field_map_v19".
 // ══════════════════════════════════════════
+// CLÉS ISOLÉES PAR ENVIRONNEMENT — et pourquoi celles-là.
+//
+// Sont suffixées toutes les données qui dépendent de la BASE Odoo connectée :
+//   odoo_field_map / odoo_model_map  → correspondances de champs et de modèles
+//   eshop_mapping / eshop_mapping_cache → SKU Shopware → IDENTIFIANT produit Odoo
+//   eshop_chariot_stock              → compteur de stock du chariot
+//   eshop_hidden_orders              → commandes masquées (état d'exploitation)
+//
+// Le cas le plus dangereux est le mapping : les identifiants produits DIFFÈRENT
+// d'une base à l'autre. Un audit catalogue lancé depuis le déploiement de test
+// aurait écrit des identifiants de la base de test dans le mapping utilisé par la
+// production, qui aurait ensuite associé les SKU à de mauvais produits — sans
+// aucune erreur, et visible seulement des jours plus tard.
+//
+// NE SONT PAS isolés, volontairement : les seuils, la configuration
+// d'impression, les cartons et les références de service, qui sont indexés par
+// référence produit (identique dans les deux bases) et n'ont donc pas de raison
+// de diverger.
+//
+// ⚠ Restent partagés faute de colonne dédiée : les caches du tableau de bord
+// (wms_stock_cache, wms_conso_cache, wms_dlv_avg, wms_avg_monthly) contiennent
+// des identifiants produits. Ne pas lancer leur synchronisation depuis le
+// déploiement de test.
 const CFG_ENV = (process.env.NEXT_PUBLIC_WMS_ENV || "").trim();
 function cfgKey(base: string): string {
   return CFG_ENV ? `${base}_${CFG_ENV}` : base;
