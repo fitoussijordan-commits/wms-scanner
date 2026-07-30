@@ -139,3 +139,34 @@ export function pendingDomain(shape: StockShape): any[] {
     ? [["quantity", ">", 0], ["picked", "=", false]]
     : [["reserved_uom_qty", ">", 0]];
 }
+
+// ── Progression d'une préparation ───────────────────────────────────────────
+// DÉCISION (validée par Jordan) : sur le modèle fusionné, on ABANDONNE la
+// progression fine partagée entre préparateurs.
+//
+// Pourquoi : Odoo 17+ ne sait plus dire « 3 sur 5 » sur une ligne — elle est
+// prélevée ou elle ne l'est pas. Conserver une progression à l'unité aurait
+// imposé de la stocker à part (Supabase) et de maintenir deux sources de vérité.
+// On préfère une progression plus grossière mais honnête, lue directement dans
+// Odoo : le nombre de lignes prélevées sur le total.
+//
+// Conséquence à connaître : en v19 la barre avance par ligne et non par unité,
+// et un collègue ne voit plus le détail d'une préparation en cours. La reprise
+// reste possible, elle démarre simplement au niveau de la ligne.
+
+export interface PickProgress { done: number; total: number; doneLines: number; totalLines: number }
+
+/** Agrège la progression d'un ensemble de lignes, quelle que soit la version. */
+export function progressFromLines(lines: any[], shape: StockShape): PickProgress {
+  let done = 0, total = 0, doneLines = 0, totalLines = 0;
+  for (const ml of lines) {
+    const exp = lineExpected(ml, shape);
+    if (exp <= 0) continue;
+    totalLines++;
+    total += exp;
+    const d = lineDone(ml, shape);
+    done += d;
+    if (d >= exp) doneLines++;
+  }
+  return { done, total, doneLines, totalLines };
+}
