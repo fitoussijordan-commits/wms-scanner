@@ -234,7 +234,12 @@ async function call(session: OdooSession, endpoint: string, params: any) {
 }
 
 export async function searchRead(session: OdooSession, model: string, domain: any[], fields: string[], limit = 0, order = "") {
-  return call(session, "/web/dataset/call_kw", { model, method: "search_read", args: [domain], kwargs: { fields, limit, order } });
+  const rows = await call(session, "/web/dataset/call_kw", { model, method: "search_read", args: [domain], kwargs: { fields, limit, order } });
+  // Lignes de mouvement : on rétablit les noms historiques (voir normalizeMoveLines).
+  if (model === "stock.move.line" || model === M("MODEL_MOVE_LINE")) {
+    return normalizeMoveLines(rows, await stockShape(session));
+  }
+  return rows;
 }
 
 // Récupère TOUS les enregistrements en paginant (par lots de `chunk`), sans plafond.
@@ -325,12 +330,57 @@ export async function getImparfaiteTrackings(
   return out;
 }
 
+/**
+ * TRADUCTION DES QUANTITÉS À L'ÉCRITURE.
+ *
+ * Le code écrit `qty_done` et `reserved_uom_qty` sur les lignes de mouvement à
+ * une vingtaine d'endroits. Ces champs n'existent plus en Odoo 17+ : chaque
+ * écriture y échouerait avec « Invalid field ». Plutôt que de modifier vingt
+ * appels, on traduit ici, au seul point de passage.
+ *
+ * Règles :
+ *   qty_done: q          → quantity: q, picked: q > 0
+ *   reserved_uom_qty: r  → quantity: r si r > 0 ; ignoré si r vaut 0
+ *
+ * Le cas `reserved_uom_qty: 0` servait à empêcher Odoo 16 de re-réserver une
+ * ligne pendant l'emballage. Cette mécanique n'existe plus en 17+ (c'est
+ * `picked` qui tranche) et écrire quantity: 0 effacerait la quantité préparée.
+ * On l'ignore donc volontairement.
+ */
+function translateMlVals(values: any, shape: compat.StockShape): any {
+  if (!shape.merged || !values || typeof values !== "object") return values;
+  const hasDone = "qty_done" in values;
+  const hasResv = "reserved_uom_qty" in values;
+  if (!hasDone && !hasResv) return values;
+
+  const out: any = { ...values };
+  delete out.qty_done;
+  delete out.reserved_uom_qty;
+
+  if (hasDone) {
+    const q = Number(values.qty_done) || 0;
+    out.quantity = q;
+    out.picked = q > 0;
+  } else {
+    const r = Number(values.reserved_uom_qty) || 0;
+    if (r > 0) out.quantity = r;
+  }
+  return out;
+}
+
+async function maybeTranslate(session: OdooSession, model: string, values: any) {
+  if (model !== M("MODEL_MOVE_LINE") && model !== "stock.move.line") return values;
+  return translateMlVals(values, await stockShape(session));
+}
+
 export async function create(session: OdooSession, model: string, values: any) {
-  return call(session, "/web/dataset/call_kw", { model, method: "create", args: [values], kwargs: {} });
+  const vals = await maybeTranslate(session, model, values);
+  return call(session, "/web/dataset/call_kw", { model, method: "create", args: [vals], kwargs: {} });
 }
 
 export async function write(session: OdooSession, model: string, ids: number[], values: any) {
-  return call(session, "/web/dataset/call_kw", { model, method: "write", args: [ids, values], kwargs: {} });
+  const vals = await maybeTranslate(session, model, values);
+  return call(session, "/web/dataset/call_kw", { model, method: "write", args: [ids, vals], kwargs: {} });
 }
 export async function unlink(session: OdooSession, model: string, ids: number[]) {
   return call(session, "/web/dataset/call_kw", { model, method: "unlink", args: [ids], kwargs: {} });
@@ -989,6 +1039,20 @@ export async function availableFields(session: OdooSession, model: string, wante
   return kept.length ? kept : wanted;
 }
 
+/**
+ * Structure des quantités de stock de la base connectée (Odoo 16 vs 17+).
+ * Exportée pour que les écrans n'aient pas à réécrire l'appel fields_get.
+ * Le résultat est mémorisé par odooCompat : appeler ceci est quasi gratuit.
+ */
+export async function stockShape(session: OdooSession) {
+  return compat.detectStockShape(
+    m => call(session, "/web/dataset/call_kw", {
+      model: m, method: "fields_get", args: [], kwargs: { attributes: ["type"] },
+    }),
+    M("MODEL_MOVE_LINE"),
+  );
+}
+
 // ============================================
 // PREPARATION — Outgoing pickings
 // ============================================
@@ -1149,7 +1213,7 @@ export async function getOutgoingPickings(session: OdooSession) {
 
 // Get move lines for a picking (what needs to be prepared)
 export async function getPickingMoveLines(session: OdooSession, pickingId: number) {
-  return searchRead(
+  const rows = await searchRead(
     session, M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId]],
     // Champs de quantité filtrés sur ce qui existe : qty_done/reserved_uom_qty
@@ -1162,6 +1226,39 @@ export async function getPickingMoveLines(session: OdooSession, pickingId: numbe
     200,
     "product_id"
   );
+  return normalizeMoveLines(rows, await stockShape(session));
+}
+
+/**
+ * NORMALISATION DES LIGNES — pourquoi elle existe.
+ *
+ * L'écran de préparation lit `reserved_uom_qty` et `qty_done` à plus de
+ * quatre-vingts endroits. En Odoo 17+ ces champs n'existent plus : les lignes
+ * arrivent sans eux, toutes les comparaisons valent 0 < 0, et l'écran affiche
+ * « 0 article à préparer » sans la moindre erreur — exactement le bug constaté.
+ *
+ * Réécrire ces quatre-vingts comparaisons serait long et risqué. On rétablit
+ * donc les deux noms historiques sur les objets renvoyés, calculés depuis
+ * `quantity` / `picked`. Le code d'affichage reste inchangé et garde un sens
+ * correct ; seules les ÉCRITURES passent par compat.doneVals, qui elles
+ * connaissent la vraie version.
+ *
+ * Limite assumée : en modèle fusionné une ligne est prélevée ou ne l'est pas.
+ * Le « fait » relu depuis Odoo est donc 0 ou la quantité complète — la
+ * progression à l'unité en cours de préparation reste locale au WMS.
+ */
+export function normalizeMoveLines<T = any>(rows: any[], shape: compat.StockShape): T[] {
+  if (!shape.merged || !Array.isArray(rows)) return rows as T[];
+  return rows.map((ml: any) => {
+    // Si `quantity` n'a pas été demandé, on n'invente rien : ajouter des clés à 0
+    // serait pire que leur absence pour le code qui teste leur présence.
+    if (!ml || typeof ml !== "object" || !("quantity" in ml)) return ml;
+    return {
+      ...ml,
+      reserved_uom_qty: compat.lineExpected(ml, shape),
+      qty_done:         compat.lineDone(ml, shape),
+    };
+  }) as T[];
 }
 
 // Progression réelle (partagée, lue depuis Odoo) pour PLUSIEURS pickings d'un coup.

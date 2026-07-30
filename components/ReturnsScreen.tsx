@@ -6,6 +6,7 @@ import * as odoo from "@/lib/odoo";
 import type { OdooSession } from "@/lib/odoo";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
 import { F } from "@/lib/fieldMap";
+import * as compat from "@/lib/odooCompat";
 
 // ── Palette de couleurs (reprend le thème WMS) ─────────────────────────────
 const C = {
@@ -131,11 +132,20 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
       }
 
       // 3. Load moves for all pickings
+      // Odoo 17+ : quantity_done / reserved_uom_qty / qty_done n'existent plus
+      // (fusionnés en quantity + picked). On demande les deux jeux de champs et
+      // availableFields retire ceux qui manquent — sinon la requête entière
+      // échoue et l'écran reste vide.
+      const shape = await odoo.stockShape(session);
       const pickingIds = pickings.map((p: any) => p.id);
       const moves = await odoo.searchRead(
         session, "stock.move",
         [["picking_id", "in", pickingIds], ["state", "!=", "cancel"]],
-        ["id", "picking_id", "product_id", "product_uom_qty", "quantity_done", "product_uom", "move_line_ids"],
+        await odoo.availableFields(session, "stock.move", [
+          "id", "picking_id", "product_id", "product_uom_qty",
+          "quantity_done", "quantity", "picked",
+          "product_uom", "move_line_ids",
+        ]),
         500
       );
 
@@ -145,7 +155,11 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
         ? await odoo.searchRead(
             session, "stock.move.line",
             [["move_id", "in", moveIds]],
-            ["id", "move_id", "product_id", "lot_id", "reserved_uom_qty", "qty_done", "product_uom_id"],
+            await odoo.availableFields(session, "stock.move.line", [
+              "id", "move_id", "product_id", "lot_id",
+              "reserved_uom_qty", "qty_done", "quantity", "picked",
+              "product_uom_id",
+            ]),
             500
           )
         : [];
@@ -198,8 +212,8 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
                 productRef:  refMap[productId] || "",
                 lotId:       ml.lot_id ? ml.lot_id[0] : null,
                 lotName:     ml.lot_id ? ml.lot_id[1] : "",
-                demandQty:   ml.reserved_uom_qty || m.product_uom_qty || 0,
-                doneQty:     ml.qty_done || 0,
+                demandQty:   compat.lineExpected(ml, shape) || m.product_uom_qty || 0,
+                doneQty:     compat.lineDone(ml, shape),
                 uomName:     Array.isArray(m.product_uom) ? m.product_uom[1] : "Unité(s)",
               });
             }
@@ -214,7 +228,9 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
               lotId:       null,
               lotName:     "",
               demandQty:   m.product_uom_qty || 0,
-              doneQty:     m.quantity_done || 0,
+              doneQty:     shape.merged
+                             ? (m.picked ? Number(m.quantity ?? 0) || 0 : 0)
+                             : Number(m.quantity_done ?? 0) || 0,
               uomName:     Array.isArray(m.product_uom) ? m.product_uom[1] : "Unité(s)",
             });
           }
@@ -265,7 +281,9 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
     setValidating(true);
     setError("");
     try {
-      // 1. Set qty_done on each move line + effacer les package_id hérités de l'expédition
+      // 1. Inscrire la quantité reçue sur chaque ligne + effacer les package_id
+      //    hérités de l'expédition. Le nom du champ dépend de la version d'Odoo.
+      const wShape = await odoo.stockShape(session);
       for (const line of selected.lines) {
         const key   = line.moveLineId ?? line.moveId;
         const qty   = parseFloat(qtyEdits[key] ?? String(line.demandQty));
@@ -274,13 +292,16 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
         if (line.moveLineId) {
           // Effacer result_package_id et package_id pour éviter l'erreur "même colis deux fois"
           await odoo.write(session, "stock.move.line", [line.moveLineId], {
-            qty_done: safeQty,
+            ...compat.doneVals(safeQty, wShape),
             result_package_id: false,
             package_id: false,
           });
         } else {
-          // No move line — write quantity_done on stock.move (triggers line creation)
-          await odoo.write(session, "stock.move", [line.moveId], { quantity_done: safeQty });
+          // Pas de ligne de mouvement — on écrit la quantité sur le stock.move,
+          // ce qui déclenche la création de la ligne par Odoo.
+          await odoo.write(session, "stock.move", [line.moveId],
+            wShape.merged ? { quantity: safeQty, picked: safeQty > 0 }
+                          : { quantity_done: safeQty });
         }
       }
 
