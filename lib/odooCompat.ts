@@ -105,6 +105,11 @@ export function lineExpected(ml: any, shape: StockShape): number {
 export function lineDone(ml: any, shape: StockShape): number {
   if (!ml) return 0;
   if (!shape.merged) return Number(ml.qty_done ?? 0) || 0;
+  // Ligne TERMINÉE : la quantité inscrite EST la quantité réalisée, que `picked`
+  // soit resté à vrai ou non. Sans ce cas, tout l'historique (consommation,
+  // réceptions, statistiques du tableau de bord) serait compté à zéro — des
+  // chiffres faux et plausibles, bien pires qu'une erreur visible.
+  if (ml.state === "done") return Number(ml.quantity ?? 0) || 0;
   return ml.picked ? (Number(ml.quantity ?? 0) || 0) : 0;
 }
 

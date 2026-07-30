@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "rea
 import * as odoo from "@/lib/odoo";
 import * as supa from "@/lib/supabase";
 import type { WmsPendingOrder } from "@/lib/supabase";
+import { M } from "@/lib/fieldMap";
 import PlanningVsCommande from "@/components/PlanningVsCommande";
 import AlertsDashboard from "@/components/AlertsDashboard";
 
@@ -2981,8 +2982,13 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       }
 
       const MOVE_LIMIT = 10000;
+      // `name` (description de ligne) a été retiré de stock.move en Odoo 19 : le
+      // demander tel quel fait échouer la requête, donc vide tout l'historique.
       const rawMoves = await odoo.searchRead(session, "stock.move", domain,
-        ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids", "name", "product_id"], MOVE_LIMIT, "date desc");
+        await odoo.availableFields(session, "stock.move", [
+          "date", "picking_id", "location_id", "location_dest_id",
+          "product_qty", "lot_ids", "name", "product_id",
+        ]), MOVE_LIMIT, "date desc");
       // Plafond atteint → l'historique est incomplet, on le signale (les totaux
       // seraient faussés sans cet avertissement).
       setMovesTruncated(rawMoves.length >= MOVE_LIMIT);
@@ -3166,8 +3172,10 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
             }
           }
         } else if (ref.type === "lot") {
-          const lots = await odoo.searchRead(session, "stock.lot",
-            [["name","=",ref.raw]], ["id","name","product_id","expiration_date","use_date"], 1);
+          const lots = await odoo.searchRead(session, M("MODEL_LOT"),
+            [["name","=",ref.raw]],
+            await odoo.availableFields(session, M("MODEL_LOT"),
+              ["id","name","product_id","expiration_date","use_date"]), 1);
           if (lots.length) {
             const l = lots[0];
             row["lot_produit"] = l.product_id?.[1] || "";
@@ -3654,9 +3662,13 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       if (needLots) {
         setCatMsg("Lots / DLUO...");
         try {
-          const lots = await odoo.searchRead(session,"stock.lot",
+          // use_expiration_date est un champ de PRODUIT, pas de lot : selon la
+          // version il n'existe pas sur stock.lot et fait échouer la requête, donc
+          // vide les colonnes Lots / DLUO sans message.
+          const lots = await odoo.searchRead(session, M("MODEL_LOT"),
             [["product_id","in",ids]],
-            ["product_id","name","expiration_date","use_expiration_date"],
+            await odoo.availableFields(session, M("MODEL_LOT"),
+              ["product_id","name","expiration_date","use_date","use_expiration_date"]),
             ids.length*10
           );
           const lotsByProd: Record<number,{name:string;exp:string}[]> = {};

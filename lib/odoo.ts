@@ -254,7 +254,10 @@ function translateMlFields(fields: string[], shape: compat.StockShape): string[]
     if (f === "qty_done" || f === "reserved_uom_qty") { touched = true; continue; }
     out.add(f);
   }
-  if (touched) { out.add("quantity"); out.add("picked"); }
+  // `state` est ajouté d'office : sur une ligne terminée, la quantité réalisée se
+  // lit directement dans `quantity` (voir lineDone). Sans lui, tout l'historique
+  // serait compté à zéro.
+  if (touched) { out.add("quantity"); out.add("picked"); out.add("state"); }
   return Array.from(out);
 }
 
