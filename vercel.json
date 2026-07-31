@@ -1,16 +1,4 @@
 {
-  "$comment": [
-    "ignoreCommand : evite de construire DEUX FOIS le meme commit.",
-    "Les projets wms-scanner (production) et wms-scanner19 (test) sont branches sur",
-    "le meme depot GitHub : sans filtre, chaque push declenche un build dans les deux.",
-    "Sur l'offre Hobby un seul build tourne a la fois, ce qui doublait l'attente et",
-    "rendait difficile de savoir quel deploiement on regardait.",
-    "Le fichier etant partage par les deux projets, on distingue via VERCEL_PROJECT_ID.",
-    "Convention Vercel a l'envers : sortie 1 = on construit, sortie 0 = on ignore.",
-    "  wms-scanner   (prj_nKAa...) -> ne construit que main",
-    "  wms-scanner19 (prj_6Rg1...) -> ne construit que odoo19",
-    "Tout autre projet construit normalement."
-  ],
   "ignoreCommand": "bash -c 'if [ \"$VERCEL_PROJECT_ID\" = \"prj_nKAa9L0hiEGRPLZhvsFSMKTrrfwk\" ]; then ! [ \"$VERCEL_GIT_COMMIT_REF\" = \"main\" ]; elif [ \"$VERCEL_PROJECT_ID\" = \"prj_6Rg1yVpj9lQmLnblujB6r3KtOHqk\" ]; then ! [ \"$VERCEL_GIT_COMMIT_REF\" = \"odoo19\" ]; else false; fi'",
   "functions": {
     "api/extract.py": {
