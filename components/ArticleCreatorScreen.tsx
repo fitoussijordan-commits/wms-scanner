@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import * as odoo from "@/lib/odoo";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
+import MeaImportScreen from "@/components/MeaImportScreen";
 import { useScannerListener } from "@/lib/useScannerListener";
 
 // ─── Données de codification (extraites du fichier Excel _Listes) ─────────────
@@ -124,7 +125,7 @@ interface Props {
 }
 
 export default function ArticleCreatorScreen({ session, onBack, onToast, initialTab = "creation" }: Props) {
-  const [tab, setTab] = useState<"creation" | "logistique" | "seuils" | "nonvendable" | "abloquer">(initialTab);
+  const [tab, setTab] = useState<"creation" | "logistique" | "seuils" | "nonvendable" | "abloquer" | "mea">(initialTab);
 
   const TAB_LABELS: Record<string, string> = {
     creation: "Création article",
@@ -132,6 +133,7 @@ export default function ArticleCreatorScreen({ session, onBack, onToast, initial
     seuils: "Seuils d'alerte",
     nonvendable: "Stock non vendable",
     abloquer: "Stock à bloquer",
+    mea: "Création MEA",
   };
 
   return (
@@ -147,7 +149,7 @@ export default function ArticleCreatorScreen({ session, onBack, onToast, initial
 
       {/* Onglets */}
       <div style={{ display: "flex", background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "0 16px", overflowX: "auto" }}>
-        {(["creation", "logistique", "seuils", "nonvendable", "abloquer"] as const).map(t => (
+        {(["creation", "logistique", "seuils", "nonvendable", "abloquer", "mea"] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -172,7 +174,9 @@ export default function ArticleCreatorScreen({ session, onBack, onToast, initial
         ? <SeuilsTab   session={session} onToast={onToast} />
         : tab === "nonvendable"
         ? <NonVendableTab session={session} onToast={onToast} />
-        : <ABloquerTab session={session} onToast={onToast} />
+        : tab === "abloquer"
+        ? <ABloquerTab session={session} onToast={onToast} />
+        : <MeaImportScreen session={session} onToast={onToast} />
       }
     </div>
   );

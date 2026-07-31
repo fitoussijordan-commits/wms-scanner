@@ -4785,6 +4785,95 @@ export async function createProductTemplate(session: OdooSession, data: {
   return create(session, M("MODEL_PRODUCT_TEMPLATE"), vals);
 }
 
+// ══════════════════════════════════════════
+// CRÉATION APPARIÉE MEA — code 7 + code AV + nomenclature kit
+// ══════════════════════════════════════════
+
+/**
+ * Cherche des articles par référence exacte, actifs ET archivés.
+ *
+ * Inclure les archivés est indispensable avant une création : Odoo refuse deux
+ * articles avec la même référence interne, y compris si l'existant est archivé.
+ * Sans ce contrôle, l'écran annoncerait « à créer » puis échouerait à la
+ * validation, après avoir déjà créé la moitié du lot.
+ */
+export async function findProductsByRefs(
+  session: OdooSession, refs: string[],
+): Promise<Record<string, { id: number; tmplId: number; name: string; active: boolean }>> {
+  const out: Record<string, { id: number; tmplId: number; name: string; active: boolean }> = {};
+  const clean = Array.from(new Set(refs.map(r => r.trim()).filter(Boolean)));
+  if (!clean.length) return out;
+  const rows = await searchRead(
+    session, M("MODEL_PRODUCT"),
+    [["default_code", "in", clean], ["active", "in", [true, false]]],
+    ["id", "default_code", "name", "active", "product_tmpl_id"],
+    clean.length * 2,
+  );
+  for (const p of rows) {
+    if (!p.default_code) continue;
+    out[String(p.default_code).trim()] = {
+      id: p.id,
+      tmplId: Array.isArray(p.product_tmpl_id) ? p.product_tmpl_id[0] : p.product_tmpl_id,
+      name: p.name || "",
+      active: p.active !== false,
+    };
+  }
+  return out;
+}
+
+/** Réglages repris d'un article de référence, pour ne rien figer dans le code. */
+export interface ProductDefaults { categId: number | null; uomId: number | null }
+
+/**
+ * Lit la catégorie et l'unité d'un article existant, qui sert de modèle.
+ * Préféré à des valeurs écrites en dur : si la catégorie change dans Odoo, les
+ * nouveaux articles suivent sans qu'on ait à retoucher le code.
+ */
+export async function getProductDefaults(session: OdooSession, ref: string): Promise<ProductDefaults> {
+  const rows = await searchRead(
+    session, M("MODEL_PRODUCT"),
+    [["default_code", "=", ref.trim()], ["active", "in", [true, false]]],
+    ["id", "categ_id", "uom_id"], 1,
+  );
+  const p = rows[0];
+  if (!p) return { categId: null, uomId: null };
+  return {
+    categId: Array.isArray(p.categ_id) ? p.categ_id[0] : (p.categ_id || null),
+    uomId: Array.isArray(p.uom_id) ? p.uom_id[0] : (p.uom_id || null),
+  };
+}
+
+/**
+ * Nomenclature de type KIT sur un article, avec un composant unique.
+ *
+ * En Odoo un kit se déclare par type = "phantom" : à la sortie, l'article se
+ * décompose en ses composants au lieu de déclencher un ordre de fabrication.
+ * C'est exactement le comportement décrit par l'écran Odoo : « Une nomenclature
+ * de type kit est utilisée pour séparer l'article en ses composants ».
+ */
+export async function createKitBom(
+  session: OdooSession,
+  productTmplId: number,
+  componentProductId: number,
+  componentQty = 1,
+): Promise<number> {
+  return await create(session, M("MODEL_MRP_BOM"), {
+    product_tmpl_id: productTmplId,
+    product_qty: 1,
+    type: "phantom",
+    bom_line_ids: [[0, 0, { product_id: componentProductId, product_qty: componentQty }]],
+  }) as number;
+}
+
+/** Nomenclature déjà présente sur cet article ? Évite d'en créer une seconde. */
+export async function hasBom(session: OdooSession, productTmplId: number): Promise<boolean> {
+  const rows = await searchRead(
+    session, M("MODEL_MRP_BOM"),
+    [["product_tmpl_id", "=", productTmplId]], ["id"], 1,
+  );
+  return rows.length > 0;
+}
+
 /** Recherche des produits par liste de références (default_code) ou mots-clés.
  *  Retourne id, default_code, name, temp_min_quantity.
  */
