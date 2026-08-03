@@ -1067,9 +1067,23 @@ export async function getPickingReportList(session: OdooSession): Promise<{ id: 
 }
 
 const PREP_REPORT_KEY = "wms_prep_report_name";
+
+// Rapport imposé à tous les postes, chargé depuis Supabase au démarrage.
+// Prioritaire sur le réglage local : c'est tout l'intérêt d'un réglage partagé.
+// Tant qu'il n'est pas chargé (null), on garde le comportement d'avant, ce qui
+// évite un écran bloqué si Supabase est injoignable.
+let _sharedPrepReport: string | null = null;
+
+export function setSharedPrepReportName(name: string | null) {
+  _sharedPrepReport = name && name.trim() ? name.trim() : null;
+}
+
 export function getSavedPrepReportName(): string {
+  if (_sharedPrepReport) return _sharedPrepReport;
   try { return localStorage.getItem(PREP_REPORT_KEY) || M("MODEL_REPORT_PICKING"); } catch { return M("MODEL_REPORT_PICKING"); }
 }
+
+/** Mémorise localement. Le partage vers les autres postes se fait à part. */
 export function savePrepReportName(reportName: string): void {
   try { localStorage.setItem(PREP_REPORT_KEY, reportName); } catch {}
 }

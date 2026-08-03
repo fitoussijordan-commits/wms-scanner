@@ -195,6 +195,37 @@ export async function loadPrintConfigs(): Promise<Record<string, WmsPrintConfig>
   return Object.fromEntries((data || []).map((r: WmsPrintConfig) => [r.type, r]));
 }
 
+/**
+ * RAPPORT ODOO PARTAGÉ PAR TOUS LES POSTES.
+ *
+ * L'imprimante et le format d'étiquette étaient déjà partagés (table
+ * wms_print_config), mais le CHOIX DU RAPPORT restait dans le navigateur de
+ * chacun. Conséquence vécue lors de la migration Odoo 19 : le rapport
+ * personnalisé a cessé de fonctionner, l'administrateur en a choisi un autre
+ * sur son poste, et tous les autres ont continué d'échouer à l'impression sans
+ * comprendre pourquoi.
+ *
+ * La clé passe par cfgKey : une base de test ne peut donc pas imposer son
+ * rapport à la production.
+ */
+export async function loadSharedReportName(type: string): Promise<string | null> {
+  if (!supabaseConfigured) return null;
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value")
+      .eq("key", cfgKey(`report_name_${type}`)).single();
+    const v = (data?.value || "").trim();
+    return v || null;
+  } catch { return null; }
+}
+
+export async function saveSharedReportName(type: string, reportName: string): Promise<void> {
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: cfgKey(`report_name_${type}`), value: reportName.trim(), updated_at: new Date().toISOString() },
+    { onConflict: "key" },
+  );
+  if (error) throw new Error(error.message);
+}
+
 export async function savePrintConfig(
   type: string,
   printerId: number | null,

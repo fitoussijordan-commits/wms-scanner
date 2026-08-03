@@ -1671,6 +1671,11 @@ export default function Page() {
         const [fo, mo] = await Promise.all([sbase.loadFieldOverrides(), sbase.loadModelOverrides()]);
         fieldMap.setFieldOverrides(fo);
         fieldMap.setModelOverrides(mo);
+        // Rapport d'impression imposé par l'administrateur, commun à tous les
+        // postes. Chargé ici pour que le premier clic sur Imprimer l'utilise déjà.
+        sbase.loadSharedReportName("prep")
+          .then(n => odoo.setSharedPrepReportName(n))
+          .catch(() => { /* Supabase indisponible : on garde le réglage local */ });
       } catch (e) {
         console.warn("Chargement du mapping Odoo échoué, valeurs par défaut utilisées.", e);
       }
@@ -12543,7 +12548,22 @@ function SettingsScreen({ onBack, session, isDark, onToggleDark }: { onBack: () 
                           ) : (
                             <div style={{ display: "flex", flexDirection: "column" as const, gap: 5 }}>
                               {reportList.map(r => (
-                                <button key={r.id} onClick={() => { setSelectedReport(r.report_name); odoo.savePrepReportName(r.report_name); setMsg(`✓ ${r.name}`); setTimeout(() => setMsg(""), 2000); }}
+                                <button key={r.id} onClick={() => {
+                                    setSelectedReport(r.report_name);
+                                    odoo.savePrepReportName(r.report_name);
+                                    // Un administrateur règle POUR TOUT LE MONDE : le choix part dans
+                                    // Supabase et s'impose aux autres postes à leur prochain chargement.
+                                    // Un non-administrateur ne change que son propre poste — sans quoi
+                                    // n'importe qui pourrait modifier l'impression de tout l'entrepôt.
+                                    if (session && odoo.isAdmin(session)) {
+                                      odoo.setSharedPrepReportName(r.report_name);
+                                      sbase.saveSharedReportName("prep", r.report_name)
+                                        .then(() => { setMsg(`✓ ${r.name} — appliqué à tous les postes`); setTimeout(() => setMsg(""), 3000); })
+                                        .catch((e: any) => setMsg(`✓ ${r.name} (ce poste seulement — partage échoué : ${e.message})`));
+                                      return;
+                                    }
+                                    setMsg(`✓ ${r.name} (ce poste seulement)`); setTimeout(() => setMsg(""), 2500);
+                                  }}
                                   style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: selectedReport === r.report_name ? C.blueSoft : C.bg, border: `1.5px solid ${selectedReport === r.report_name ? C.blue : C.border}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, color: C.text }}>
                                   <div style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${selectedReport === r.report_name ? C.blue : C.border}`, background: selectedReport === r.report_name ? C.blue : "transparent", flexShrink: 0 }} />
                                   <div>

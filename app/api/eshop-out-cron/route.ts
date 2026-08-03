@@ -321,6 +321,27 @@ async function fillPickingShippingDate(s: OSess, orderId: number, date: string):
   return toFill.length;
 }
 
+// ─── Compatibilité Odoo 16 / 19 sur les lignes de mouvement ─────────────────
+//
+// Ce cron possède ses PROPRES helpers RPC et ne passe pas par lib/odoo.ts : il
+// ne bénéficie donc d'aucune des traductions mises en place côté application.
+// Depuis Odoo 17, reserved_uom_qty et qty_done n'existent plus (fusionnés en
+// quantity + picked). Le cron lisait ces champs : la requête échouait, la
+// validation du PICK et du OUT ne se faisait plus, et les commandes e-shop
+// restaient à l'état préparé sans que rien ne soit expédié.
+let _mlMerged: boolean | null = null;
+
+async function moveLineMerged(s: OSess): Promise<boolean> {
+  if (_mlMerged !== null) return _mlMerged;
+  try {
+    const f = await odooCall(s, "stock.move.line", "fields_get", [], { attributes: ["type"] });
+    _mlMerged = !!(f && typeof f === "object" && "quantity" in f && "picked" in f);
+  } catch {
+    _mlMerged = false; // repli sur l'ancien modèle : comportement historique
+  }
+  return _mlMerged;
+}
+
 // ─── Validation strict pick + out (identique à validateOrderPickings) ─────
 
 async function validateOrderPickings(s: OSess, orderId: number): Promise<{ validated: string[]; failed: { name: string; error: string }[] }> {
@@ -334,12 +355,23 @@ async function validateOrderPickings(s: OSess, orderId: number): Promise<{ valid
   for (const p of picks) {
     try {
       try { await odooCall(s, "stock.picking", "action_assign", [[p.id]]); } catch {}
+      const merged = await moveLineMerged(s);
       const mls = await odooSearch(s, "stock.move.line", [["picking_id", "=", p.id], ["state", "not in", ["done", "cancel"]]],
-        ["id", "reserved_uom_qty", "qty_done"], 500);
+        merged ? ["id", "quantity", "picked"] : ["id", "reserved_uom_qty", "qty_done"], 500);
       for (const ml of mls) {
-        const want = ml.reserved_uom_qty || 0;
-        if (want > 0 && (ml.qty_done || 0) < want) {
-          try { await odooWrite(s, "stock.move.line", [ml.id], { qty_done: want }); } catch {}
+        if (merged) {
+          // Modèle fusionné : `quantity` porte déjà la réservation, il suffit de
+          // marquer la ligne comme prélevée. Écrire une quantité identique serait
+          // inutile et risquerait d'écraser un ajustement fait dans Odoo.
+          const q = Number(ml.quantity) || 0;
+          if (q > 0 && !ml.picked) {
+            try { await odooWrite(s, "stock.move.line", [ml.id], { picked: true }); } catch {}
+          }
+        } else {
+          const want = ml.reserved_uom_qty || 0;
+          if (want > 0 && (ml.qty_done || 0) < want) {
+            try { await odooWrite(s, "stock.move.line", [ml.id], { qty_done: want }); } catch {}
+          }
         }
       }
       // Validation stricte : si Odoo réclame un reliquat (stock insuffisant), on lève une erreur.
