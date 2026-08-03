@@ -4945,6 +4945,108 @@ export function cleanPartnerLabel(display: string): string {
   return gardes.join(", ");
 }
 
+// ══════════════════════════════════════════
+// CONTRÔLE DU DESTINATAIRE AVANT REMISE AU TRANSPORTEUR
+// ══════════════════════════════════════════
+//
+// TNT refuse le nom du destinataire au-delà de 32 caractères, et rejette
+// l'apostrophe. Le module Odoo transmet le nom brut : l'envoi échoue APRÈS que
+// les colis ont été faits et le bon validé — le pire moment.
+//
+// On contrôle donc AVANT. Le WMS ne corrige rien tout seul : un nom tronqué se
+// retrouverait sur les étiquettes, les factures et toute la fiche client. Il
+// propose une version conforme que l'opérateur relit et ajuste.
+
+/** Limite imposée par TNT sur le nom du destinataire. */
+export const RECIPIENT_MAX = 32;
+
+/** Un champ transmis au transporteur, avec son état. */
+export interface RecipientField {
+  /** Nom technique Odoo — c'est lui qu'on réécrira. */
+  field: "name" | "street" | "street2";
+  /** Libellé côté TNT, celui qui apparaît dans le message d'erreur. */
+  tntField: string;
+  label: string;
+  value: string;
+  ok: boolean;
+  suggestion: string;
+}
+
+export interface RecipientCheck {
+  partnerId: number;
+  name: string;
+  champs: RecipientField[];
+  /** Champs à corriger — vide si l'envoi passera. */
+  problemes: RecipientField[];
+  ok: boolean;
+}
+
+/**
+ * Version acceptable par le transporteur.
+ *
+ * L'apostrophe devient une ESPACE et non rien : « L'OLIVIER » donne
+ * « L OLIVIER », lisible par le livreur, là où « LOLIVIER » ne veut plus rien
+ * dire. Et la troncature s'arrête sur un mot entier quand c'est possible —
+ * couper « PARIS 15 » en « PARIS 1 » induirait en erreur sur l'adresse.
+ */
+export function sanitizeRecipient(name: string): string {
+  const propre = (name || "")
+    .replace(/['’`]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (propre.length <= RECIPIENT_MAX) return propre;
+
+  const coupe = propre.slice(0, RECIPIENT_MAX);
+  const dernierEspace = coupe.lastIndexOf(" ");
+  // On ne recule jusqu'au mot précédent que si ça ne sacrifie pas trop de texte,
+  // sinon une coupure nette vaut mieux qu'un nom amputé de moitié.
+  if (dernierEspace >= RECIPIENT_MAX - 12) return coupe.slice(0, dernierEspace).trim();
+  return coupe.trim();
+}
+
+/**
+ * Contrôle les champs envoyés au transporteur sur l'adresse de LIVRAISON.
+ *
+ * TNT applique la limite de 32 caractères à chaque champ séparément — le nom,
+ * mais aussi les deux lignes d'adresse. Constaté en production : après avoir
+ * corrigé le nom, l'envoi a été refusé sur `receiver.address2`, une ligne de
+ * 46 caractères. Vérifier le seul nom ne servait donc qu'à découvrir le
+ * problème suivant à l'essai d'après.
+ */
+export async function checkRecipient(session: OdooSession, partnerId: number): Promise<RecipientCheck | null> {
+  if (!partnerId) return null;
+  const rows = await searchRead(session, M("MODEL_PARTNER"),
+    [["id", "=", partnerId]], ["id", "name", "street", "street2"], 1);
+  const p = rows[0];
+  if (!p) return null;
+
+  const def: { field: RecipientField["field"]; tntField: string; label: string }[] = [
+    { field: "name",    tntField: "receiver.name",     label: "Nom du destinataire" },
+    { field: "street",  tntField: "receiver.address1", label: "Adresse ligne 1" },
+    { field: "street2", tntField: "receiver.address2", label: "Adresse ligne 2" },
+  ];
+
+  const champs: RecipientField[] = def.map(d => {
+    const value = String(p[d.field] || "");
+    const conforme = value.length <= RECIPIENT_MAX && !/['’`]/.test(value);
+    return { ...d, value, ok: conforme, suggestion: sanitizeRecipient(value) };
+  });
+
+  // Un champ vide ne pose jamais problème : on ne signale que ce qui bloquera.
+  const problemes = champs.filter(c => c.value && !c.ok);
+  return { partnerId, name: String(p.name || ""), champs, problemes, ok: problemes.length === 0 };
+}
+
+/** Applique les valeurs relues par l'opérateur sur l'adresse de livraison. */
+export async function updateRecipientFields(
+  session: OdooSession, partnerId: number, vals: Partial<Record<RecipientField["field"], string>>,
+): Promise<void> {
+  const propre: Record<string, string> = {};
+  for (const [k, v] of Object.entries(vals)) if (typeof v === "string") propre[k] = v.trim();
+  if (!Object.keys(propre).length) return;
+  await write(session, M("MODEL_PARTNER"), [partnerId], propre);
+}
+
 /** Recherche des produits par liste de références (default_code) ou mots-clés.
  *  Retourne id, default_code, name, temp_min_quantity.
  */
