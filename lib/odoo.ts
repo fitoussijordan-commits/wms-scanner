@@ -2108,6 +2108,35 @@ export async function packAndShipOut(
 
   await Promise.all(tasks);
 
+  // ── 4c. Date d'expédition : jamais dans le passé ────────────────────────────
+  //
+  // Le transporteur refuse une expédition datée d'hier — TNT répond
+  // « The field 'shippingDate' is not valid. » et l'envoi échoue.
+  //
+  // Le cas est banal : une commande préparée physiquement un jour et expédiée le
+  // lendemain garde la date prévue de sa préparation. Le champ Studio
+  // « Date d'expédition prévue » ne corrige rien, ce n'est pas celui que le
+  // module transporteur lit (vérifié sur S71761 : modifier la Date prévue du OUT
+  // débloque l'envoi, le champ Studio non).
+  //
+  // On ne repousse QUE si la date est révolue, et jamais au-delà : une date
+  // future volontaire (expédition programmée) est respectée telle quelle.
+  try {
+    const [cur] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", outPickingId]], ["scheduled_date"], 1);
+    const prevue = cur?.scheduled_date ? new Date(String(cur.scheduled_date).replace(" ", "T") + "Z") : null;
+    const debutDuJour = new Date();
+    debutDuJour.setUTCHours(0, 0, 0, 0);
+    if (prevue && prevue < debutDuJour) {
+      const maintenant = new Date().toISOString().replace("T", " ").slice(0, 19);
+      await write(session, M("MODEL_PICKING"), [outPickingId], { scheduled_date: maintenant });
+      console.warn(`[WMS] ${pickingName} : date prévue ${cur.scheduled_date} révolue, repoussée à ${maintenant} (refus transporteur sinon)`);
+    }
+  } catch (e: any) {
+    // Confort : si la lecture échoue, on laisse l'expédition suivre son cours
+    // plutôt que de bloquer un emballage pour une date.
+    console.warn("[WMS] Date d'expédition non vérifiée :", e?.message || e);
+  }
+
   // ── 5. BL lancé EN PARALLÈLE de la validation ───────────────────────────────
   //     La génération du PDF côté Odoo (wkhtmltopdf) coûte 1 à 3 s ; la faire
   //     pendant button_validate au lieu d'après supprime ce temps du ressenti.
