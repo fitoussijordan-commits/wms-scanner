@@ -1643,7 +1643,10 @@ export async function createInternalTransfer(
     picking_type_id: pickingTypes[0].id,
     location_id: sourceLocationId,
     location_dest_id: destLocationId,
-    [F("PICKING_MOVE_IDS")]: await Promise.all(lines.map(async (line) => [0, 0,
+    // Nom résolu sur la base connectée : move_ids_without_package a été renommé
+    // en move_ids. Contrairement aux lectures, une écriture ne pardonne pas —
+    // Odoo refuse la clé inconnue et le transfert n'est pas créé.
+    [await pickingMoveField(session)]: await Promise.all(lines.map(async (line) => [0, 0,
       await moveVals(session, {
         description: line.productName, productId: line.productId, qty: line.qty,
         uomId: line.uomId, locationId: sourceLocationId, locationDestId: destLocationId,
@@ -1725,7 +1728,10 @@ export async function createMultiDestTransfer(
     picking_type_id: pickingTypes[0].id,
     location_id: sourceLocationId,
     location_dest_id: fallbackDestLocationId,
-    [F("PICKING_MOVE_IDS")]: await Promise.all(lines.map(async (line) => [0, 0,
+    // Nom résolu sur la base connectée : move_ids_without_package a été renommé
+    // en move_ids. Contrairement aux lectures, une écriture ne pardonne pas —
+    // Odoo refuse la clé inconnue et le transfert n'est pas créé.
+    [await pickingMoveField(session)]: await Promise.all(lines.map(async (line) => [0, 0,
       await moveVals(session, {
         description: line.productName, productId: line.productId, qty: line.qty,
         uomId: line.uomId, locationId: sourceLocationId,
