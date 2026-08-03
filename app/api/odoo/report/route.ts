@@ -77,6 +77,34 @@ async function addDateOverlay(pdfBytes: ArrayBuffer, overlayDate?: string, overl
   }
 }
 
+/**
+ * Message d'erreur exploitable pour un rapport PDF Odoo.
+ *
+ * Odoo renvoie une PAGE HTML complète en cas d'échec. La déverser telle quelle
+ * donnait « Odoo PDF 500: <html> <head> <title>Internal Server Error… », qui
+ * n'apprend rien : ni quel rapport a échoué, ni quoi faire.
+ *
+ * Le cas courant après un changement de version : le rapport enregistré n'existe
+ * plus sous ce nom. On nomme donc le rapport et on indique où le changer.
+ */
+function reportError(status: number, corps: string, reportName: string, recordId: number | string): string {
+  const estHtml = /<html|<!doctype/i.test(corps);
+  const detail = estHtml
+    ? (corps.match(/<title>([^<]+)<\/title>/i)?.[1] || "erreur interne Odoo").trim()
+    : corps.substring(0, 200).trim();
+
+  if (status === 404) {
+    return `Rapport « ${reportName} » introuvable dans Odoo. `
+         + `Choisis-en un autre dans Réglages → Bon de préparation.`;
+  }
+  if (status === 500) {
+    return `Odoo n'a pas pu générer le rapport « ${reportName} » (${detail}). `
+         + `Ce nom a souvent changé lors d'une montée de version : `
+         + `sélectionne le bon rapport dans Réglages → Bon de préparation.`;
+  }
+  return `Odoo rapport ${status} sur « ${reportName} » (transfert ${recordId}) : ${detail}`;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { odooUrl, sessionId, reportName, recordId, overlayDate, overlayIndex, overlayTotal } = await req.json();
@@ -95,7 +123,7 @@ export async function POST(req: NextRequest) {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       return NextResponse.json(
-        { error: `Odoo rapport ${res.status}: ${text.substring(0, 200)}` },
+        { error: reportError(res.status, text, reportName, recordId) },
         { status: res.status }
       );
     }
