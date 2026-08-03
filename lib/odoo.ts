@@ -1268,12 +1268,40 @@ export async function storableClause(session: OdooSession, model: string): Promi
 }
 
 /** Retire d'une liste de champs ceux qui n'existent pas sur le modèle. */
+/**
+ * Renommages connus : un champ absent qui a un SUCCESSEUR doit être remplacé,
+ * pas supprimé.
+ *
+ * Sans cela, « Commandes en attente » affichait 0 article partout : le champ
+ * move_ids_without_package était retiré parce qu'il n'existe plus en v19, donc
+ * plus rien n'était demandé, donc rien à compter — et aucune erreur pour le
+ * signaler. Supprimer un champ de confort est sans conséquence ; supprimer un
+ * champ renommé fait disparaître la donnée en silence.
+ */
+const RENOMMAGES: Record<string, string[]> = {
+  move_ids_without_package: ["move_ids"],
+  move_line_ids_without_package: ["move_line_ids"],
+};
+
 export async function availableFields(session: OdooSession, model: string, wanted: string[]): Promise<string[]> {
   const known = await knownFields(session, model);
   if (!known) return wanted;               // inconnu → comportement d'origine
-  const kept = wanted.filter(f => known.has(f));
-  const dropped = wanted.filter(f => !known.has(f));
-  if (dropped.length) console.warn(`[WMS] Champs absents de ${model}, ignorés :`, dropped.join(", "));
+
+  const kept: string[] = [];
+  const dropped: string[] = [];
+  const remplaces: string[] = [];
+  for (const f of wanted) {
+    if (known.has(f)) { kept.push(f); continue; }
+    const successeur = (RENOMMAGES[f] || []).find(alt => known.has(alt));
+    if (successeur) {
+      if (!kept.includes(successeur)) kept.push(successeur);
+      remplaces.push(`${f} → ${successeur}`);
+    } else {
+      dropped.push(f);
+    }
+  }
+  if (remplaces.length) console.warn(`[WMS] Champs renommés sur ${model} :`, remplaces.join(", "));
+  if (dropped.length)   console.warn(`[WMS] Champs absents de ${model}, ignorés :`, dropped.join(", "));
   return kept.length ? kept : wanted;
 }
 
