@@ -3470,7 +3470,7 @@ export default function Page() {
             </div>
             <div style={{ fontSize: 11.5, opacity: 0.9, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {pausedPicking._progress ? `${pausedPicking._progress.doneLines}/${pausedPicking._progress.totalLines} lignes · ` : ""}
-              {Array.isArray(pausedPicking.partner_id) ? pausedPicking.partner_id[1] : "préparation en cours"}
+              {Array.isArray(pausedPicking.partner_id) ? odoo.cleanPartnerLabel(pausedPicking.partner_id[1]) : "préparation en cours"}
             </div>
           </div>
           <button
@@ -4102,7 +4102,7 @@ export default function Page() {
                 </div>
                 {pendingConfirmPicking.partner_id && (
                   <div style={{ fontSize: 18, fontWeight: 700, color: "#2563eb", marginBottom: siblings.length > 0 ? 12 : 20 }}>
-                    {pendingConfirmPicking.partner_id[1]}
+                    {odoo.cleanPartnerLabel(pendingConfirmPicking.partner_id[1])}
                   </div>
                 )}
 
@@ -9999,7 +9999,7 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
                       <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</span>
                       {p.carrier_id && <span style={{ fontSize: 11, color: "#7c3aed", background: "#f3e8ff", padding: "2px 6px", borderRadius: 4, fontWeight: 600 }}>{p.carrier_id[1]}</span>}
                     </div>
-                    {p.partner_id && <div style={{ fontSize: 12, color: C.textMuted }}>{p.partner_id[1]}</div>}
+                    {p.partner_id && <div style={{ fontSize: 12, color: C.textMuted }}>{odoo.cleanPartnerLabel(p.partner_id[1])}</div>}
                     <div style={{ display: "flex", gap: 8, marginTop: 2, flexWrap: "wrap" as const }}>
                       {p.origin && <span style={{ fontSize: 11, color: C.textMuted }}>Origine : {p.origin}</span>}
                       {p.carrier_tracking_ref && <span style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>🚚 {p.carrier_tracking_ref}</span>}

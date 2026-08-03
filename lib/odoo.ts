@@ -4917,6 +4917,34 @@ export async function hasBom(session: OdooSession, productTmplId: number): Promi
   return rows.length > 0;
 }
 
+/**
+ * NOM DE CLIENT LISIBLE.
+ *
+ * Odoo renvoie le nom d'AFFICHAGE d'un contact rattaché à une société sous la
+ * forme « Société, Contact ». Quand les deux portent le même nom — ou que l'un
+ * contient l'autre, ce qui est fréquent avec des libellés du type
+ * « BIO VEYRE - LES COMPTOIRS ... , LES COMPTOIRS ... » — la même chose s'affiche
+ * deux fois de suite et devient illisible sur un écran d'entrepôt.
+ *
+ * On ne retire que la redondance : deux segments réellement différents (une
+ * société et le nom d'un magasin distinct) restent tous les deux affichés, car
+ * l'information sert à identifier le destinataire.
+ */
+export function cleanPartnerLabel(display: string): string {
+  const brut = (display || "").trim();
+  if (!brut) return "";
+  const segments = brut.split(",").map(s => s.trim()).filter(Boolean);
+  const gardes: string[] = [];
+  for (const seg of segments) {
+    const redondant = gardes.some(g =>
+      g.toUpperCase() === seg.toUpperCase() ||
+      g.toUpperCase().includes(seg.toUpperCase()) ||
+      seg.toUpperCase().includes(g.toUpperCase()));
+    if (!redondant) gardes.push(seg);
+  }
+  return gardes.join(", ");
+}
+
 /** Recherche des produits par liste de références (default_code) ou mots-clés.
  *  Retourne id, default_code, name, temp_min_quantity.
  */

@@ -247,7 +247,7 @@ export default function ReturnsScreen({ session, onBack, onToast }: Props) {
           state:            p.state,
           origin:           p.origin || "",
           partnerId:        p.partner_id ? p.partner_id[0] : null,
-          partnerName:      p.partner_id ? p.partner_id[1] : "",
+          partnerName:      p.partner_id ? odoo.cleanPartnerLabel(p.partner_id[1]) : "",
           date:             p.scheduled_date || p[F("PICKING_DATE")] || "",
           locationDestId:   Array.isArray(p.location_dest_id) ? p.location_dest_id[0] : (p.location_dest_id || 0),
           locationDestName: Array.isArray(p.location_dest_id) ? (p.location_dest_id[1] || "") : "",

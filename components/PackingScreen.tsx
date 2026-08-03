@@ -245,7 +245,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         name:        p.name,
         origin:      p.origin || "",
         cdeClient:   Array.isArray(p[F("CLIENT_ORDER")]) ? p[F("CLIENT_ORDER")][1] : (p[F("CLIENT_ORDER")] || ""),
-        partnerName: p.partner_id ? p.partner_id[1] : "",
+        partnerName: p.partner_id ? odoo.cleanPartnerLabel(p.partner_id[1]) : "",
         partnerId:   p.partner_id ? p.partner_id[0] : 0,
         carrierId:   p.carrier_id ? p.carrier_id[1] : "",
         lineCount:   Array.isArray(p[F("PICKING_MOVE_IDS")]) ? p[F("PICKING_MOVE_IDS")].length : 0,
@@ -455,7 +455,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         );
         const outPick = results.find((r: any) => /\/OUT\//i.test(r.name || ""));
         const p = exact || outPick || results[0];
-        openDetail(p.id, p.name, p.partner_id ? p.partner_id[1] : "", p.origin || "",
+        openDetail(p.id, p.name, p.partner_id ? odoo.cleanPartnerLabel(p.partner_id[1]) : "", p.origin || "",
           p.partner_id ? p.partner_id[0] : undefined);
         setScanCode("");
       } else {
