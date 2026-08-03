@@ -205,6 +205,8 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   const [destCheck, setDestCheck] = useState<odoo.RecipientCheck | null>(null);
   const [destEdit,  setDestEdit]  = useState<Record<string, string>>({});
   const [destSaving, setDestSaving] = useState(false);
+  // Transporteur absent du bon : aucune etiquette ne sera demandee.
+  const [noCarrier, setNoCarrier] = useState(false);
   const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
   const [loadingGroup,     setLoadingGroup]     = useState(false);
 
@@ -296,12 +298,19 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
       const [moveLines, moves, pickingInfo] = await Promise.all([
         odoo.getPickingMoveLines(session, pickingId),
         odoo.getPickingMoves(session, pickingId),
-        partnerId ? Promise.resolve(null) :
-          odoo.searchRead(session, "stock.picking", [["id", "=", pickingId]],
-            ["id", "partner_id"], 1).then((r: any[]) => r[0] || null),
+        // Toujours relu, même quand le partenaire est déjà connu : c'est ici qu'on
+        // apprend s'il y a un transporteur, et l'absence d'étiquette ne se voit
+        // qu'après validation. Une requête de plus vaut mieux qu'un colis sans
+        // étiquette.
+        odoo.searchRead(session, "stock.picking", [["id", "=", pickingId]],
+          ["id", "partner_id", "carrier_id"], 1).then((r: any[]) => r[0] || null),
       ]);
 
       const resolvedPartnerId = partnerId || (pickingInfo?.partner_id ? pickingInfo.partner_id[0] : 0);
+      // Sans transporteur sur le BON, aucune etiquette ne sera demandee — meme
+      // si la commande en porte un. La propagation commande -> bon peut echouer,
+      // et l'operateur ne s'en apercevait qu'apres validation, colis en main.
+      setNoCarrier(!!pickingInfo && !pickingInfo.carrier_id);
 
       // Contrôle non bloquant : un échec de vérification ne doit pas empêcher
       // d'emballer, il ne fait que priver de l'avertissement.
@@ -841,6 +850,16 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
             Le WMS ne renomme pas de lui-même : un nom tronqué se retrouverait
             sur les étiquettes, les factures et toute la fiche client. Il propose,
             l'opérateur relit et décide. */}
+        {noCarrier && (
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 13, color: "#991b1b" }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠️ Aucun transporteur sur ce bon</div>
+            <div style={{ lineHeight: 1.5 }}>
+              La validation sortira le stock mais <strong>aucune étiquette ne sera demandée</strong>.
+              Vérifie le transporteur dans Odoo avant d&apos;emballer — il peut être présent sur la
+              commande sans être descendu sur le bon.
+            </div>
+          </div>
+        )}
         {destCheck && (
           <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 13, color: "#92400e" }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>
