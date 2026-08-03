@@ -451,6 +451,7 @@ export const MODEL_DEFS = {
   MODEL_BACKORDER_CONFIRM: { default: "stock.backorder.confirmation", label: "Confirmation de reliquat" },
   MODEL_INVENTORY_ADJ_NAME:{ default: "stock.inventory.adjustment.name", label: "Nom d'ajustement d'inventaire" },
   MODEL_SALE_ORDER:        { default: "sale.order",             label: "Commande de vente" },
+  MODEL_ACCOUNT_MOVE:      { default: "account.move",           label: "Facture / pièce comptable" },
   MODEL_PURCHASE_ORDER:    { default: "purchase.order",         label: "Commande d'achat" },
   MODEL_PARTNER:           { default: "res.partner",            label: "Partenaire (client/fournisseur)" },
   MODEL_PARTNER_CATEGORY:  { default: "res.partner.category",   label: "Catégorie de partenaire" },

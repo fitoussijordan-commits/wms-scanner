@@ -17,6 +17,7 @@ import LabelEditor, { generateLabelPDF, LabelTemplate, LabelElement } from "@/co
 import SupplierImportScreen from "@/components/SupplierImportScreen";
 import ArticleCreatorScreen, { SeuilsTab, CreationTab, NonVendableTab, ABloquerTab, LogistiqueTab } from "@/components/ArticleCreatorScreen";
 import MeaImportScreen from "@/components/MeaImportScreen";
+import InvoiceAuditScreen from "@/components/InvoiceAuditScreen";
 import FreeScanScreen from "@/components/FreeScanScreen";
 import InventoryCountScreen from "@/components/InventoryCountScreen";
 import EshopSortiesScreen from "@/components/EshopSortiesScreen";
@@ -1227,7 +1228,7 @@ function WeatherWidget() {
 // (pas d'état supplémentaire perdu au refresh, contrairement à prepDetail/history/settings/done
 // qui ont besoin d'un picking/contexte sélectionné en mémoire). Utilisé pour le deep-link
 // ?screen=... à la fois en lecture (restauration après refresh) et en écriture (sync URL).
-const DEEP_LINK_SCREENS = ["transfer", "prep", "waitingOrders", "packing", "arrival", "eshop", "inventory", "inventoryCount", "freeScan", "negativeStock", "reprintLabel", "productImport", "supplierImport", "returns", "order", "eshopSorties", "locationManager", "imparfaite", "fefo", "manufacturing", "admin"];
+const DEEP_LINK_SCREENS = ["transfer", "prep", "waitingOrders", "packing", "arrival", "eshop", "inventory", "inventoryCount", "freeScan", "negativeStock", "reprintLabel", "productImport", "supplierImport", "returns", "order", "eshopSorties", "locationManager", "imparfaite", "fefo", "manufacturing", "admin", "invoiceAudit"];
 
 // ============================================
 // MAIN APP
@@ -1244,7 +1245,7 @@ export default function Page() {
     setIsDark(val);
   };
 
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager" | "imparfaite" | "fefo" | "manufacturing" | "admin">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager" | "imparfaite" | "fefo" | "manufacturing" | "admin" | "invoiceAudit">("login");
   // true dès qu'on sait s'il y a une session sauvegardée ou non (localStorage, synchrone).
   // Tant que false, on n'affiche PAS le formulaire de connexion même si screen==="login"
   // (valeur initiale par défaut) — ça évite le flash de l'écran de connexion au refresh (F5)
@@ -3161,6 +3162,7 @@ export default function Page() {
     { key: "productImport", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>, label: "Gestion articles", onClick: () => setScreen("productImport"), admin: false, badge: null, badgeColor: "" },
     { key: "supplierImport", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>, label: "Import WALA", onClick: () => setScreen("supplierImport"), admin: true, badge: null, badgeColor: "" },
     { key: "negativeStock", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true, badge: badgeNegStock, badgeColor: "#ef4444" },
+    { key: "invoiceAudit", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>, label: "Factures", onClick: () => setScreen("invoiceAudit"), admin: true, badge: null, badgeColor: "" },
     { key: "reprintLabel", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: false, badge: null, badgeColor: "" },
     { key: "labels", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels"), admin: false, badge: null, badgeColor: "" },
     { key: "locationManager", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>, label: "Gestion emplacements", onClick: () => setScreen("locationManager"), admin: false, badge: null, badgeColor: "" },
@@ -4306,6 +4308,20 @@ export default function Page() {
         )}
         {screen === "negativeStock" && session && odoo.isAdmin(session) && (
           <NegativeStockScreen session={session} onBack={goHome} onToast={showToast} onGoToInventory={(p) => { setInventoryInitProduct(p); setScreen("inventory"); }} />
+        )}
+        {screen === "invoiceAudit" && session && odoo.isAdmin(session) && (
+          <div style={{ padding: isDesktopUI ? 0 : undefined }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "16px 16px 0" }}>
+              <button onClick={goHome} style={{ background: "#f8fafc", border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0f172a" strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+              </button>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Factures</div>
+                <div style={{ fontSize: 12, color: "#475569" }}>Ce que l&apos;automatisation a laissé en brouillon</div>
+              </div>
+            </div>
+            <InvoiceAuditScreen session={session} onToast={showToast} />
+          </div>
         )}
         {screen === "admin" && session && odoo.isAdmin(session) && (
           <AdminScreen session={session} onBack={goHome} onToast={showToast} />

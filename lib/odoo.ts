@@ -5074,6 +5074,81 @@ export async function updateRecipientFields(
   await write(session, M("MODEL_PARTNER"), [partnerId], propre);
 }
 
+// ══════════════════════════════════════════
+// AUDIT DES FACTURES CLIENT
+// ══════════════════════════════════════════
+//
+// L'action automatisée de facturation compare le montant de la facture à celui
+// de la COMMANDE ENTIÈRE. Dès qu'une commande est livrée en plusieurs fois, la
+// facture ne couvre que le livré : l'écart est normal, mais l'action le traite
+// comme une anomalie, envoie une alerte et — surtout — laisse la facture en
+// brouillon sans la comptabiliser ni l'envoyer au client.
+//
+// Cet écran sert à retrouver ces factures et à distinguer les vrais écarts des
+// faux positifs. LECTURE SEULE : rien n'est modifié dans Odoo.
+
+export interface InvoiceAuditRow {
+  id: number;
+  name: string;
+  partner: string;
+  origin: string;
+  amount: number;
+  state: string;
+  date: string;
+  /** Montant de la commande d'origine, si on l'a retrouvée. */
+  orderAmount: number | null;
+  ecart: number | null;
+  brouillon: boolean;
+}
+
+export async function auditInvoices(
+  session: OdooSession, dateFrom: string, dateTo: string,
+): Promise<InvoiceAuditRow[]> {
+  // create_date et non invoice_date : on cherche ce que l'automatisation a
+  // produit un jour donné, pas ce qui est daté de ce jour-là comptablement.
+  const invs = await searchRead(
+    session, M("MODEL_ACCOUNT_MOVE"),
+    [["move_type", "=", "out_invoice"],
+     ["create_date", ">=", `${dateFrom} 00:00:00`],
+     ["create_date", "<=", `${dateTo} 23:59:59`]],
+    ["id", "name", "partner_id", "invoice_origin", "amount_total", "state", "create_date"],
+    2000, "create_date desc",
+  );
+  if (!invs.length) return [];
+
+  // Les commandes d'origine, en une seule requête. invoice_origin peut en
+  // contenir plusieurs, séparées par des virgules.
+  const noms = Array.from(new Set(
+    invs.flatMap((i: any) => String(i.invoice_origin || "").split(",").map((s: string) => s.trim()).filter(Boolean)),
+  ));
+  const montantParCommande: Record<string, number> = {};
+  if (noms.length) {
+    const sos = await searchRead(session, M("MODEL_SALE_ORDER"),
+      [["name", "in", noms]], ["name", "amount_total"], noms.length);
+    for (const so of sos) montantParCommande[so.name] = Number(so.amount_total) || 0;
+  }
+
+  return invs.map((i: any) => {
+    const origines = String(i.invoice_origin || "").split(",").map((s: string) => s.trim()).filter(Boolean);
+    const connues = origines.filter(o => o in montantParCommande);
+    // Somme des commandes : une facture peut en regrouper plusieurs.
+    const orderAmount = connues.length ? connues.reduce((s, o) => s + montantParCommande[o], 0) : null;
+    const amount = Number(i.amount_total) || 0;
+    return {
+      id: i.id,
+      name: i.name || `(brouillon ${i.id})`,
+      partner: Array.isArray(i.partner_id) ? cleanPartnerLabel(i.partner_id[1]) : "",
+      origin: origines.join(", "),
+      amount,
+      state: i.state || "",
+      date: String(i.create_date || "").slice(0, 16).replace("T", " "),
+      orderAmount,
+      ecart: orderAmount === null ? null : Math.round((amount - orderAmount) * 100) / 100,
+      brouillon: i.state === "draft",
+    };
+  });
+}
+
 /** Recherche des produits par liste de références (default_code) ou mots-clés.
  *  Retourne id, default_code, name, temp_min_quantity.
  */
