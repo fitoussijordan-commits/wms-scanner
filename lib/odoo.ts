@@ -1971,6 +1971,15 @@ export interface PackShipResult {
   blPromise:        Promise<{ success: boolean; error?: string }>;
   /** Étiquettes transporteur dès qu'elles arrivent (liste vide si timeout). */
   labelsPromise:    Promise<{ id: number; name: string; datas: string }[]>;
+  /**
+   * Refus du transporteur, s'il y en a un. `null` sinon.
+   *
+   * Indispensable : le bon est validé AVANT l'appel au transporteur. Si celui-ci
+   * refuse — nom ou adresse trop longs par exemple — le stock est sorti et aucune
+   * étiquette n'arrive. Sans ce canal, l'erreur était avalée et l'opérateur
+   * repartait avec un colis sans étiquette, sans savoir pourquoi.
+   */
+  shipErrorPromise: Promise<string | null>;
 }
 
 /** Workflow complet emballage + expédition pour un OUT picking.
@@ -2191,9 +2200,14 @@ export async function packAndShipOut(
     return best;
   };
 
+  // Canal séparé pour le refus transporteur : labelsPromise ne renvoie que des
+  // pièces jointes, elle ne peut pas porter la raison d'une absence.
+  let signalerErreurEnvoi: (e: string | null) => void = () => {};
+  const shipErrorPromise = new Promise<string | null>(r => { signalerErreurEnvoi = r; });
+
   const labelsPromise: Promise<any[]> = !hasCarrier
     // Pas de transporteur → aucune étiquette à attendre, on ne poll même pas.
-    ? Promise.resolve([])
+    ? (signalerErreurEnvoi(null), Promise.resolve([]))
     : (async () => {
         // Odoo appelle normalement send_to_shipper dans button_validate :
         // les étiquettes sont souvent déjà là. Polling serré d'abord.
@@ -2218,14 +2232,26 @@ export async function packAndShipOut(
             alreadyShipped = true;
           }
           if (!alreadyShipped) {
-            try { await callMethod(session, M("MODEL_PICKING"), "send_to_shipper", [[outPickingId]]); } catch {}
+            try {
+              await callMethod(session, M("MODEL_PICKING"), "send_to_shipper", [[outPickingId]]);
+            } catch (e: any) {
+              // On NE masque plus : le refus du transporteur est la seule
+              // explication de l'absence d'étiquette, et l'opérateur doit la voir.
+              signalerErreurEnvoi(safeErrMsg?.(e) || e?.message || String(e));
+            }
           }
         }
 
         // Étiquettes partiellement arrivées (ou envoi relancé) : on attend
         // simplement les suivantes, sans jamais re-solliciter le transporteur.
         const late = await pollLabels(30_000, 1500, nPackages);
-        return late.length >= quick.length ? late : quick;
+        const res = late.length >= quick.length ? late : quick;
+        // Aucune étiquette et aucun refus explicite : on le dit quand même, sinon
+        // l'écran affiche « expédié » pour une expédition qui n'a pas eu lieu.
+        signalerErreurEnvoi(res.length === 0
+          ? "Aucune étiquette reçue du transporteur — vérifie le bon dans Odoo (bouton « Envoyer à l\u2019expéditeur »)"
+          : null);
+        return res;
       })();
 
   return {
@@ -2235,6 +2261,7 @@ export async function packAndShipOut(
     blPrinted:        false,
     blPromise,
     labelsPromise,
+    shipErrorPromise,
   };
 }
 

@@ -578,6 +578,16 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         } : prev));
       });
 
+      // ── 5a. Refus du transporteur ────────────────────────────────────────
+      // Le bon est validé AVANT l'appel au transporteur. Si celui-ci refuse, le
+      // stock est sorti et aucune étiquette n'arrive : l'opérateur DOIT le savoir
+      // tout de suite, sinon le colis part sans étiquette.
+      result.shipErrorPromise.then(msg => {
+        if (!msg) return;
+        setError(`Transporteur : ${msg}`);
+        onToast("⚠ Bon validé mais AUCUNE étiquette — voir le message", "error");
+      }).catch(() => {});
+
       // ── 5. Étiquettes transporteur, en tâche de fond ─────────────────────
       result.labelsPromise.then(async rawAtts => {
         // Dédoublonnage avant impression : par id, puis par contenu du PDF.
