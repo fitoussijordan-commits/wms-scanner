@@ -342,6 +342,37 @@ function translateMlDomain(domain: any[], shape: compat.StockShape): any[] {
   });
 }
 
+/**
+ * Alias du champ « mouvements du transfert », commun à searchRead et
+ * searchReadAll.
+ *
+ * Factorisé parce que la divergence entre les deux a coûté cher : l'alias
+ * n'existait que dans searchRead, si bien que « Commandes en attente », qui
+ * passe par searchReadAll, affichait 0 article partout. Deux chemins de lecture
+ * doivent traduire à l'identique, sinon la correction n'en couvre qu'un.
+ */
+async function aliasChampMouvements(session: OdooSession, model: string, fields: string[]) {
+  if (!isPickingModel(model)) return { fields, alias: null as null | { from: string; to: string } };
+  const declared = F("PICKING_MOVE_IDS");
+  const real = await pickingMoveField(session);
+  if (real === declared || !(fields.includes(declared) || fields.includes(real))) {
+    return { fields, alias: null };
+  }
+  return {
+    fields: fields.map(x => (x === declared ? real : x)),
+    alias: { from: real, to: declared },
+  };
+}
+
+/** Réexpose le nom historique sur les enregistrements renvoyés. */
+function appliquerAlias(rows: any[], alias: { from: string; to: string } | null) {
+  if (!alias || !Array.isArray(rows)) return rows;
+  for (const r of rows) {
+    if (r && typeof r === "object" && alias.from in r) r[alias.to] = r[alias.from];
+  }
+  return rows;
+}
+
 export async function searchRead(session: OdooSession, model: string, domain: any[], fields: string[], limit = 0, order = "") {
   let d = domain, f = fields;
   if (isMoveLineModel(model)) {
@@ -357,27 +388,16 @@ export async function searchRead(session: OdooSession, model: string, domain: an
   // L'alias est posé que l'appelant ait passé l'ancien nom OU le nouveau : selon
   // qu'il soit passé ou non par availableFields, ce n'est pas le même. Ne traiter
   // qu'un seul des deux cas laisserait l'autre silencieusement sans données.
-  let moveAlias: { from: string; to: string } | null = null;
-  if (isPickingModel(model)) {
-    const declared = F("PICKING_MOVE_IDS");
-    const real = await pickingMoveField(session);
-    if (real !== declared && (f.includes(declared) || f.includes(real))) {
-      f = f.map(x => (x === declared ? real : x));
-      moveAlias = { from: real, to: declared };
-    }
-  }
+  const aliasRes = await aliasChampMouvements(session, model, f);
+  f = aliasRes.fields;
+  const moveAlias = aliasRes.alias;
 
   const rows = await call(session, "/web/dataset/call_kw", { model, method: "search_read", args: [d], kwargs: { fields: f, limit, order } });
   // Lignes de mouvement : on rétablit les noms historiques (voir normalizeMoveLines).
   if (isMoveLineModel(model)) {
     return normalizeMoveLines(rows, await stockShape(session));
   }
-  if (moveAlias && Array.isArray(rows)) {
-    for (const r of rows) {
-      if (r && typeof r === "object" && moveAlias.from in r) r[moveAlias.to] = r[moveAlias.from];
-    }
-  }
-  return rows;
+  return appliquerAlias(rows, moveAlias);
 }
 
 // Récupère TOUS les enregistrements en paginant (par lots de `chunk`), sans plafond.
@@ -391,7 +411,8 @@ export async function searchReadAll(
   // sans cela elle resterait la seule porte ouverte aux noms de champs disparus.
   const mlShape = isMoveLineModel(model) ? await stockShape(session) : null;
   const d = mlShape ? translateMlDomain(domain, mlShape) : domain;
-  const f = mlShape ? translateMlFields(fields, mlShape) : fields;
+  const aliasRes = await aliasChampMouvements(session, model, mlShape ? translateMlFields(fields, mlShape) : fields);
+  const f = aliasRes.fields;
   while (true) {
     const batch = await call(session, "/web/dataset/call_kw", {
       model, method: "search_read", args: [d], kwargs: { fields: f, limit: chunk, offset, order },
@@ -402,7 +423,7 @@ export async function searchReadAll(
     offset += chunk;
     if (offset > 1_000_000) break;   // garde-fou absolu
   }
-  return mlShape ? normalizeMoveLines(out, mlShape) : out;
+  return mlShape ? normalizeMoveLines(out, mlShape) : appliquerAlias(out, aliasRes.alias);
 }
 
 export async function callMethod(session: OdooSession, model: string, method: string, args: any[] = [], kwargs: any = {}) {
