@@ -200,11 +200,6 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
 
   // ── Commandes groupées ────────────────────────────────────────────────────────
   const [groupedPickings,  setGroupedPickings]  = useState<GroupedPicking[]>([]);
-  // Contrôle du destinataire : TNT plafonne le nom à 32 caractères et refuse
-  // l'apostrophe. Détecté AVANT emballage, pas après validation du bon.
-  const [destCheck, setDestCheck] = useState<odoo.RecipientCheck | null>(null);
-  const [destEdit,  setDestEdit]  = useState("");
-  const [destSaving, setDestSaving] = useState(false);
   const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
   const [loadingGroup,     setLoadingGroup]     = useState(false);
 
@@ -302,13 +297,6 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
       ]);
 
       const resolvedPartnerId = partnerId || (pickingInfo?.partner_id ? pickingInfo.partner_id[0] : 0);
-
-      // Contrôle non bloquant : un échec de vérification ne doit pas empêcher
-      // d'emballer, il ne fait que priver de l'avertissement.
-      setDestCheck(null); setDestEdit("");
-      odoo.checkRecipient(session, resolvedPartnerId)
-        .then(c => { if (c && !c.ok) { setDestCheck(c); setDestEdit(c.suggestion); } })
-        .catch(() => {});
 
       // Articles
       const productIds = Array.from(new Set(moveLines.map((ml: any) => ml.product_id[0]))) as number[];
@@ -820,49 +808,6 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
         {selectedOrigin && (
           <div style={{ background: C.blueSoft, border: "1px solid #bfdbfe", borderRadius: 10, padding: "8px 14px", marginBottom: 12, fontSize: 12, color: "#1d4ed8", fontWeight: 500 }}>
             Réf : {selectedOrigin}
-          </div>
-        )}
-        {/* Destinataire refusé par le transporteur — signalé AVANT d'emballer.
-            Le WMS ne renomme pas de lui-même : un nom tronqué se retrouverait
-            sur les étiquettes, les factures et toute la fiche client. Il propose,
-            l'opérateur relit et décide. */}
-        {destCheck && (
-          <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 13, color: "#92400e" }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>
-              ⚠️ Le transporteur refusera ce destinataire
-            </div>
-            <div style={{ marginBottom: 8, lineHeight: 1.5 }}>
-              {destCheck.tropLong && <>Nom trop long : {destCheck.name.length} caractères, maximum {odoo.RECIPIENT_MAX}.<br /></>}
-              {destCheck.caracteresRefuses.length > 0 && <>Caractère refusé : {destCheck.caracteresRefuses.join(" ")}<br /></>}
-              <span style={{ opacity: 0.85 }}>Actuel : {destCheck.name}</span>
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" as const }}>
-              <input
-                value={destEdit}
-                onChange={e => setDestEdit(e.target.value.slice(0, odoo.RECIPIENT_MAX))}
-                style={{ flex: 1, minWidth: 220, padding: "8px 10px", border: "1px solid #fcd34d", borderRadius: 8, fontSize: 13, fontFamily: "inherit" }}
-              />
-              <span style={{ fontSize: 11.5, opacity: 0.75 }}>{destEdit.length}/{odoo.RECIPIENT_MAX}</span>
-              <button
-                disabled={destSaving || !destEdit.trim()}
-                onClick={async () => {
-                  setDestSaving(true);
-                  try {
-                    await odoo.renamePartner(session, destCheck.partnerId, destEdit);
-                    setDestCheck(null);
-                    onToast("Nom du client corrigé ✓", "success");
-                  } catch (e: any) {
-                    onToast("Renommage impossible : " + (e?.message || e), "error");
-                  }
-                  setDestSaving(false);
-                }}
-                style={{ padding: "8px 14px", background: destSaving ? "#d6d3d1" : "#b45309", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: destSaving ? "default" : "pointer", fontFamily: "inherit" }}>
-                {destSaving ? "…" : "Corriger la fiche client"}
-              </button>
-            </div>
-            <div style={{ fontSize: 11.5, opacity: 0.8, marginTop: 6 }}>
-              Modifie la fiche client dans Odoo. Tu peux aussi emballer sans corriger : c&apos;est l&apos;envoi au transporteur qui échouera.
-            </div>
           </div>
         )}
         {error && <div style={{ background: "#fef2f2", border: `1px solid #fecaca`, borderRadius: 10, padding: 12, marginBottom: 12, color: C.danger, fontSize: 13 }}>{error}</div>}
