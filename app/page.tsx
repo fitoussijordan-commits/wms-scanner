@@ -2265,6 +2265,25 @@ export default function Page() {
     setLoading(false);
   };
 
+  // CHARGEMENT À L'ARRIVÉE SUR L'ÉCRAN PRÉPARATION.
+  //
+  // La liste n'était demandée que par les clics de menu. Après un rafraîchissement
+  // (F5), l'écran est restauré depuis ?screen=prep mais aucun clic n'a eu lieu :
+  // l'écran s'affichait « Aucune commande prête à préparer » alors qu'il y en a,
+  // et il fallait sortir puis revenir. Le message étant celui d'une liste vide et
+  // non d'une erreur, rien n'indiquait que les données n'avaient jamais été lues.
+  //
+  // Les dépendances excluent volontairement `pickings` et `loading` : l'effet se
+  // déclenche une fois par arrivée sur l'écran, sans boucler quand la liste est
+  // réellement vide. Le garde sur `loading` évite le doublon quand on arrive par
+  // un clic, qui a déjà lancé le chargement.
+  useEffect(() => {
+    if (screen !== "prep" || !session) return;
+    if (pickings.length || loading) return;
+    loadPickings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, session]);
+
   const openPickingByNameInProgress = useRef(false);
   const openPickingByName = async (name: string) => {
     if (!session) return;
