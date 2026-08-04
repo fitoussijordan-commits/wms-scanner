@@ -18,7 +18,7 @@ function getCreds() {
 }
 
 // Actions qui ÉCRIVENT dans Shopware → exigent le token interne (x-wms-token).
-const WRITE_ACTIONS = new Set(["setStock", "binSetStock", "duplicateOrder", "cancelOrder"]);
+const WRITE_ACTIONS = new Set(["setStock", "binSetStock", "binWriteProbe", "duplicateOrder", "cancelOrder"]);
 
 async function swFetch(path: string, creds: { url: string; user: string; key: string }, method = "GET", body?: any) {
   const base64 = Buffer.from(`${creds.user}:${creds.key}`).toString("base64");
@@ -494,6 +494,73 @@ export async function GET(req: NextRequest) {
         applique: put.ok && !!relu && relu.stock === cible,
         httpPut: put.status,
         erreurPut: put.ok ? undefined : (put.json?.message || put.raw || "").toString().slice(0, 600),
+      });
+    }
+
+    // ── binWriteProbe: quelle formulation de PUT Pickware accepte-t-il ? ──
+    //
+    // Les correspondances ne sont pas exposees comme ressource : seul le PUT sur
+    // l'emplacement reste. Mais sans `code` Pickware le dit obligatoire, et avec
+    // `code` il y voit un renommage. On essaie donc plusieurs formulations, TOUTES
+    // avec la quantite INCHANGEE : quelle que soit celle qui passe, rien n'est
+    // modifie. C'est le seul moyen honnete de savoir laquelle fonctionne.
+    if (action === "binWriteProbe") {
+      const an = searchParams.get("articleNumber");
+      const code = searchParams.get("code");
+      if (!an || !code) return NextResponse.json({ error: "articleNumber et code requis" }, { status: 400 });
+
+      const vr = await safeJson(await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds));
+      const detail = vr.json?.data;
+      if (!detail) return NextResponse.json({ error: `Référence ${an} introuvable` }, { status: 404 });
+
+      const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=2000", creds));
+      const bin = (blRes.json?.data || []).find((b: any) => String(b.code).toUpperCase() === code.toUpperCase());
+      if (!bin) return NextResponse.json({ error: `Emplacement ${code} introuvable` }, { status: 404 });
+
+      const full = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${bin.id}`, creds));
+      const src = full.json?.data;
+      const maps = src?.articleDetailBinLocationMappings || [];
+      const mapping = maps.find((m: any) => m.articleDetailId === detail.id);
+      if (!mapping) return NextResponse.json({ error: `${an} n'est pas rangé en ${code}` }, { status: 404 });
+
+      const inchange = mapping.stock; // valeur ACTUELLE : aucune modification possible
+
+      const essais: { nom: string; url: string; corps: any }[] = [
+        { nom: "id + mappings seuls",
+          url: `/ViisonPickwareERPBinLocations/${bin.id}`,
+          corps: { articleDetailBinLocationMappings: [{ id: mapping.id, stock: inchange }] } },
+        { nom: "code comme identifiant (useCodeAsId)",
+          url: `/ViisonPickwareERPBinLocations/${encodeURIComponent(src.code)}?useCodeAsId=true`,
+          corps: { articleDetailBinLocationMappings: [{ id: mapping.id, stock: inchange }] } },
+        { nom: "id + code + warehouseId",
+          url: `/ViisonPickwareERPBinLocations/${bin.id}`,
+          corps: { code: src.code, warehouseId: src.warehouseId, articleDetailBinLocationMappings: [{ id: mapping.id, stock: inchange }] } },
+        { nom: "id + liste COMPLETE des correspondances",
+          url: `/ViisonPickwareERPBinLocations/${bin.id}`,
+          corps: { articleDetailBinLocationMappings: maps.map((m: any) => ({ id: m.id, stock: m.stock })) } },
+      ];
+
+      const resultats: any[] = [];
+      for (const e of essais) {
+        const r = await safeJson(await swFetch(e.url, creds, "PUT", e.corps));
+        resultats.push({
+          essai: e.nom,
+          status: r.status,
+          accepte: r.ok,
+          message: r.ok ? undefined : (r.json?.message || r.raw || "").toString().slice(0, 250),
+        });
+      }
+
+      // Relecture finale : preuve que la quantite n'a pas bouge.
+      const apres = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${bin.id}`, creds));
+      const relu = (apres.json?.data?.articleDetailBinLocationMappings || [])
+        .find((m: any) => m.articleDetailId === detail.id);
+
+      return NextResponse.json({
+        articleNumber: an, code, quantiteInchangee: inchange,
+        quantiteApresTests: relu?.stock ?? null,
+        aucuneModification: relu?.stock === inchange,
+        resultats,
       });
     }
 

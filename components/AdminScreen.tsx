@@ -299,7 +299,7 @@ function PickwareProbe() {
     setBusy(true); setRes(null);
     try {
       const r = await fetch(
-        `/api/shopware-explore?action=binSetStock&articleNumber=${encodeURIComponent(ref)}&code=${encodeURIComponent(code)}&verifyOnly=1`,
+        `/api/shopware-explore?action=binWriteProbe&articleNumber=${encodeURIComponent(ref)}&code=${encodeURIComponent(code)}`,
         { headers: writeHeaders },
       ).then(x => x.json());
       setRes(r);
@@ -315,7 +315,7 @@ function PickwareProbe() {
         Emplacements Pickware — test d&apos;écriture
       </div>
       <div style={{ fontSize: 12.5, color: C.textSec, lineHeight: 1.55, marginBottom: 10 }}>
-        Réécrit la quantité <strong>actuelle</strong> de cette référence sur cet emplacement.
+        Essaie plusieurs formulations d&apos;écriture avec la quantité <strong>actuelle</strong>.
         Rien n&apos;est modifié : on vérifie seulement que Pickware accepte l&apos;écriture.
         Le champ <code>applique</code> de la réponse donne le verdict.
       </div>
@@ -331,6 +331,24 @@ function PickwareProbe() {
       </div>
       {res && (
         <>
+          {Array.isArray(res.resultats) && (
+            <div style={{ marginBottom: 8 }}>
+              {res.resultats.map((r: any, i: number) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "7px 10px", marginBottom: 5,
+                                      borderRadius: 8, fontSize: 12.5,
+                                      background: r.accepte ? C.greenSoft : "#fef2f2",
+                                      color: r.accepte ? C.green : C.red }}>
+                  <span style={{ fontWeight: 700 }}>{r.accepte ? "✓" : "✕"} {r.essai}</span>
+                  <span style={{ opacity: .85, textAlign: "right" as const, minWidth: 0 }}>{r.status}{r.message ? ` — ${r.message}` : ""}</span>
+                </div>
+              ))}
+              <div style={{ fontSize: 12, color: res.aucuneModification ? C.textSec : C.red, fontWeight: 700, marginTop: 6 }}>
+                {res.aucuneModification
+                  ? `Quantité inchangée (${res.quantiteInchangee}) — aucun stock modifié.`
+                  : `⚠ La quantité a changé : ${res.quantiteInchangee} → ${res.quantiteApresTests}`}
+              </div>
+            </div>
+          )}
           {"applique" in res && (
             <div style={{ padding: 10, borderRadius: 9, marginBottom: 8, fontSize: 13, fontWeight: 700,
                           background: res.applique ? C.greenSoft : "#fef2f2",
