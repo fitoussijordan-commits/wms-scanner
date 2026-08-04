@@ -524,6 +524,13 @@ export interface WmsInventoryEntry {
   quantId?: number | null;  // id du stock.quant correspondant (pour appliquer la correction)
   quantQty?: number;        // qty propre du quant cible (scan libre → appliquer un DELTA, pas l'absolu)
   matchedAt?: string;       // ISO date du dernier matching
+  /**
+   * Ligne ajoutée par le matching : lot présent en stock qu'AUCUN scan n'a
+   * couvert. Comptée à zéro, donc en écart négatif. Distinguée d'une saisie
+   * réelle : on ne l'applique pas sans avoir vérifié physiquement, elle peut
+   * simplement se trouver dans une zone non inventoriée.
+   */
+  unscanned?: boolean;
 }
 
 export interface WmsInventorySession {

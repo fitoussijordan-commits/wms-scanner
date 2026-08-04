@@ -6195,6 +6195,74 @@ export async function findLocationsByName(session: OdooSession, query: string): 
 // Retourne pour chaque clé: { quantId, theoretical } d'après stock.quant temps réel.
 export interface TheoreticalRow { productId: number; lotId: number | null; locationId: number | null; quantId: number | null; theoretical: number; quantQty?: number; }
 
+export interface UnscannedLot {
+  productId: number; productName: string; odooRef: string;
+  lotId: number | null; lotName: string;
+  locationId: number; locationName: string;
+  quantId: number; qty: number;
+}
+
+/**
+ * Lots en stock qu'AUCUN scan n'a couverts.
+ *
+ * Sans cela, l'inventaire ne compare que ce qui a été trouvé : un lot présent
+ * en stock mais introuvable physiquement reste invisible, et son stock demeure
+ * faux indéfiniment. C'est précisément l'écart qu'un inventaire doit révéler.
+ *
+ * Un scan sans emplacement vaut pour TOUS les emplacements de ce couple
+ * produit/lot, et un scan sans lot ni emplacement couvre le produit entier —
+ * dans ce dernier cas on ne peut rien conclure lot par lot, alors on s'abstient
+ * plutôt que d'inventer des écarts.
+ */
+export async function findUnscannedLots(
+  session: OdooSession,
+  scanned: { productId: number; lotId: number | null; locationId: number | null }[],
+): Promise<UnscannedLot[]> {
+  const productIds = Array.from(new Set(scanned.map(s => s.productId)));
+  if (!productIds.length) return [];
+
+  // Produits comptés globalement (ni lot ni emplacement) : le total fait foi,
+  // le détail par lot n'a pas de sens.
+  const global = new Set(scanned.filter(s => !s.lotId && s.locationId == null).map(s => s.productId));
+
+  const couvert = (pid: number, lot: number | null, loc: number) =>
+    scanned.some(s =>
+      s.productId === pid &&
+      (s.lotId == null || s.lotId === lot) &&
+      (s.locationId == null || s.locationId === loc));
+
+  const quants = await searchRead(
+    session, M("MODEL_QUANT"),
+    [["product_id", "in", productIds], ["location_id.usage", "=", "internal"], ["quantity", ">", 0]],
+    ["id", "product_id", "lot_id", "location_id", "quantity"], 5000,
+  );
+
+  return quants
+    .filter((q: any) => {
+      const pid = Array.isArray(q.product_id) ? q.product_id[0] : q.product_id;
+      if (global.has(pid)) return false;
+      const lot = q.lot_id ? (Array.isArray(q.lot_id) ? q.lot_id[0] : q.lot_id) : null;
+      const loc = Array.isArray(q.location_id) ? q.location_id[0] : q.location_id;
+      return !couvert(pid, lot, loc);
+    })
+    .map((q: any) => {
+      const pid = Array.isArray(q.product_id) ? q.product_id[0] : q.product_id;
+      const nomProduit = Array.isArray(q.product_id) ? q.product_id[1] : "";
+      const ref = (nomProduit.match(/^\[([^\]]+)\]/) || [])[1] || "";
+      return {
+        productId: pid,
+        productName: nomProduit.replace(/^\[[^\]]+\]\s*/, ""),
+        odooRef: ref,
+        lotId: q.lot_id ? (Array.isArray(q.lot_id) ? q.lot_id[0] : q.lot_id) : null,
+        lotName: q.lot_id && Array.isArray(q.lot_id) ? q.lot_id[1] : "",
+        locationId: Array.isArray(q.location_id) ? q.location_id[0] : q.location_id,
+        locationName: Array.isArray(q.location_id) ? q.location_id[1] : "",
+        quantId: q.id,
+        qty: Number(q.quantity) || 0,
+      };
+    });
+}
+
 export async function getInventoryTheoretical(
   session: OdooSession,
   keys: { productId: number; lotId: number | null; locationId: number | null }[]

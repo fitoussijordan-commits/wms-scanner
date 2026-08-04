@@ -262,16 +262,43 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
     try {
       const keys = entries.map(e => ({ productId: e.productId, lotId: e.lotId, locationId: e.locationId }));
       const theo = await odoo.getInventoryTheoretical(session, keys);
+      const maintenant = new Date().toISOString();
       const next = entries.map((e, i) => ({
         ...e,
         counted: calcCounted(e),
         theoretical: theo[i]?.theoretical ?? 0,
         quantId: theo[i]?.quantId ?? null,
         quantQty: theo[i]?.quantQty ?? 0,
-        matchedAt: new Date().toISOString(),
+        matchedAt: maintenant,
       }));
-      persist(next);
-      onToast("Matching effectué ✓", "success");
+
+      // Lots présents en stock qu'aucun scan n'a couverts. Sans eux, le matching
+      // ne compare que ce qui a été trouvé : un lot introuvable physiquement
+      // resterait invisible et son stock faux. On les ajoute comptés à ZÉRO,
+      // donc en écart négatif, et signalés comme non scannés — ils peuvent aussi
+      // se trouver dans une zone que l'opérateur n'a pas inventoriée.
+      const manquants = await odoo.findUnscannedLots(session, keys);
+      const ajouts = manquants
+        // Une ligne déjà présente (même produit/lot/emplacement) n'est pas ré-ajoutée.
+        .filter(m => !next.some(e =>
+          e.productId === m.productId && e.lotId === m.lotId && e.locationId === m.locationId))
+        .map(m => ({
+          productId: m.productId, productName: m.productName, odooRef: m.odooRef, barcode: "",
+          lotId: m.lotId, lotName: m.lotName,
+          locationId: m.locationId, locationName: m.locationName,
+          colis: 0, unitsPerColis: 0, vrac: 0,
+          counted: 0,
+          theoretical: m.qty,
+          quantId: m.quantId,
+          quantQty: m.qty,
+          matchedAt: maintenant,
+          unscanned: true,
+        }));
+
+      persist([...next, ...ajouts]);
+      onToast(ajouts.length
+        ? `Matching effectué ✓ — ${ajouts.length} lot(s) en stock non scanné(s)`
+        : "Matching effectué ✓", ajouts.length ? "info" : "success");
     } catch (e: any) { onToast("Erreur matching : " + e.message, "error"); }
     setMatching(false);
   };
@@ -513,7 +540,18 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
                 <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>
                   {e.odooRef && <span>{e.odooRef}</span>}
                   {e.lotName && <span> · Lot {e.lotName}</span>}
+                  {e.locationName && <span> · {e.locationName}</span>}
                 </div>
+                {/* Ligne issue du matching, pas d'une saisie : l'operateur doit
+                    verifier physiquement avant d'appliquer. Le lot peut aussi se
+                    trouver dans une zone qu'il n'a pas inventoriee. */}
+                {e.unscanned && (
+                  <div style={{ marginTop: 4, display: "inline-block", fontSize: 10.5, fontWeight: 700,
+                                color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a",
+                                borderRadius: 5, padding: "2px 7px" }}>
+                    NON SCANNÉ — en stock, à vérifier sur place
+                  </div>
+                )}
               </div>
               <button onClick={() => removeLine(i)} title="Retirer"
                 style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: C.textMuted, flexShrink: 0 }}>
