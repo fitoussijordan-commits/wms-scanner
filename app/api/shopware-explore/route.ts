@@ -424,6 +424,59 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // ── binRaw: structure BRUTE d'un emplacement Pickware (LECTURE, sonde) ──
+    //
+    // Avant d'ecrire dans Pickware, il faut savoir ce qu'il expose reellement :
+    // quels champs porte la correspondance declinaison/emplacement, et sous
+    // quelle forme. Ecrire au jugé reviendrait a manipuler du stock physique en
+    // production sur une hypothese.
+    //
+    // Appel : /api/shopware-explore?action=binRaw&articleNumber=XXXX
+    if (action === "binRaw") {
+      const an = searchParams.get("articleNumber");
+      if (!an) return NextResponse.json({ error: "articleNumber requis" }, { status: 400 });
+
+      const vr = await safeJson(await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds));
+      const detail = vr.json?.data;
+      if (!detail) return NextResponse.json({ articleNumber: an, found: false }, { status: 404 });
+
+      const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=2000", creds));
+      const bins = (blRes.json?.data || []).filter((b: any) => b.code !== "pickware_null_bin_location");
+
+      // On cherche un emplacement contenant CETTE declinaison. A defaut, on
+      // renvoie un emplacement quelconque : sa structure suffit a savoir si
+      // l'ecriture est possible.
+      let avecArticle: any = null;
+      let premier: any = null;
+      for (let i = 0; i < bins.length && !avecArticle; i += 8) {
+        const slice = bins.slice(i, i + 8);
+        const details = await Promise.all(
+          slice.map(async (b: any) => safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${b.id}`, creds)))
+        );
+        for (const one of details) {
+          const d = one.json?.data;
+          if (!d) continue;
+          if (!premier) premier = d;
+          const maps = d.articleDetailBinLocationMappings || [];
+          if (maps.some((m: any) => m.articleDetailId === detail.id)) { avecArticle = d; break; }
+        }
+      }
+
+      const cible = avecArticle || premier;
+      return NextResponse.json({
+        articleNumber: an,
+        detailId: detail.id,
+        inStock: detail.inStock,
+        emplacementTrouveAvecArticle: !!avecArticle,
+        nbEmplacementsTotal: bins.length,
+        // Structure complete : c'est elle qu'on analyse pour savoir quoi ecrire.
+        emplacementBrut: cible || null,
+        champsDisponibles: cible ? Object.keys(cible) : [],
+        champsMapping: cible?.articleDetailBinLocationMappings?.[0]
+          ? Object.keys(cible.articleDetailBinLocationMappings[0]) : [],
+      });
+    }
+
     // ── binAll: TOUS les emplacements en une fois → map detailId → {code, stock} (LECTURE) ──
     // Permet de précharger les emplacements au lancement de l'audit (1 seul scan).
     if (action === "binAll") {
