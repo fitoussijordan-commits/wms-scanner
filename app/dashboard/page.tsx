@@ -1627,14 +1627,24 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
       setLotMoves(rows);
       if (!rows.length) setLotError("Ce lot existe mais n'a aucun mouvement terminé.");
 
-      // 1) Emplacements actuels du lot
+      // 1) Emplacements actuels du lot — INTERNES uniquement.
+      //    Les emplacements clients ou virtuels ne sont pas du stock : ce sont
+      //    des traces de mouvements passes. Les afficher ici noyait la seule
+      //    ligne utile — celle qui dit ou la marchandise se trouve vraiment.
       const quants = await odoo.searchRead(session, M("MODEL_QUANT"),
-        [["lot_id", "=", lot.id], ["quantity", "!=", 0]],
-        ["location_id", "quantity"], 200);
-      setLotQuants(quants.map((q: any) => ({
-        loc: Array.isArray(q.location_id) ? q.location_id[1] : "",
-        qty: Number(q.quantity) || 0,
-      })).sort((a: any, b: any) => b.qty - a.qty));
+        [["lot_id", "=", lot.id], ["quantity", "!=", 0], ["location_id.usage", "=", "internal"]],
+        ["location_id", "quantity"], 500);
+      // Un meme emplacement peut porter plusieurs quants : on regroupe, sinon la
+      // liste repete la meme ligne et devient illisible.
+      const parEmplacement: Record<string, number> = {};
+      for (const q of quants) {
+        const nom = Array.isArray(q.location_id) ? q.location_id[1] : "";
+        parEmplacement[nom] = (parEmplacement[nom] || 0) + (Number(q.quantity) || 0);
+      }
+      setLotQuants(Object.entries(parEmplacement)
+        .map(([loc, qty]) => ({ loc, qty }))
+        .filter(x => x.qty !== 0)
+        .sort((a, b) => b.qty - a.qty));
 
       // 2) Lots du MEME produit au nom proche. Une confusion de rangement se
       //    fait presque toujours entre deux lots d'une meme reception, dont les
@@ -5089,7 +5099,7 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                     <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
                       <div style={{ flex: 1, minWidth: 250, padding: 12, background: "#f8fafc", border: "1px solid var(--border)", borderRadius: 10 }}>
                         <div style={{ fontSize: 11.5, fontWeight: 800, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 7 }}>
-                          Où se trouve ce lot aujourd&apos;hui
+                          Où se trouve ce lot aujourd&apos;hui <span style={{ fontWeight: 600, textTransform: "none" as const }}>· stock interne</span>
                         </div>
                         {lotQuants.length ? lotQuants.map((q, i) => (
                           <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "3px 0" }}>
@@ -5097,7 +5107,9 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
                             <strong style={{ color: q.qty < 0 ? "#dc2626" : "#0f172a" }}>{q.qty}</strong>
                           </div>
                         )) : (
-                          <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Aucun stock enregistré pour ce lot.</div>
+                          <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                            Plus aucun stock interne — le lot est entièrement sorti. Voir l&apos;historique ci-dessous.
+                          </div>
                         )}
                       </div>
 
