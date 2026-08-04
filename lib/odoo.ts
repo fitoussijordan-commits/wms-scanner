@@ -3383,16 +3383,31 @@ export async function validateReception(
   session: OdooSession, pickingId: number,
 ): Promise<{ validated: boolean; chained: { id: number; name: string; state: string }[] }> {
   await validatePicking(session, pickingId);
-  const [pick] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", pickingId]], ["id", "name", "origin"], 1);
+
   let chained: { id: number; name: string; state: string }[] = [];
   try {
-    // Les transferts suivants portent le nom du bon validé dans leur origine.
-    if (pick?.name) {
-      chained = await searchRead(session, M("MODEL_PICKING"),
-        [["origin", "like", pick.name], ["id", "!=", pickingId], ["state", "not in", ["done", "cancel"]]],
-        ["id", "name", "state"], 10);
+    // On suit la CHAÎNE DES MOUVEMENTS plutôt que le nom du bon : c'est la vraie
+    // relation entre une réception et le transfert de rangement qu'elle
+    // déclenche. Le rapprochement par nom d'origine échouerait dès qu'Odoo
+    // nomme le transfert suivant autrement — ce qui dépend du paramétrage.
+    const moves = await searchRead(session, M("MODEL_MOVE"),
+      [["picking_id", "=", pickingId]],
+      await availableFields(session, M("MODEL_MOVE"), ["id", "move_dest_ids"]), 500);
+    const destIds = Array.from(new Set(moves.flatMap((m: any) => m.move_dest_ids || [])));
+    if (destIds.length) {
+      const destMoves = await searchRead(session, M("MODEL_MOVE"),
+        [["id", "in", destIds]], ["id", "picking_id", "state"], destIds.length);
+      const pickIds = Array.from(new Set(
+        destMoves.map((m: any) => (Array.isArray(m.picking_id) ? m.picking_id[0] : m.picking_id)).filter(Boolean),
+      ));
+      if (pickIds.length) {
+        chained = await searchRead(session, M("MODEL_PICKING"),
+          [["id", "in", pickIds], ["state", "not in", ["done", "cancel"]]],
+          ["id", "name", "state"], pickIds.length);
+      }
     }
-  } catch { /* information de confort */ }
+  } catch { /* information de confort : ne doit pas faire échouer la réception */ }
+
   return { validated: true, chained };
 }
 
