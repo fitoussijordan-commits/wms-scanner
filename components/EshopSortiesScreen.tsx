@@ -823,6 +823,36 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
   // résultat de la MAJ par réf : { newStock, hasLocation, locCode }
   const [pushed, setPushed] = useState<Record<string, { newStock: number; hasLocation: boolean; locCode?: string }>>({});
   const [search, setSearch] = useState("");
+  // Recherche DIRECTE dans Shopware, independante de la liste de l'audit.
+  // L'audit ne couvre que le catalogue qu'il a su lister ; une reference absente
+  // de cette liste reste parfaitement interrogeable et corrigeable par son
+  // numero — c'est ce que fait Shopware avec /variants?useNumberAsId=true.
+  const [direct, setDirect] = useState<{ number: string; found: boolean; sw: number | null; odoo: number | null; name: string; odooRef: string } | null>(null);
+  const [directLoading, setDirectLoading] = useState(false);
+
+  const chercherDirect = async (ref: string) => {
+    const n = ref.trim();
+    if (!n) return;
+    setDirectLoading(true); setDirect(null);
+    try {
+      const sw = await fetch(`/api/shopware-explore?action=stockInfo&articleNumber=${encodeURIComponent(n)}`).then(r => r.json());
+      let odooQty: number | null = null, nom = "", oref = "";
+      try {
+        const m = await odoo.matchEshopSkus(session, [n]);
+        const hit: any = (m as any)[n];
+        if (hit?.product_id) {
+          nom = hit.product_name || ""; oref = hit.default_code || "";
+          const stock = await odoo.getAvailableStockBatch(session, [hit.product_id]);
+          odooQty = stock[hit.product_id] ?? 0;
+        }
+      } catch { /* le stock Odoo est un complement : son echec ne masque pas Shopware */ }
+      setDirect({ number: n, found: !!sw?.found, sw: sw?.native_inStock ?? null, odoo: odooQty, name: nom, odooRef: oref });
+      if (!sw?.found) onToast(`Référence ${n} introuvable dans Shopware`, "error");
+    } catch (e: any) {
+      onToast("Recherche Shopware impossible : " + (e?.message || e), "error");
+    }
+    setDirectLoading(false);
+  };
   // valeur libre saisie par réf (pour MAJ manuelle)
   const [freeVal, setFreeVal] = useState<Record<string, string>>({});
   // emplacements préchargés : detailId → { code, stock }
@@ -1000,6 +1030,63 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
             {search && <button onClick={() => setSearch("")} style={{ padding: "8px 12px", background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 12, cursor: "pointer", color: C.textMuted, fontFamily: "inherit" }}>✕</button>}
             <span style={{ fontSize: 12, color: C.textMuted, whiteSpace: "nowrap" }}>{visible.length} ligne{visible.length > 1 ? "s" : ""}</span>
           </div>
+
+          {/* La reference cherchee n'est pas dans la liste : on interroge Shopware
+              directement plutot que de conclure qu'elle n'existe pas. */}
+          {search.trim() && visible.length === 0 && (
+            <div style={{ background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
+              <div style={{ fontSize: 13, color: C.textSec, marginBottom: 10, lineHeight: 1.5 }}>
+                <strong>{search.trim()}</strong> n&apos;est pas dans le catalogue chargé par l&apos;audit.
+                Cela ne veut pas dire qu&apos;elle n&apos;existe pas — interroge Shopware directement.
+              </div>
+              <button onClick={() => chercherDirect(search)} disabled={directLoading}
+                style={{ padding: "9px 16px", background: directLoading ? "#cbd5e1" : C.blue, color: "#fff", border: "none",
+                         borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: directLoading ? "default" : "pointer", fontFamily: "inherit" }}>
+                {directLoading ? "Recherche…" : "Chercher dans Shopware"}
+              </button>
+
+              {direct && (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+                  {!direct.found ? (
+                    <div style={{ fontSize: 13, color: C.red }}>
+                      Référence <strong>{direct.number}</strong> introuvable dans Shopware.
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 16, flexWrap: "wrap" as const, alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{direct.number}</div>
+                        <div style={{ fontSize: 12, color: C.textMuted }}>
+                          {direct.name || "produit Odoo non rapproché"}{direct.odooRef ? ` · ${direct.odooRef}` : ""}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 13 }}>
+                        Stock Shopware <strong>{direct.sw ?? "?"}</strong>
+                      </div>
+                      <div style={{ fontSize: 13 }}>
+                        Stock Odoo <strong>{direct.odoo ?? "?"}</strong>
+                      </div>
+                      {direct.odoo !== null && direct.sw !== null && direct.odoo !== direct.sw && (
+                        <button onClick={async () => {
+                            if (!confirm(`Écrire ${direct.odoo} sur Shopware pour ${direct.number} ?\n(actuel : ${direct.sw})`)) return;
+                            try {
+                              const r = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(direct.number)}&qty=${direct.odoo}`,
+                                { headers: writeHeaders }).then(x => x.json());
+                              if (r?.error) throw new Error(r.error);
+                              onToast(`Stock Shopware mis à jour : ${direct.odoo}`, "success");
+                              setDirect({ ...direct, sw: direct.odoo });
+                            } catch (e: any) { onToast("Écriture refusée : " + (e?.message || e), "error"); }
+                          }}
+                          style={{ padding: "8px 14px", background: C.orange, color: "#fff", border: "none", borderRadius: 8,
+                                   fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                          Aligner Shopware sur Odoo
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow }}>
             <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
               <colgroup><col style={{ width: "11%" }} /><col style={{ width: "29%" }} /><col style={{ width: "11%" }} /><col style={{ width: "11%" }} /><col style={{ width: "12%" }} /><col style={{ width: "26%" }} /></colgroup>
