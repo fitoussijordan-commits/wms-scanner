@@ -424,24 +424,53 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
   const ecartCount = entries.filter(e => e.matchedAt && ecart(e) !== 0).length;
   const totalCounted = entries.reduce((n, e) => n + calcCounted(e), 0);
 
+  // Le PDA Zebra fait environ 360 px de large. Ce qui tient sur un ecran de
+  // bureau y devient illisible : on empile au lieu de juxtaposer, et on grossit
+  // les cibles tactiles — l'operateur a souvent des gants.
+  const [pda, setPda] = useState(false);
+  useEffect(() => {
+    const check = () => setPda(window.innerWidth < 420);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
   return (
     <div style={{ padding: "14px 12px 110px", maxWidth: 980, margin: "0 auto", fontFamily: "'DM Sans', sans-serif" }}>
       {/* En-tête */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-        <button onClick={onBack} style={{ background: C.bg, border: "none", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex" }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
-        </button>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 17, fontWeight: 700, color: C.text }}>{sess.name}</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>
-            {sess.mode === "location" ? "📍 Par emplacement" : "🔍 Scan libre"} · {entries.length} ligne{entries.length > 1 ? "s" : ""} · {totalCounted} u. comptées
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={onBack} aria-label="Retour"
+            style={{ background: C.bg, border: "none", borderRadius: 10, padding: pda ? 11 : 8, cursor: "pointer", display: "flex", flexShrink: 0 }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2.2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+          </button>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: pda ? 19 : 17, fontWeight: 800, color: C.text, lineHeight: 1.2,
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
+              {sess.name}
+            </div>
           </div>
+          <button onClick={exportExcel} title="Export Excel" aria-label="Export Excel"
+            style={{ background: C.greenSoft, border: "1px solid #bbf7d0", color: "#16a34a", borderRadius: 10,
+                     padding: pda ? 11 : "8px 12px", fontWeight: 700, fontSize: 13, cursor: "pointer",
+                     display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            {!pda && "Excel"}
+          </button>
         </div>
-        <button onClick={exportExcel} title="Export Excel"
-          style={{ background: C.greenSoft, border: `1px solid #bbf7d0`, color: "#16a34a", borderRadius: 10, padding: "8px 12px", fontWeight: 700, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          Excel
-        </button>
+        {/* Les compteurs sur leur propre ligne : sur 360 px ils ne tiennent pas
+            a cote du titre sans etre tronques. */}
+        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" as const }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: C.textSec, background: C.bg, borderRadius: 7, padding: "4px 9px" }}>
+            {sess.mode === "location" ? "📍 Emplacement" : "🔍 Scan libre"}
+          </span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: C.textSec, background: C.bg, borderRadius: 7, padding: "4px 9px" }}>
+            {entries.length} ligne{entries.length > 1 ? "s" : ""}
+          </span>
+          <span style={{ fontSize: 12, fontWeight: 800, color: C.purple, background: C.purpleSoft, borderRadius: 7, padding: "4px 9px" }}>
+            {totalCounted} u. comptées
+          </span>
+        </div>
       </div>
 
       {/* Mode emplacement, aucune zone choisie → PLAN CLIQUABLE plein écran */}
@@ -463,15 +492,31 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
 
       {/* Scan manuel — caché tant qu'aucune zone n'est choisie en mode emplacement */}
       {!(sess.mode === "location" && !activeAisle) && (
-      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 14, boxShadow: C.shadow }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>Scanner un lot / une référence</div>
-        <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ background: C.white, border: `1.5px solid ${C.purple}`, borderRadius: 14, padding: pda ? 14 : 12,
+                    marginBottom: 14, boxShadow: "0 0 0 3px " + C.purpleSoft, boxSizing: "border-box" }}>
+        <div style={{ fontSize: pda ? 12 : 11, fontWeight: 800, color: C.purple, textTransform: "uppercase",
+                      letterSpacing: "0.06em", marginBottom: 9 }}>
+          Scanner un lot / une référence
+        </div>
+        {/* Sur PDA : champ pleine largeur puis bouton dessous. Cote a cote, le
+            champ devient trop etroit pour lire un code-barres saisi a la main. */}
+        <div style={{ display: "flex", flexDirection: pda ? "column" : "row", gap: 9 }}>
           <input value={scanInput} onChange={e => setScanInput(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && scanInput.trim()) { addByCode(scanInput); setScanInput(""); } }}
             placeholder="Lot, code-barres ou réf…"
-            style={{ flex: 1, padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontFamily: "inherit", background: C.bg }} />
+            inputMode="text" autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+            style={{ flex: 1, width: pda ? "100%" : undefined, boxSizing: "border-box",
+                     padding: pda ? "14px 13px" : "10px 12px",
+                     border: `1.5px solid ${C.border}`, borderRadius: 11,
+                     fontSize: pda ? 17 : 14, fontWeight: 600, fontFamily: "inherit",
+                     background: C.bg, color: C.text }} />
           <button onClick={() => { if (scanInput.trim()) { addByCode(scanInput); setScanInput(""); } }} disabled={busy}
-            style={{ padding: "0 16px", background: C.purple, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: busy ? 0.6 : 1 }}>+ Ajouter</button>
+            style={{ padding: pda ? "14px 0" : "0 16px", width: pda ? "100%" : undefined,
+                     background: C.purple, color: "#fff", border: "none", borderRadius: 11,
+                     fontWeight: 800, fontSize: pda ? 16 : 14, cursor: "pointer",
+                     opacity: busy ? 0.6 : 1, fontFamily: "inherit" }}>
+            {busy ? "…" : "+ Ajouter"}
+          </button>
         </div>
       </div>
       )}
@@ -510,8 +555,15 @@ function CountView({ session, sess, onBack, onToast, scanCode, onScanConsumed }:
             .filter(({ e }) => sess.mode !== "location" || e.locationName === activeAisle);
           if (visible.length === 0) {
             return (
-              <div style={{ textAlign: "center", color: C.textMuted, padding: 40, fontSize: 14 }}>
-                {sess.mode === "location" ? `Scanne un lot pour l'ajouter à la zone ${activeAisle}` : "Scanne un lot ou une référence pour démarrer"}
+              <div style={{ textAlign: "center", padding: "36px 20px", background: C.white,
+                            border: `1px dashed ${C.border}`, borderRadius: 14 }}>
+                <div style={{ fontSize: 34, marginBottom: 8 }}>📦</div>
+                <div style={{ fontSize: pda ? 16 : 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                  {sess.mode === "location" ? `Zone ${activeAisle} — aucune ligne` : "Aucune ligne comptée"}
+                </div>
+                <div style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.5 }}>
+                  Scanne un lot ou une référence<br />pour commencer le comptage
+                </div>
               </div>
             );
           }
