@@ -9401,6 +9401,15 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 // REPRINT LABEL SCREEN — Réimprimer étiquette transporteur + gestion colis TNT
 // ============================================================
 function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+  // PDA Zebra ~360 px : la ligne colis (nom + poids + 3 boutons) ne tient pas
+  // sur une seule ligne, le nom du colis se retrouvait tronque sous les boutons.
+  const [pda, setPda] = useState(false);
+  useEffect(() => {
+    const check = () => setPda(window.innerWidth < 480);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
   const [query, setQuery] = useState("");
   const [pickings, setPickings] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
@@ -9976,10 +9985,15 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
     const pkgLines: any[] = pkg.lines || [];
     return (
       <div key={pkg.id} style={{ background: C.bg, borderRadius: 10, marginBottom: 8, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px" }}>
+        {/* Sur PDA on empile : identite du colis, puis les actions en dessous.
+            Sur une seule ligne le nom du colis passait sous les boutons. */}
+        <div style={{ display: "flex", flexDirection: pda ? "column" : "row",
+                      alignItems: pda ? "stretch" : "center", gap: pda ? 10 : 8, padding: pda ? "11px 12px" : "9px 12px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: pda ? undefined : 1 }}>
           <span style={{ fontSize: 22 }}>📦</span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{pkg.name}</div>
+            <div style={{ fontSize: pda ? 15 : 14, fontWeight: 800, color: C.text,
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{pkg.name}</div>
             {weight != null && weight > 0 ? (
               <div style={{ fontSize: 11, color: C.textMuted }}>{weight} kg</div>
             ) : (
@@ -9995,20 +10009,23 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
               </div>
             )}
           </div>
+          </div>
+          <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
           <button onClick={() => setExpandedPkgId(isExpanded ? null : pkg.id)}
             title="Voir le contenu (diviser/déplacer une ligne)"
-            style={{ padding: "7px 10px", background: isExpanded ? C.blue : C.white, color: isExpanded ? "#fff" : C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const }}>
+            style={{ flex: pda ? 1 : undefined, padding: pda ? "11px 8px" : "7px 10px", background: isExpanded ? C.blue : C.white, color: isExpanded ? "#fff" : C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: pda ? 13 : 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const }}>
             {isExpanded ? "▲ Fermer" : `▼ Contenu (${pkgLines.length})`}
           </button>
           <button onClick={() => preparePbList(picking, pkg)} disabled={pbLoading}
             title="Imprimer les codes-barres produits (1 étiq. / 5 unités)"
-            style={{ padding: "7px 10px", background: C.white, color: C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: pbLoading ? "wait" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const }}>
+            style={{ padding: pda ? "11px 10px" : "7px 10px", background: C.white, color: C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 8, fontSize: pda ? 13 : 12, fontWeight: 700, cursor: pbLoading ? "wait" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const }}>
             🏷️ CB
           </button>
           <button onClick={() => printPackingList(picking, pkg)} disabled={isPL}
-            style={{ padding: "7px 12px", background: isPL ? C.border : C.blue, color: isPL ? C.textMuted : "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: isPL ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const, opacity: isPL ? 0.6 : 1 }}>
+            style={{ flex: pda ? 1 : undefined, padding: pda ? "11px 12px" : "7px 12px", background: isPL ? C.border : C.blue, color: isPL ? C.textMuted : "#fff", border: "none", borderRadius: 8, fontSize: pda ? 13 : 12, fontWeight: 700, cursor: isPL ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const, opacity: isPL ? 0.6 : 1 }}>
             {isPL ? "…" : "🖨 Imprimer"}
           </button>
+          </div>
         </div>
         {isExpanded && (
           <div style={{ padding: "0 12px 12px" }}>
