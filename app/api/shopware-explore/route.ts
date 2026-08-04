@@ -460,7 +460,14 @@ export async function GET(req: NextRequest) {
       // Correspondance existante → on la modifie par son id.
       // Absente → on l'ajoute en nommant la déclinaison, ce qui revient à
       // affecter l'article à cet emplacement.
-      const payload = {
+      // Pickware exige `code` dans le corps, même quand on ne modifie que les
+      // correspondances : sans lui il répond 400 « Parameter "code" is missing
+      // but obligatory ». On renvoie donc l'identite de l'emplacement telle
+      // quelle, sans la changer.
+      const src = full.json?.data || bin;
+      const payload: any = {
+        code: src.code,
+        warehouseId: src.warehouseId,
         articleDetailBinLocationMappings: [
           mapping ? { id: mapping.id, stock: cible } : { articleDetailId: detail.id, stock: cible },
         ],
@@ -481,7 +488,10 @@ export async function GET(req: NextRequest) {
         avant,
         demande: cible,
         apres: relu ? relu.stock : null,
-        applique: relu ? relu.stock === cible : false,
+        // L'ecriture doit avoir ete ACCEPTEE *et* relue conforme. Se fier a la
+        // seule relecture donnait un faux positif en mode verification : la
+        // valeur etant inchangee, elle correspondait meme quand le PUT echouait.
+        applique: put.ok && !!relu && relu.stock === cible,
         httpPut: put.status,
         erreurPut: put.ok ? undefined : (put.json?.message || put.raw || "").toString().slice(0, 300),
       });
