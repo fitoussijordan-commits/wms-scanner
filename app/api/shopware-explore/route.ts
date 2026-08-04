@@ -493,8 +493,40 @@ export async function GET(req: NextRequest) {
         // valeur etant inchangee, elle correspondait meme quand le PUT echouait.
         applique: put.ok && !!relu && relu.stock === cible,
         httpPut: put.status,
-        erreurPut: put.ok ? undefined : (put.json?.message || put.raw || "").toString().slice(0, 300),
+        erreurPut: put.ok ? undefined : (put.json?.message || put.raw || "").toString().slice(0, 600),
       });
+    }
+
+    // ── binEndpoints: quelles ressources Pickware existent ? (LECTURE, sonde) ──
+    //
+    // Modifier l'emplacement entier ne marche pas : sans `code` Pickware le dit
+    // obligatoire, avec `code` il le prend pour un renommage et refuse. La
+    // correspondance declinaison/emplacement est donc probablement une ressource
+    // a part entiere. On cherche laquelle repond.
+    if (action === "binEndpoints") {
+      const candidats = [
+        "/ViisonPickwareERPArticleDetailBinLocationMappings",
+        "/ViisonPickwareERPBinLocationMappings",
+        "/ViisonPickwareERPArticleDetailBinLocations",
+        "/ViisonPickwareERPStocks",
+        "/ViisonPickwareERPWarehouses",
+        "/ViisonPickwareERPStockMovements",
+      ];
+      const out: any = {};
+      for (const c of candidats) {
+        try {
+          const r = await safeJson(await swFetch(`${c}?limit=1`, creds));
+          out[c] = {
+            status: r.status,
+            existe: r.ok,
+            // Les champs du premier enregistrement disent ce qu'on pourrait ecrire.
+            champs: r.json?.data?.[0] ? Object.keys(r.json.data[0]) : undefined,
+            exemple: r.json?.data?.[0],
+            message: r.ok ? undefined : (r.json?.message || r.raw || "").toString().slice(0, 160),
+          };
+        } catch (e: any) { out[c] = { erreur: e?.message }; }
+      }
+      return NextResponse.json(out);
     }
 
     // ── binRaw: structure BRUTE d'un emplacement Pickware (LECTURE, sonde) ──
