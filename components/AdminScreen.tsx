@@ -5,7 +5,6 @@ import { loadUserPermissions, saveUserPermission, loadHiddenTools, saveHiddenToo
 import FieldMapEditor from "@/components/FieldMapEditor";
 import OdooDiagnosticScreen from "@/components/OdooDiagnosticScreen";
 import ModelMapEditor from "@/components/ModelMapEditor";
-import { writeHeaders } from "@/lib/writeToken";
 
 const C = {
   bg: "#f8fafc", white: "#ffffff", text: "#1a1a2e", textSec: "#374151",
@@ -280,89 +279,6 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
         </>
       )}
 
-      {/* ── Sonde Pickware : l'API accepte-t-elle d'ecrire un stock d'emplacement ?
-          Le mode verification reecrit la valeur ACTUELLE : rien ne change, mais
-          on sait si l'ecriture aboutit. Le jeton part tout seul, il n'a pas a
-          etre colle dans une console. ── */}
-      <PickwareProbe />
-    </div>
-  );
-}
-
-function PickwareProbe() {
-  const [ref, setRef] = useState("429000040");
-  const [code, setCode] = useState("A12");
-  const [res, setRes] = useState<any>(null);
-  const [busy, setBusy] = useState(false);
-
-  const lancer = async () => {
-    setBusy(true); setRes(null);
-    try {
-      const r = await fetch(
-        `/api/shopware-explore?action=binWriteProbe&articleNumber=${encodeURIComponent(ref)}&code=${encodeURIComponent(code)}`,
-        { headers: writeHeaders },
-      ).then(x => x.json());
-      setRes(r);
-    } catch (e: any) {
-      setRes({ error: e?.message || String(e) });
-    }
-    setBusy(false);
-  };
-
-  return (
-    <div style={{ marginTop: 18, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14 }}>
-      <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 4 }}>
-        Emplacements Pickware — test d&apos;écriture
-      </div>
-      <div style={{ fontSize: 12.5, color: C.textSec, lineHeight: 1.55, marginBottom: 10 }}>
-        Essaie plusieurs formulations d&apos;écriture avec la quantité <strong>actuelle</strong>.
-        Rien n&apos;est modifié : on vérifie seulement que Pickware accepte l&apos;écriture.
-        Le champ <code>applique</code> de la réponse donne le verdict.
-      </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" as const, marginBottom: 10 }}>
-        <input value={ref} onChange={e => setRef(e.target.value)} placeholder="Référence"
-          style={{ flex: 1, minWidth: 150, padding: "9px 11px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit" }} />
-        <input value={code} onChange={e => setCode(e.target.value)} placeholder="Emplacement"
-          style={{ width: 120, padding: "9px 11px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit" }} />
-        <button onClick={lancer} disabled={busy || !ref.trim() || !code.trim()}
-          style={{ padding: "9px 16px", background: busy ? C.textMuted : C.blue, color: "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: busy ? "default" : "pointer", fontFamily: "inherit" }}>
-          {busy ? "Test…" : "Vérifier (sans modifier)"}
-        </button>
-      </div>
-      {res && (
-        <>
-          {Array.isArray(res.resultats) && (
-            <div style={{ marginBottom: 8 }}>
-              {res.resultats.map((r: any, i: number) => (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "7px 10px", marginBottom: 5,
-                                      borderRadius: 8, fontSize: 12.5,
-                                      background: r.accepte ? C.greenSoft : "#fef2f2",
-                                      color: r.accepte ? C.green : C.red }}>
-                  <span style={{ fontWeight: 700 }}>{r.accepte ? "✓" : "✕"} {r.essai}</span>
-                  <span style={{ opacity: .85, textAlign: "right" as const, minWidth: 0 }}>{r.status}{r.message ? ` — ${r.message}` : ""}</span>
-                </div>
-              ))}
-              <div style={{ fontSize: 12, color: res.aucuneModification ? C.textSec : C.red, fontWeight: 700, marginTop: 6 }}>
-                {res.aucuneModification
-                  ? `Quantité inchangée (${res.quantiteInchangee}) — aucun stock modifié.`
-                  : `⚠ La quantité a changé : ${res.quantiteInchangee} → ${res.quantiteApresTests}`}
-              </div>
-            </div>
-          )}
-          {"applique" in res && (
-            <div style={{ padding: 10, borderRadius: 9, marginBottom: 8, fontSize: 13, fontWeight: 700,
-                          background: res.applique ? C.greenSoft : "#fef2f2",
-                          color: res.applique ? C.green : C.red }}>
-              {res.applique
-                ? `Écriture acceptée — Pickware a bien enregistré (${res.apres}).`
-                : `Écriture refusée ou sans effet — demandé ${res.demande}, relu ${res.apres ?? "rien"}.`}
-            </div>
-          )}
-          <pre style={{ margin: 0, padding: 10, background: C.bg, borderRadius: 9, fontSize: 11.5, overflowX: "auto" }}>
-            {JSON.stringify(res, null, 2)}
-          </pre>
-        </>
-      )}
     </div>
   );
 }
