@@ -331,15 +331,56 @@ export async function GET(req: NextRequest) {
       const first = await safeJson(await swFetch(buildUrl(0), creds));
       const firstData = first.json?.data || [];
       const total: number = first.json?.total ?? firstData.length;
-      const all: any[] = firstData.map(mapArticle);
+      const articles: any[] = firstData.map(mapArticle);
 
       if (total > pageSize) {
         // Toutes les pages restantes lancées d'un coup (parallèle).
         const starts: number[] = [];
         for (let s = pageSize; s < total && s < 10000; s += pageSize) starts.push(s);
         const pages = await Promise.all(starts.map(async (s) => safeJson(await swFetch(buildUrl(s), creds))));
-        for (const p of pages) for (const a of (p.json?.data || [])) all.push(mapArticle(a));
+        for (const p of pages) for (const a of (p.json?.data || [])) articles.push(mapArticle(a));
       }
+
+      // ── Déclinaisons ──────────────────────────────────────────────────────
+      // /articles ne renvoie que la déclinaison PRINCIPALE de chaque article.
+      // Une référence secondaire — autre contenance, autre conditionnement —
+      // n'apparaissait donc jamais dans l'audit alors qu'elle se vend. On liste
+      // les variantes et on leur rattache le nom de leur article.
+      const nomParArticle: Record<number, string> = {};
+      for (const a of articles) if (a.articleId) nomParArticle[a.articleId] = a.name;
+
+      const buildVarUrl = (start: number) => `/variants?limit=${pageSize}&start=${start}`;
+      const parRef = new Map<string, any>();
+      for (const a of articles) if (a.number) parRef.set(String(a.number), a);
+
+      try {
+        const v1 = await safeJson(await swFetch(buildVarUrl(0), creds));
+        const vData = v1.json?.data || [];
+        const vTotal: number = v1.json?.total ?? vData.length;
+        const toutes: any[] = [...vData];
+        if (vTotal > pageSize) {
+          const starts: number[] = [];
+          for (let s = pageSize; s < vTotal && s < 20000; s += pageSize) starts.push(s);
+          const pages = await Promise.all(starts.map(async (s) => safeJson(await swFetch(buildVarUrl(s), creds))));
+          for (const p of pages) for (const v of (p.json?.data || [])) toutes.push(v);
+        }
+        for (const v of toutes) {
+          const num = String(v.number || "");
+          if (!num || parRef.has(num)) continue;   // déjà présent via son article
+          if (v.active === false) continue;        // déclinaison désactivée
+          const aid = v.articleId;
+          // Sans article actif rattaché, la déclinaison n'est pas vendable :
+          // l'inclure ferait remonter de fausses anomalies.
+          if (!nomParArticle[aid]) continue;
+          parRef.set(num, {
+            articleId: aid, detailId: v.id, number: num,
+            name: nomParArticle[aid] + (v.additionalText ? ` — ${v.additionalText}` : ""),
+            active: true, inStock: v.inStock ?? null,
+          });
+        }
+      } catch { /* les variantes sont un complément : leur échec ne doit pas vider l'audit */ }
+
+      const all = Array.from(parRef.values());
       return NextResponse.json({ count: all.length, products: all });
     }
 
