@@ -3203,6 +3203,199 @@ export async function savePackingList(session: OdooSession, name: string, data: 
   });
 }
 
+// ══════════════════════════════════════════
+// IMPORT WALA PROGRAMMÉ
+// ══════════════════════════════════════════
+//
+// L'import Wala se fait aujourd'hui à l'arrivée physique de la marchandise, par
+// une personne qui sait analyser le fichier fournisseur. Pendant une absence,
+// personne ne peut le faire — et la marchandise arrive quand même.
+//
+// On sépare donc les deux temps : l'analyse est PRÉPARÉE à l'avance, et le
+// préparateur n'a qu'un bouton à presser le jour de la livraison.
+//
+// Stocké en pièce jointe Odoo, comme les listes de prélèvement : visible et
+// récupérable depuis Odoo, et ça ne dépend pas d'un navigateur particulier.
+
+const WALA_PENDING_FILE = "wala_import_programme.json";
+
+export interface PendingWalaImport {
+  /** Lignes déjà rapprochées des articles Odoo — l'analyse est faite. */
+  lines: any[];
+  fileName: string;
+  invoiceNo: string;
+  preparedBy: string;
+  preparedAt: string;
+  note?: string;
+}
+
+export async function savePendingWalaImport(session: OdooSession, data: PendingWalaImport): Promise<void> {
+  const bytes = new TextEncoder().encode(JSON.stringify(data));
+  let bin = "";
+  const chunk = 8192;
+  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode(...Array.from(bytes.slice(i, i + chunk)));
+  const b64 = btoa(bin);
+
+  const existing = await searchRead(session, M("MODEL_ATTACHMENT"), [["name", "=", WALA_PENDING_FILE]], ["id"], 1);
+  if (existing.length) {
+    await write(session, M("MODEL_ATTACHMENT"), [existing[0].id], { datas: b64 });
+    return;
+  }
+  await create(session, M("MODEL_ATTACHMENT"), {
+    name: WALA_PENDING_FILE, type: "binary", datas: b64,
+    mimetype: "application/json", public: true,
+  });
+}
+
+export async function loadPendingWalaImport(session: OdooSession): Promise<PendingWalaImport | null> {
+  const atts = await searchRead(session, M("MODEL_ATTACHMENT"),
+    [["name", "=", WALA_PENDING_FILE]], ["id", "datas"], 1, "write_date desc");
+  if (!atts.length || !atts[0].datas) return null;
+  try {
+    const bin = atob(atts[0].datas);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch { return null; }
+}
+
+/** Supprime l'import programmé — appelé une fois qu'il a été exécuté. */
+export async function clearPendingWalaImport(session: OdooSession): Promise<void> {
+  const atts = await searchRead(session, M("MODEL_ATTACHMENT"), [["name", "=", WALA_PENDING_FILE]], ["id"], 5);
+  if (atts.length) await unlink(session, M("MODEL_ATTACHMENT"), atts.map((a: any) => a.id));
+}
+
+export interface WalaImportResult {
+  poId: number;
+  poName: string;
+  pickingId: number;
+  pickingName: string;
+  lotsCreated: number;
+  lotsDuplicate: string[];
+  linesCount: number;
+  /** Renseigné seulement si la validation a été demandée. */
+  validated?: boolean;
+  chained?: { id: number; name: string; state: string }[];
+}
+
+/**
+ * Import Wala : commande fournisseur, lots, quantités, et validation optionnelle.
+ *
+ * Extrait de l'écran d'import pour être appelé aussi par le bouton d'arrivage.
+ * Deux implémentations de la même chose finissent toujours par diverger — on l'a
+ * vérifié aujourd'hui avec searchRead et searchReadAll.
+ *
+ * En cas d'échec APRÈS création du bon de commande, celui-ci est annulé et
+ * supprimé : sans ce retour arrière, chaque tentative ratée laisserait une
+ * commande fantôme et une réception vide dans Odoo.
+ */
+export async function runWalaImport(
+  session: OdooSession,
+  lines: { productId: number; qty: number; price: number; defaultCode: string; name: string; uomId: number; lotNo: string; expiryDate: string; invoiceNo: string }[],
+  opts: { validate?: boolean; onLog?: (msg: string, state: "running" | "ok" | "warn" | "error") => void } = {},
+): Promise<WalaImportResult> {
+  const log = opts.onLog || (() => {});
+  const lotsDuplicate: string[] = [];
+  let lotsCreated = 0;
+  let createdPoId: number | null = null;
+
+  try {
+    log("Recherche du fournisseur WALA Heilmittel GmbH…", "running");
+    const partnerId = await getWalaPartnerId(session);
+    log(`Fournisseur trouvé (ID ${partnerId})`, "ok");
+
+    log("Création du bon de commande fournisseur…", "running");
+    const poLines: WalaPOLine[] = lines.map(l => ({
+      productId: l.productId, qty: l.qty, price: l.price,
+      name: `[${l.defaultCode}] ${l.name}`, uomId: l.uomId,
+    }));
+    const invoiceNo = lines[0]?.invoiceNo || "";
+    const po = await createAndConfirmPO(session, partnerId, poLines, { partnerRef: invoiceNo });
+    createdPoId = po.poId;
+    log(`Bon de commande créé et confirmé : ${po.poName}`, "ok");
+    log(`Réception générée : ${po.pickingName}`, "ok");
+
+    log(`Création des lots (${lines.length} lignes)…`, "running");
+    const receptionLines: ReceptionLotLine[] = [];
+    const lotIdCache: Record<string, number> = {};
+    for (const line of lines) {
+      if (!line.lotNo) {
+        receptionLines.push({ productId: line.productId, lotId: null, lotName: "", qty: line.qty, uomId: line.uomId });
+        continue;
+      }
+      const key = `${line.productId}|${line.lotNo}`;
+      let lotId = lotIdCache[key];
+      if (!lotId) {
+        const { id, existed } = await getOrCreateLot(session, line.productId, line.lotNo, line.expiryDate);
+        lotId = id; lotIdCache[key] = id;
+        if (existed) { if (!lotsDuplicate.includes(line.lotNo)) lotsDuplicate.push(line.lotNo); }
+        else lotsCreated++;
+      }
+      receptionLines.push({ productId: line.productId, lotId, lotName: line.lotNo, qty: line.qty, uomId: line.uomId });
+    }
+    log(lotsDuplicate.length
+      ? `Lots traités — ${lotsCreated} créés, ${lotsDuplicate.length} déjà existants (réutilisés)`
+      : `${lotsCreated} lots créés`, lotsDuplicate.length ? "warn" : "ok");
+
+    log("Affectation des lots et quantités à la réception…", "running");
+    await setReceptionLots(session, po.pickingId, po.locationId, po.locationDestId, receptionLines);
+    log("Lots et quantités affectés", "ok");
+
+    const res: WalaImportResult = {
+      poId: po.poId, poName: po.poName,
+      pickingId: po.pickingId, pickingName: po.pickingName,
+      lotsCreated, lotsDuplicate, linesCount: lines.length,
+    };
+
+    if (opts.validate) {
+      log("Validation de la réception…", "running");
+      const v = await validateReception(session, po.pickingId);
+      res.validated = v.validated;
+      res.chained = v.chained;
+      log(v.chained.length
+        ? `Réception validée — ${v.chained.length} transfert(s) de rangement à traiter`
+        : "Réception validée, stock à jour", v.chained.length ? "warn" : "ok");
+    } else {
+      log("Réception prête à valider dans Odoo", "ok");
+    }
+
+    createdPoId = null; // succès : plus de retour arrière à faire
+    return res;
+  } catch (e: any) {
+    if (createdPoId !== null) {
+      log("Annulation du bon de commande créé…", "running");
+      try { await cancelAndDeletePO(session, createdPoId); log("Bon de commande annulé", "ok"); }
+      catch { log("Annulation impossible — à vérifier dans Odoo", "error"); }
+    }
+    throw e;
+  }
+}
+
+/**
+ * Valide une réception fournisseur et signale les transferts enchaînés.
+ *
+ * En réception multi-étapes, valider le bon fournisseur déclenche un second
+ * transfert vers les emplacements de stockage. Le stock n'est réellement rangé
+ * qu'après celui-là : on le renvoie pour que l'écran puisse le dire, plutôt que
+ * d'annoncer « terminé » alors qu'il reste une étape.
+ */
+export async function validateReception(
+  session: OdooSession, pickingId: number,
+): Promise<{ validated: boolean; chained: { id: number; name: string; state: string }[] }> {
+  await validatePicking(session, pickingId);
+  const [pick] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", pickingId]], ["id", "name", "origin"], 1);
+  let chained: { id: number; name: string; state: string }[] = [];
+  try {
+    // Les transferts suivants portent le nom du bon validé dans leur origine.
+    if (pick?.name) {
+      chained = await searchRead(session, M("MODEL_PICKING"),
+        [["origin", "like", pick.name], ["id", "!=", pickingId], ["state", "not in", ["done", "cancel"]]],
+        ["id", "name", "state"], 10);
+    }
+  } catch { /* information de confort */ }
+  return { validated: true, chained };
+}
+
 export async function loadPackingList(session: OdooSession, name: string) {
   const fileName = `packing_${name}.json`;
   const attachments = await searchRead(

@@ -8714,6 +8714,50 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
   // Refs marquées comme "rangées" — persistées sur Odoo (partagé entre postes)
   const [rangedRefs, setRangedRefs] = useState<Set<string>>(new Set());
   const [currentPackingName, setCurrentPackingName] = useState<string>("");
+  // Import Wala prepare a l'avance : le preparateur n'a qu'a l'activer le jour
+  // de la livraison. Voir savePendingWalaImport dans lib/odoo.
+  const [pendingWala, setPendingWala] = useState<odoo.PendingWalaImport | null>(null);
+  const [walaRunning, setWalaRunning] = useState(false);
+  const [walaLogs, setWalaLogs] = useState<{ msg: string; state: string }[]>([]);
+  const [walaDone, setWalaDone] = useState<odoo.WalaImportResult | null>(null);
+
+  useEffect(() => {
+    odoo.loadPendingWalaImport(session).then(setPendingWala).catch(() => {});
+  }, [session]);
+
+  const lancerWala = async () => {
+    if (!pendingWala || walaRunning) return;
+    if (!confirm(
+      `Importer la reception WALA et VALIDER dans Odoo ?\n\n` +
+      `${pendingWala.lines.length} ligne(s) — facture ${pendingWala.invoiceNo || "?"}\n` +
+      `Le stock sera mis a jour immediatement. A ne faire qu'une fois la marchandise recue.`
+    )) return;
+    setWalaRunning(true); setWalaLogs([]); setWalaDone(null);
+    try {
+      const res = await odoo.runWalaImport(session, pendingWala.lines as any, {
+        validate: true,
+        onLog: (msg, state) => setWalaLogs(prev => {
+          // Un message "running" est remplace par son resultat, comme dans
+          // l'ecran d'import : on suit l'avancement sans empiler les lignes.
+          const copie = [...prev];
+          if (copie.length && copie[copie.length - 1].state === "running" && state !== "running") {
+            copie[copie.length - 1] = { msg, state };
+            return copie;
+          }
+          return [...copie, { msg, state }];
+        }),
+      });
+      setWalaDone(res);
+      // Consomme : on ne veut pas qu'un second appui recree une commande.
+      await odoo.clearPendingWalaImport(session).catch(() => {});
+      setPendingWala(null);
+      onToast(`Reception importee et validee — ${res.pickingName}`);
+    } catch (e: any) {
+      setWalaLogs(prev => [...prev, { msg: "Erreur : " + (e?.message || e), state: "error" }]);
+      onToast("Import WALA en echec — rien n'a ete laisse a moitie fait");
+    }
+    setWalaRunning(false);
+  };
 
   const saveRanged = async (newSet: Set<string>, packName: string) => {
     if (!packName || !session) return;
@@ -9031,6 +9075,54 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 
       {step === "list" && (
         <>
+          {/* Reception WALA preparee a l'avance — le preparateur n'a qu'a l'activer */}
+          {(pendingWala || walaLogs.length > 0) && (
+            <Section>
+              <div style={{ padding: 4 }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: "#92400e", marginBottom: 6 }}>
+                  📦 Réception WALA préparée
+                </div>
+                {pendingWala && (
+                  <>
+                    <div style={{ fontSize: 12.5, color: "#78350f", lineHeight: 1.6, marginBottom: 10 }}>
+                      {pendingWala.lines.length} ligne(s) · facture {pendingWala.invoiceNo || "—"}<br />
+                      Préparée par {pendingWala.preparedBy} le {new Date(pendingWala.preparedAt).toLocaleDateString("fr-FR")}<br />
+                      <strong>À activer uniquement une fois la marchandise reçue</strong> — le stock sera mis à jour.
+                    </div>
+                    <button onClick={lancerWala} disabled={walaRunning}
+                      style={{ width: "100%", padding: 14, background: walaRunning ? "#d6d3d1" : "#b45309", color: "#fff",
+                               border: "none", borderRadius: 11, fontSize: 15, fontWeight: 700,
+                               cursor: walaRunning ? "default" : "pointer", fontFamily: "inherit" }}>
+                      {walaRunning ? "Import en cours…" : "✓ La marchandise est arrivée — importer et valider"}
+                    </button>
+                  </>
+                )}
+                {walaLogs.length > 0 && (
+                  <div style={{ marginTop: 10, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 9, padding: 10 }}>
+                    {walaLogs.map((l, i) => (
+                      <div key={i} style={{ fontSize: 12, marginBottom: 3,
+                                            color: l.state === "error" ? "#dc2626" : l.state === "warn" ? "#b45309" : l.state === "ok" ? "#16a34a" : "#64748b" }}>
+                        {l.state === "ok" ? "✓" : l.state === "error" ? "✕" : l.state === "warn" ? "⚠" : "…"} {l.msg}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {walaDone && (
+                  <div style={{ marginTop: 10, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 9, padding: 11, fontSize: 12.5, color: "#15803d" }}>
+                    <strong>{walaDone.poName}</strong> · réception <strong>{walaDone.pickingName}</strong> validée.<br />
+                    {walaDone.lotsCreated} lot(s) créé(s){walaDone.lotsDuplicate.length ? `, ${walaDone.lotsDuplicate.length} réutilisé(s)` : ""}.
+                    {walaDone.chained && walaDone.chained.length > 0 && (
+                      <div style={{ marginTop: 6, color: "#92400e" }}>
+                        ⚠ {walaDone.chained.length} transfert(s) de rangement à traiter dans Odoo :{" "}
+                        {walaDone.chained.map(c => c.name).join(", ")}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </Section>
+          )}
+
           {/* Upload new */}
           <Section>
             <div style={{ textAlign: "center", padding: "20px 16px" }}>

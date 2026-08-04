@@ -545,6 +545,37 @@ export default function SupplierImportScreen({
                     {collisions.length > 0 ? "⛔ Corrige les collisions d'abord" : "🚀 Lancer l'import Odoo"}
                   </button>
                 )}
+                {/* Analyse faite maintenant, execution le jour de la livraison.
+                    Permet de preparer un import avant une absence : le preparateur
+                    n'aura qu'un bouton a presser dans Arrivage. */}
+                {matchedLines.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      if (collisions.length > 0) return;
+                      if (!confirm(
+                        `Programmer cet import pour l'arrivage ?\n\n` +
+                        `${matchedLines.length} ligne(s) analysée(s). Rien ne sera créé dans Odoo maintenant.\n` +
+                        `Un bouton apparaîtra dans Arrivage : à la livraison, le préparateur l'active ` +
+                        `et tout est importé PUIS validé, stock compris.`
+                      )) return;
+                      try {
+                        await odoo.savePendingWalaImport(session, {
+                          lines: matchedLines,
+                          fileName,
+                          invoiceNo: matchedLines[0]?.invoiceNo || "",
+                          preparedBy: session.name || session.login || "",
+                          preparedAt: new Date().toISOString(),
+                        });
+                        onToast("Import programmé — visible dans Arrivage");
+                      } catch (e: any) {
+                        onToast("Impossible de programmer : " + (e?.message || e));
+                      }
+                    }}
+                    disabled={collisions.length > 0}
+                    style={{ ...S.btnSecondary, ...(collisions.length > 0 ? { opacity: .5, cursor: "not-allowed" } : {}) }}>
+                    📅 Programmer pour l&apos;arrivage
+                  </button>
+                )}
               </div>
             ) : (
               /* Réfs manquantes : annuler (rouge) + forcer (orange) */
