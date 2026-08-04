@@ -424,6 +424,69 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // ── binSetStock: poser un stock sur un emplacement Pickware (ÉCRITURE) ──
+    //
+    // Pickware range la quantité dans une correspondance déclinaison/emplacement
+    // qui porte son propre identifiant. On modifie donc CETTE correspondance,
+    // pas l'emplacement entier : envoyer la liste complète risquerait d'effacer
+    // les autres articles rangés au même endroit.
+    //
+    // Appel : ?action=binSetStock&articleNumber=X&code=A12&qty=N
+    //         &verifyOnly=1 pour réécrire la valeur ACTUELLE — vérifie que
+    //         l'API accepte l'écriture sans rien modifier.
+    if (action === "binSetStock") {
+      const an = searchParams.get("articleNumber");
+      const code = searchParams.get("code");
+      const qtyRaw = searchParams.get("qty");
+      const verifyOnly = searchParams.get("verifyOnly") === "1";
+      if (!an || !code) return NextResponse.json({ error: "articleNumber et code requis" }, { status: 400 });
+      if (!verifyOnly && qtyRaw == null) return NextResponse.json({ error: "qty requis" }, { status: 400 });
+
+      const vr = await safeJson(await swFetch(`/variants/${encodeURIComponent(an)}?useNumberAsId=true`, creds));
+      const detail = vr.json?.data;
+      if (!detail) return NextResponse.json({ error: `Référence ${an} introuvable` }, { status: 404 });
+
+      const blRes = await safeJson(await swFetch("/ViisonPickwareERPBinLocations?limit=2000", creds));
+      const bin = (blRes.json?.data || []).find((b: any) => String(b.code).toUpperCase() === code.toUpperCase());
+      if (!bin) return NextResponse.json({ error: `Emplacement ${code} introuvable` }, { status: 404 });
+
+      const full = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${bin.id}`, creds));
+      const maps = full.json?.data?.articleDetailBinLocationMappings || [];
+      const mapping = maps.find((m: any) => m.articleDetailId === detail.id);
+
+      const avant = mapping ? mapping.stock : null;
+      const cible = verifyOnly ? (avant ?? 0) : Number(qtyRaw);
+
+      // Correspondance existante → on la modifie par son id.
+      // Absente → on l'ajoute en nommant la déclinaison, ce qui revient à
+      // affecter l'article à cet emplacement.
+      const payload = {
+        articleDetailBinLocationMappings: [
+          mapping ? { id: mapping.id, stock: cible } : { articleDetailId: detail.id, stock: cible },
+        ],
+      };
+
+      const put = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${bin.id}`, creds, "PUT", payload));
+
+      // Relecture : la seule preuve que l'écriture a réellement pris. Une API
+      // peut répondre 200 sans rien enregistrer.
+      const apres = await safeJson(await swFetch(`/ViisonPickwareERPBinLocations/${bin.id}`, creds));
+      const relu = (apres.json?.data?.articleDetailBinLocationMappings || [])
+        .find((m: any) => m.articleDetailId === detail.id);
+
+      return NextResponse.json({
+        articleNumber: an, code, detailId: detail.id,
+        mode: verifyOnly ? "verification (aucune modification)" : "ecriture",
+        mappingExistant: !!mapping,
+        avant,
+        demande: cible,
+        apres: relu ? relu.stock : null,
+        applique: relu ? relu.stock === cible : false,
+        httpPut: put.status,
+        erreurPut: put.ok ? undefined : (put.json?.message || put.raw || "").toString().slice(0, 300),
+      });
+    }
+
     // ── binRaw: structure BRUTE d'un emplacement Pickware (LECTURE, sonde) ──
     //
     // Avant d'ecrire dans Pickware, il faut savoir ce qu'il expose reellement :
