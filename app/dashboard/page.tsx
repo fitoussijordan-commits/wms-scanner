@@ -1549,6 +1549,164 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
   const [delStart, setDelStart] = useState(() => { const d = new Date(); d.setDate(1); return d.toISOString().split("T")[0]; });
   const [delEnd, setDelEnd] = useState(() => new Date().toISOString().split("T")[0]);
   const [moveRef, setMoveRef] = useState("");
+
+  // ── Suivi par NUMÉRO DE LOT ──────────────────────────────────────────────
+  // Le suivi par référence mélange tous les lots. Pour tracer un lot precis —
+  // rappel qualite, ecart d'inventaire, litige client — il faut sa vie propre.
+  //
+  // Le bruit vient des transferts INTERNES : un meme colis apparait au PICK puis
+  // au OUT alors que le stock total n'a pas bouge entre les deux. On les masque
+  // par defaut : ne restent que les mouvements qui changent reellement le stock.
+  type LotMove = {
+    id: number; date: string; ref: string;
+    fromName: string; toName: string;
+    fromUsage: string; toUsage: string;
+    qty: number; signed: number;
+    kind: "entree" | "sortie" | "interne" | "ajustement";
+  };
+  const [lotQuery, setLotQuery] = useState("");
+  const [lotLoading, setLotLoading] = useState(false);
+  const [lotError, setLotError] = useState("");
+  const [lotInfo, setLotInfo] = useState<{ id: number; name: string; product: string; expiry: string } | null>(null);
+  const [lotMoves, setLotMoves] = useState<LotMove[]>([]);
+  const [lotShowInternal, setLotShowInternal] = useState(false);
+  const [lotKinds, setLotKinds] = useState<Record<string, boolean>>({ entree: true, sortie: true, ajustement: true });
+  // Ou se trouve physiquement le lot aujourd'hui, et quels lots du meme produit
+  // portent un nom ressemblant. C'est la question posee quand le stock annonce
+  // 96 unites introuvables : soit une correction fautive, soit un rangement sous
+  // un lot voisin d'une meme reception.
+  const [lotQuants, setLotQuants] = useState<{ loc: string; qty: number }[]>([]);
+  const [lotSimilar, setLotSimilar] = useState<{ id: number; name: string; qty: number; dist: number; entree: string; ref: string; memeRecep: boolean }[]>([]);
+
+  const loadLotHistory = useCallback(async () => {
+    const q = lotQuery.trim();
+    if (!q || !session) return;
+    setLotLoading(true); setLotError(""); setLotMoves([]); setLotInfo(null); setLotQuants([]); setLotSimilar([]);
+    try {
+      const lots = await odoo.searchRead(session, M("MODEL_LOT"),
+        [["name", "=", q]],
+        await odoo.availableFields(session, M("MODEL_LOT"), ["id", "name", "product_id", "expiration_date"]), 1);
+      if (!lots.length) { setLotError(`Aucun lot nommé « ${q} »`); setLotLoading(false); return; }
+      const lot = lots[0];
+      setLotInfo({
+        id: lot.id, name: lot.name,
+        product: Array.isArray(lot.product_id) ? lot.product_id[1] : "",
+        expiry: (lot.expiration_date || "").slice(0, 10),
+      });
+
+      // Seuls les mouvements TERMINÉS comptent : un mouvement en cours ne dit
+      // rien de la vie reelle du lot et fausserait le solde.
+      const mls = await odoo.searchRead(session, "stock.move.line",
+        [["lot_id", "=", lot.id], ["state", "=", "done"]],
+        ["id", "date", "reference", "location_id", "location_dest_id",
+         "location_usage", "location_dest_usage", "quantity", "qty_done"],
+        3000, "date asc");
+
+      const rows: LotMove[] = mls.map((m: any) => {
+        const fromU = m.location_usage || "";
+        const toU = m.location_dest_usage || "";
+        const qty = Number(m.qty_done ?? m.quantity ?? 0) || 0;
+        const entre = toU === "internal" && fromU !== "internal";
+        const sort  = fromU === "internal" && toU !== "internal";
+        const inv   = fromU === "inventory" || toU === "inventory";
+        const kind: LotMove["kind"] = inv ? "ajustement" : entre ? "entree" : sort ? "sortie" : "interne";
+        return {
+          id: m.id,
+          date: String(m.date || "").slice(0, 16).replace("T", " "),
+          ref: m.reference || "",
+          fromName: Array.isArray(m.location_id) ? m.location_id[1] : "",
+          toName: Array.isArray(m.location_dest_id) ? m.location_dest_id[1] : "",
+          fromUsage: fromU, toUsage: toU,
+          qty,
+          // Un transfert interne ne change pas le stock : son signe est nul,
+          // sinon le solde cumule se mettrait a diverger.
+          signed: entre ? qty : sort ? -qty : 0,
+          kind,
+        };
+      });
+      setLotMoves(rows);
+      if (!rows.length) setLotError("Ce lot existe mais n'a aucun mouvement terminé.");
+
+      // 1) Emplacements actuels du lot
+      const quants = await odoo.searchRead(session, M("MODEL_QUANT"),
+        [["lot_id", "=", lot.id], ["quantity", "!=", 0]],
+        ["location_id", "quantity"], 200);
+      setLotQuants(quants.map((q: any) => ({
+        loc: Array.isArray(q.location_id) ? q.location_id[1] : "",
+        qty: Number(q.quantity) || 0,
+      })).sort((a: any, b: any) => b.qty - a.qty));
+
+      // 2) Lots du MEME produit au nom proche. Une confusion de rangement se
+      //    fait presque toujours entre deux lots d'une meme reception, dont les
+      //    numeros ne different que d'un ou deux caracteres.
+      const pid = Array.isArray(lot.product_id) ? lot.product_id[0] : lot.product_id;
+      if (pid) {
+        const freres = await odoo.searchRead(session, M("MODEL_LOT"),
+          [["product_id", "=", pid], ["id", "!=", lot.id]], ["id", "name"], 500);
+        const dist = (a: string, b: string) => {
+          // Distance de Levenshtein, bornee : on ne garde que les noms proches.
+          const m = a.length, n = b.length;
+          if (Math.abs(m - n) > 3) return 99;
+          const d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+          for (let j = 1; j <= n; j++) d[0][j] = j;
+          for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+            d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+          return d[m][n];
+        };
+        const proches = freres
+          .map((f: any) => ({ id: f.id, name: f.name || "", dist: dist(lot.name || "", f.name || "") }))
+          .filter((f: any) => f.dist > 0 && f.dist <= 3)
+          .sort((a: any, b: any) => a.dist - b.dist)
+          .slice(0, 12);
+        if (proches.length) {
+          const ids = proches.map((x: any) => x.id);
+          const qs = await odoo.searchRead(session, M("MODEL_QUANT"),
+            [["lot_id", "in", ids], ["location_id.usage", "=", "internal"]],
+            ["lot_id", "quantity"], 1000);
+          const parLot: Record<number, number> = {};
+          for (const q of qs) {
+            const lid = Array.isArray(q.lot_id) ? q.lot_id[0] : q.lot_id;
+            parLot[lid] = (parLot[lid] || 0) + (Number(q.quantity) || 0);
+          }
+
+          // Date et reference d'ENTREE de chaque lot voisin. Un nom qui se
+          // ressemble ne prouve rien si le lot est entre six mois plus tot : la
+          // confusion de rangement se produit entre lots recus ENSEMBLE.
+          const entrees = await odoo.searchRead(session, "stock.move.line",
+            [["lot_id", "in", ids], ["state", "=", "done"], ["location_dest_usage", "=", "internal"]],
+            ["lot_id", "date", "reference"], 3000, "date asc");
+          const premiere: Record<number, { date: string; ref: string }> = {};
+          for (const e of entrees) {
+            const lid = Array.isArray(e.lot_id) ? e.lot_id[0] : e.lot_id;
+            if (!premiere[lid]) premiere[lid] = { date: String(e.date || "").slice(0, 10), ref: e.reference || "" };
+          }
+
+          // Reference de l'entree du lot recherche, pour reperer une meme reception.
+          const monEntree = rows.find(r => r.kind === "entree");
+          const maDate = monEntree ? monEntree.date.slice(0, 10) : "";
+          const maRef = monEntree ? monEntree.ref : "";
+          const jours = (a: string, b: string) => {
+            if (!a || !b) return 9999;
+            return Math.abs((new Date(a).getTime() - new Date(b).getTime()) / 86400000);
+          };
+
+          setLotSimilar(proches
+            .map((x: any) => {
+              const e = premiere[x.id] || { date: "", ref: "" };
+              return { ...x, qty: parLot[x.id] || 0, entree: e.date, ref: e.ref,
+                       memeRecep: !!maRef && e.ref === maRef };
+            })
+            // On ne garde que ce qui est plausible : meme reception, ou entree a
+            // moins de 7 jours. Le reste n'explique pas un rangement croise.
+            .filter((x: any) => x.memeRecep || jours(x.entree, maDate) <= 7)
+            .sort((a: any, b: any) => (b.memeRecep ? 1 : 0) - (a.memeRecep ? 1 : 0) || a.dist - b.dist));
+        } else setLotSimilar([]);
+      }
+    } catch (e: any) {
+      setLotError(e?.message || String(e));
+    }
+    setLotLoading(false);
+  }, [lotQuery, session]);
   const [moveSearched, setMoveSearched] = useState(false);
   const [moveStart, setMoveStart] = useState("");
   const [moveEnd, setMoveEnd] = useState("");
@@ -4882,6 +5040,163 @@ document.getElementById('ranking').innerHTML=rank.map(([k,d])=>'<div class="row"
         {/* ══════════ SUIVI STOCK ══════════ */}
         {tab === "stock-tracking" && (
           <div style={{ animation: "fadeIn .3s ease both" }}>
+
+            {/* ── Suivi par numero de lot ────────────────────────────────── */}
+            <div style={{ marginBottom: 28, padding: 18, background: "#fff", border: "1px solid var(--border)", borderRadius: 14 }}>
+              <h2 style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Vie d&apos;un numéro de lot</h2>
+              <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 14 }}>
+                Entrées, sorties et ajustements d&apos;un lot précis. Les transferts internes sont masqués
+                par défaut : ils déplacent le lot sans changer le stock.
+              </p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+                <input className="wms-input" value={lotQuery} onChange={e => setLotQuery(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && loadLotHistory()}
+                  placeholder="Numéro de lot (ex. A441139)…" style={{ flex: 1, minWidth: 220 }} />
+                <button className="wms-btn wms-btn-primary" onClick={loadLotHistory}
+                  disabled={lotLoading || !lotQuery.trim()} style={{ opacity: !lotQuery.trim() ? .5 : 1 }}>
+                  {lotLoading ? <Spinner /> : I.search} Tracer
+                </button>
+              </div>
+
+              {lotError && (
+                <div style={{ padding: 11, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 9, fontSize: 13, color: "#991b1b" }}>{lotError}</div>
+              )}
+
+              {lotInfo && lotMoves.length > 0 && (() => {
+                const visibles = lotMoves.filter(m =>
+                  m.kind === "interne" ? lotShowInternal : (lotKinds[m.kind] !== false));
+                // Le solde se calcule sur TOUS les mouvements, pas sur les seuls
+                // affiches : filtrer l'affichage ne doit pas fausser le stock.
+                let cumul = 0;
+                const avecSolde = lotMoves.map(m => ({ m, solde: (cumul += m.signed) }));
+                const soldeFinal = cumul;
+                const parType = (k: string) => lotMoves.filter(m => m.kind === k).length;
+
+                return (
+                  <>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>{lotInfo.name}</div>
+                      <div style={{ fontSize: 13, color: "var(--text-muted)" }}>{lotInfo.product}</div>
+                      {lotInfo.expiry && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>DLUO {lotInfo.expiry}</div>}
+                      <div style={{ marginLeft: "auto", fontSize: 14, fontWeight: 800,
+                                    color: soldeFinal > 0 ? "#16a34a" : soldeFinal < 0 ? "#dc2626" : "var(--text-muted)" }}>
+                        Solde {soldeFinal > 0 ? "+" : ""}{soldeFinal}
+                      </div>
+                    </div>
+
+                    {/* Ou sont les unites aujourd'hui — la question posee quand
+                        le stock annonce des quantites introuvables. */}
+                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
+                      <div style={{ flex: 1, minWidth: 250, padding: 12, background: "#f8fafc", border: "1px solid var(--border)", borderRadius: 10 }}>
+                        <div style={{ fontSize: 11.5, fontWeight: 800, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 7 }}>
+                          Où se trouve ce lot aujourd&apos;hui
+                        </div>
+                        {lotQuants.length ? lotQuants.map((q, i) => (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "3px 0" }}>
+                            <span>{q.loc}</span>
+                            <strong style={{ color: q.qty < 0 ? "#dc2626" : "#0f172a" }}>{q.qty}</strong>
+                          </div>
+                        )) : (
+                          <div style={{ fontSize: 13, color: "var(--text-muted)" }}>Aucun stock enregistré pour ce lot.</div>
+                        )}
+                      </div>
+
+                      {/* Confusion de rangement : presque toujours entre deux lots
+                          d'une meme reception dont les numeros se ressemblent. */}
+                      <div style={{ flex: 1, minWidth: 250, padding: 12, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10 }}>
+                        <div style={{ fontSize: 11.5, fontWeight: 800, color: "#92400e", textTransform: "uppercase", marginBottom: 7 }}>
+                          Lots au nom ressemblant
+                        </div>
+                        {lotSimilar.length ? lotSimilar.map(l => (
+                          <div key={l.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, padding: "4px 0", color: "#78350f" }}>
+                            <span style={{ minWidth: 0 }}>
+                              <strong>{l.name}</strong>
+                              <span style={{ opacity: .65, fontSize: 11 }}> · {l.dist} car. d&apos;écart</span>
+                              <br />
+                              <span style={{ fontSize: 11, opacity: .8 }}>
+                                {l.memeRecep ? `même réception ${l.ref}` : `entré le ${l.entree || "?"}`}
+                              </span>
+                            </span>
+                            <strong style={{ whiteSpace: "nowrap" }}>{l.qty}</strong>
+                          </div>
+                        )) : (
+                          <div style={{ fontSize: 13, color: "#92400e" }}>
+                            Aucun lot proche reçu à la même période — la piste du rangement croisé est écartée.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 12 }}>
+                      {([["entree", "Entrées"], ["sortie", "Sorties"], ["ajustement", "Ajustements"]] as const).map(([k, lbl]) => (
+                        <button key={k} onClick={() => setLotKinds(p => ({ ...p, [k]: p[k] === false }))}
+                          style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                                   fontFamily: "inherit",
+                                   border: `1.5px solid ${lotKinds[k] !== false ? "#2563eb" : "var(--border)"}`,
+                                   background: lotKinds[k] !== false ? "#eff6ff" : "#fff",
+                                   color: lotKinds[k] !== false ? "#2563eb" : "var(--text-muted)" }}>
+                          {lbl} ({parType(k)})
+                        </button>
+                      ))}
+                      <button onClick={() => setLotShowInternal(v => !v)}
+                        style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                                 fontFamily: "inherit",
+                                 border: `1.5px solid ${lotShowInternal ? "#7c3aed" : "var(--border)"}`,
+                                 background: lotShowInternal ? "#f5f3ff" : "#fff",
+                                 color: lotShowInternal ? "#7c3aed" : "var(--text-muted)" }}>
+                        Transferts internes ({parType("interne")})
+                      </button>
+                    </div>
+
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: 11.5, textTransform: "uppercase" }}>
+                            <th style={{ padding: "6px 8px" }}>Date</th>
+                            <th style={{ padding: "6px 8px" }}>Type</th>
+                            <th style={{ padding: "6px 8px" }}>Référence</th>
+                            <th style={{ padding: "6px 8px" }}>De → Vers</th>
+                            <th style={{ padding: "6px 8px", textAlign: "right" }}>Qté</th>
+                            <th style={{ padding: "6px 8px", textAlign: "right" }}>Solde</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {avecSolde.filter(({ m }) => visibles.includes(m)).map(({ m, solde }) => {
+                            const couleur = m.kind === "entree" ? "#16a34a" : m.kind === "sortie" ? "#dc2626"
+                                          : m.kind === "ajustement" ? "#d97706" : "#7c3aed";
+                            const libelle = m.kind === "entree" ? "Entrée" : m.kind === "sortie" ? "Sortie"
+                                          : m.kind === "ajustement" ? "Ajustement" : "Interne";
+                            return (
+                              <tr key={m.id} style={{ borderTop: "1px solid var(--border)" }}>
+                                <td style={{ padding: "7px 8px", whiteSpace: "nowrap" }}>{m.date}</td>
+                                <td style={{ padding: "7px 8px" }}>
+                                  <span style={{ color: couleur, fontWeight: 700, fontSize: 12 }}>{libelle}</span>
+                                </td>
+                                <td style={{ padding: "7px 8px" }}>{m.ref}</td>
+                                <td style={{ padding: "7px 8px", color: "var(--text-muted)", fontSize: 12 }}>
+                                  {m.fromName} → {m.toName}
+                                </td>
+                                <td style={{ padding: "7px 8px", textAlign: "right", fontWeight: 700,
+                                             color: m.signed > 0 ? "#16a34a" : m.signed < 0 ? "#dc2626" : "var(--text-muted)" }}>
+                                  {m.signed > 0 ? "+" : ""}{m.signed !== 0 ? m.signed : m.qty}
+                                </td>
+                                <td style={{ padding: "7px 8px", textAlign: "right", color: "var(--text-muted)" }}>{solde}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                      {!visibles.length && (
+                        <div style={{ padding: 16, textAlign: "center", fontSize: 13, color: "var(--text-muted)" }}>
+                          Aucun mouvement dans les filtres actifs.
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
             <div style={{ marginBottom: 24 }}>
               <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Suivi de stock produit</h2>
               <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>Entrez une référence pour tracer l'historique complet et détecter les anomalies.</p>
