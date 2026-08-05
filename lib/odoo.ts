@@ -7254,8 +7254,29 @@ export async function getManufacturingOrderDetail(
 export async function fillManufacturingDone(
   session: OdooSession,
   orderId: number
-): Promise<{ updated: number; skipped: number }> {
-  const detail = await getManufacturingOrderDetail(session, orderId);
+): Promise<{ updated: number; skipped: number; confirmed?: boolean; reserved?: boolean }> {
+  let detail = await getManufacturingOrderDetail(session, orderId);
+  let confirmed = false, reserved = false;
+
+  // Un ordre en BROUILLON n'a aucune réservation : Odoo n'affecte le stock qu'à
+  // la confirmation. Le remplissage trouvait donc « réservé = 0 » partout et
+  // annonçait des composants indisponibles, alors que le stock est là.
+  if (detail.state === "draft") {
+    await callMethod(session, M("MODEL_MRP_PRODUCTION"), "action_confirm", [[orderId]]);
+    confirmed = true;
+  }
+
+  // Puis on demande la réservation. Sans elle, un ordre confirmé mais jamais
+  // assigné présente les mêmes symptômes.
+  if (detail.lines.every(l => (l.reserved || 0) <= 0)) {
+    try {
+      await callMethod(session, M("MODEL_MRP_PRODUCTION"), "action_assign", [[orderId]]);
+      reserved = true;
+    } catch { /* stock réellement insuffisant : on le verra à la relecture */ }
+  }
+
+  if (confirmed || reserved) detail = await getManufacturingOrderDetail(session, orderId);
+
   let updated = 0, skipped = 0;
   for (const l of detail.lines) {
     if (!l.moveLineId || l.reserved <= 0) { skipped++; continue; }
@@ -7263,5 +7284,5 @@ export async function fillManufacturingDone(
     await write(session, M("MODEL_MOVE_LINE"), [l.moveLineId], { [detail.qtyDoneField]: l.reserved });
     updated++;
   }
-  return { updated, skipped };
+  return { updated, skipped, confirmed, reserved };
 }

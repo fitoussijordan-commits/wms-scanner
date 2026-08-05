@@ -114,10 +114,16 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     setFilling(true);
     try {
       const r = await odoo.fillManufacturingDone(session, openOrder.id);
+      // Le message doit dire ce qui s'est REELLEMENT passe. « Composants
+      // indisponibles » etait faux dans le cas courant : l'ordre etait
+      // simplement en brouillon, donc jamais reserve, alors que le stock etait la.
+      const etapes = [r.confirmed && "ordre confirmé", r.reserved && "stock réservé"].filter(Boolean).join(" · ");
       if (r.updated === 0 && r.skipped > 0) {
-        onToast("Aucune ligne réservée à remplir (composants indisponibles)", "info");
+        onToast(etapes
+          ? `${etapes} — mais aucune quantité réservée : stock réellement insuffisant`
+          : "Aucune ligne réservée : vérifie la disponibilité des composants dans Odoo", "info");
       } else {
-        onToast(`✅ ${r.updated} ligne(s) remplie(s)${r.skipped ? ` · ${r.skipped} ignorée(s)` : ""}`, "success");
+        onToast(`✅ ${etapes ? etapes + " · " : ""}${r.updated} ligne(s) remplie(s)${r.skipped ? ` · ${r.skipped} ignorée(s)` : ""}`, "success");
       }
       // Recharge le détail pour refléter les quantités mises à jour.
       setOpenOrder(await odoo.getManufacturingOrderDetail(session, openOrder.id));
