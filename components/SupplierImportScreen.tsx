@@ -552,12 +552,44 @@ export default function SupplierImportScreen({
                   <button
                     onClick={async () => {
                       if (collisions.length > 0) return;
-                      if (!confirm(
+
+                      // Il n'existe qu'un seul emplacement d'import programme :
+                      // enregistrer ecrase le precedent. Silencieusement, ce
+                      // serait le meilleur moyen de perdre le travail d'un
+                      // collegue sans que personne ne s'en apercoive.
+                      let existant: odoo.PendingWalaImport | null = null;
+                      try { existant = await odoo.loadPendingWalaImport(session); } catch {}
+
+                      if (existant?.progress) {
+                        // Cet import a deja cree des choses dans Odoo. L'ecraser
+                        // rendrait la reprise impossible et laisserait une
+                        // commande orpheline que plus personne ne saurait finir.
+                        alert(
+                          `Impossible de programmer : un import est en cours de reprise.\n\n` +
+                          `Facture ${existant.invoiceNo || "?"} — commande ${existant.progress.poName} ` +
+                          `deja creee dans Odoo (etape "${existant.progress.etape}").\n\n` +
+                          `Termine-le depuis l'ecran Arrivage, ou annule le bon ${existant.progress.poName} ` +
+                          `dans Odoo, avant d'en programmer un autre.`
+                        );
+                        return;
+                      }
+
+                      if (existant && !confirm(
+                        `⚠ Un import est deja programme et sera REMPLACE.\n\n` +
+                        `Actuel : facture ${existant.invoiceNo || "?"} — ${existant.lines.length} ligne(s), ` +
+                        `prepare par ${existant.preparedBy} le ` +
+                        `${new Date(existant.preparedAt).toLocaleDateString("fr-FR")}\n` +
+                        `Nouveau : facture ${matchedLines[0]?.invoiceNo || "?"} — ${matchedLines.length} ligne(s)\n\n` +
+                        `L'ancien sera definitivement perdu. Continuer ?`
+                      )) return;
+
+                      if (!existant && !confirm(
                         `Programmer cet import pour l'arrivage ?\n\n` +
                         `${matchedLines.length} ligne(s) analysée(s). Rien ne sera créé dans Odoo maintenant.\n` +
                         `Un bouton apparaîtra dans Arrivage : à la livraison, le préparateur l'active ` +
                         `et tout est importé PUIS validé, stock compris.`
                       )) return;
+
                       try {
                         await odoo.savePendingWalaImport(session, {
                           lines: matchedLines,
