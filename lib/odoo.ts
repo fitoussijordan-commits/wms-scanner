@@ -3230,6 +3230,22 @@ export interface PendingWalaImport {
   /** Poste qui a lancé l'import, pour que les autres cessent de le proposer. */
   claimedBy?: string;
   claimedAt?: string;
+  /**
+   * Ce qui a déjà été fait, pour reprendre après un échec en cours de route.
+   *
+   * Une fois le bon de commande créé dans Odoo, tout recommencer de zéro n'est
+   * plus possible : on note donc l'avancement pour continuer là où ça s'est
+   * arrêté, au lieu de laisser une commande orpheline et un opérateur bloqué.
+   */
+  progress?: {
+    poId: number;
+    poName: string;
+    pickingId: number;
+    pickingName: string;
+    /** Dernière étape achevée : commande | lots | validation. */
+    etape: "commande" | "lots" | "validation";
+    at: string;
+  };
 }
 
 export async function savePendingWalaImport(session: OdooSession, data: PendingWalaImport): Promise<void> {
@@ -3334,9 +3350,19 @@ export interface WalaImportResult {
  * Deux implémentations de la même chose finissent toujours par diverger — on l'a
  * vérifié aujourd'hui avec searchRead et searchReadAll.
  *
- * En cas d'échec APRÈS création du bon de commande, celui-ci est annulé et
- * supprimé : sans ce retour arrière, chaque tentative ratée laisserait une
- * commande fantôme et une réception vide dans Odoo.
+ * REPRISE APRÈS ÉCHEC — une fois le bon de commande créé dans Odoo, il n'y a
+ * plus de retour arrière propre. Plutôt que d'annuler et de tout recommencer,
+ * l'avancement est remonté à l'appelant après chaque étape franchie ; un
+ * nouvel appel avec `reprise` repart de là. Chaque étape est écrite pour
+ * supporter d'être rejouée :
+ *   - les lots sont récupérés s'ils existent déjà,
+ *   - l'affectation des quantités réécrit les mêmes lignes,
+ *   - une réception déjà validée n'est pas revalidée,
+ *   - seuls les transferts de rangement encore ouverts sont traités.
+ *
+ * Tant que l'avancement n'est pas enregistré (échec avant toute création), le
+ * bon de commande est annulé et supprimé : sans ce retour arrière, chaque
+ * tentative ratée laisserait une commande fantôme dans Odoo.
  */
 export async function runWalaImport(
   session: OdooSession,
@@ -3345,6 +3371,10 @@ export async function runWalaImport(
     validate?: boolean;
     /** Enchaîne aussi les transferts de rangement (voir validateReception). */
     terminerRangement?: boolean;
+    /** Avancement d'une tentative précédente : on repart de là au lieu de zéro. */
+    reprise?: PendingWalaImport["progress"];
+    /** Appelé après chaque étape franchie, pour persister l'avancement. */
+    onProgress?: (p: NonNullable<PendingWalaImport["progress"]>) => void | Promise<void>;
     onLog?: (msg: string, state: "running" | "ok" | "warn" | "error") => void;
   } = {},
 ): Promise<WalaImportResult> {
@@ -3352,6 +3382,17 @@ export async function runWalaImport(
   const lotsDuplicate: string[] = [];
   let lotsCreated = 0;
   let createdPoId: number | null = null;
+  const reprise = opts.reprise;
+
+  // L'avancement n'est utile que s'il est connu de l'appelant AVANT l'échec
+  // suivant. On le remonte donc au fil de l'eau, sans attendre la fin.
+  const avancer = async (po: { poId: number; poName: string; pickingId: number; pickingName: string },
+                         etape: "commande" | "lots" | "validation") => {
+    createdPoId = null; // à partir d'ici, on reprend au lieu d'annuler
+    try {
+      await opts.onProgress?.({ ...po, etape, at: new Date().toISOString() });
+    } catch { log("Avancement non enregistré — une reprise repartirait du début", "warn"); }
+  };
 
   try {
     log("Recherche du fournisseur WALA Heilmittel GmbH…", "running");
@@ -3369,12 +3410,16 @@ export async function runWalaImport(
     //
     // Le numéro de facture WALA est reporté dans partner_ref du bon de commande.
     // S'il en existe déjà un, la marchandise est déjà entrée en stock.
+    //
+    // En reprise, le bon existant est le nôtre : le contrôle se contente alors
+    // de vérifier qu'aucun AUTRE bon n'a été créé entre-temps.
     if (invoiceNo) {
       log(`Vérification qu'aucune commande n'existe pour la facture ${invoiceNo}…`, "running");
       const deja = await searchRead(session, M("MODEL_PURCHASE_ORDER"),
         [["partner_ref", "=", invoiceNo], ["state", "!=", "cancel"]], ["id", "name", "state"], 3);
-      if (deja.length) {
-        const noms = deja.map((p: any) => p.name).join(", ");
+      const etrangers = deja.filter((p: any) => p.id !== reprise?.poId);
+      if (etrangers.length) {
+        const noms = etrangers.map((p: any) => p.name).join(", ");
         const err: any = new Error(
           `Facture ${invoiceNo} déjà importée — bon de commande ${noms}. ` +
           `Le stock a déjà été mis à jour. Pour réimporter, annulez d'abord ce bon dans Odoo.`);
@@ -3390,41 +3435,59 @@ export async function runWalaImport(
       log("Pas de numéro de facture — le contrôle anti-doublon ne peut pas s'appliquer", "warn");
     }
 
-    log("Création du bon de commande fournisseur…", "running");
-    const poLines: WalaPOLine[] = lines.map(l => ({
-      productId: l.productId, qty: l.qty, price: l.price,
-      name: `[${l.defaultCode}] ${l.name}`, uomId: l.uomId,
-    }));
-    const po = await createAndConfirmPO(session, partnerId, poLines, { partnerRef: invoiceNo });
-    createdPoId = po.poId;
-    log(`Bon de commande créé et confirmé : ${po.poName}`, "ok");
-    log(`Réception générée : ${po.pickingName}`, "ok");
-
-    log(`Création des lots (${lines.length} lignes)…`, "running");
-    const receptionLines: ReceptionLotLine[] = [];
-    const lotIdCache: Record<string, number> = {};
-    for (const line of lines) {
-      if (!line.lotNo) {
-        receptionLines.push({ productId: line.productId, lotId: null, lotName: "", qty: line.qty, uomId: line.uomId });
-        continue;
-      }
-      const key = `${line.productId}|${line.lotNo}`;
-      let lotId = lotIdCache[key];
-      if (!lotId) {
-        const { id, existed } = await getOrCreateLot(session, line.productId, line.lotNo, line.expiryDate);
-        lotId = id; lotIdCache[key] = id;
-        if (existed) { if (!lotsDuplicate.includes(line.lotNo)) lotsDuplicate.push(line.lotNo); }
-        else lotsCreated++;
-      }
-      receptionLines.push({ productId: line.productId, lotId, lotName: line.lotNo, qty: line.qty, uomId: line.uomId });
+    let po: { poId: number; poName: string; pickingId: number; pickingName: string; locationId: number; locationDestId: number };
+    if (reprise) {
+      log(`Reprise de l'import — commande ${reprise.poName} déjà créée`, "warn");
+      const loc = await receptionLocations(session, reprise.pickingId);
+      po = { ...reprise, ...loc };
+    } else {
+      log("Création du bon de commande fournisseur…", "running");
+      const poLines: WalaPOLine[] = lines.map(l => ({
+        productId: l.productId, qty: l.qty, price: l.price,
+        name: `[${l.defaultCode}] ${l.name}`, uomId: l.uomId,
+      }));
+      po = await createAndConfirmPO(session, partnerId, poLines, { partnerRef: invoiceNo });
+      createdPoId = po.poId;
+      log(`Bon de commande créé et confirmé : ${po.poName}`, "ok");
+      log(`Réception générée : ${po.pickingName}`, "ok");
+      await avancer(po, "commande");
     }
-    log(lotsDuplicate.length
-      ? `Lots traités — ${lotsCreated} créés, ${lotsDuplicate.length} déjà existants (réutilisés)`
-      : `${lotsCreated} lots créés`, lotsDuplicate.length ? "warn" : "ok");
 
-    log("Affectation des lots et quantités à la réception…", "running");
-    await setReceptionLots(session, po.pickingId, po.locationId, po.locationDestId, receptionLines);
-    log("Lots et quantités affectés", "ok");
+    // Les lots sont déjà posés sur la réception : les rejouer ne casserait rien
+    // (getOrCreateLot les retrouve, setReceptionLots réécrit les mêmes lignes)
+    // mais ferait perdre du temps sur une grosse packing list.
+    const lotsDejaFaits = reprise?.etape === "lots" || reprise?.etape === "validation";
+
+    if (lotsDejaFaits) {
+      log("Lots et quantités déjà affectés lors de la tentative précédente", "ok");
+    } else {
+      log(`Création des lots (${lines.length} lignes)…`, "running");
+      const receptionLines: ReceptionLotLine[] = [];
+      const lotIdCache: Record<string, number> = {};
+      for (const line of lines) {
+        if (!line.lotNo) {
+          receptionLines.push({ productId: line.productId, lotId: null, lotName: "", qty: line.qty, uomId: line.uomId });
+          continue;
+        }
+        const key = `${line.productId}|${line.lotNo}`;
+        let lotId = lotIdCache[key];
+        if (!lotId) {
+          const { id, existed } = await getOrCreateLot(session, line.productId, line.lotNo, line.expiryDate);
+          lotId = id; lotIdCache[key] = id;
+          if (existed) { if (!lotsDuplicate.includes(line.lotNo)) lotsDuplicate.push(line.lotNo); }
+          else lotsCreated++;
+        }
+        receptionLines.push({ productId: line.productId, lotId, lotName: line.lotNo, qty: line.qty, uomId: line.uomId });
+      }
+      log(lotsDuplicate.length
+        ? `Lots traités — ${lotsCreated} créés, ${lotsDuplicate.length} déjà existants (réutilisés)`
+        : `${lotsCreated} lots créés`, lotsDuplicate.length ? "warn" : "ok");
+
+      log("Affectation des lots et quantités à la réception…", "running");
+      await setReceptionLots(session, po.pickingId, po.locationId, po.locationDestId, receptionLines);
+      log("Lots et quantités affectés", "ok");
+      await avancer(po, "lots");
+    }
 
     const res: WalaImportResult = {
       poId: po.poId, poName: po.poName,
@@ -3441,6 +3504,10 @@ export async function runWalaImport(
       res.validated = v.validated;
       res.chained = v.chained;
       res.rangements = v.rangements;
+      // Le stock est entré. Si un rangement échoue, la reprise devra sauter la
+      // validation — la rejouer sur une réception déjà « done » lèverait une
+      // erreur Odoo et masquerait le vrai problème.
+      await avancer(po, "validation");
       const ranges = (v.rangements || []).filter(r => r.ok).length;
       log(v.chained.length
         ? `Réception validée — ${v.chained.length} transfert(s) de rangement à traiter`
@@ -3516,7 +3583,17 @@ export async function validateReception(
   rangements?: { name: string; ok: boolean; erreur?: string }[];
 }> {
   const log = opts.onLog || (() => {});
-  await validatePicking(session, pickingId);
+
+  // Une réception déjà validée (reprise après échec du rangement) ne doit pas
+  // l'être une seconde fois : Odoo lèverait une erreur qui masquerait le vrai
+  // problème. On passe directement à la suite de la chaîne.
+  const [etat] = await searchRead(session, M("MODEL_PICKING"),
+    [["id", "=", pickingId]], ["id", "name", "state"], 1);
+  if (etat?.state === "done") {
+    log(`Réception ${etat.name} déjà validée — on passe au rangement`, "ok");
+  } else {
+    await validatePicking(session, pickingId);
+  }
 
   let chained: { id: number; name: string; state: string }[] = [];
   try { chained = await transfertsEnchaines(session, pickingId); }
@@ -4513,6 +4590,22 @@ export interface WalaPOResult {
   pickingName: string;
   locationId: number;
   locationDestId: number;
+}
+
+/**
+ * Emplacements source et destination d'une réception existante.
+ *
+ * En reprise, le bon de commande n'est pas recréé : ces deux valeurs, que
+ * createAndConfirmPO renvoyait, doivent être relues sur la réception elle-même.
+ */
+export async function receptionLocations(
+  session: OdooSession, pickingId: number,
+): Promise<{ locationId: number; locationDestId: number }> {
+  const [p] = await searchRead(session, M("MODEL_PICKING"),
+    [["id", "=", pickingId]], ["id", "location_id", "location_dest_id"], 1);
+  if (!p) throw new Error(`Réception ${pickingId} introuvable — reprise impossible`);
+  const num = (v: any) => (Array.isArray(v) ? v[0] : v) || 0;
+  return { locationId: num(p.location_id), locationDestId: num(p.location_dest_id) };
 }
 
 /** Crée et confirme un bon de commande fournisseur, retourne le BL créé automatiquement */

@@ -8744,13 +8744,19 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
     return age >= 0 && age < 15 * 60 * 1000 ? pendingWala.claimedBy : "";
   })();
 
+  // Tentative precedente interrompue : le bouton reprend au lieu de relancer.
+  const walaReprise = pendingWala?.progress || null;
+
   const lancerWala = async () => {
     if (!pendingWala || walaRunning) return;
-    if (!confirm(
-      `Importer la reception WALA, VALIDER et RANGER dans Odoo ?\n\n` +
-      `${pendingWala.lines.length} ligne(s) — facture ${pendingWala.invoiceNo || "?"}\n` +
-      `Le stock sera mis a jour immediatement ET place dans les emplacements de\n` +
-      `rangement decides par Odoo. A ne faire qu'une fois la marchandise recue.`
+    if (!confirm(walaReprise
+      ? `Reprendre l'import interrompu ?\n\n` +
+        `Commande ${walaReprise.poName} deja creee — reception ${walaReprise.pickingName}.\n` +
+        `L'import repartira de l'etape "${walaReprise.etape}" sans rien recreer.`
+      : `Importer la reception WALA, VALIDER et RANGER dans Odoo ?\n\n` +
+        `${pendingWala.lines.length} ligne(s) — facture ${pendingWala.invoiceNo || "?"}\n` +
+        `Le stock sera mis a jour immediatement ET place dans les emplacements de\n` +
+        `rangement decides par Odoo. A ne faire qu'une fois la marchandise recue.`
     )) return;
     setWalaRunning(true); setWalaLogs([]); setWalaDone(null);
     try {
@@ -8767,6 +8773,14 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 
       const res = await odoo.runWalaImport(session, pendingWala.lines as any, {
         validate: true,
+        // Reprise : si une tentative precedente s'est arretee en route, on
+        // repart de son avancement au lieu de recreer une commande.
+        reprise: prise.data.progress,
+        onProgress: async (p) => {
+          const maj = { ...prise.data, progress: p };
+          await odoo.savePendingWalaImport(session, maj).catch(() => {});
+          setPendingWala(maj);
+        },
         // Le rangement physique suit ce qu'Odoo décide : on va donc jusqu'au
         // bout de la chaîne plutôt que de laisser la marchandise en zone
         // d'entrée avec un transfert en attente que personne ne voit passer.
@@ -8800,9 +8814,11 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
         onToast("Facture deja importee — import programme retire");
       } else {
         // L'import a échoué : on rend la main, sinon l'arrivage resterait bloqué
-        // quinze minutes sur un poste qui n'y arrive pas.
+        // quinze minutes sur un poste qui n'y arrive pas. L'avancement, lui, est
+        // conserve : le bouton reste et reprendra ou ca s'est arrete.
         await odoo.releasePendingWalaImport(session).catch(() => {});
-        onToast("Import WALA en echec — rien n'a ete laisse a moitie fait");
+        setPendingWala(await odoo.loadPendingWalaImport(session).catch(() => pendingWala));
+        onToast("Import WALA interrompu — le bouton permet de reprendre");
       }
     }
     setWalaRunning(false);
@@ -9136,7 +9152,10 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                     <div style={{ fontSize: 12.5, color: "#78350f", lineHeight: 1.6, marginBottom: 10 }}>
                       {pendingWala.lines.length} ligne(s) · facture {pendingWala.invoiceNo || "—"}<br />
                       Préparée par {pendingWala.preparedBy} le {new Date(pendingWala.preparedAt).toLocaleDateString("fr-FR")}<br />
-                      <strong>À activer uniquement une fois la marchandise reçue</strong> — le stock sera mis à jour.
+                      {walaReprise
+                        ? <><strong style={{ color: "#b45309" }}>Tentative interrompue</strong> — commande {walaReprise.poName} déjà créée,
+                            réception {walaReprise.pickingName}. La reprise repartira de l'étape « {walaReprise.etape} ».</>
+                        : <><strong>À activer uniquement une fois la marchandise reçue</strong> — le stock sera mis à jour.</>}
                     </div>
                     {walaPrisPar && !walaRunning ? (
                       <div style={{ padding: 13, background: "#fff", border: "1px solid #fcd34d", borderRadius: 11,
@@ -9148,7 +9167,9 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                         style={{ width: "100%", padding: 14, background: walaRunning ? "#d6d3d1" : "#b45309", color: "#fff",
                                  border: "none", borderRadius: 11, fontSize: 15, fontWeight: 700,
                                  cursor: walaRunning ? "default" : "pointer", fontFamily: "inherit" }}>
-                        {walaRunning ? "Import en cours…" : "✓ La marchandise est arrivée — importer et valider"}
+                        {walaRunning ? "Import en cours…"
+                          : walaReprise ? "↻ Reprendre l'import interrompu"
+                          : "✓ La marchandise est arrivée — importer et valider"}
                       </button>
                     )}
                   </>
