@@ -7251,6 +7251,42 @@ export async function getManufacturingOrderDetail(
  * Ne touche qu'aux lignes réservées (reserved > 0) : une ligne à 0 réservé n'a
  * rien à "faire". Retourne le nombre de lignes mises à jour.
  */
+/**
+ * Termine un ordre de fabrication : consomme les composants et produit le fini.
+ *
+ * Validation STRICTE, comme pour l'emballage. Si Odoo propose un reliquat —
+ * c'est-à-dire qu'on produit moins que prévu — on refuse et on renvoie la main :
+ * créer un reliquat en silence laisserait un ordre fantôme que personne ne
+ * cherchera, et fausserait le suivi de production.
+ */
+export async function markManufacturingDone(
+  session: OdooSession, orderId: number,
+): Promise<{ done: boolean; name: string; state: string }> {
+  const res = await callMethod(session, M("MODEL_MRP_PRODUCTION"), "button_mark_done", [[orderId]]);
+
+  if (res && typeof res === "object" && (res as any).res_model) {
+    const model = (res as any).res_model;
+    const wid = (res as any).res_id;
+    const ctx = (res as any).context || {};
+    if (model === "mrp.immediate.production") {
+      // « Quantités non renseignées » : Odoo propose de produire le prévu.
+      await callMethod(session, model, "process", [[wid]], { context: ctx });
+    } else if (model === "mrp.production.backorder") {
+      throw new Error(
+        "Odoo demande un reliquat : la quantité produite est inférieure au prévu. "
+        + "À traiter dans Odoo pour choisir ce qu'il advient du reste.");
+    } else {
+      throw new Error(`Fenêtre Odoo inattendue (${model}) — fabrication non validée automatiquement`);
+    }
+  }
+
+  // Relecture : seule preuve que l'ordre est réellement terminé. Une méthode
+  // peut répondre sans erreur sans que l'état ait changé.
+  const [o] = await searchRead(session, M("MODEL_MRP_PRODUCTION"),
+    [["id", "=", orderId]], ["id", "name", "state"], 1);
+  return { done: o?.state === "done", name: o?.name || "", state: o?.state || "" };
+}
+
 export async function fillManufacturingDone(
   session: OdooSession,
   orderId: number

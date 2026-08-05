@@ -108,6 +108,37 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
     setOrderLoading(false);
   };
 
+  // Termine l'ordre : consomme les composants et produit le fini. Action reelle
+  // dans Odoo, donc confirmation explicite et etat affiche apres coup.
+  const [producing, setProducing] = useState(false);
+
+  const launchProduction = async () => {
+    if (!openOrder || producing) return;
+    const total = openOrder.lines.reduce((n: number, l: any) => n + (l.done || 0), 0);
+    if (!confirm(
+      `Lancer la fabrication de ${openOrder.name} ?\n\n`
+      + `${total} unité(s) de composant seront CONSOMMÉES et le produit fini sera créé en stock.\n`
+      + `Cette action est définitive dans Odoo.`
+    )) return;
+    setProducing(true);
+    try {
+      const r = await odoo.markManufacturingDone(session, openOrder.id);
+      if (r.done) {
+        onToast(`✅ ${r.name} terminé — produit fini en stock`, "success");
+        setOpenOrder(null);
+        loadRecent();
+      } else {
+        // Pas d'erreur mais pas termine non plus : on le dit plutot que de
+        // laisser croire au succes.
+        onToast(`${r.name} non terminé (état : ${r.state}) — à vérifier dans Odoo`, "info");
+        setOpenOrder(await odoo.getManufacturingOrderDetail(session, openOrder.id));
+      }
+    } catch (e: any) {
+      onToast(odoo.safeErrMsg(e), "error");
+    }
+    setProducing(false);
+  };
+
   // Pré-remplit "Fait" = réservé sur toutes les lignes, sans valider.
   const fillDone = async () => {
     if (!openOrder) return;
@@ -394,9 +425,26 @@ export default function ManufacturingScreen({ session, onBack, onToast }: {
                   {filling ? "Remplissage…" : "⤵ Tout mettre en fait (= réservé)"}
                 </button>
                 <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 8, textAlign: "center", lineHeight: 1.5 }}>
-                  Remplit la colonne « Fait » sans valider. Rien n'est consommé : tu contrôles
-                  puis tu cliques « Marquer comme fait » dans Odoo.
+                  Remplit la colonne « Fait » sans valider. Rien n'est consommé.
                 </div>
+
+                {/* Lancer la fabrication : seulement quand quelque chose est fait,
+                    et pas sur un ordre deja termine. Consommer sans quantite
+                    renseignee n'aurait aucun sens. */}
+                {openOrder.state !== "done" && openOrder.state !== "cancel" && (
+                  <>
+                    <button onClick={launchProduction}
+                      disabled={producing || filling || openOrder.lines.every((l: any) => (l.done || 0) <= 0)}
+                      style={{ ...S.btn, marginTop: 12,
+                               background: producing ? "#e5e7eb" : openOrder.lines.every((l: any) => (l.done || 0) <= 0) ? "#e5e7eb" : "#16a34a",
+                               color: producing || openOrder.lines.every((l: any) => (l.done || 0) <= 0) ? "#9ca3af" : "#fff" }}>
+                      {producing ? "Fabrication en cours…" : "🏭 Lancer la fabrication"}
+                    </button>
+                    <div style={{ fontSize: 11.5, color: "#b45309", marginTop: 8, textAlign: "center", lineHeight: 1.5 }}>
+                      Consomme les composants et crée le produit fini. <strong>Définitif.</strong>
+                    </div>
+                  </>
+                )}
               </>
             )}
           </div>
