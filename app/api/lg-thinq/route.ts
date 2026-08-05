@@ -16,7 +16,7 @@
 // Variables d'environnement :
 //   LG_THINQ_PAT        jeton personnel (obligatoire)
 //   LG_THINQ_COUNTRY    code pays, ex. FR (obligatoire)
-//   LG_THINQ_REGION     eu | us | kic  (défaut : eu)
+//   LG_THINQ_REGION     eic (Europe) | aic (Amériques) | kic (Corée) — défaut : eic
 //   LG_THINQ_API_KEY    clé publique du portail développeur
 //   LG_THINQ_CLIENT_ID  identifiant client libre (un UUID stable suffit)
 import { NextRequest, NextResponse } from "next/server";
@@ -28,7 +28,7 @@ function cfg() {
   return {
     pat: process.env.LG_THINQ_PAT || "",
     country: process.env.LG_THINQ_COUNTRY || "FR",
-    region: process.env.LG_THINQ_REGION || "eu",
+    region: process.env.LG_THINQ_REGION || "eic",
     apiKey: process.env.LG_THINQ_API_KEY || "",
     clientId: process.env.LG_THINQ_CLIENT_ID || "",
   };
@@ -56,12 +56,51 @@ async function thinq(path: string, method: "GET" | "POST" = "GET", body?: any) {
   if (c.apiKey) headers["x-api-key"] = c.apiKey;
   if (c.clientId) headers["x-client-id"] = c.clientId;
 
-  const url = `https://${c.region}-ext.lgthinq.com${path}`;
-  const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  const texte = await res.text().catch(() => "");
-  let json: any = null;
-  try { json = JSON.parse(texte); } catch { /* réponse non JSON */ }
-  return { ok: res.ok, status: res.status, json, raw: texte.slice(0, 400) };
+  return appel(c.region, path, method, headers, body);
+}
+
+async function appel(region: string, path: string, method: "GET" | "POST",
+                     headers: Record<string, string>, body?: any) {
+  const url = `https://${region}-ext.lgthinq.com${path}`;
+  try {
+    const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const texte = await res.text().catch(() => "");
+    let json: any = null;
+    try { json = JSON.parse(texte); } catch { /* réponse non JSON */ }
+    return { ok: res.ok, status: res.status, json, raw: texte.slice(0, 400) };
+  } catch (e: any) {
+    // Un « fetch failed » nu ne dit pas quelle adresse a échoué. On la nomme :
+    // c'est presque toujours une région erronée, donc un nom d'hôte inexistant.
+    return { ok: false, status: 0, json: null,
+             raw: `Injoignable : ${url} (${e?.cause?.code || e?.message || "erreur réseau"})` };
+  }
+}
+
+/**
+ * Essaie les trois régions ThinQ et rapporte ce que chacune répond.
+ *
+ * LG documente le format de l'adresse mais pas la liste exacte des codes région.
+ * Plutôt que de deviner et de laisser un « fetch failed » sans explication, on
+ * teste et on montre le résultat brut de chaque tentative.
+ */
+async function sonderRegions() {
+  const c = cfg();
+  const headers: Record<string, string> = {
+    "Authorization": `Bearer ${c.pat}`,
+    "x-country-code": c.country,
+    "x-message-id": messageId(),
+    "Content-Type": "application/json",
+  };
+  if (c.apiKey) headers["x-api-key"] = c.apiKey;
+  if (c.clientId) headers["x-client-id"] = c.clientId;
+
+  const regions = ["eic", "aic", "kic", "eu", "us"];
+  const resultats: any[] = [];
+  for (const r of regions) {
+    const rep = await appel(r, "/devices", "GET", { ...headers, "x-message-id": messageId() });
+    resultats.push({ region: r, statut: rep.status, ok: rep.ok, reponse: rep.raw.slice(0, 200) });
+  }
+  return resultats;
 }
 
 /**
@@ -132,6 +171,12 @@ export async function GET(req: NextRequest) {
   const action = searchParams.get("action") || "status";
 
   try {
+    // Diagnostic : quelle région répond réellement ?
+    if (action === "regions") {
+      return NextResponse.json({ configuree: { pays: c.country, region: c.region },
+                                 essais: await sonderRegions() });
+    }
+
     // Liste des appareils — sert à récupérer le deviceId une première fois.
     if (action === "devices") {
       const r = await thinq("/devices");
