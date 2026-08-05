@@ -8736,14 +8736,19 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
   const lancerWala = async () => {
     if (!pendingWala || walaRunning) return;
     if (!confirm(
-      `Importer la reception WALA et VALIDER dans Odoo ?\n\n` +
+      `Importer la reception WALA, VALIDER et RANGER dans Odoo ?\n\n` +
       `${pendingWala.lines.length} ligne(s) — facture ${pendingWala.invoiceNo || "?"}\n` +
-      `Le stock sera mis a jour immediatement. A ne faire qu'une fois la marchandise recue.`
+      `Le stock sera mis a jour immediatement ET place dans les emplacements de\n` +
+      `rangement decides par Odoo. A ne faire qu'une fois la marchandise recue.`
     )) return;
     setWalaRunning(true); setWalaLogs([]); setWalaDone(null);
     try {
       const res = await odoo.runWalaImport(session, pendingWala.lines as any, {
         validate: true,
+        // Le rangement physique suit ce qu'Odoo décide : on va donc jusqu'au
+        // bout de la chaîne plutôt que de laisser la marchandise en zone
+        // d'entrée avec un transfert en attente que personne ne voit passer.
+        terminerRangement: true,
         onLog: (msg, state) => setWalaLogs(prev => {
           // Un message "running" est remplace par son resultat, comme dans
           // l'ecran d'import : on suit l'avancement sans empiler les lignes.
@@ -8759,7 +8764,10 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
       // Consomme : on ne veut pas qu'un second appui recree une commande.
       await odoo.clearPendingWalaImport(session).catch(() => {});
       setPendingWala(null);
-      onToast(`Reception importee et validee — ${res.pickingName}`);
+      const echecs = (res.rangements || []).filter(r => !r.ok).length;
+      onToast(echecs
+        ? `Reception validee — ${echecs} rangement(s) a finir dans Odoo`
+        : `Reception importee, validee et rangee — ${res.pickingName}`);
     } catch (e: any) {
       setWalaLogs(prev => [...prev, { msg: "Erreur : " + (e?.message || e), state: "error" }]);
       onToast("Import WALA en echec — rien n'a ete laisse a moitie fait");
@@ -9119,6 +9127,18 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                   <div style={{ marginTop: 10, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 9, padding: 11, fontSize: 12.5, color: "#15803d" }}>
                     <strong>{walaDone.poName}</strong> · réception <strong>{walaDone.pickingName}</strong> validée.<br />
                     {walaDone.lotsCreated} lot(s) créé(s){walaDone.lotsDuplicate.length ? `, ${walaDone.lotsDuplicate.length} réutilisé(s)` : ""}.
+                    {walaDone.rangements && walaDone.rangements.some(r => r.ok) && (
+                      <div style={{ marginTop: 6 }}>
+                        ✓ Rangement terminé : {walaDone.rangements.filter(r => r.ok).map(r => r.name).join(", ")}
+                      </div>
+                    )}
+                    {walaDone.rangements && walaDone.rangements.some(r => !r.ok) && (
+                      <div style={{ marginTop: 6, color: "#b91c1c" }}>
+                        {walaDone.rangements.filter(r => !r.ok).map(r => (
+                          <div key={r.name}>✗ {r.name} — {r.erreur}</div>
+                        ))}
+                      </div>
+                    )}
                     {walaDone.chained && walaDone.chained.length > 0 && (
                       <div style={{ marginTop: 6, color: "#92400e" }}>
                         ⚠ {walaDone.chained.length} transfert(s) de rangement à traiter dans Odoo :{" "}

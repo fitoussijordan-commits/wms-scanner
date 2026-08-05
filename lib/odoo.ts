@@ -3275,7 +3275,10 @@ export interface WalaImportResult {
   linesCount: number;
   /** Renseigné seulement si la validation a été demandée. */
   validated?: boolean;
+  /** Transferts de rangement qu'il reste à traiter à la main dans Odoo. */
   chained?: { id: number; name: string; state: string }[];
+  /** Transferts de rangement enchaînés automatiquement, et leur issue. */
+  rangements?: { name: string; ok: boolean; erreur?: string }[];
 }
 
 /**
@@ -3292,7 +3295,12 @@ export interface WalaImportResult {
 export async function runWalaImport(
   session: OdooSession,
   lines: { productId: number; qty: number; price: number; defaultCode: string; name: string; uomId: number; lotNo: string; expiryDate: string; invoiceNo: string }[],
-  opts: { validate?: boolean; onLog?: (msg: string, state: "running" | "ok" | "warn" | "error") => void } = {},
+  opts: {
+    validate?: boolean;
+    /** Enchaîne aussi les transferts de rangement (voir validateReception). */
+    terminerRangement?: boolean;
+    onLog?: (msg: string, state: "running" | "ok" | "warn" | "error") => void;
+  } = {},
 ): Promise<WalaImportResult> {
   const log = opts.onLog || (() => {});
   const lotsDuplicate: string[] = [];
@@ -3349,12 +3357,19 @@ export async function runWalaImport(
 
     if (opts.validate) {
       log("Validation de la réception…", "running");
-      const v = await validateReception(session, po.pickingId);
+      const v = await validateReception(session, po.pickingId, {
+        terminerRangement: opts.terminerRangement,
+        onLog: (m, t) => log(m, (t as any) || "ok"),
+      });
       res.validated = v.validated;
       res.chained = v.chained;
+      res.rangements = v.rangements;
+      const ranges = (v.rangements || []).filter(r => r.ok).length;
       log(v.chained.length
         ? `Réception validée — ${v.chained.length} transfert(s) de rangement à traiter`
-        : "Réception validée, stock à jour", v.chained.length ? "warn" : "ok");
+        : ranges
+          ? `Réception validée et rangée — ${ranges} transfert(s) enchaîné(s), stock à jour`
+          : "Réception validée, stock à jour", v.chained.length ? "warn" : "ok");
     } else {
       log("Réception prête à valider dans Odoo", "ok");
     }
@@ -3372,43 +3387,100 @@ export async function runWalaImport(
 }
 
 /**
- * Valide une réception fournisseur et signale les transferts enchaînés.
+ * Transferts déclenchés par un bon validé.
  *
- * En réception multi-étapes, valider le bon fournisseur déclenche un second
- * transfert vers les emplacements de stockage. Le stock n'est réellement rangé
- * qu'après celui-là : on le renvoie pour que l'écran puisse le dire, plutôt que
- * d'annoncer « terminé » alors qu'il reste une étape.
+ * On suit la CHAÎNE DES MOUVEMENTS plutôt que le nom du bon : c'est la vraie
+ * relation entre une réception et le transfert de rangement qu'elle déclenche.
+ * Le rapprochement par nom d'origine échouerait dès qu'Odoo nomme le transfert
+ * suivant autrement — ce qui dépend du paramétrage.
+ */
+async function transfertsEnchaines(
+  session: OdooSession, pickingId: number,
+): Promise<{ id: number; name: string; state: string }[]> {
+  const moves = await searchRead(session, M("MODEL_MOVE"),
+    [["picking_id", "=", pickingId]],
+    await availableFields(session, M("MODEL_MOVE"), ["id", "move_dest_ids"]), 500);
+  const destIds = Array.from(new Set(moves.flatMap((m: any) => m.move_dest_ids || [])));
+  if (!destIds.length) return [];
+
+  const destMoves = await searchRead(session, M("MODEL_MOVE"),
+    [["id", "in", destIds]], ["id", "picking_id", "state"], destIds.length);
+  const pickIds = Array.from(new Set(
+    destMoves.map((m: any) => (Array.isArray(m.picking_id) ? m.picking_id[0] : m.picking_id)).filter(Boolean),
+  ));
+  if (!pickIds.length) return [];
+
+  return searchRead(session, M("MODEL_PICKING"),
+    [["id", "in", pickIds], ["state", "not in", ["done", "cancel"]]],
+    ["id", "name", "state"], pickIds.length);
+}
+
+/**
+ * Valide une réception fournisseur, et au besoin toute la chaîne qui en découle.
+ *
+ * En réception multi-étapes, valider le bon fournisseur déclenche un transfert
+ * de rangement vers les emplacements de stockage. Tant qu'il n'est pas validé,
+ * la marchandise reste en zone d'entrée dans Odoo.
+ *
+ * `terminerRangement` enchaîne ces transferts automatiquement. C'est un choix
+ * lourd de conséquences : valider un rangement, c'est déclarer que la
+ * marchandise EST dans les emplacements de destination. À n'activer que si le
+ * rangement physique suit réellement ce qu'Odoo décide.
+ *
+ * Sans cette option, on se contente de signaler ce qui reste : mieux vaut une
+ * étape visible en attente qu'un stock annoncé au mauvais endroit.
  */
 export async function validateReception(
   session: OdooSession, pickingId: number,
-): Promise<{ validated: boolean; chained: { id: number; name: string; state: string }[] }> {
+  opts: { terminerRangement?: boolean; onLog?: (m: string, t?: string) => void } = {},
+): Promise<{
+  validated: boolean;
+  chained: { id: number; name: string; state: string }[];
+  rangements?: { name: string; ok: boolean; erreur?: string }[];
+}> {
+  const log = opts.onLog || (() => {});
   await validatePicking(session, pickingId);
 
   let chained: { id: number; name: string; state: string }[] = [];
-  try {
-    // On suit la CHAÎNE DES MOUVEMENTS plutôt que le nom du bon : c'est la vraie
-    // relation entre une réception et le transfert de rangement qu'elle
-    // déclenche. Le rapprochement par nom d'origine échouerait dès qu'Odoo
-    // nomme le transfert suivant autrement — ce qui dépend du paramétrage.
-    const moves = await searchRead(session, M("MODEL_MOVE"),
-      [["picking_id", "=", pickingId]],
-      await availableFields(session, M("MODEL_MOVE"), ["id", "move_dest_ids"]), 500);
-    const destIds = Array.from(new Set(moves.flatMap((m: any) => m.move_dest_ids || [])));
-    if (destIds.length) {
-      const destMoves = await searchRead(session, M("MODEL_MOVE"),
-        [["id", "in", destIds]], ["id", "picking_id", "state"], destIds.length);
-      const pickIds = Array.from(new Set(
-        destMoves.map((m: any) => (Array.isArray(m.picking_id) ? m.picking_id[0] : m.picking_id)).filter(Boolean),
-      ));
-      if (pickIds.length) {
-        chained = await searchRead(session, M("MODEL_PICKING"),
-          [["id", "in", pickIds], ["state", "not in", ["done", "cancel"]]],
-          ["id", "name", "state"], pickIds.length);
+  try { chained = await transfertsEnchaines(session, pickingId); }
+  catch { /* information de confort : ne doit pas faire échouer la réception */ }
+
+  if (!opts.terminerRangement || !chained.length) return { validated: true, chained };
+
+  // Une chaîne peut compter plus de deux maillons (entrée → contrôle → stock).
+  // On déroule donc, avec une borne : une boucle infinie sur des validations
+  // Odoo serait bien pire qu'un transfert oublié.
+  const rangements: { name: string; ok: boolean; erreur?: string }[] = [];
+  const traites = new Set<number>([pickingId]);
+  let file = [...chained];
+
+  for (let profondeur = 0; profondeur < 5 && file.length; profondeur++) {
+    const suivants: { id: number; name: string; state: string }[] = [];
+    for (const t of file) {
+      if (traites.has(t.id)) continue;
+      traites.add(t.id);
+      try {
+        // Réserver d'abord : sans réservation, Odoo valide un transfert vide.
+        try { await callMethod(session, M("MODEL_PICKING"), "action_assign", [[t.id]]); } catch { /* déjà réservé */ }
+        await validatePicking(session, t.id);
+        rangements.push({ name: t.name, ok: true });
+        log(`Rangement ${t.name} validé`, "ok");
+        try { suivants.push(...await transfertsEnchaines(session, t.id)); } catch { /* fin de chaîne */ }
+      } catch (e: any) {
+        const erreur = safeErrMsg(e);
+        rangements.push({ name: t.name, ok: false, erreur });
+        log(`Rangement ${t.name} non validé : ${erreur}`, "error");
       }
     }
-  } catch { /* information de confort : ne doit pas faire échouer la réception */ }
+    file = suivants.filter(s => !traites.has(s.id));
+  }
 
-  return { validated: true, chained };
+  // On ne renvoie comme « restant à traiter » que ce qui n'est pas passé :
+  // annoncer un transfert en attente alors qu'il est fait serait un faux signal.
+  const restants = chained.filter(c => !rangements.some(r => r.name === c.name && r.ok))
+    .concat(file);
+
+  return { validated: true, chained: restants, rangements };
 }
 
 export async function loadPackingList(session: OdooSession, name: string) {
