@@ -8792,10 +8792,18 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
         : `Reception importee, validee et rangee — ${res.pickingName}`);
     } catch (e: any) {
       setWalaLogs(prev => [...prev, { msg: "Erreur : " + (e?.message || e), state: "error" }]);
-      // L'import a échoué : on rend la main, sinon l'arrivage resterait bloqué
-      // quinze minutes sur un poste qui n'y arrive pas.
-      await odoo.releasePendingWalaImport(session).catch(() => {});
-      onToast("Import WALA en echec — rien n'a ete laisse a moitie fait");
+      if (e?.walaDoublon) {
+        // La marchandise est deja entree en stock : l'import programme n'a plus
+        // lieu d'etre. Le laisser afficherait un bouton condamne a echouer.
+        await odoo.clearPendingWalaImport(session).catch(() => {});
+        setPendingWala(null);
+        onToast("Facture deja importee — import programme retire");
+      } else {
+        // L'import a échoué : on rend la main, sinon l'arrivage resterait bloqué
+        // quinze minutes sur un poste qui n'y arrive pas.
+        await odoo.releasePendingWalaImport(session).catch(() => {});
+        onToast("Import WALA en echec — rien n'a ete laisse a moitie fait");
+      }
     }
     setWalaRunning(false);
   };

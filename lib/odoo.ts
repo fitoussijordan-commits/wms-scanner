@@ -3358,12 +3358,43 @@ export async function runWalaImport(
     const partnerId = await getWalaPartnerId(session);
     log(`Fournisseur trouvé (ID ${partnerId})`, "ok");
 
+    const invoiceNo = lines[0]?.invoiceNo || "";
+
+    // GARDE-FOU : la même facture ne peut pas entrer deux fois.
+    //
+    // Les protections côté écran (rafraîchissement, réservation) ferment la
+    // fenêtre courante mais reposent sur l'état d'un navigateur. Celle-ci
+    // interroge Odoo, qui est la seule source de vérité : peu importe le poste,
+    // le moment, ou le nombre de doigts sur le bouton.
+    //
+    // Le numéro de facture WALA est reporté dans partner_ref du bon de commande.
+    // S'il en existe déjà un, la marchandise est déjà entrée en stock.
+    if (invoiceNo) {
+      log(`Vérification qu'aucune commande n'existe pour la facture ${invoiceNo}…`, "running");
+      const deja = await searchRead(session, M("MODEL_PURCHASE_ORDER"),
+        [["partner_ref", "=", invoiceNo], ["state", "!=", "cancel"]], ["id", "name", "state"], 3);
+      if (deja.length) {
+        const noms = deja.map((p: any) => p.name).join(", ");
+        const err: any = new Error(
+          `Facture ${invoiceNo} déjà importée — bon de commande ${noms}. ` +
+          `Le stock a déjà été mis à jour. Pour réimporter, annulez d'abord ce bon dans Odoo.`);
+        // Marqueur : l'écran doit retirer l'import programmé plutôt que de le
+        // remettre à disposition. Rien ne sert de laisser un bouton qui échouera.
+        err.walaDoublon = true;
+        throw err;
+      }
+      log(`Aucune commande existante pour la facture ${invoiceNo}`, "ok");
+    } else {
+      // Sans numéro de facture, ce contrôle est aveugle. On le dit plutôt que
+      // de laisser croire à une protection qui n'existe pas.
+      log("Pas de numéro de facture — le contrôle anti-doublon ne peut pas s'appliquer", "warn");
+    }
+
     log("Création du bon de commande fournisseur…", "running");
     const poLines: WalaPOLine[] = lines.map(l => ({
       productId: l.productId, qty: l.qty, price: l.price,
       name: `[${l.defaultCode}] ${l.name}`, uomId: l.uomId,
     }));
-    const invoiceNo = lines[0]?.invoiceNo || "";
     const po = await createAndConfirmPO(session, partnerId, poLines, { partnerRef: invoiceNo });
     createdPoId = po.poId;
     log(`Bon de commande créé et confirmé : ${po.poName}`, "ok");
