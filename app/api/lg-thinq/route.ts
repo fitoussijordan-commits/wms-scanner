@@ -7,6 +7,12 @@
 // Le jeton personnel reste EXCLUSIVEMENT côté serveur, comme les identifiants
 // Shopware : il ne transite jamais par le navigateur.
 //
+// Le jeton personnel (PAT) s'obtient sur https://connect-pat.lgthinq.com/ en se
+// connectant avec le compte LG ThinQ auquel la clim est rattachée. Ce n'est PAS
+// le portail thinq.developer.lge.com, qui est réservé aux partenaires
+// industriels de LG (contrat, service_id/service_key délivrés par un
+// commercial) et inutile pour un usage personnel.
+//
 // Variables d'environnement :
 //   LG_THINQ_PAT        jeton personnel (obligatoire)
 //   LG_THINQ_COUNTRY    code pays, ex. FR (obligatoire)
