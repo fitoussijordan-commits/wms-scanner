@@ -85,6 +85,39 @@ function lire(status: any) {
   };
 }
 
+/**
+ * Retrouve seul l'identifiant du climatiseur.
+ *
+ * Obliger à relever un deviceId à la main puis à le recopier dans une variable
+ * d'environnement, c'est une étape de plus pour rien : le compte ne contient
+ * qu'un climatiseur. On interroge donc la liste des appareils et on garde le
+ * premier de type DEVICE_AIR_CONDITIONER.
+ *
+ * LG_THINQ_DEVICE_ID reste prioritaire : le jour où un deuxième appareil
+ * apparaît, il faut pouvoir désigner explicitement lequel piloter.
+ */
+let deviceCache: { id: string; expire: number } | null = null;
+
+async function resolveDevice(): Promise<string> {
+  const fixe = process.env.LG_THINQ_DEVICE_ID || "";
+  if (fixe) return fixe;
+  if (deviceCache && deviceCache.expire > Date.now()) return deviceCache.id;
+
+  const r = await thinq("/devices");
+  if (!r.ok) throw new Error(r.json?.error?.message || r.raw || "Liste des appareils illisible");
+  const liste: any[] = r.json?.response || [];
+  const clim = liste.find(d => String(d?.deviceInfo?.deviceType || "").includes("AIR_CONDITIONER"));
+  const id = clim?.deviceId || "";
+  if (!id) {
+    throw new Error(
+      liste.length
+        ? `Aucun climatiseur parmi les ${liste.length} appareils du compte`
+        : "Aucun appareil rattaché à ce compte LG");
+  }
+  deviceCache = { id, expire: Date.now() + 3_600_000 };
+  return id;
+}
+
 export async function GET(req: NextRequest) {
   const rl = checkRateLimit(`lg:${getClientIp(req)}`, 60, 60_000);
   if (!rl.allowed) return NextResponse.json({ error: "Trop de requêtes" }, { status: 429 });
@@ -106,8 +139,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ devices: r.json?.response || [] });
     }
 
-    const deviceId = searchParams.get("deviceId") || process.env.LG_THINQ_DEVICE_ID || "";
-    if (!deviceId) return NextResponse.json({ error: "deviceId requis" }, { status: 400 });
+    const deviceId = searchParams.get("deviceId") || (await resolveDevice());
 
     if (action === "status") {
       const r = await thinq(`/devices/${deviceId}`);
@@ -138,8 +170,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const { deviceId: fourni, power, target } = await req.json();
-    const deviceId = fourni || process.env.LG_THINQ_DEVICE_ID || "";
-    if (!deviceId) return NextResponse.json({ error: "deviceId requis" }, { status: 400 });
+    const deviceId = fourni || (await resolveDevice());
 
     const corps: any = {};
     if (power === "on" || power === "off") {
