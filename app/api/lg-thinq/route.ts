@@ -20,6 +20,7 @@
 //   LG_THINQ_API_KEY    clé publique du portail développeur
 //   LG_THINQ_CLIENT_ID  identifiant client libre (un UUID stable suffit)
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "crypto";
 import { checkRateLimit, getClientIp } from "@/lib/rateLimiter";
 
 export const dynamic = "force-dynamic";
@@ -43,20 +44,35 @@ function messageId(): string {
   return Buffer.from(uuid, "hex").toString("base64url");
 }
 
-async function thinq(path: string, method: "GET" | "POST" = "GET", body?: any) {
+/**
+ * Identifiant client. ThinQ l'exige mais n'en impose pas la valeur : il sert à
+ * distinguer les applications d'un même compte. Plutôt que d'obliger à inventer
+ * un UUID et à le coller dans une variable, on en dérive un du jeton — stable
+ * d'un déploiement à l'autre, et sans révéler le jeton lui-même.
+ */
+function clientId(): string {
   const c = cfg();
-  const headers: Record<string, string> = {
+  if (c.clientId) return c.clientId;
+  return createHash("sha256").update(c.pat).digest("hex").slice(0, 32);
+}
+
+function enTetes(): Record<string, string> {
+  const c = cfg();
+  const h: Record<string, string> = {
     "Authorization": `Bearer ${c.pat}`,
     "x-country-code": c.country,
     "x-message-id": messageId(),
+    "x-client-id": clientId(),
     "Content-Type": "application/json",
   };
-  // Le portail LG fournit selon les cas une clé d'API et un identifiant client.
-  // On n'envoie que ce qui est renseigné : un en-tête vide ferait échouer l'appel.
-  if (c.apiKey) headers["x-api-key"] = c.apiKey;
-  if (c.clientId) headers["x-client-id"] = c.clientId;
+  // La clé d'API n'est envoyée que si elle est renseignée : un en-tête vide
+  // ferait échouer l'appel plus sûrement qu'un en-tête absent.
+  if (c.apiKey) h["x-api-key"] = c.apiKey;
+  return h;
+}
 
-  return appel(c.region, path, method, headers, body);
+async function thinq(path: string, method: "GET" | "POST" = "GET", body?: any) {
+  return appel(cfg().region, path, method, enTetes(), body);
 }
 
 async function appel(region: string, path: string, method: "GET" | "POST",
@@ -77,27 +93,51 @@ async function appel(region: string, path: string, method: "GET" | "POST",
 }
 
 /**
- * Essaie les trois régions ThinQ et rapporte ce que chacune répond.
+ * Cherche la combinaison d'en-têtes que ThinQ accepte.
  *
- * LG documente le format de l'adresse mais pas la liste exacte des codes région.
- * Plutôt que de deviner et de laisser un « fetch failed » sans explication, on
- * teste et on montre le résultat brut de chaque tentative.
+ * Le serveur répond « Missing parameters » (1101) sans dire lequel manque. On
+ * essaie donc les combinaisons plausibles une par une et on montre la réponse
+ * brute de chacune : c'est la seule façon honnête de trancher sans documentation.
+ *
+ * La clé d'API candidate est celle publiée par LG dans son propre SDK Python
+ * « thinqconnect ». Elle n'est pas confirmée ici : ce test est précisément là
+ * pour le vérifier.
  */
-async function sonderRegions() {
+const CLE_CANDIDATE = "v6GFvkweNo7DK7yD3ylIZ9w52aKBU0eJ7wLXkSR3";
+
+async function sonder() {
   const c = cfg();
-  const headers: Record<string, string> = {
+  const base = (): Record<string, string> => ({
     "Authorization": `Bearer ${c.pat}`,
     "x-country-code": c.country,
     "x-message-id": messageId(),
     "Content-Type": "application/json",
-  };
-  if (c.apiKey) headers["x-api-key"] = c.apiKey;
-  if (c.clientId) headers["x-client-id"] = c.clientId;
+  });
 
-  const regions = ["eic", "aic", "kic", "eu", "us"];
+  const essais: { nom: string; headers: Record<string, string> }[] = [
+    { nom: "jeton seul", headers: base() },
+    { nom: "+ client-id", headers: { ...base(), "x-client-id": clientId() } },
+    { nom: "+ client-id + clé SDK", headers: { ...base(), "x-client-id": clientId(), "x-api-key": CLE_CANDIDATE } },
+    { nom: "+ clé SDK seule", headers: { ...base(), "x-api-key": CLE_CANDIDATE } },
+  ];
+  if (c.apiKey) {
+    essais.push({ nom: "+ client-id + clé configurée",
+                  headers: { ...base(), "x-client-id": clientId(), "x-api-key": c.apiKey } });
+  }
+
   const resultats: any[] = [];
-  for (const r of regions) {
-    const rep = await appel(r, "/devices", "GET", { ...headers, "x-message-id": messageId() });
+  for (const e of essais) {
+    const rep = await appel(c.region, "/devices", "GET", e.headers);
+    resultats.push({ essai: e.nom, statut: rep.status, ok: rep.ok, reponse: rep.raw.slice(0, 250) });
+  }
+  return resultats;
+}
+
+/** Essaie les codes région, quand le nom d'hôte lui-même est en cause. */
+async function sonderRegions() {
+  const resultats: any[] = [];
+  for (const r of ["eic", "aic", "kic"]) {
+    const rep = await appel(r, "/devices", "GET", enTetes());
     resultats.push({ region: r, statut: rep.status, ok: rep.ok, reponse: rep.raw.slice(0, 200) });
   }
   return resultats;
@@ -171,6 +211,11 @@ export async function GET(req: NextRequest) {
   const action = searchParams.get("action") || "status";
 
   try {
+    // Diagnostic : quels en-têtes ThinQ accepte-t-il ?
+    if (action === "diag") {
+      return NextResponse.json({ region: c.region, pays: c.country, essais: await sonder() });
+    }
+
     // Diagnostic : quelle région répond réellement ?
     if (action === "regions") {
       return NextResponse.json({ configuree: { pays: c.country, region: c.region },
