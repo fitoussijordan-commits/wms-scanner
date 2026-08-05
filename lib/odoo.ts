@@ -3227,6 +3227,9 @@ export interface PendingWalaImport {
   preparedBy: string;
   preparedAt: string;
   note?: string;
+  /** Poste qui a lancé l'import, pour que les autres cessent de le proposer. */
+  claimedBy?: string;
+  claimedAt?: string;
 }
 
 export async function savePendingWalaImport(session: OdooSession, data: PendingWalaImport): Promise<void> {
@@ -3263,6 +3266,49 @@ export async function loadPendingWalaImport(session: OdooSession): Promise<Pendi
 export async function clearPendingWalaImport(session: OdooSession): Promise<void> {
   const atts = await searchRead(session, M("MODEL_ATTACHMENT"), [["name", "=", WALA_PENDING_FILE]], ["id"], 5);
   if (atts.length) await unlink(session, M("MODEL_ATTACHMENT"), atts.map((a: any) => a.id));
+}
+
+/** Au-delà de ce délai, une prise en main est considérée comme abandonnée. */
+const WALA_CLAIM_MS = 15 * 60 * 1000;
+
+/**
+ * Réserve l'import avant de l'exécuter.
+ *
+ * Le bouton est visible sur tous les postes. Sans réservation, deux personnes
+ * qui appuient à quelques secondes d'intervalle créeraient deux bons de
+ * commande et doubleraient le stock — une erreur pénible à défaire.
+ *
+ * On relit donc l'état partagé au dernier moment : si quelqu'un d'autre est
+ * déjà dessus, on refuse en le nommant. La réservation expire au bout de
+ * quinze minutes, pour qu'un poste planté ne bloque pas l'arrivage.
+ *
+ * Ce n'est pas un verrou strict — deux appuis dans la même seconde peuvent
+ * encore passer. Ça ferme la fenêtre réaliste, pas toutes les fenêtres.
+ */
+export async function claimPendingWalaImport(
+  session: OdooSession, par: string,
+): Promise<{ ok: true; data: PendingWalaImport } | { ok: false; raison: string }> {
+  const data = await loadPendingWalaImport(session);
+  if (!data) return { ok: false, raison: "L'import a déjà été effectué depuis un autre poste." };
+
+  if (data.claimedBy && data.claimedAt) {
+    const age = Date.now() - new Date(data.claimedAt).getTime();
+    if (age >= 0 && age < WALA_CLAIM_MS && data.claimedBy !== par) {
+      return { ok: false, raison: `Import déjà lancé par ${data.claimedBy}.` };
+    }
+  }
+
+  const reserve = { ...data, claimedBy: par, claimedAt: new Date().toISOString() };
+  await savePendingWalaImport(session, reserve);
+  return { ok: true, data: reserve };
+}
+
+/** Lève la réservation après un échec, pour qu'un autre poste puisse réessayer. */
+export async function releasePendingWalaImport(session: OdooSession): Promise<void> {
+  const data = await loadPendingWalaImport(session);
+  if (!data) return;
+  const { claimedBy, claimedAt, ...reste } = data;
+  await savePendingWalaImport(session, reste as PendingWalaImport);
 }
 
 export interface WalaImportResult {

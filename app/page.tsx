@@ -8721,9 +8721,28 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
   const [walaLogs, setWalaLogs] = useState<{ msg: string; state: string }[]>([]);
   const [walaDone, setWalaDone] = useState<odoo.WalaImportResult | null>(null);
 
+  // Le bouton d'arrivage est visible sur tous les postes. Une fois l'import
+  // fait ailleurs, les autres doivent cesser de le proposer — sinon quelqu'un
+  // appuie sur un bouton qui ne correspond plus à rien. On relit donc l'état
+  // partagé regulierement, et on se tait pendant qu'on execute (sinon on
+  // effacerait notre propre bouton en pleine operation).
   useEffect(() => {
-    odoo.loadPendingWalaImport(session).then(setPendingWala).catch(() => {});
-  }, [session]);
+    let vivant = true;
+    const relire = () => {
+      if (!vivant || walaRunning) return;
+      odoo.loadPendingWalaImport(session).then(p => { if (vivant) setPendingWala(p); }).catch(() => {});
+    };
+    relire();
+    const t = setInterval(relire, 30_000);
+    return () => { vivant = false; clearInterval(t); };
+  }, [session, walaRunning]);
+
+  // Import pris en main par un autre poste : on affiche qui, plutôt que le bouton.
+  const walaPrisPar = (() => {
+    if (!pendingWala?.claimedBy || !pendingWala.claimedAt) return "";
+    const age = Date.now() - new Date(pendingWala.claimedAt).getTime();
+    return age >= 0 && age < 15 * 60 * 1000 ? pendingWala.claimedBy : "";
+  })();
 
   const lancerWala = async () => {
     if (!pendingWala || walaRunning) return;
@@ -8735,6 +8754,17 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
     )) return;
     setWalaRunning(true); setWalaLogs([]); setWalaDone(null);
     try {
+      // Réservation au dernier moment : entre l'affichage du bouton et l'appui,
+      // quelqu'un d'autre a pu lancer l'import depuis un autre poste.
+      const prise = await odoo.claimPendingWalaImport(session, session.name || "un autre poste");
+      if (!prise.ok) {
+        setWalaLogs([{ msg: prise.raison, state: "error" }]);
+        setPendingWala(await odoo.loadPendingWalaImport(session).catch(() => null));
+        onToast(prise.raison);
+        setWalaRunning(false);
+        return;
+      }
+
       const res = await odoo.runWalaImport(session, pendingWala.lines as any, {
         validate: true,
         // Le rangement physique suit ce qu'Odoo décide : on va donc jusqu'au
@@ -8762,6 +8792,9 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
         : `Reception importee, validee et rangee — ${res.pickingName}`);
     } catch (e: any) {
       setWalaLogs(prev => [...prev, { msg: "Erreur : " + (e?.message || e), state: "error" }]);
+      // L'import a échoué : on rend la main, sinon l'arrivage resterait bloqué
+      // quinze minutes sur un poste qui n'y arrive pas.
+      await odoo.releasePendingWalaImport(session).catch(() => {});
       onToast("Import WALA en echec — rien n'a ete laisse a moitie fait");
     }
     setWalaRunning(false);
@@ -9097,12 +9130,19 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                       Préparée par {pendingWala.preparedBy} le {new Date(pendingWala.preparedAt).toLocaleDateString("fr-FR")}<br />
                       <strong>À activer uniquement une fois la marchandise reçue</strong> — le stock sera mis à jour.
                     </div>
-                    <button onClick={lancerWala} disabled={walaRunning}
-                      style={{ width: "100%", padding: 14, background: walaRunning ? "#d6d3d1" : "#b45309", color: "#fff",
-                               border: "none", borderRadius: 11, fontSize: 15, fontWeight: 700,
-                               cursor: walaRunning ? "default" : "pointer", fontFamily: "inherit" }}>
-                      {walaRunning ? "Import en cours…" : "✓ La marchandise est arrivée — importer et valider"}
-                    </button>
+                    {walaPrisPar && !walaRunning ? (
+                      <div style={{ padding: 13, background: "#fff", border: "1px solid #fcd34d", borderRadius: 11,
+                                    fontSize: 13.5, fontWeight: 600, color: "#92400e", textAlign: "center" }}>
+                        Import en cours par {walaPrisPar} — ne pas relancer
+                      </div>
+                    ) : (
+                      <button onClick={lancerWala} disabled={walaRunning}
+                        style={{ width: "100%", padding: 14, background: walaRunning ? "#d6d3d1" : "#b45309", color: "#fff",
+                                 border: "none", borderRadius: 11, fontSize: 15, fontWeight: 700,
+                                 cursor: walaRunning ? "default" : "pointer", fontFamily: "inherit" }}>
+                        {walaRunning ? "Import en cours…" : "✓ La marchandise est arrivée — importer et valider"}
+                      </button>
+                    )}
                   </>
                 )}
                 {walaLogs.length > 0 && (
