@@ -829,6 +829,9 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
   // numero — c'est ce que fait Shopware avec /variants?useNumberAsId=true.
   const [direct, setDirect] = useState<{ number: string; found: boolean; sw: number | null; odoo: number | null; name: string; odooRef: string } | null>(null);
   const [directLoading, setDirectLoading] = useState(false);
+  // Quantite a ecrire : pre-remplie avec le stock Odoo, mais librement
+  // modifiable — aligner n'est qu'un cas particulier de la correction.
+  const [directQty, setDirectQty] = useState("");
 
   const chercherDirect = async (ref: string) => {
     const n = ref.trim();
@@ -847,6 +850,7 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
         }
       } catch { /* le stock Odoo est un complement : son echec ne masque pas Shopware */ }
       setDirect({ number: n, found: !!sw?.found, sw: sw?.native_inStock ?? null, odoo: odooQty, name: nom, odooRef: oref });
+      setDirectQty(odooQty != null ? String(odooQty) : "");
       if (!sw?.found) onToast(`Référence ${n} introuvable dans Shopware`, "error");
     } catch (e: any) {
       onToast("Recherche Shopware impossible : " + (e?.message || e), "error");
@@ -1065,22 +1069,43 @@ function AuditTab({ session, onToast }: { session: odoo.OdooSession; onToast: Pr
                       <div style={{ fontSize: 13 }}>
                         Stock Odoo <strong>{direct.odoo ?? "?"}</strong>
                       </div>
-                      {direct.odoo !== null && direct.sw !== null && direct.odoo !== direct.sw && (
-                        <button onClick={async () => {
-                            if (!confirm(`Écrire ${direct.odoo} sur Shopware pour ${direct.number} ?\n(actuel : ${direct.sw})`)) return;
+                      <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
+                        <input value={directQty}
+                          onChange={e => setDirectQty(e.target.value.replace(/[^0-9-]/g, ""))}
+                          placeholder="qté"
+                          inputMode="numeric"
+                          style={{ width: 90, padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8,
+                                   fontSize: 13, textAlign: "right" as const, fontFamily: "inherit" }} />
+                        {direct.odoo !== null && String(direct.odoo) !== directQty && (
+                          <button onClick={() => setDirectQty(String(direct.odoo))}
+                            title="Reprendre le stock Odoo"
+                            style={{ padding: "8px 10px", background: C.white, color: C.blue, border: `1.5px solid ${C.blue}`,
+                                     borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                            = Odoo
+                          </button>
+                        )}
+                        <button
+                          disabled={directQty === "" || Number(directQty) === direct.sw}
+                          onClick={async () => {
+                            const q = Number(directQty);
+                            if (!confirm(`Écrire ${q} sur Shopware pour ${direct.number} ?\n(actuel : ${direct.sw})`)) return;
                             try {
-                              const r = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(direct.number)}&qty=${direct.odoo}`,
+                              const r = await fetch(`/api/shopware-explore?action=setStock&articleNumber=${encodeURIComponent(direct.number)}&qty=${q}`,
                                 { headers: writeHeaders }).then(x => x.json());
                               if (r?.error) throw new Error(r.error);
-                              onToast(`Stock Shopware mis à jour : ${direct.odoo}`, "success");
-                              setDirect({ ...direct, sw: direct.odoo });
+                              onToast(`Stock Shopware mis à jour : ${q}`, "success");
+                              setDirect({ ...direct, sw: q });
                             } catch (e: any) { onToast("Écriture refusée : " + (e?.message || e), "error"); }
                           }}
-                          style={{ padding: "8px 14px", background: C.orange, color: "#fff", border: "none", borderRadius: 8,
-                                   fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                          Aligner Shopware sur Odoo
+                          style={{ padding: "8px 14px",
+                                   background: (directQty === "" || Number(directQty) === direct.sw) ? "#cbd5e1" : C.orange,
+                                   color: "#fff", border: "none", borderRadius: 8,
+                                   fontSize: 12.5, fontWeight: 700,
+                                   cursor: (directQty === "" || Number(directQty) === direct.sw) ? "default" : "pointer",
+                                   fontFamily: "inherit" }}>
+                          Écrire sur Shopware
                         </button>
-                      )}
+                      </div>
                     </div>
                   )}
                 </div>
