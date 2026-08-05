@@ -18,6 +18,7 @@ import SupplierImportScreen from "@/components/SupplierImportScreen";
 import ArticleCreatorScreen, { SeuilsTab, CreationTab, NonVendableTab, ABloquerTab, LogistiqueTab } from "@/components/ArticleCreatorScreen";
 import MeaImportScreen from "@/components/MeaImportScreen";
 import InvoiceAuditScreen from "@/components/InvoiceAuditScreen";
+import ClimTile from "@/components/ClimTile";
 import FreeScanScreen from "@/components/FreeScanScreen";
 import InventoryCountScreen from "@/components/InventoryCountScreen";
 import EshopSortiesScreen from "@/components/EshopSortiesScreen";
@@ -3775,6 +3776,13 @@ export default function Page() {
               {lookupType === "lot" && lookupResult && <LotResult lot={lookupResult.lot} product={lookupResult.product} stock={lookupStock} />}
               {lookupType === "location" && lookupResult && <LocationResult location={lookupResult} stock={lookupStock} onRename={rename} />}
               {lookupType === "palette" && lookupResult && <PaletteResult data={lookupResult} session={session} />}
+
+              {/* Climatisation — l'entrepot stocke des cosmetiques, la temperature
+                  ambiante conditionne leur conservation. La tuile ne s'affiche pas
+                  si la clim n'est pas configuree. */}
+              <div style={{ marginBottom: 26, maxWidth: 360 }}>
+                <ClimTile onToast={showToast} desktop />
+              </div>
 
               {/* Opérations + Centre de contrôle */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 26, alignItems: "start" }}>
