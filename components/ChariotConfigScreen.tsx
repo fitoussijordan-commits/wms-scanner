@@ -9,6 +9,7 @@ import * as odoo from "@/lib/odoo";
 import { writeHeaders } from "@/lib/writeToken";
 import { setChariotSkusLocal } from "@/lib/chariotLocal";
 import { getEshopMappingOverrides, saveEshopMappingOverride, type EshopMappingOverrides } from "@/lib/supabase";
+import { useEcranEtroit } from "@/lib/useEcranEtroit";
 
 const C = {
   bg: "#f8fafc", white: "#ffffff", text: "#1a1a2e", textSec: "#374151",
@@ -23,25 +24,6 @@ function Section({ children, style: s }: { children: React.ReactNode; style?: Re
 }
 
 type Toast = (msg: string, type?: "success" | "error" | "info") => void;
-
-/**
- * Vrai sur l'écran étroit d'un PDA.
- *
- * Le tableau en colonnes est lisible sur un poste fixe, illisible sur un
- * scanner Zebra : la désignation est tronquée, la référence Odoo écrasée, et
- * les champs deviennent trop petits pour le doigt. On bascule donc sur une
- * fiche empilée plutôt que de rétrécir des colonnes qui ne rentrent pas.
- */
-function useEcranEtroit() {
-  const [etroit, setEtroit] = useState(false);
-  useEffect(() => {
-    const test = () => setEtroit(window.innerWidth < 560);
-    test();
-    window.addEventListener("resize", test);
-    return () => window.removeEventListener("resize", test);
-  }, []);
-  return etroit;
-}
 
 export default function ChariotConfigScreen({ session, onToast }: { session: any; onToast: Toast }) {
   return <EshopChariotSkus session={session} onToast={onToast} />;

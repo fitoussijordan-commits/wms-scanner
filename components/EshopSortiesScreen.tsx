@@ -6,6 +6,7 @@ import { useScannerListener } from "@/lib/useScannerListener";
 import ChariotConfigScreen from "@/components/ChariotConfigScreen";
 import { getEshopMappingOverrides, saveEshopMappingOverride, getCartonsConfig, getProcessedEshopOrders, markEshopOrdersProcessed, getLastProcessedEshopOrders, getCronRunHistory, type EshopMappingOverrides, type CronRunStatus } from "@/lib/supabase";
 import { writeHeaders } from "@/lib/writeToken";
+import { useEcranEtroit } from "@/lib/useEcranEtroit";
 
 const C = {
   bg: "#f8fafc", white: "#ffffff", text: "#1a1a2e", textSec: "#374151",
@@ -24,6 +25,12 @@ interface SaleLine { articleNumber: string | null; ean: string; name: string; qu
 interface SaleOrder { id: number; number: string; orderStatusId: number; paymentStatusId: number; dispatchId: number; orderTime: string; lines: SaleLine[]; }
 
 const PARTNER_KEY = "wms_eshop_partner_id";
+
+/** Étiquette de champ des fiches PDA — nomme la donnée que la colonne portait. */
+const etiquettePda: React.CSSProperties = {
+  fontSize: 10, fontWeight: 700, color: C.textMuted,
+  textTransform: "uppercase", letterSpacing: 0.4,
+};
 
 export default function EshopSortiesScreen({ session, onBack, onToast }: Props) {
   const [tab, setTab] = useState<"sorties" | "audit" | "resend" | "reappro" | "chariot">("sorties");
@@ -55,6 +62,7 @@ export default function EshopSortiesScreen({ session, onBack, onToast }: Props) 
 }
 
 function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: Props["onToast"] }) {
+  const etroit = useEcranEtroit();
   const today = new Date().toISOString().slice(0, 10);
   const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
@@ -468,8 +476,89 @@ function SortiesTab({ session, onToast }: { session: odoo.OdooSession; onToast: 
         </div>
       )}
 
+      {/* PDA : une fiche par référence, tout sur plusieurs lignes.
+          Un tableau de six colonnes sur un écran de scanner ne se lit pas —
+          les libellés s'écrasent et la désignation disparaît. */}
+      {etroit && aggList.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          {aggList.map((a, i) => {
+            const fond = a.chariot ? C.orangeSoft : !a.matched ? C.redSoft : a.manual ? "#f5f3ff" : C.white;
+            const bord = a.chariot ? "#fed7aa" : !a.matched ? "#fecaca" : a.manual ? "#ddd6fe" : C.border;
+            return (
+              <div key={i} style={{ background: fond, border: `1.5px solid ${bord}`, borderRadius: 11, padding: 12, marginBottom: 10 }}>
+                {/* Référence Shopware + quantité : les deux chiffres qu'on cherche en premier */}
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={etiquettePda}>Réf Shopware</div>
+                    <div style={{ fontSize: 17, fontWeight: 800, color: C.text, fontFamily: "monospace", wordBreak: "break-all", lineHeight: 1.2 }}>{a.ref}</div>
+                  </div>
+                  <div style={{ textAlign: "center", flexShrink: 0, background: C.white, border: `1px solid ${bord}`, borderRadius: 9, padding: "4px 12px" }}>
+                    <div style={etiquettePda}>Qté</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: C.text, lineHeight: 1.2 }}>{a.qty}</div>
+                  </div>
+                </div>
+
+                {/* Désignation — sur autant de lignes qu'il faut */}
+                <div style={{ marginTop: 8 }}>
+                  <div style={etiquettePda}>Produit</div>
+                  <div style={{ fontSize: 14, color: C.text, fontWeight: 500, lineHeight: 1.4 }}>{a.name || "—"}</div>
+                </div>
+
+                {/* Référence Odoo + état du rapprochement */}
+                <div style={{ marginTop: 8, display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 110 }}>
+                    <div style={etiquettePda}>Réf Odoo</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, fontFamily: "monospace", color: a.matched ? C.green : C.textMuted, wordBreak: "break-all", lineHeight: 1.25 }}>
+                      {a.odooRef || "—"}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 12.5, fontWeight: 800, padding: "4px 9px", borderRadius: 7, background: C.white, border: `1px solid ${bord}`,
+                                 color: a.chariot ? C.orange : a.matched ? (a.manual ? C.purple : C.green) : C.red }}>
+                    {a.chariot ? "Chariot" : a.matched ? (a.manual ? "✓ manuel" : "✓ OK") : "non mappé"}
+                  </span>
+                </div>
+
+                {/* Commandes concernées */}
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${bord}` }}>
+                  <div style={etiquettePda}>Commandes</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 3 }}>
+                    {a.cmds.map((c, k) => (
+                      <span key={k} style={{ fontSize: 12, fontFamily: "monospace", background: C.white, border: `1px solid ${bord}`, borderRadius: 6, padding: "2px 7px" }}>
+                        {c.number}{c.qty > 1 ? ` ×${c.qty}` : ""}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {!a.chariot && (
+                  <button onClick={() => { setFixRef(fixRef === a.ref ? null : a.ref); setFixQuery(""); setFixResults([]); }}
+                    style={{ marginTop: 10, width: "100%", padding: "10px 0", background: C.white, border: `1.5px solid ${C.blue}`, borderRadius: 9,
+                             color: C.blue, fontSize: 13.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+                    {fixRef === a.ref ? "Fermer" : a.matched ? "Changer la réf Odoo" : "Corriger la réf Odoo"}
+                  </button>
+                )}
+                {fixRef === a.ref && (
+                  <div style={{ marginTop: 8 }}>
+                    <input value={fixQuery} onChange={e => { setFixQuery(e.target.value); searchOdoo(e.target.value); }}
+                      placeholder="Réf, nom ou code-barres…" autoFocus
+                      style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: `1.5px solid ${C.blue}`, borderRadius: 9, fontSize: 14, fontFamily: "inherit", marginBottom: 6 }} />
+                    {fixResults.map((r: any, k: number) => (
+                      <button key={k} onClick={() => applyFix(a.ref, r.data)} disabled={fixing}
+                        style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 5, cursor: "pointer", fontFamily: "inherit" }}>
+                        <div style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 800, color: C.blue }}>{r.data.default_code || "—"}</div>
+                        <div style={{ fontSize: 13, color: C.text, lineHeight: 1.35 }}>{r.data.name}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Tableau */}
-      {aggList.length > 0 && (
+      {!etroit && aggList.length > 0 && (
         <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow, marginBottom: 14 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
