@@ -8727,7 +8727,9 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
     echecs: { ref: string; erreur: string }[];
     ignores: { ref: string; raison: string }[];
     cartonsIgnores: { raison: string; cartons: number }[];
+    suggestions: odoo.PoidsSuggere[];
   } | null>(null);
+  const [poidsCorrige, setPoidsCorrige] = useState<Record<number, number>>({});
 
   // Le bouton d'arrivage est visible sur tous les postes. Une fois l'import
   // fait ailleurs, les autres doivent cesser de le proposer — sinon quelqu'un
@@ -8899,13 +8901,37 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
     setPoidsBusy(true);
     try {
       const { suggestions, ignores } = await odoo.suggererPoidsArticles(session, pallets);
-      if (!suggestions.length) { setPoids({ ecrits: [], echecs: [], ignores: [], cartonsIgnores: ignores }); setPoidsBusy(false); return; }
+      if (!suggestions.length) { setPoids({ ecrits: [], echecs: [], ignores: [], cartonsIgnores: ignores, suggestions: [] }); setPoidsBusy(false); return; }
       const r = await odoo.remplirPoidsManquants(session, suggestions);
-      setPoids({ ...r, cartonsIgnores: ignores });
+      setPoids({ ...r, cartonsIgnores: ignores, suggestions });
       if (r.ecrits.length) onToast(`⚖️ ${r.ecrits.length} poids article(s) renseigne(s)`);
     } catch (e: any) {
       onToast("Poids non calcules : " + (e?.message || e));
     }
+    setPoidsBusy(false);
+  };
+
+  // Ecart tolere entre le poids Odoo et le poids calcule : 10 %, avec un plancher
+  // de 5 g. Sans ce plancher, un article de 12 g serait declare "divergent" pour
+  // 1,3 g d'ecart — du bruit, pas une information.
+  const ecartPoids = (actuel: number, calcule: number) => {
+    const diff = Math.abs(actuel - calcule);
+    return { diff, divergent: diff > Math.max(actuel * 0.1, 0.005) };
+  };
+
+  const corrigerPoids = async (s: odoo.PoidsSuggere) => {
+    if (!s.productId) return;
+    if (!confirm(
+      `Remplacer le poids de ${s.defaultCode || s.supplierRef} ?\n\n` +
+      `Odoo : ${s.actuel} kg\nCalcule : ${s.unitaire} kg (${s.cartons} carton${s.cartons > 1 ? "s" : ""})\n\n` +
+      `L'ancienne valeur sera perdue.`
+    )) return;
+    setPoidsBusy(true);
+    try {
+      await odoo.appliquerPoidsArticle(session, s.productId, s.unitaire);
+      setPoidsCorrige(prev => ({ ...prev, [s.productId!]: s.unitaire }));
+      onToast(`✓ ${s.defaultCode || s.supplierRef} : ${s.unitaire} kg`);
+    } catch (e: any) { onToast("❌ " + (e?.message || e)); }
     setPoidsBusy(false);
   };
 
@@ -9361,6 +9387,79 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                       ))}
                     </div>
                   )}
+
+                  {/* Contrôle : ce qui était déjà renseigné correspond-il au calcul ?
+                      C'est l'intérêt principal une fois les fiches vides remplies —
+                      un poids faux fausse tous les frais de port qui en découlent. */}
+                  {(() => {
+                    const compares = poids.suggestions.filter(s =>
+                      s.productId && (s.actuel ?? 0) > 0 && s.dispersion <= odoo.POIDS_DISPERSION_MAX);
+                    if (!compares.length) return null;
+                    const ecarts = compares.filter(s => ecartPoids(s.actuel!, s.unitaire).divergent);
+                    const conformes = compares.length - ecarts.length;
+                    return (
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text, marginBottom: 6 }}>
+                          Contrôle des poids déjà renseignés
+                          <span style={{ fontWeight: 500, color: C.textMuted }}> · {conformes}/{compares.length} conforme(s)</span>
+                        </div>
+
+                        {ecarts.length === 0 ? (
+                          <div style={{ fontSize: 11.5, color: "#15803d", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 9, padding: "8px 10px" }}>
+                            ✓ Tous les poids déjà saisis correspondent au calcul (tolérance 10 %).
+                          </div>
+                        ) : (
+                          <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 9, padding: 10 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", marginBottom: 6 }}>
+                              ⚠ {ecarts.length} écart(s) au-delà de 10 %
+                            </div>
+                            {ecarts.map(s => {
+                              const { diff } = ecartPoids(s.actuel!, s.unitaire);
+                              const corrige = s.productId ? poidsCorrige[s.productId] : undefined;
+                              const pct = Math.round((diff / s.actuel!) * 100);
+                              return (
+                                <div key={s.supplierRef} style={{ background: C.white, border: "1px solid #fde68a", borderRadius: 8, padding: 9, marginBottom: 6 }}>
+                                  <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text, lineHeight: 1.35 }}>
+                                    {s.productName || s.designation || s.supplierRef}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>
+                                    <span style={{ fontFamily: "monospace" }}>{s.defaultCode || s.supplierRef}</span>
+                                    {" · "}{s.cartons} carton{s.cartons > 1 ? "s" : ""}
+                                  </div>
+                                  <div style={{ display: "flex", gap: 16, marginTop: 7, alignItems: "baseline", flexWrap: "wrap" }}>
+                                    <div>
+                                      <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: .4 }}>Odoo</div>
+                                      <div style={{ fontSize: 16, fontWeight: 800, color: corrige != null ? C.textMuted : "#b45309", textDecoration: corrige != null ? "line-through" : "none" }}>
+                                        {s.actuel} kg
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: .4 }}>Calculé</div>
+                                      <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a" }}>{s.unitaire} kg</div>
+                                    </div>
+                                    <div style={{ fontSize: 11.5, color: "#b45309", fontWeight: 700 }}>
+                                      {s.unitaire > s.actuel! ? "+" : "−"}{Math.round(diff * 1000)} g ({pct} %)
+                                    </div>
+                                  </div>
+                                  {corrige != null ? (
+                                    <div style={{ fontSize: 11.5, color: "#15803d", fontWeight: 700, marginTop: 6 }}>✓ Corrigé à {corrige} kg</div>
+                                  ) : (
+                                    <button onClick={() => corrigerPoids(s)} disabled={poidsBusy}
+                                      style={{ marginTop: 8, width: "100%", padding: "8px 0", background: "#b45309", color: "#fff", border: "none", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: poidsBusy ? 0.6 : 1 }}>
+                                      Remplacer par {s.unitaire} kg
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                            <div style={{ fontSize: 11, color: "#92400e", marginTop: 2 }}>
+                              Un écart ne veut pas forcément dire que la fiche est fausse : le poids net de la packing list inclut le conditionnement. À toi de trancher, rien n&apos;est remplacé sans ton clic.
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {(poids.ignores.length > 0 || poids.cartonsIgnores.length > 0) && (
                     <details>
