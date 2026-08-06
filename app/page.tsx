@@ -8730,6 +8730,9 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
     suggestions: odoo.PoidsSuggere[];
   } | null>(null);
   const [poidsCorrige, setPoidsCorrige] = useState<Record<number, number>>({});
+  // Replie par defaut : le poids est un sujet annexe quand on vient ranger une
+  // palette. Le resume dans l'en-tete suffit a savoir s'il y a lieu d'ouvrir.
+  const [poidsOuvert, setPoidsOuvert] = useState(false);
 
   // Le bouton d'arrivage est visible sur tous les postes. Une fois l'import
   // fait ailleurs, les autres doivent cesser de le proposer — sinon quelqu'un
@@ -8917,6 +8920,40 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
   const ecartPoids = (actuel: number, calcule: number) => {
     const diff = Math.abs(actuel - calcule);
     return { diff, divergent: diff > Math.max(actuel * 0.1, 0.005) };
+  };
+
+  /** Ecarts au-dela du seuil, non encore corriges — base des actions en masse. */
+  const poidsDivergents = (): odoo.PoidsSuggere[] => {
+    if (!poids) return [];
+    return poids.suggestions.filter(s =>
+      s.productId && (s.actuel ?? 0) > 0 && s.dispersion <= odoo.POIDS_DISPERSION_MAX
+      && !poidsCorrige[s.productId] && ecartPoids(s.actuel!, s.unitaire).divergent);
+  };
+
+  const corrigerTousPoids = async () => {
+    const lot = poidsDivergents();
+    if (!lot.length) return;
+    if (!confirm(
+      `Remplacer le poids de ${lot.length} article(s) par la valeur calculee ?\n\n` +
+      lot.slice(0, 8).map(s => `${s.defaultCode || s.supplierRef} : ${s.actuel} → ${s.unitaire} kg`).join("\n") +
+      (lot.length > 8 ? `\n… et ${lot.length - 8} autre(s)` : "") +
+      `\n\nLes anciennes valeurs seront perdues.`
+    )) return;
+    setPoidsBusy(true);
+    let ok = 0; const echecs: string[] = [];
+    for (const s of lot) {
+      try {
+        await odoo.appliquerPoidsArticle(session, s.productId!, s.unitaire);
+        setPoidsCorrige(prev => ({ ...prev, [s.productId!]: s.unitaire }));
+        ok++;
+      } catch (e: any) {
+        echecs.push(`${s.defaultCode || s.supplierRef} : ${e?.message || e}`);
+      }
+    }
+    onToast(echecs.length
+      ? `${ok} poids corriges — ${echecs.length} echec(s) : ${echecs[0]}`
+      : `✓ ${ok} poids corriges`);
+    setPoidsBusy(false);
   };
 
   const corrigerPoids = async (s: odoo.PoidsSuggere) => {
@@ -9347,11 +9384,34 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
           {/* Poids articles — rempli automatiquement, mais on rend compte de ce
               qui a été écrit ET de ce qui ne l'a pas été. Une automatisation
               muette laisse croire que tout est fait. */}
-          {(poidsBusy || poids) && (
-            <div style={{ marginBottom: 12, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>
-                ⚖️ Poids des articles
-              </div>
+          {(poidsBusy || poids) && (() => {
+            const nbEcarts = poidsDivergents().length;
+            const nbRemplis = poids?.ecrits.length || 0;
+            return (
+            <div style={{ marginBottom: 12, background: C.white, border: `1px solid ${nbEcarts > 0 ? "#fde68a" : C.border}`, borderRadius: 12, overflow: "hidden" }}>
+              {/* En-tête : le résumé se lit sans ouvrir. */}
+              <button onClick={() => setPoidsOuvert(v => !v)}
+                style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: 12, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>⚖️ Poids des articles</div>
+                  <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2 }}>
+                    {poidsBusy ? "Calcul en cours…" : (
+                      <>
+                        {nbRemplis > 0 && <span style={{ color: "#15803d", fontWeight: 600 }}>{nbRemplis} fiche(s) remplie(s)</span>}
+                        {nbRemplis > 0 && nbEcarts > 0 && " · "}
+                        {nbEcarts > 0 && <span style={{ color: "#b45309", fontWeight: 700 }}>{nbEcarts} écart(s) à arbitrer</span>}
+                        {nbRemplis === 0 && nbEcarts === 0 && "Rien à signaler"}
+                      </>
+                    )}
+                  </div>
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, flexShrink: 0 }}>
+                  {poidsOuvert ? "▲ Fermer" : "▼ Détail"}
+                </span>
+              </button>
+
+              {poidsOuvert && (
+              <div style={{ padding: "0 12px 12px" }}>
               {poidsBusy ? (
                 <div style={{ fontSize: 12, color: C.textMuted }}>Calcul en cours…</div>
               ) : poids && (
@@ -9413,6 +9473,15 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                             <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", marginBottom: 6 }}>
                               ⚠ {ecarts.length} écart(s) au-delà de 10 %
                             </div>
+
+                            {/* Tout appliquer d'un coup — l'écran récapitule les
+                                valeurs avant d'écrire, et chaque échec est nommé. */}
+                            {poidsDivergents().length > 1 && (
+                              <button onClick={corrigerTousPoids} disabled={poidsBusy}
+                                style={{ width: "100%", padding: 11, marginBottom: 10, background: "#b45309", color: "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", opacity: poidsBusy ? 0.6 : 1 }}>
+                                {poidsBusy ? "…" : `Tout remplacer par les poids calculés (${poidsDivergents().length})`}
+                              </button>
+                            )}
                             {ecarts.map(s => {
                               const { diff } = ecartPoids(s.actuel!, s.unitaire);
                               const corrige = s.productId ? poidsCorrige[s.productId] : undefined;
@@ -9481,12 +9550,15 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                   )}
 
                   {poids.ecrits.length === 0 && poids.echecs.length === 0 && (
-                    <div style={{ fontSize: 12, color: C.textMuted }}>Aucune fiche à compléter.</div>
+                    <div style={{ fontSize: 12, color: C.textMuted }}>Aucune fiche vide à compléter.</div>
                   )}
                 </>
               )}
+              </div>
+              )}
             </div>
-          )}
+            );
+          })()}
 
           {/* Compteur global rangement */}
           {(() => {
