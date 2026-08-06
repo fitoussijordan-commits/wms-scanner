@@ -3388,7 +3388,7 @@ export async function suggererPoidsArticles(
   session: OdooSession, pallets: any[],
 ): Promise<{ suggestions: PoidsSuggere[]; ignores: { raison: string; cartons: number }[] }> {
   const parRef: Record<string, { designation: string; poids: number[] }> = {};
-  let multiArticles = 0, sansPoids = 0, sansQte = 0;
+  let multiArticles = 0, sansPoids = 0, sansQte = 0, invraisemblables = 0;
 
   for (const p of pallets || []) {
     for (const c of p.cartons || []) {
@@ -3396,19 +3396,33 @@ export async function suggererPoidsArticles(
       if (arts.length === 0) continue;
       if (arts.length > 1) { multiArticles++; continue; }
 
-      const net = kgVersNombre(c.netKg);
+      let net = kgVersNombre(c.netKg);
+      const brut = kgVersNombre(c.grossKg);
       if (net == null) { sansPoids++; continue; }
+
+      // Le parseur prend les DEUX derniers nombres de la ligne carton et suppose
+      // l'ordre net puis brut. Si la mise en page du PDF change, ils arrivent
+      // inversés — et on calculerait avec le poids emballage compris sans que
+      // rien ne le signale. Le net ne pouvant pas dépasser le brut, on remet
+      // dans l'ordre plutôt que de faire confiance à la position.
+      if (brut != null && net > brut) net = brut;
+
       const qte = Number(arts[0].qtyProduct) || 0;
       if (qte <= 0) { sansQte++; continue; }
 
+      const unitaire = net / qte;
+      // Garde-fou grossier : un cosmétique ne pèse ni 0 g ni 50 kg. Une valeur
+      // hors de ces bornes vient d'une ligne mal découpée, pas d'une balance.
+      if (unitaire <= 0.0005 || unitaire > 50) { invraisemblables++; continue; }
+
       const ref = String(arts[0].supplierRef);
       if (!parRef[ref]) parRef[ref] = { designation: arts[0].productDesc || "", poids: [] };
-      parRef[ref].poids.push(net / qte);
+      parRef[ref].poids.push(unitaire);
     }
   }
 
   const refs = Object.keys(parRef);
-  if (!refs.length) return { suggestions: [], ignores: ignoresListe(multiArticles, sansPoids, sansQte) };
+  if (!refs.length) return { suggestions: [], ignores: ignoresListe(multiArticles, sansPoids, sansQte, invraisemblables) };
 
   // Rapprochement Odoo : sans article rattaché, un poids ne mène nulle part.
   const matches = await matchSupplierRefs(session, refs);
@@ -3448,14 +3462,15 @@ export async function suggererPoidsArticles(
     };
   }).sort((a, b) => a.supplierRef.localeCompare(b.supplierRef));
 
-  return { suggestions, ignores: ignoresListe(multiArticles, sansPoids, sansQte) };
+  return { suggestions, ignores: ignoresListe(multiArticles, sansPoids, sansQte, invraisemblables) };
 }
 
-function ignoresListe(multi: number, sansPoids: number, sansQte: number) {
+function ignoresListe(multi: number, sansPoids: number, sansQte: number, invraisemblables = 0) {
   const out: { raison: string; cartons: number }[] = [];
   if (multi) out.push({ raison: "carton contenant plusieurs articles — attribution impossible", cartons: multi });
   if (sansPoids) out.push({ raison: "poids net absent ou illisible sur la packing list", cartons: sansPoids });
   if (sansQte) out.push({ raison: "quantité absente", cartons: sansQte });
+  if (invraisemblables) out.push({ raison: "poids unitaire hors bornes (moins d'1 g ou plus de 50 kg) — ligne mal lue", cartons: invraisemblables });
   return out;
 }
 
