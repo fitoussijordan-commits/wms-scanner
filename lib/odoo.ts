@@ -3327,6 +3327,193 @@ export async function releasePendingWalaImport(session: OdooSession): Promise<vo
   await savePendingWalaImport(session, reste as PendingWalaImport);
 }
 
+// ============================================
+// POIDS ARTICLE DÉDUIT DE LA PACKING LIST
+// ============================================
+//
+// Les packing lists WALA donnent le poids net de chaque carton. Quand un carton
+// ne contient qu'un seul article, diviser ce poids par la quantité donne le
+// poids unitaire — une donnée que personne ne saisit à la main et qui manque
+// donc sur beaucoup de fiches Odoo.
+//
+// Deux réserves assumées, dites à l'écran plutôt que cachées :
+//   - le poids net inclut le conditionnement primaire (flacon, étui). C'est le
+//     poids à l'expédition, pas le poids du produit seul. Pour du calcul de
+//     frais de port, c'est justement celui qu'on veut.
+//   - un carton contenant plusieurs articles ne permet aucune attribution : on
+//     ne devine pas, on l'ignore.
+
+/** Convertit « 1.234,56 », « 12,345 » ou « 12.345 » en nombre. */
+function kgVersNombre(brut: string): number | null {
+  if (!brut) return null;
+  let s = String(brut).trim();
+  const virgule = s.lastIndexOf(",");
+  const point = s.lastIndexOf(".");
+  // Le séparateur décimal est le dernier des deux ; l'autre sépare les milliers.
+  if (virgule > point) s = s.replace(/\./g, "").replace(",", ".");
+  else if (point > virgule) s = s.replace(/,/g, "");
+  else s = s.replace(",", ".");
+  const n = parseFloat(s);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export interface PoidsSuggere {
+  supplierRef: string;
+  designation: string;
+  productId: number | null;
+  defaultCode: string;
+  productName: string;
+  /** Poids unitaire retenu, en kg. */
+  unitaire: number;
+  /** Nombre de cartons exploitables ayant servi au calcul. */
+  cartons: number;
+  /** Écart relatif entre le carton le plus léger et le plus lourd (0 = parfait). */
+  dispersion: number;
+  /** Poids actuellement renseigné dans Odoo, null si l'article n'est pas rattaché. */
+  actuel: number | null;
+}
+
+/** Au-delà, deux cartons du même article ne se ressemblent plus assez pour conclure. */
+export const POIDS_DISPERSION_MAX = 0.1;
+
+/**
+ * Déduit un poids unitaire par article à partir des cartons mono-article.
+ *
+ * Quand plusieurs cartons portent le même article, on retient la MÉDIANE : une
+ * pesée aberrante tirerait une moyenne, pas une médiane. La dispersion est
+ * renvoyée pour que l'appelant puisse refuser les cas trop incertains au lieu
+ * d'écrire un chiffre douteux dans Odoo.
+ */
+export async function suggererPoidsArticles(
+  session: OdooSession, pallets: any[],
+): Promise<{ suggestions: PoidsSuggere[]; ignores: { raison: string; cartons: number }[] }> {
+  const parRef: Record<string, { designation: string; poids: number[] }> = {};
+  let multiArticles = 0, sansPoids = 0, sansQte = 0;
+
+  for (const p of pallets || []) {
+    for (const c of p.cartons || []) {
+      const arts = (c.articles && c.articles.length ? c.articles : [c]).filter((a: any) => a?.supplierRef);
+      if (arts.length === 0) continue;
+      if (arts.length > 1) { multiArticles++; continue; }
+
+      const net = kgVersNombre(c.netKg);
+      if (net == null) { sansPoids++; continue; }
+      const qte = Number(arts[0].qtyProduct) || 0;
+      if (qte <= 0) { sansQte++; continue; }
+
+      const ref = String(arts[0].supplierRef);
+      if (!parRef[ref]) parRef[ref] = { designation: arts[0].productDesc || "", poids: [] };
+      parRef[ref].poids.push(net / qte);
+    }
+  }
+
+  const refs = Object.keys(parRef);
+  if (!refs.length) return { suggestions: [], ignores: ignoresListe(multiArticles, sansPoids, sansQte) };
+
+  // Rapprochement Odoo : sans article rattaché, un poids ne mène nulle part.
+  const matches = await matchSupplierRefs(session, refs);
+  const productIds = Array.from(new Set(
+    Object.values(matches).map((m: any) => m?.product_id).filter(Boolean))) as number[];
+
+  const actuels: Record<number, { weight: number; code: string; name: string }> = {};
+  if (productIds.length) {
+    const prods = await searchRead(session, M("MODEL_PRODUCT"),
+      [["id", "in", productIds]], ["id", "weight", "default_code", "name"], productIds.length);
+    for (const pr of prods) actuels[pr.id] = { weight: Number(pr.weight) || 0, code: pr.default_code || "", name: pr.name || "" };
+  }
+
+  const suggestions: PoidsSuggere[] = refs.map(ref => {
+    const liste = parRef[ref].poids.slice().sort((a, b) => a - b);
+    const milieu = Math.floor(liste.length / 2);
+    const mediane = liste.length % 2 ? liste[milieu] : (liste[milieu - 1] + liste[milieu]) / 2;
+    const dispersion = liste.length > 1 && liste[0] > 0
+      ? (liste[liste.length - 1] - liste[0]) / liste[0] : 0;
+
+    const m: any = matches[ref];
+    const pid = m?.product_id || null;
+    const info = pid ? actuels[pid] : null;
+
+    return {
+      supplierRef: ref,
+      designation: parRef[ref].designation,
+      productId: pid,
+      defaultCode: info?.code || "",
+      productName: info?.name || m?.product_name || "",
+      // Trois décimales : au gramme près. Au-delà, on afficherait une précision
+      // que la source n'a pas.
+      unitaire: Math.round(mediane * 1000) / 1000,
+      cartons: liste.length,
+      dispersion: Math.round(dispersion * 1000) / 1000,
+      actuel: info ? info.weight : null,
+    };
+  }).sort((a, b) => a.supplierRef.localeCompare(b.supplierRef));
+
+  return { suggestions, ignores: ignoresListe(multiArticles, sansPoids, sansQte) };
+}
+
+function ignoresListe(multi: number, sansPoids: number, sansQte: number) {
+  const out: { raison: string; cartons: number }[] = [];
+  if (multi) out.push({ raison: "carton contenant plusieurs articles — attribution impossible", cartons: multi });
+  if (sansPoids) out.push({ raison: "poids net absent ou illisible sur la packing list", cartons: sansPoids });
+  if (sansQte) out.push({ raison: "quantité absente", cartons: sansQte });
+  return out;
+}
+
+/**
+ * Écrit le poids sur la fiche article.
+ *
+ * Le champ vit sur product.template : passer par product.product emprunte un
+ * champ relié, ce qui marche parfois et échoue silencieusement le reste du
+ * temps selon la configuration. On vise donc le modèle porteur.
+ */
+export async function appliquerPoidsArticle(
+  session: OdooSession, productId: number, poids: number,
+): Promise<void> {
+  if (!(poids > 0)) throw new Error("Poids invalide");
+  const [prod] = await searchRead(session, M("MODEL_PRODUCT"),
+    [["id", "=", productId]], ["id", "product_tmpl_id"], 1);
+  if (!prod) throw new Error("Article introuvable");
+  const tmplId = Array.isArray(prod.product_tmpl_id) ? prod.product_tmpl_id[0] : prod.product_tmpl_id;
+  if (!tmplId) throw new Error("Modèle d'article introuvable");
+  await write(session, "product.template", [tmplId], { weight: poids });
+}
+
+/**
+ * Remplit automatiquement les poids MANQUANTS.
+ *
+ * Ne touche jamais à un poids déjà renseigné : une valeur saisie à la main a
+ * demandé du travail et vaut mieux qu'une déduction. Les cas trop dispersés
+ * sont laissés de côté aussi — ils sont renvoyés pour être arbitrés à l'écran.
+ */
+export async function remplirPoidsManquants(
+  session: OdooSession, suggestions: PoidsSuggere[],
+): Promise<{
+  ecrits: { ref: string; nom: string; poids: number }[];
+  echecs: { ref: string; erreur: string }[];
+  ignores: { ref: string; raison: string }[];
+}> {
+  const ecrits: { ref: string; nom: string; poids: number }[] = [];
+  const echecs: { ref: string; erreur: string }[] = [];
+  const ignores: { ref: string; raison: string }[] = [];
+
+  for (const s of suggestions) {
+    const nom = s.defaultCode || s.supplierRef;
+    if (!s.productId) { ignores.push({ ref: nom, raison: "aucun article Odoo rattaché" }); continue; }
+    if ((s.actuel ?? 0) > 0) { ignores.push({ ref: nom, raison: `poids déjà renseigné (${s.actuel} kg)` }); continue; }
+    if (s.dispersion > POIDS_DISPERSION_MAX) {
+      ignores.push({ ref: nom, raison: `cartons incohérents (${Math.round(s.dispersion * 100)} % d'écart)` });
+      continue;
+    }
+    try {
+      await appliquerPoidsArticle(session, s.productId, s.unitaire);
+      ecrits.push({ ref: nom, nom: s.productName || s.designation, poids: s.unitaire });
+    } catch (e: any) {
+      echecs.push({ ref: nom, erreur: safeErrMsg(e) });
+    }
+  }
+  return { ecrits, echecs, ignores };
+}
+
 export interface WalaImportResult {
   poId: number;
   poName: string;

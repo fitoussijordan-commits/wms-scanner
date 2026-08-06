@@ -8720,6 +8720,14 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
   const [walaRunning, setWalaRunning] = useState(false);
   const [walaLogs, setWalaLogs] = useState<{ msg: string; state: string }[]>([]);
   const [walaDone, setWalaDone] = useState<odoo.WalaImportResult | null>(null);
+  // Poids articles deduits de la packing list (voir remplirPoids).
+  const [poidsBusy, setPoidsBusy] = useState(false);
+  const [poids, setPoids] = useState<{
+    ecrits: { ref: string; nom: string; poids: number }[];
+    echecs: { ref: string; erreur: string }[];
+    ignores: { ref: string; raison: string }[];
+    cartonsIgnores: { raison: string; cartons: number }[];
+  } | null>(null);
 
   // Le bouton d'arrivage est visible sur tous les postes. Une fois l'import
   // fait ailleurs, les autres doivent cesser de le proposer — sinon quelqu'un
@@ -8874,7 +8882,31 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
         const locs = await odoo.getProductLocations(session, productIds);
         setLocationData(locs);
       }
+      // Poids : deduit des cartons mono-article, ecrit sur les fiches VIDES.
+      // Lance apres le reste et sans bloquer l'affichage — un poids manquant
+      // n'empeche pas de ranger la palette.
+      remplirPoids(data.pallets);
     }
+  };
+
+  // ── Poids articles ─────────────────────────────────────────────────────────
+  // Poids net du carton ÷ quantite = poids unitaire. Uniquement sur les cartons
+  // ne contenant qu'un seul article : sinon la division ne veut rien dire.
+  //
+  // Seules les fiches SANS poids sont remplies. Une valeur deja saisie a demande
+  // du travail et vaut mieux qu'une deduction : on ne l'ecrase pas.
+  const remplirPoids = async (pallets: any[]) => {
+    setPoidsBusy(true);
+    try {
+      const { suggestions, ignores } = await odoo.suggererPoidsArticles(session, pallets);
+      if (!suggestions.length) { setPoids({ ecrits: [], echecs: [], ignores: [], cartonsIgnores: ignores }); setPoidsBusy(false); return; }
+      const r = await odoo.remplirPoidsManquants(session, suggestions);
+      setPoids({ ...r, cartonsIgnores: ignores });
+      if (r.ecrits.length) onToast(`⚖️ ${r.ecrits.length} poids article(s) renseigne(s)`);
+    } catch (e: any) {
+      onToast("Poids non calcules : " + (e?.message || e));
+    }
+    setPoidsBusy(false);
   };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -9284,6 +9316,77 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
           {/* Search by ref */}
           {packingData && (
             <PalletRefSearch packingData={packingData} matchData={matchData} />
+          )}
+
+          {/* Poids articles — rempli automatiquement, mais on rend compte de ce
+              qui a été écrit ET de ce qui ne l'a pas été. Une automatisation
+              muette laisse croire que tout est fait. */}
+          {(poidsBusy || poids) && (
+            <div style={{ marginBottom: 12, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                ⚖️ Poids des articles
+              </div>
+              {poidsBusy ? (
+                <div style={{ fontSize: 12, color: C.textMuted }}>Calcul en cours…</div>
+              ) : poids && (
+                <>
+                  <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8 }}>
+                    Poids net du carton ÷ quantité, sur les cartons ne contenant qu&apos;un seul article.
+                    Seules les fiches sans poids sont remplies.
+                  </div>
+
+                  {poids.ecrits.length > 0 && (
+                    <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 9, padding: 10, marginBottom: 8 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700, color: "#15803d", marginBottom: 4 }}>
+                        ✓ {poids.ecrits.length} fiche(s) renseignée(s)
+                      </div>
+                      {poids.ecrits.map((e, k) => (
+                        <div key={k} style={{ fontSize: 11.5, color: "#166534", lineHeight: 1.5 }}>
+                          <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{e.ref}</span> — {e.poids} kg
+                          {e.nom ? ` · ${e.nom}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {poids.echecs.length > 0 && (
+                    <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 9, padding: 10, marginBottom: 8 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700, color: "#b91c1c", marginBottom: 4 }}>
+                        {poids.echecs.length} écriture(s) refusée(s) par Odoo
+                      </div>
+                      {poids.echecs.map((e, k) => (
+                        <div key={k} style={{ fontSize: 11.5, color: "#7f1d1d", lineHeight: 1.5 }}>
+                          <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{e.ref}</span> — {e.erreur}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {(poids.ignores.length > 0 || poids.cartonsIgnores.length > 0) && (
+                    <details>
+                      <summary style={{ fontSize: 11.5, color: C.textMuted, cursor: "pointer", fontWeight: 600 }}>
+                        Non traité : {poids.ignores.length} référence(s)
+                        {poids.cartonsIgnores.length > 0 && `, ${poids.cartonsIgnores.reduce((s, i) => s + i.cartons, 0)} carton(s)`}
+                      </summary>
+                      <div style={{ marginTop: 6, fontSize: 11.5, color: C.textMuted, lineHeight: 1.6 }}>
+                        {poids.cartonsIgnores.map((ig, k) => (
+                          <div key={`c${k}`}>{ig.cartons} carton(s) — {ig.raison}</div>
+                        ))}
+                        {poids.ignores.map((ig, k) => (
+                          <div key={`r${k}`}>
+                            <span style={{ fontFamily: "monospace" }}>{ig.ref}</span> — {ig.raison}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+
+                  {poids.ecrits.length === 0 && poids.echecs.length === 0 && (
+                    <div style={{ fontSize: 12, color: C.textMuted }}>Aucune fiche à compléter.</div>
+                  )}
+                </>
+              )}
+            </div>
           )}
 
           {/* Compteur global rangement */}
