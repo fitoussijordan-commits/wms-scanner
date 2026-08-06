@@ -10142,29 +10142,51 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
           <div style={{ padding: "0 12px 12px" }}>
             {pkgLines.length === 0 ? (
               <div style={{ fontSize: 12, color: C.textMuted, fontStyle: "italic", padding: "8px 0" }}>Aucune ligne trouvée dans ce colis pour ce picking.</div>
-            ) : pkgLines.map((ml: any) => (
-              <div key={ml.id} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, marginBottom: 6 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text }}>{ml.product_id?.[1] || "Produit"}</div>
-                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6 }}>
-                  {ml.lot_id ? `Lot ${ml.lot_id[1]} · ` : ""}Qté {ml.qty_done || 0}
-                </div>
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <span style={{ fontSize: 11, color: C.textMuted }}>Diviser : garder</span>
-                  <input type="number" min={1} max={(ml.qty_done || 1) - 1} value={splitInput[ml.id] ?? ""}
-                    onChange={e => setSplitInput(prev => ({ ...prev, [ml.id]: e.target.value }))}
-                    placeholder="qté"
-                    style={{ width: 56, padding: "5px 6px", border: `1.5px solid ${C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "inherit" }} />
-                  <span style={{ fontSize: 11, color: C.textMuted }}>ici, reste → nouvelle ligne à assigner</span>
-                  <button onClick={async () => {
-                    await splitOrphanLine(ml.id);
-                    setExpandedPkgId(null); // referme : la vue colis va se recharger via loadScanPicking
-                  }} disabled={repairingLine === ml.id || !splitInput[ml.id]}
-                    style={{ padding: "5px 12px", background: C.blue, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginLeft: "auto" }}>
-                    {repairingLine === ml.id ? "…" : "Diviser"}
-                  </button>
-                </div>
-              </div>
-            ))}
+            ) : (() => {
+              // Odoo peut garder deux lignes séparées pour un même produit/lot
+              // (24 + 1 après récupération d'un reliquat) alors que sa propre
+              // interface les affiche groupées. On regroupe donc pareil : lire
+              // « 24 » puis « 1 » laisse croire à deux articles distincts.
+              // Aucune donnée n'est modifiée — c'est un regroupement d'affichage.
+              const groupes: Record<string, { produit: string; lot: string; qty: number; lignes: any[] }> = {};
+              for (const ml of pkgLines) {
+                const cle = `${ml.product_id?.[0] ?? "?"}|${ml.lot_id?.[0] ?? 0}`;
+                if (!groupes[cle]) groupes[cle] = { produit: ml.product_id?.[1] || "Produit", lot: ml.lot_id?.[1] || "", qty: 0, lignes: [] };
+                groupes[cle].qty += ml.qty_done || 0;
+                groupes[cle].lignes.push(ml);
+              }
+              return Object.entries(groupes).map(([cle, g]) => {
+                // La division porte sur la plus grosse ligne du groupe : c'est
+                // celle qui a de quoi être coupée.
+                const cible = g.lignes.reduce((a: any, b: any) => ((b.qty_done || 0) > (a.qty_done || 0) ? b : a));
+                return (
+                  <div key={cle} style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, marginBottom: 6 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text }}>{g.produit}</div>
+                    <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6 }}>
+                      {g.lot ? `Lot ${g.lot} · ` : ""}Qté {g.qty}
+                      {g.lignes.length > 1 && (
+                        <span style={{ color: "#94a3b8" }}> · {g.lignes.length} lignes Odoo regroupées</span>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <span style={{ fontSize: 11, color: C.textMuted }}>Diviser : garder</span>
+                      <input type="number" min={1} max={(cible.qty_done || 1) - 1} value={splitInput[cible.id] ?? ""}
+                        onChange={e => setSplitInput(prev => ({ ...prev, [cible.id]: e.target.value }))}
+                        placeholder="qté"
+                        style={{ width: 56, padding: "5px 6px", border: `1.5px solid ${C.border}`, borderRadius: 6, fontSize: 12, fontFamily: "inherit" }} />
+                      <span style={{ fontSize: 11, color: C.textMuted }}>ici, reste → nouvelle ligne à assigner</span>
+                      <button onClick={async () => {
+                        await splitOrphanLine(cible.id);
+                        setExpandedPkgId(null); // referme : la vue colis va se recharger via loadScanPicking
+                      }} disabled={repairingLine === cible.id || !splitInput[cible.id]}
+                        style={{ padding: "5px 12px", background: C.blue, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginLeft: "auto" }}>
+                        {repairingLine === cible.id ? "…" : "Diviser"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
         )}
       </div>
