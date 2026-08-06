@@ -5,6 +5,7 @@ import * as odoo from "@/lib/odoo";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
 import MeaImportScreen from "@/components/MeaImportScreen";
 import { useScannerListener } from "@/lib/useScannerListener";
+import { useEcranEtroit } from "@/lib/useEcranEtroit";
 
 // ─── Données de codification (extraites du fichier Excel _Listes) ─────────────
 
@@ -1373,6 +1374,12 @@ export function ABloquerTab({ session, onToast }: { session: odoo.OdooSession; o
 // PutawayTab — Stratégie de rangement
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Étiquette de champ des fiches PDA — nomme la donnée que la colonne portait. */
+const etiquette: React.CSSProperties = {
+  fontSize: 10, fontWeight: 700, color: "#94a3b8",
+  textTransform: "uppercase", letterSpacing: 0.4,
+};
+
 type PutawayRow = {
   ruleId: number;
   productId: number;
@@ -1398,6 +1405,7 @@ type NoPutawayRow = {
 };
 
 export function PutawayTab({ session, onToast }: { session: odoo.OdooSession; onToast: (msg: string, type?: "success"|"error"|"info") => void }) {
+  const etroit = useEcranEtroit();
   const [rows, setRows] = useState<PutawayRow[]>([]);
   const [noPutaway, setNoPutaway] = useState<NoPutawayRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1626,7 +1634,54 @@ export function PutawayTab({ session, onToast }: { session: odoo.OdooSession; on
         </div>
       ) : (
         <>
-          {filteredRows.length > 0 && (
+          {/* PDA : une fiche par règle. Cinq colonnes sur un écran de scanner,
+              la désignation est tronquée et « Règle → Réel » devient illisible. */}
+          {etroit && filteredRows.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              {filteredRows.map(row => (
+                <div key={row.ruleId} style={{ ...S.card, padding: 12, marginBottom: 10,
+                                               background: row.divergent ? "#fffbeb" : "#fff",
+                                               borderColor: row.divergent ? "#fde68a" : "#e8ecf3" }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={etiquette}>Réf</div>
+                      <div style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#0f172a", wordBreak: "break-all", lineHeight: 1.2 }}>{row.productCode}</div>
+                    </div>
+                    {row.divergent ? <span style={S.badge("#b45309", "#fef3c7")}>⚠ Décalé</span> : <span style={S.badge("#166534", "#dcfce7")}>✓ OK</span>}
+                  </div>
+
+                  <div style={{ marginTop: 8 }}>
+                    <div style={etiquette}>Désignation</div>
+                    <div style={{ fontSize: 14, color: "#0f172a", lineHeight: 1.4 }}>{row.productName}</div>
+                  </div>
+
+                  {/* Les deux emplacements l'un sous l'autre : c'est la comparaison
+                      qui compte, et en ligne elle sortait de l'écran. */}
+                  <div style={{ marginTop: 10, paddingTop: 9, borderTop: "1px solid #f1f5f9" }}>
+                    <div style={{ fontSize: 13.5, marginBottom: 4 }}>
+                      <span style={{ color: "#7c3aed", fontWeight: 700 }}>Règle : </span>
+                      <span style={{ color: "#475569", wordBreak: "break-word" }}>{row.ruleLocation}</span>
+                    </div>
+                    <div style={{ fontSize: 13.5 }}>
+                      <span style={{ fontWeight: 700, color: row.divergent ? "#b45309" : "#16a34a" }}>Réel : </span>
+                      <span style={{ color: row.divergent ? "#b45309" : "#16a34a", wordBreak: "break-word" }}>{row.realLocation}</span>
+                      {row.realQty > 0 && <span style={{ color: "#94a3b8" }}> ({row.realQty % 1 === 0 ? row.realQty : row.realQty.toFixed(1)})</span>}
+                    </div>
+                  </div>
+
+                  {row.divergent && row.realLocationId && (
+                    <button disabled={row.updating} onClick={() => setConfirmRow(row)}
+                      style={{ marginTop: 10, width: "100%", padding: "11px 0", borderRadius: 9, border: "none", cursor: "pointer",
+                               background: "#dbeafe", color: "#2563eb", fontSize: 13.5, fontWeight: 800, fontFamily: "inherit" }}>
+                      {row.updating ? "Mise à jour…" : `Aligner la règle sur ${row.realLocation}`}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!etroit && filteredRows.length > 0 && (
             <div style={{ ...S.card, overflow: "hidden", marginBottom: 24 }}>
               <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 100px 44px", padding: "9px 16px", background: "#f8fafc", borderBottom: "1px solid #e8ecf3", fontSize: 10.5, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.07em", textTransform: "uppercase" as const, gap: 12 }}>
                 <span>Réf</span><span>Désignation</span><span>Règle → Réel</span><span style={{ textAlign: "center" }}>Statut</span><span/>
@@ -1660,6 +1715,26 @@ export function PutawayTab({ session, onToast }: { session: odoo.OdooSession; on
               <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" as const, color: "#94a3b8", margin: "0 0 12px 2px" }}>
                 Articles sans règle de rangement ({noPutaway.length})
               </div>
+              {etroit && noPutaway.map(row => (
+                <div key={row.productId} style={{ ...S.card, padding: 12, marginBottom: 10 }}>
+                  <div style={etiquette}>Réf</div>
+                  <div style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: "#0f172a", wordBreak: "break-all", lineHeight: 1.2 }}>{row.productCode}</div>
+                  <div style={{ ...etiquette, marginTop: 8 }}>Désignation</div>
+                  <div style={{ fontSize: 14, color: "#0f172a", lineHeight: 1.4 }}>{row.productName}</div>
+                  <div style={{ ...etiquette, marginTop: 8 }}>Stock actuel</div>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: "#d97706", wordBreak: "break-word" }}>
+                    📍 {row.realLocation}
+                    <span style={{ color: "#94a3b8", fontWeight: 500 }}> ({row.realQty % 1 === 0 ? row.realQty : row.realQty.toFixed(1)})</span>
+                  </div>
+                  <button disabled={row.creating} onClick={() => setConfirmRow(row)}
+                    style={{ marginTop: 10, width: "100%", padding: "11px 0", borderRadius: 9, border: "none", cursor: "pointer",
+                             background: "#fef3c7", color: "#b45309", fontSize: 13.5, fontWeight: 800, fontFamily: "inherit" }}>
+                    {row.creating ? "Création…" : `Créer la règle → ${row.realLocation}`}
+                  </button>
+                </div>
+              ))}
+
+              {!etroit && (
               <div style={{ ...S.card, overflow: "hidden" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 44px", padding: "9px 16px", background: "#f8fafc", borderBottom: "1px solid #e8ecf3", fontSize: 10.5, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.07em", textTransform: "uppercase" as const, gap: 12 }}>
                   <span>Réf</span><span>Désignation</span><span>Stock actuel</span><span/>
@@ -1679,6 +1754,7 @@ export function PutawayTab({ session, onToast }: { session: odoo.OdooSession; on
                   </div>
                 ))}
               </div>
+              )}
             </div>
           )}
 
