@@ -9601,11 +9601,33 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
   const assignOrphanToPackage = async (lineId: number, packageId: number) => {
     setRepairingLine(lineId);
     try {
-      await odoo.repairAndAssignLine(session, lineId, packageId);
+      await odoo.repairAndAssignLine(session, lineId, packageId, { marquerPreleve: true });
       onToast("✓ Ligne réparée et assignée au colis");
       await loadScanPicking(scanPicking.name);
     } catch (e: any) { onToast("❌ " + e.message); }
     setRepairingLine(null);
+  };
+
+  // ── Réparation colis : TOUT ce qui est sans colis va dans le même colis ──
+  // Quand le scan Odoo a laissé 24 des 25 unites de cote, les reprendre une par
+  // une est fastidieux et se prete aux oublis.
+  const [regroupingPkg, setRegroupingPkg] = useState<number | null>(null);
+  const assignAllOrphans = async (pkg: any) => {
+    const total = orphanLines.filter((ml: any) => !ml.result_package_id).length;
+    if (!total) return;
+    if (!confirm(
+      `Mettre les ${total} ligne(s) sans colis dans ${pkg.name} ?\n\n` +
+      `Elles seront aussi marquees comme prelevees, sinon le colis paraitrait vide.`
+    )) return;
+    setRegroupingPkg(pkg.id);
+    try {
+      const r = await odoo.assignAllOrphansToPackage(session, scanPicking.id, pkg.id);
+      onToast(r.echecs.length
+        ? `${r.traitees} ligne(s) mises dans ${pkg.name} — ${r.echecs.length} refusee(s) : ${r.echecs[0].erreur}`
+        : `✓ ${r.traitees} ligne(s) mises dans ${pkg.name}`);
+      await loadScanPicking(scanPicking.name);
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setRegroupingPkg(null);
   };
 
   // ── Réparation colis : crée un NOUVEAU colis et y assigne la ligne orpheline ──
@@ -10413,13 +10435,36 @@ function ReprintLabelScreen({ session, onBack, onToast }: { session: any; onBack
                     ⚠ {orphanLines.length} ligne(s) sans colis
                   </div>
                   <div style={{ fontSize: 11.5, color: "#7f1d1d", marginBottom: 10 }}>
-                    Ces lignes ont du stock fait mais ne sont dans aucun colis (souvent après une manip de colis annulée). Assigne-les à un colis existant, crée-en un nouveau, ou divise la quantité pour la répartir sur plusieurs colis.
+                    Ces lignes ne sont dans aucun colis. Cas fréquent : au scan, Odoo a mis 1 unité dans le colis et laissé le reste de côté. Assigne-les à un colis existant, crée-en un nouveau, ou divise la quantité pour la répartir sur plusieurs colis.
                   </div>
+
+                  {/* Tout regrouper d'un coup — l'action la plus fréquente : le
+                      reliquat appartient au même carton que la première unité. */}
+                  {scanPkgs.length > 0 && orphanLines.filter((ml: any) => !ml.result_package_id).length > 1 && (
+                    <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid #fecaca" }}>
+                      <div style={{ fontSize: 11.5, fontWeight: 700, color: "#7f1d1d", marginBottom: 6 }}>
+                        Tout mettre dans un seul colis :
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {scanPkgs.map((pkg: any) => (
+                          <button key={pkg.id} onClick={() => assignAllOrphans(pkg)} disabled={regroupingPkg !== null}
+                            style={{ padding: "9px 14px", background: "#b91c1c", color: "#fff", border: "none", borderRadius: 9, fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", opacity: regroupingPkg !== null ? 0.6 : 1 }}>
+                            {regroupingPkg === pkg.id ? "…" : `⤵ Tout dans ${pkg.name}`}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {orphanLines.map((ml: any) => (
                     <div key={ml.id} style={{ background: C.white, border: "1px solid #fecaca", borderRadius: 10, padding: 10, marginBottom: 8 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>{ml.product_id?.[1] || "Produit"}</div>
                       <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8 }}>
-                        {ml.lot_id ? `Lot ${ml.lot_id[1]} · ` : ""}Fait {ml.qty_done || 0} · Réservé {ml.reserved_uom_qty || 0}
+                        {ml.lot_id ? `Lot ${ml.lot_id[1]} · ` : ""}
+                        {/* « Fait 0 · Réservé 24 » se lit comme une anomalie alors que
+                            c'est simplement une ligne pas encore prélevée. On le dit. */}
+                        {(ml.qty_done || 0) === 0 && (ml.reserved_uom_qty || 0) > 0
+                          ? <strong style={{ color: "#b45309" }}>{ml.reserved_uom_qty} réservé(s), non prélevé(s)</strong>
+                          : <>Fait {ml.qty_done || 0} · Réservé {ml.reserved_uom_qty || 0}</>}
                         {ml.result_package_id ? ` · Colis actuel : ${ml.result_package_id[1]}` : " · Aucun colis"}
                       </div>
                       {ml.result_package_id && (ml.reserved_uom_qty || 0) !== (ml.qty_done || 0) && (

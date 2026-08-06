@@ -4115,10 +4115,16 @@ export async function getPickingPackages(session: OdooSession, pickingId: number
  */
 export async function getOrphanMoveLines(session: OdooSession, pickingId: number): Promise<any[]> {
   // « Quelque chose a été fait sur la ligne » ne s'exprime pas pareil selon la
-  // version : qty_done > 0 avant la v17, picked = true ensuite. Le champ figure
+  // version : qty_done > 0 avant la v17, quantity > 0 ensuite. Le champ figure
   // ici dans le DOMAINE, donc un mauvais nom fait échouer la requête entière.
+  //
+  // On filtre sur la QUANTITÉ et non sur `picked`. Quand Odoo scinde une ligne
+  // au scan — 1 unité prélevée et mise en colis, 24 laissées de côté — le
+  // reliquat porte une quantité mais `picked = false`. Filtrer sur `picked`
+  // cachait donc précisément les lignes qu'on vient réparer ici : l'écran
+  // annonçait « aucune ligne sans colis » alors que 24 unités l'étaient.
   const shape = await stockShape(session);
-  const doneClause = shape.merged ? ["picked", "=", true] : ["qty_done", ">", 0];
+  const doneClause = shape.merged ? ["quantity", ">", 0] : ["qty_done", ">", 0];
   const lines = await searchRead(
     session, M("MODEL_MOVE_LINE"),
     [["picking_id", "=", pickingId], doneClause],
@@ -4129,9 +4135,14 @@ export async function getOrphanMoveLines(session: OdooSession, pickingId: number
     ]),
     200
   );
-  return lines.filter((ml: any) =>
-    !ml.result_package_id || (ml.reserved_uom_qty || 0) !== (ml.qty_done || 0)
-  );
+  return lines.filter((ml: any) => {
+    // Sans colis : c'est le cas principal, quel que soit l'état de prélèvement.
+    if (!ml.result_package_id) return true;
+    // Avec colis : on ne signale qu'une vraie désynchronisation (fait ≠ réservé),
+    // pas une ligne simplement pas encore prélevée — sinon tout un picking en
+    // cours remonterait comme « à réparer », ce qui noierait les vrais cas.
+    return (ml.qty_done || 0) > 0 && (ml.reserved_uom_qty || 0) !== (ml.qty_done || 0);
+  });
 }
 
 /**
@@ -4149,14 +4160,53 @@ export async function findPackageByName(session: OdooSession, name: string): Pro
  * laissé reserved_uom_qty désynchronisé, ex: 0 réservé alors que 200 sont faits) —
  * puis l'assigne au colis donné. Combine réparation + affectation en un seul appel.
  */
-export async function repairAndAssignLine(session: OdooSession, moveLineId: number, packageId: number): Promise<void> {
+export async function repairAndAssignLine(
+  session: OdooSession, moveLineId: number, packageId: number,
+  opts: { marquerPreleve?: boolean } = {},
+): Promise<void> {
   const [ml] = await searchRead(session, M("MODEL_MOVE_LINE"), [["id", "=", moveLineId]], ["qty_done", "reserved_uom_qty"], 1);
   if (!ml) throw new Error("Ligne introuvable");
   const vals: any = { result_package_id: packageId };
-  if ((ml.reserved_uom_qty || 0) !== (ml.qty_done || 0)) {
+
+  // Une ligne réservée mais non prélevée compte pour 0 dans le colis : la mettre
+  // dans le carton sans la marquer prélevée donnerait un colis qui paraît vide.
+  // On reprend la quantité réservée comme quantité faite.
+  if (opts.marquerPreleve && (ml.qty_done || 0) === 0 && (ml.reserved_uom_qty || 0) > 0) {
+    vals.qty_done = ml.reserved_uom_qty;
+  } else if ((ml.reserved_uom_qty || 0) !== (ml.qty_done || 0)) {
     vals.reserved_uom_qty = ml.qty_done || 0;
   }
   await write(session, M("MODEL_MOVE_LINE"), [moveLineId], vals);
+}
+
+/**
+ * Met TOUTES les lignes sans colis d'un transfert dans le même colis.
+ *
+ * Cas réel : au scan, Odoo a mis 1 unité dans le colis et laissé 24 de côté.
+ * Les reprendre une par une est fastidieux et se prête aux oublis — d'autant
+ * que le reliquat peut être éclaté sur plusieurs lignes.
+ *
+ * Chaque ligne est traitée séparément et les échecs sont rapportés plutôt que
+ * de faire échouer l'ensemble : mieux vaut 23 lignes rangées et 1 erreur
+ * nommée qu'un abandon global sans savoir où ça a coincé.
+ */
+export async function assignAllOrphansToPackage(
+  session: OdooSession, pickingId: number, packageId: number,
+): Promise<{ traitees: number; echecs: { id: number; produit: string; erreur: string }[] }> {
+  const orphans = (await getOrphanMoveLines(session, pickingId))
+    .filter((ml: any) => !ml.result_package_id);
+
+  let traitees = 0;
+  const echecs: { id: number; produit: string; erreur: string }[] = [];
+  for (const ml of orphans) {
+    try {
+      await repairAndAssignLine(session, ml.id, packageId, { marquerPreleve: true });
+      traitees++;
+    } catch (e: any) {
+      echecs.push({ id: ml.id, produit: ml.product_id?.[1] || `ligne ${ml.id}`, erreur: safeErrMsg(e) });
+    }
+  }
+  return { traitees, echecs };
 }
 
 /**
