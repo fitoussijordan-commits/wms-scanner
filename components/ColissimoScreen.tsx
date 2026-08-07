@@ -79,7 +79,10 @@ export default function ColissimoScreen({
         cp: l.cp, ville: l.ville, pays: l.pays || "FR",
         email: l.email, telephone: l.telephone,
         poids: l.poids > 0 ? String(l.poids) : "",
-        reference: l.origin || l.pickingName,
+        // Référence colis = commande de vente Odoo (S…). C'est le numéro que
+        // le service client cherchera en cas de litige ; le nom du transfert
+        // ne parle qu'au magasin.
+        reference: l.commande || l.origin || l.pickingName,
       }));
       if (l.manquants.length) onToast(`À compléter : ${l.manquants.join(", ")}`, "info");
     } catch (e: any) { onToast("Erreur : " + (e?.message || e), "error"); }
@@ -196,7 +199,7 @@ export default function ColissimoScreen({
         <div style={{ display: "flex", gap: 6 }}>
           <input value={recherche} onChange={e => setRecherche(e.target.value)}
             onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") charger(recherche); }}
-            placeholder="N° de OUT, de pick ou de commande…"
+            placeholder="N° de commande (S…), de OUT ou de pick…"
             style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: etroit ? "12px" : "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: etroit ? 14.5 : 13.5, fontFamily: "inherit", outline: "none" }} />
           <button onClick={() => charger(recherche)} disabled={chargement}
             style={{ padding: etroit ? "12px 16px" : "10px 18px", background: C.blue, color: "#fff", border: "none", borderRadius: 9, fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: chargement ? .6 : 1, flexShrink: 0 }}>
@@ -211,7 +214,8 @@ export default function ColissimoScreen({
           <div style={{ marginTop: 10, background: C.blueSoft, border: `1px solid #bfdbfe`, borderRadius: 9, padding: 10, fontSize: 12 }}>
             <div style={{ fontWeight: 700, color: C.text }}>
               {livraison.pickingName}
-              {livraison.origin && <span style={{ color: C.textMuted, fontWeight: 500 }}> · {livraison.origin}</span>}
+              {livraison.commande && <span style={{ color: C.textMuted, fontWeight: 500 }}> · commande {livraison.commande}</span>}
+              {!livraison.commande && livraison.origin && <span style={{ color: C.textMuted, fontWeight: 500 }}> · {livraison.origin}</span>}
             </div>
             {livraison.transporteur && <div style={{ color: C.textSec, marginTop: 2 }}>Transporteur Odoo : {livraison.transporteur}</div>}
             {livraison.suiviExistant && (

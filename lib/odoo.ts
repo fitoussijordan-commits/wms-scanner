@@ -2420,6 +2420,8 @@ export interface LivraisonColissimo {
   pickingId: number;
   pickingName: string;
   origin: string;
+  /** Commande de vente Odoo (S…) — c'est elle qui sert de référence colis. */
+  commande: string;
   state: string;
   transporteur: string;
   suiviExistant: string;
@@ -2438,16 +2440,56 @@ export interface LivraisonColissimo {
 }
 
 export async function chargerLivraison(session: OdooSession, ref: string): Promise<LivraisonColissimo | null> {
-  const pickings = await searchPickingByCommande(session, ref);
+  let pickings = await searchPickingByCommande(session, ref);
+
+  // Un numéro de PICK n'est pas un transfert sortant : la recherche ci-dessus
+  // ne le trouve pas. Or c'est souvent le papier que le préparateur a en main.
+  // On remonte donc du pick à sa commande d'origine, puis de la commande au OUT.
+  if (!pickings.length) {
+    const [interne] = await searchRead(session, M("MODEL_PICKING"),
+      [["name", "=", ref.trim()]], ["id", "name", "origin"], 1);
+    if (interne?.origin) pickings = await searchPickingByCommande(session, interne.origin);
+  }
+
+  // Numéro de commande de vente (S…) : on passe par la commande elle-même
+  // plutôt que par le champ `origin`, qui n'est qu'un texte libre et peut
+  // avoir été réécrit.
+  if (!pickings.length) {
+    const [so] = await searchRead(session, "sale.order",
+      [["name", "=", ref.trim()]], ["id", "name"], 1);
+    if (so?.id) {
+      pickings = await searchRead(session, M("MODEL_PICKING"),
+        [["sale_id", "=", so.id], ["picking_type_code", "=", "outgoing"],
+         ["state", "not in", ["cancel"]]],
+        ["id", "name", "origin", "partner_id", "carrier_id", "carrier_tracking_ref", "date_done", "state"],
+        10, "id desc");
+    }
+  }
+
   if (!pickings.length) return null;
   // Le OUT le plus récent : c'est celui qu'on est en train d'expédier.
   const p = pickings[0];
 
+  // Référence portée sur l'étiquette : la commande de vente. C'est le numéro
+  // que le service client cherchera si un colis pose problème — pas le nom du
+  // transfert, interne au magasin.
+  let commande = "";
+  try {
+    const [avecSo] = await searchRead(session, M("MODEL_PICKING"),
+      [["id", "=", p.id]], ["id", "sale_id"], 1);
+    if (avecSo?.sale_id) commande = String(Array.isArray(avecSo.sale_id) ? avecSo.sale_id[1] : avecSo.sale_id);
+  } catch { /* pas de lien commande : on retombera sur origin */ }
+  if (!commande && /^S\d+/i.test(String(p.origin || ""))) commande = String(p.origin);
+
   const partnerId = Array.isArray(p.partner_id) ? p.partner_id[0] : p.partner_id;
   let adr: any = {};
   if (partnerId) {
-    const [c] = await searchRead(session, "res.partner", [["id", "=", partnerId]],
-      ["id", "name", "street", "street2", "zip", "city", "country_id", "email", "phone", "mobile", "parent_id", "is_company"], 1);
+    // `mobile` a disparu de res.partner en Odoo 19 (fusionné dans `phone`).
+    // Le demander tel quel faisait échouer TOUTE la requête, donc l'écran
+    // entier, pour un champ d'appoint.
+    const champs = await availableFields(session, "res.partner",
+      ["id", "name", "street", "street2", "zip", "city", "country_id", "email", "phone", "mobile", "parent_id", "is_company"]);
+    const [c] = await searchRead(session, "res.partner", [["id", "=", partnerId]], champs, 1);
     adr = c || {};
   }
 
@@ -2482,6 +2524,7 @@ export async function chargerLivraison(session: OdooSession, ref: string): Promi
     pickingId: p.id,
     pickingName: p.name || "",
     origin: p.origin || "",
+    commande,
     state: p.state || "",
     transporteur: Array.isArray(p.carrier_id) ? String(p.carrier_id[1] || "") : "",
     suiviExistant: String(p.carrier_tracking_ref || ""),
