@@ -2406,6 +2406,107 @@ export async function searchDoneOutPickings(session: OdooSession, query: string)
 
 // Recherche un OUT par numéro de commande (origin) ou numéro OUT — tous états
 // Cherche UNIQUEMENT sur origin et name pour éviter les faux-positifs sur partenaire/tracking
+/**
+ * Coordonnées de livraison d'un transfert, prêtes pour un affranchissement.
+ *
+ * Le préparateur ne doit rien retaper : tout est déjà dans Odoo. On accepte
+ * indifféremment le nom du OUT, celui du pick ou la référence de commande —
+ * sur le terrain, c'est le papier sous la main qui décide de ce qu'on scanne.
+ *
+ * Le poids est repris du transfert quand Odoo le connaît. Sinon il est laissé
+ * à zéro et devra être saisi : deviner un poids, c'est affranchir faux.
+ */
+export interface LivraisonColissimo {
+  pickingId: number;
+  pickingName: string;
+  origin: string;
+  state: string;
+  transporteur: string;
+  suiviExistant: string;
+  nom: string;
+  societe: string;
+  adresse: string;
+  adresse2: string;
+  cp: string;
+  ville: string;
+  pays: string;
+  email: string;
+  telephone: string;
+  poids: number;
+  /** Ce qui manque pour affranchir — vide si tout est là. */
+  manquants: string[];
+}
+
+export async function chargerLivraison(session: OdooSession, ref: string): Promise<LivraisonColissimo | null> {
+  const pickings = await searchPickingByCommande(session, ref);
+  if (!pickings.length) return null;
+  // Le OUT le plus récent : c'est celui qu'on est en train d'expédier.
+  const p = pickings[0];
+
+  const partnerId = Array.isArray(p.partner_id) ? p.partner_id[0] : p.partner_id;
+  let adr: any = {};
+  if (partnerId) {
+    const [c] = await searchRead(session, "res.partner", [["id", "=", partnerId]],
+      ["id", "name", "street", "street2", "zip", "city", "country_id", "email", "phone", "mobile", "parent_id", "is_company"], 1);
+    adr = c || {};
+  }
+
+  // Poids : Odoo le porte sur le transfert quand un transporteur est renseigné.
+  let poids = 0;
+  try {
+    const champs = await knownFields(session, M("MODEL_PICKING"));
+    const dispo = ["shipping_weight", "weight"].filter(f => !champs || champs.has(f));
+    if (dispo.length) {
+      const [w] = await searchRead(session, M("MODEL_PICKING"), [["id", "=", p.id]], ["id", ...dispo], 1);
+      for (const f of dispo) { const v = Number(w?.[f]) || 0; if (v > 0) { poids = v; break; } }
+    }
+  } catch { /* poids inconnu : saisie manuelle */ }
+
+  const pays = Array.isArray(adr.country_id) ? String(adr.country_id[1] || "") : "";
+  // Odoo ne donne que le libellé du pays sur ce champ relationnel. On ne garde
+  // le code que pour la France, seul cas courant ici ; le reste sera choisi à
+  // l'écran plutôt que déduit d'une traduction.
+  const codePays = /france/i.test(pays) ? "FR" : "";
+
+  const nom = String(adr.name || "").trim();
+  const societe = adr.is_company ? nom : (Array.isArray(adr.parent_id) ? String(adr.parent_id[1] || "") : "");
+
+  const manquants: string[] = [];
+  if (!nom) manquants.push("nom du destinataire");
+  if (!adr.street) manquants.push("adresse");
+  if (!adr.zip) manquants.push("code postal");
+  if (!adr.city) manquants.push("ville");
+  if (!(poids > 0)) manquants.push("poids");
+
+  return {
+    pickingId: p.id,
+    pickingName: p.name || "",
+    origin: p.origin || "",
+    state: p.state || "",
+    transporteur: Array.isArray(p.carrier_id) ? String(p.carrier_id[1] || "") : "",
+    suiviExistant: String(p.carrier_tracking_ref || ""),
+    nom,
+    societe: societe === nom ? "" : societe,
+    adresse: String(adr.street || ""),
+    adresse2: String(adr.street2 || ""),
+    cp: String(adr.zip || ""),
+    ville: String(adr.city || ""),
+    pays: codePays,
+    email: String(adr.email || ""),
+    telephone: String(adr.mobile || adr.phone || ""),
+    poids,
+    manquants,
+  };
+}
+
+/** Inscrit le numéro de colis sur le transfert, pour le retrouver depuis Odoo. */
+export async function ecrireSuiviColissimo(
+  session: OdooSession, pickingId: number, numero: string,
+): Promise<void> {
+  if (!numero) return;
+  await write(session, M("MODEL_PICKING"), [pickingId], { carrier_tracking_ref: numero });
+}
+
 export async function searchPickingByCommande(session: OdooSession, ref: string): Promise<any[]> {
   const trimmed = ref.trim();
   const domain: any[] = [

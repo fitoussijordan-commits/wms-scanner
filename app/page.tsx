@@ -22,6 +22,7 @@ import FreeScanScreen from "@/components/FreeScanScreen";
 import InventoryCountScreen from "@/components/InventoryCountScreen";
 import EshopSortiesScreen from "@/components/EshopSortiesScreen";
 import LocationManagerScreen from "@/components/LocationManagerScreen";
+import ColissimoScreen from "@/components/ColissimoScreen";
 import ManufacturingScreen from "@/components/ManufacturingScreen";
 import ImparfaiteImportScreen from "@/components/ImparfaiteImportScreen";
 import FefoAnalysisScreen from "@/components/FefoAnalysisScreen";
@@ -1245,7 +1246,9 @@ export default function Page() {
     setIsDark(val);
   };
 
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager" | "imparfaite" | "fefo" | "manufacturing" | "admin" | "invoiceAudit">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop" | "palettes" | "negativeStock" | "reprintLabel" | "waitingOrders" | "productImport" | "supplierImport" | "freeScan" | "returns" | "packing" | "order" | "inventoryCount" | "eshopSorties" | "locationManager" | "imparfaite" | "fefo" | "manufacturing" | "admin" | "invoiceAudit" | "colissimo">("login");
+  // Reference pre-chargee quand Colissimo est ouvert depuis l'emballage.
+  const [colissimoRef, setColissimoRef] = useState("");
   // true dès qu'on sait s'il y a une session sauvegardée ou non (localStorage, synchrone).
   // Tant que false, on n'affiche PAS le formulaire de connexion même si screen==="login"
   // (valeur initiale par défaut) — ça évite le flash de l'écran de connexion au refresh (F5)
@@ -1741,7 +1744,7 @@ export default function Page() {
   // peut viser une autre base, et un schéma hérité produit des erreurs de champs
   // incompréhensibles (« Invalid field 'quantity' » sur une base qui ne l'a jamais eu).
   const logout = () => { odoo.resetSchemaCache(); setSession(null); clearSess(); setScreen("login"); resetTransfer(); };
-  const goHome = () => { setScreen("home"); resetTransfer(); clearLookup(); setInventoryInitProduct(null); };
+  const goHome = () => { setScreen("home"); resetTransfer(); clearLookup(); setInventoryInitProduct(null); setColissimoRef(""); };
 
   // Charge le compteur de prépas en arrière-plan dès que la home est affichée
   useEffect(() => {
@@ -3164,6 +3167,7 @@ export default function Page() {
     { key: "negativeStock", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>, label: "Stock négatif", onClick: () => setScreen("negativeStock"), admin: true, badge: badgeNegStock, badgeColor: "#ef4444" },
     { key: "invoiceAudit", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>, label: "Factures", onClick: () => setScreen("invoiceAudit"), admin: true, badge: null, badgeColor: "" },
     { key: "reprintLabel", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>, label: "Réimpr. étiq.", onClick: () => setScreen("reprintLabel"), admin: false, badge: null, badgeColor: "" },
+    { key: "colissimo", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.3 7 12 12 20.7 7"/><line x1="12" y1="22" x2="12" y2="12"/></svg>, label: "Envoi Colissimo", onClick: () => setScreen("colissimo"), admin: false, badge: null, badgeColor: "" },
     { key: "labels", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>, label: "Étiquettes", onClick: () => setScreen("labels"), admin: false, badge: null, badgeColor: "" },
     { key: "locationManager", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>, label: "Gestion emplacements", onClick: () => setScreen("locationManager"), admin: false, badge: null, badgeColor: "" },
     { key: "imparfaite", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>, label: "Import Imparfaite", onClick: () => setScreen("imparfaite"), admin: true, badge: null, badgeColor: "" },
@@ -4291,10 +4295,15 @@ export default function Page() {
             onBack={() => { setPackingPickingId(null); goHome(); }}
             onToast={showToast}
             initialPickingId={packingPickingId ?? undefined}
+            onColissimo={(ref) => { setColissimoRef(ref); setScreen("colissimo"); }}
           />
         )}
         {screen === "reprintLabel" && session && (
           <ReprintLabelScreen session={session} onBack={goHome} onToast={showToast} />
+        )}
+        {screen === "colissimo" && session && (
+          <ColissimoScreen session={session} onBack={goHome} onToast={showToast}
+            refInitiale={colissimoRef || undefined} />
         )}
         {screen === "locationManager" && session && (
           <LocationManagerScreen session={session} onBack={goHome} onToast={showToast}

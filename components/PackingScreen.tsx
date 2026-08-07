@@ -176,9 +176,23 @@ interface Props {
   onBack:            () => void;
   onToast:           (msg: string, type?: "success" | "error" | "info") => void;
   initialPickingId?: number;
+  /** Bascule vers l'écran Colissimo avec la référence déjà chargée. */
+  onColissimo?:      (ref: string) => void;
 }
 
-export default function PackingScreen({ session, onBack, onToast, initialPickingId }: Props) {
+/**
+ * Le transporteur est-il La Poste ?
+ *
+ * Le libellé du transporteur est saisi dans Odoo et varie (« Colissimo »,
+ * « La Poste - Colissimo », « LAPOSTE »…). On teste donc sur des mots-clés
+ * plutôt que sur une correspondance exacte, qui raterait à la première
+ * variante d'orthographe.
+ */
+function estLaPoste(nom: string): boolean {
+  return /colissimo|la\s*poste|laposte/i.test(nom || "");
+}
+
+export default function PackingScreen({ session, onBack, onToast, initialPickingId, onColissimo }: Props) {
   const [view,            setView]            = useState<"list" | "detail">(initialPickingId ? "detail" : "list");
   const [loadingList,     setLoadingList]     = useState(true);
   const [pickings,        setPickings]        = useState<PackablePicking[]>([]);
@@ -202,6 +216,9 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
   const [groupedPickings,  setGroupedPickings]  = useState<GroupedPicking[]>([]);
   // Transporteur absent du bon : aucune etiquette ne sera demandee.
   const [noCarrier, setNoCarrier] = useState(false);
+  // Transporteur du bon : sert a proposer l'affranchissement Colissimo au bon
+  // moment, plutot que d'afficher le bouton sur tous les envois.
+  const [selectedCarrier, setSelectedCarrier] = useState("");
   const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
   const [loadingGroup,     setLoadingGroup]     = useState(false);
 
@@ -306,6 +323,7 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
       // si la commande en porte un. La propagation commande -> bon peut echouer,
       // et l'operateur ne s'en apercevait qu'apres validation, colis en main.
       setNoCarrier(!!pickingInfo && !pickingInfo.carrier_id);
+      setSelectedCarrier(pickingInfo?.carrier_id ? String(pickingInfo.carrier_id[1] || "") : "");
 
 
       // Articles
@@ -786,6 +804,15 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
               </div>
             ))}
           </div>
+        )}
+
+        {/* La Poste n'affranchit pas depuis Odoo : l'étiquette se crée ici,
+            sinon le préparateur repart ressaisir la commande sur le portail. */}
+        {onColissimo && estLaPoste(selectedCarrier) && (
+          <button onClick={() => onColissimo(selectedOrigin || done.pickingName)}
+            style={{ width: "100%", padding: "14px 0", marginBottom: 10, background: "#0f172a", color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+            📮 Créer l&apos;étiquette Colissimo
+          </button>
         )}
 
         <button onClick={() => { setDone(null); setView("list"); }}
