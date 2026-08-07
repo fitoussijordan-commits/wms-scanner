@@ -46,7 +46,7 @@ export default function ColissimoScreen({
 }) {
   const etroit = useEcranEtroit();
 
-  const [config, setConfig] = useState<{ configure: boolean; test: boolean; expediteurManquant: string[]; offres: Offre[] } | null>(null);
+  const [config, setConfig] = useState<{ configure: boolean; authentification: string; test: boolean; expediteurManquant: string[]; offres: Offre[] } | null>(null);
   const [recherche, setRecherche] = useState(refInitiale || "");
   const [chargement, setChargement] = useState(false);
   const [livraison, setLivraison] = useState<odoo.LivraisonColissimo | null>(null);
@@ -165,7 +165,10 @@ export default function ColissimoScreen({
         <button onClick={onBack} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.textMuted, padding: 4 }}>←</button>
         <div style={{ flex: 1 }}>
           <h2 style={{ fontSize: 18, fontWeight: 800, color: C.text, margin: 0 }}>📮 Expédition Colissimo</h2>
-          <div style={{ fontSize: 12, color: C.textMuted }}>Étiquette La Poste en direct, sans ressaisie</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>
+            Étiquette La Poste en direct, sans ressaisie
+            {config?.authentification && <span> · {config.authentification}</span>}
+          </div>
         </div>
       </div>
 
@@ -173,7 +176,7 @@ export default function ColissimoScreen({
           fait perdre bien plus de temps qu'un avertissement à l'ouverture. */}
       {config && !config.configure && (
         <div style={{ background: C.redSoft, border: "1px solid #fecaca", borderRadius: 11, padding: 12, marginBottom: 14, fontSize: 12.5, color: "#7f1d1d" }}>
-          <strong>Colissimo n&apos;est pas configuré.</strong> Il manque <code>COLISSIMO_CONTRACT</code> et <code>COLISSIMO_PASSWORD</code> dans les variables Vercel — ce sont le numéro de contrat et le mot de passe fournis par La Poste.
+          <strong>Colissimo n&apos;est pas configuré.</strong> Il faut, au choix, <code>COLISSIMO_API_KEY</code> (clé générée depuis l&apos;espace client Colissimo), ou <code>COLISSIMO_CONTRACT</code> + <code>COLISSIMO_PASSWORD</code> (numéro de contrat et mot de passe fournis par La Poste).
         </div>
       )}
       {config?.configure && config.expediteurManquant.length > 0 && (

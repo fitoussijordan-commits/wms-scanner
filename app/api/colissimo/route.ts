@@ -7,9 +7,16 @@
 // Identifiants EXCLUSIVEMENT côté serveur, comme Odoo, Shopware et TNT. Ce sont
 // ceux du contrat : ils permettent d'affranchir, donc d'engager des frais.
 //
+// Deux authentifications possibles, au choix — La Poste accepte l'une OU l'autre :
+//   - une clé d'API (en-tête `apiKey`), à générer depuis l'espace client Colissimo
+//   - le numéro de contrat et son mot de passe, dans le corps de la requête
+// La clé est préférable : elle se révoque sans toucher au mot de passe du
+// compte, dont dépend aussi l'accès au portail.
+//
 // Variables d'environnement :
-//   COLISSIMO_CONTRACT   numéro de contrat (obligatoire)
-//   COLISSIMO_PASSWORD   mot de passe du contrat (obligatoire)
+//   COLISSIMO_API_KEY    clé d'API (prioritaire si renseignée)
+//   COLISSIMO_CONTRACT   numéro de contrat (si pas de clé)
+//   COLISSIMO_PASSWORD   mot de passe du contrat (si pas de clé)
 //   COLISSIMO_SANDBOX    "1" pour taper l'environnement de test
 //   COLISSIMO_SENDER_*   coordonnées de l'expéditeur (voir expediteur())
 import { NextRequest, NextResponse } from "next/server";
@@ -37,9 +44,14 @@ export const OFFRES = [
 ] as const;
 
 function cfg() {
+  const cle = process.env.COLISSIMO_API_KEY || "";
+  const contrat = process.env.COLISSIMO_CONTRACT || "";
+  const motDePasse = process.env.COLISSIMO_PASSWORD || "";
   return {
-    contrat: process.env.COLISSIMO_CONTRACT || "",
-    motDePasse: process.env.COLISSIMO_PASSWORD || "",
+    cle, contrat, motDePasse,
+    // La clé prime : si elle est là, on n'envoie pas le mot de passe du compte.
+    methode: cle ? ("cle" as const) : ("contrat" as const),
+    configure: !!cle || !!(contrat && motDePasse),
     base: process.env.COLISSIMO_SANDBOX === "1" ? BASE_TEST : BASE,
     test: process.env.COLISSIMO_SANDBOX === "1",
   };
@@ -138,7 +150,8 @@ export async function GET(req: NextRequest) {
   if (action === "config") {
     // Ne renvoie JAMAIS les identifiants — seulement s'ils sont présents.
     return NextResponse.json({
-      configure: !!(c.contrat && c.motDePasse),
+      configure: c.configure,
+      authentification: c.configure ? (c.methode === "cle" ? "Clé d'API" : "Contrat + mot de passe") : "",
       test: c.test,
       expediteurManquant: expediteurIncomplet(),
       offres: OFFRES,
@@ -160,8 +173,10 @@ export async function POST(req: NextRequest) {
   }
 
   const c = cfg();
-  if (!c.contrat || !c.motDePasse) {
-    return NextResponse.json({ error: "Colissimo non configuré (COLISSIMO_CONTRACT / COLISSIMO_PASSWORD)" }, { status: 503 });
+  if (!c.configure) {
+    return NextResponse.json({
+      error: "Colissimo non configuré — il faut COLISSIMO_API_KEY, ou COLISSIMO_CONTRACT + COLISSIMO_PASSWORD",
+    }, { status: 503 });
   }
   const manquants = expediteurIncomplet();
   if (manquants.length) {
@@ -238,22 +253,33 @@ export async function POST(req: NextRequest) {
     };
     if (relais) lettre.service.pickupLocationId = pointRetrait;
 
-    const payload = {
-      contractNumber: c.contrat,
-      password: c.motDePasse,
+    const payload: any = {
       outputFormat: {
         x: 0, y: 0,
         outputPrintingType: String(b.format || "PDF_10x15_300dpi"),
       },
       letter: lettre,
     };
+    // Avec une clé d'API, le contrat et le mot de passe ne doivent PAS être
+    // envoyés : La Poste refuse la requête si les deux identifications
+    // coexistent.
+    if (c.methode === "contrat") {
+      payload.contractNumber = c.contrat;
+      payload.password = c.motDePasse;
+    }
 
     // `checkGenerateLabel` valide la requête SANS créer d'expédition ni
     // facturer. Indispensable pour tester un paramétrage sans consommer.
     const methode = action === "check" ? "checkGenerateLabel" : "generateLabel";
+    const entetes: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Accept": "multipart/related, application/json",
+    };
+    if (c.methode === "cle") entetes["apiKey"] = c.cle;
+
     const res = await fetchT(`${c.base}/${methode}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "multipart/related, application/json" },
+      headers: entetes,
       body: JSON.stringify(payload),
     }, 25_000);
 
