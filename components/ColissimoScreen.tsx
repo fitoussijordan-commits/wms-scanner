@@ -24,6 +24,32 @@ const C = {
 
 interface Offre { code: string; libelle: string; relais: boolean }
 
+interface PointRetrait {
+  id: string; nom: string; adresse: string; cp: string; ville: string;
+  distance: number; type: string; poidsMaxKg: number | null;
+  accesPMR: boolean; conges: boolean;
+  horaires: Record<string, string>;
+}
+
+/**
+ * Filtres de réseau proposés par La Poste.
+ *
+ * On n'expose pas les sept valeurs documentées : trois suffisent à couvrir les
+ * cas réels, et un menu de sept lignes sur un PDA fait choisir au hasard.
+ */
+const FILTRES = [
+  { code: "1", libelle: "Tous les points" },
+  { code: "0", libelle: "Bureaux de poste" },
+  { code: "3", libelle: "Commerçants Pickup" },
+];
+
+/** « 09:00-12:00 14:00-18:00 » ou « fermé » quand les deux plages sont nulles. */
+function horaireLisible(h: string): string {
+  if (!h) return "—";
+  const plages = h.split(" ").filter(p => p && p !== "00:00-00:00");
+  return plages.length ? plages.join("  ") : "fermé";
+}
+
 interface Saisie {
   nom: string; societe: string; adresse: string; adresse2: string;
   cp: string; ville: string; pays: string; email: string; telephone: string;
@@ -93,10 +119,62 @@ export default function ColissimoScreen({
 
   const offreCourante = config?.offres.find(o => o.code === s.offre);
 
+  // ── Points de retrait ──────────────────────────────────────────────────────
+  const [points, setPoints] = useState<PointRetrait[] | null>(null);
+  const [pointsBusy, setPointsBusy] = useState(false);
+  const [pointsErreur, setPointsErreur] = useState("");
+  const [filtre, setFiltre] = useState("1");
+  const [pointChoisi, setPointChoisi] = useState<PointRetrait | null>(null);
+
+  const chercherPoints = async (f = filtre) => {
+    if (!s.cp || !s.ville) { onToast("Renseigne d'abord le code postal et la ville du destinataire", "error"); return; }
+    setPointsBusy(true); setPointsErreur("");
+    try {
+      const r = await fetch("/api/colissimo?action=relais", {
+        method: "POST",
+        headers: { ...writeHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adresse: s.adresse, cp: s.cp, ville: s.ville, pays: s.pays,
+          poids: parseFloat(String(s.poids).replace(",", ".")) || 1,
+          filtre: f, reference: s.reference,
+        }),
+      }).then(x => x.json());
+      if (r?.error) throw new Error(r.error);
+      setPoints(r.points || []);
+      if (!r.points?.length) setPointsErreur("Aucun point trouvé autour de cette adresse.");
+    } catch (e: any) {
+      setPoints(null);
+      setPointsErreur(e?.message || "Recherche impossible");
+    }
+    setPointsBusy(false);
+  };
+
+  const choisirPoint = (p: PointRetrait) => {
+    setPointChoisi(p);
+    setS(prev => ({ ...prev, pointRetrait: p.id }));
+    setPoints(null);
+  };
+
+  // Changer d'offre ou d'adresse invalide le point retenu : le laisser en place
+  // ferait partir un colis vers un point qui ne correspond plus.
+  useEffect(() => { setPointChoisi(null); setPoints(null); setS(prev => ({ ...prev, pointRetrait: "" })); },
+    [s.offre, s.cp, s.ville]);
+
   const creer = async (verifier: boolean) => {
     if (!s.nom || !s.adresse || !s.cp || !s.ville) { onToast("Nom, adresse, code postal et ville sont requis", "error"); return; }
     const poids = parseFloat(String(s.poids).replace(",", "."));
     if (!(poids > 0)) { onToast("Poids requis (en kg)", "error"); return; }
+
+    if (offreCourante?.relais) {
+      if (!s.pointRetrait) { onToast("Choisis d'abord un point de retrait", "error"); return; }
+      // Le SMS de mise à disposition part sur le mobile du destinataire :
+      // sans numéro, il ne saura pas que son colis est arrivé.
+      if (!verifier && !s.telephone && !confirm(
+        "Aucun téléphone pour le destinataire.\n\n" +
+        "C'est par SMS que La Poste prévient qu'un colis est disponible en point de retrait.\n\n" +
+        "Créer l'étiquette quand meme ?"
+      )) return;
+    }
 
     setEnvoi(true);
     try {
@@ -266,11 +344,96 @@ export default function ColissimoScreen({
         </div>
 
         {offreCourante?.relais && (
-          <div style={{ marginTop: 10 }}>
-            {champ("pointRetrait", "Identifiant du point de retrait", { requis: true, large: true })}
-            <div style={{ fontSize: 11.5, color: "#7c2d12", background: C.orangeSoft, border: "1px solid #fed7aa", borderRadius: 8, padding: 8, marginTop: 6 }}>
-              La recherche de points relais relève d&apos;une autre API La Poste, qui n&apos;est pas encore branchée. En attendant, l&apos;identifiant doit être collé à la main.
-            </div>
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text, marginBottom: 6 }}>Point de retrait</div>
+
+            {pointChoisi ? (
+              <div style={{ background: C.greenSoft, border: "1px solid #bbf7d0", borderRadius: 10, padding: 11 }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{pointChoisi.nom}</div>
+                <div style={{ fontSize: 12.5, color: C.textSec, marginTop: 2, lineHeight: 1.4 }}>
+                  {pointChoisi.adresse}<br />{pointChoisi.cp} {pointChoisi.ville}
+                </div>
+                <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 4 }}>
+                  N° <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{pointChoisi.id}</span>
+                  {pointChoisi.distance > 0 && <> · à {pointChoisi.distance} m</>}
+                </div>
+                <button onClick={() => { setPointChoisi(null); setS(prev => ({ ...prev, pointRetrait: "" })); }}
+                  style={{ marginTop: 8, padding: "7px 12px", background: C.white, border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", color: C.textSec }}>
+                  Changer de point
+                </button>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                  {FILTRES.map(f => (
+                    <button key={f.code} onClick={() => { setFiltre(f.code); if (points) chercherPoints(f.code); }}
+                      style={{ padding: etroit ? "9px 12px" : "7px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+                               border: `1.5px solid ${filtre === f.code ? C.blue : C.border}`,
+                               background: filtre === f.code ? C.blueSoft : C.white,
+                               color: filtre === f.code ? C.blue : C.textSec, fontSize: 12.5, fontWeight: 700 }}>
+                      {f.libelle}
+                    </button>
+                  ))}
+                </div>
+
+                <button onClick={() => chercherPoints()} disabled={pointsBusy}
+                  style={{ width: "100%", padding: 12, background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 13.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", opacity: pointsBusy ? .6 : 1 }}>
+                  {pointsBusy ? "Recherche…" : "🔍 Chercher les points près du destinataire"}
+                </button>
+
+                {pointsErreur && (
+                  <div style={{ marginTop: 8, background: C.redSoft, border: "1px solid #fecaca", borderRadius: 9, padding: 10, fontSize: 12, color: "#7f1d1d" }}>
+                    {pointsErreur}
+                  </div>
+                )}
+
+                {points && points.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 6 }}>{points.length} point(s) — le plus proche en premier</div>
+                    {points.map(p => {
+                      const poids = parseFloat(String(s.poids).replace(",", ".")) || 0;
+                      // Un point qui n'accepte pas le poids du colis ne doit pas
+                      // être choisissable : La Poste refuserait l'affranchissement.
+                      const tropLourd = p.poidsMaxKg != null && poids > p.poidsMaxKg;
+                      return (
+                        <div key={p.id} style={{ border: `1px solid ${tropLourd || p.conges ? "#fed7aa" : C.border}`,
+                                                 background: tropLourd || p.conges ? C.orangeSoft : C.white,
+                                                 borderRadius: 10, padding: 10, marginBottom: 6 }}>
+                          <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                            <div style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 800, color: C.text, lineHeight: 1.3 }}>{p.nom}</div>
+                            {p.distance > 0 && <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, flexShrink: 0 }}>{p.distance} m</div>}
+                          </div>
+                          <div style={{ fontSize: 12.5, color: C.textSec, marginTop: 2, lineHeight: 1.4 }}>
+                            {p.adresse}<br />{p.cp} {p.ville}
+                          </div>
+                          <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4, lineHeight: 1.5 }}>
+                            Lun {horaireLisible(p.horaires.lundi)} · Sam {horaireLisible(p.horaires.samedi)}
+                            {p.poidsMaxKg != null && <> · max {p.poidsMaxKg} kg</>}
+                            {p.accesPMR && <> · accès PMR</>}
+                          </div>
+                          {tropLourd && (
+                            <div style={{ fontSize: 11.5, color: "#b45309", fontWeight: 700, marginTop: 5 }}>
+                              ⚠ Colis de {poids} kg — ce point accepte {p.poidsMaxKg} kg au maximum.
+                            </div>
+                          )}
+                          {p.conges && !tropLourd && (
+                            <div style={{ fontSize: 11.5, color: "#b45309", fontWeight: 700, marginTop: 5 }}>
+                              ⚠ Fermeture pour congés annoncée sur ce point.
+                            </div>
+                          )}
+                          <button onClick={() => choisirPoint(p)} disabled={tropLourd}
+                            style={{ marginTop: 8, width: "100%", padding: "9px 0", borderRadius: 8, border: "none",
+                                     background: tropLourd ? "#e2e8f0" : C.green, color: tropLourd ? C.textMuted : "#fff",
+                                     fontSize: 12.5, fontWeight: 800, cursor: tropLourd ? "default" : "pointer", fontFamily: "inherit" }}>
+                            {tropLourd ? "Poids dépassé" : "Choisir ce point"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>

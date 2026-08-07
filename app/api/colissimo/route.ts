@@ -29,6 +29,11 @@ export const dynamic = "force-dynamic";
 const BASE = "https://ws.colissimo.fr/sls-ws/SlsServiceWSRest/2.0";
 const BASE_TEST = "https://ws.colissimo.fr/sandbox/sls-ws/SlsServiceWSRest/2.0";
 
+// Recherche de points de retrait — service distinct de l'affranchissement, mais
+// même contrat. Pas de bac à sable documenté pour celui-ci : la recherche est
+// une simple lecture, elle ne crée rien et ne facture rien.
+const PDR = "https://ws.colissimo.fr/pointretrait-ws-cxf/rest/v2/pointretrait";
+
 /**
  * Offres Colissimo utilisables depuis le WMS.
  *
@@ -134,6 +139,77 @@ function decouperMultipart(buf: Buffer, contentType: string): { json: any; etiqu
   return { json, etiquette };
 }
 
+/**
+ * Cherche les points de retrait autour d'une adresse.
+ *
+ * La documentation de la v2 REST donne `apiKey` comme identification. Les
+ * versions antérieures acceptaient le couple contrat + mot de passe. Comme on
+ * ne sait pas d'avance ce que le contrat autorise, on envoie ce qu'on a : c'est
+ * un appel en lecture, sans effet ni facturation, donc l'essai est sans risque.
+ */
+async function chercherPointsRetrait(p: {
+  adresse: string; cp: string; ville: string; pays: string;
+  poidsGrammes: number; filtre: string; reference: string;
+}) {
+  const c = cfg();
+  // Date d'envoi : demain. Un point fermé pour congés le jour prévu ne doit pas
+  // être proposé, et La Poste s'en sert pour ce filtrage.
+  const demain = new Date(Date.now() + 86_400_000);
+  const jj = String(demain.getDate()).padStart(2, "0");
+  const mm = String(demain.getMonth() + 1).padStart(2, "0");
+
+  const corps: any = {
+    address: p.adresse,
+    zipCode: p.cp,
+    city: p.ville,
+    countryCode: p.pays || "FR",
+    weight: String(Math.max(1, Math.round(p.poidsGrammes))),
+    shippingDate: `${jj}/${mm}/${demain.getFullYear()}`,
+    filterRelay: p.filtre || "1",
+    requestId: (p.reference || "WMS").slice(0, 64),
+    lang: "FR",
+  };
+  if (c.methode === "cle") corps.apiKey = c.cle;
+  else { corps.accountNumber = c.contrat; corps.password = c.motDePasse; }
+
+  const res = await fetchT(`${PDR}/findRDVPointRetraitAcheminement`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    body: JSON.stringify(corps),
+  }, 20_000);
+
+  const texte = await res.text().catch(() => "");
+  let json: any = null;
+  try { json = JSON.parse(texte); } catch { /* réponse non JSON */ }
+  if (!res.ok) throw new Error(`Point Retrait ${res.status} : ${texte.slice(0, 250)}`);
+  // Le service répond 200 même en cas de refus : c'est errorCode qui tranche.
+  if (json?.errorCode && Number(json.errorCode) !== 0) {
+    throw new Error(`[${json.errorCode}] ${json.errorMessage || "Recherche refusée"}`);
+  }
+
+  const liste: any[] = json?.listePointRetraitAcheminement || [];
+  return liste.map(pt => ({
+    id: String(pt.identifiant || ""),
+    nom: String(pt.nom || ""),
+    adresse: [pt.adresse1, pt.adresse2, pt.adresse3].filter(Boolean).join(" "),
+    cp: String(pt.codePostal || ""),
+    ville: String(pt.localite || ""),
+    distance: Number(pt.distanceEnMetre) || 0,
+    type: String(pt.typeDePoint || ""),
+    poidsMaxKg: pt.poidsMaxi ? Number(pt.poidsMaxi) / 1000 : null,
+    accesPMR: !!pt.accesPersonneMobiliteReduite,
+    // Congés : un point fermé la semaine où le colis arrive est un colis perdu
+    // dix jours. Mieux vaut le voir avant de choisir.
+    conges: !!(pt.congesTotal || pt.congesPartiel),
+    horaires: {
+      lundi: pt.horairesOuvertureLundi || "", mardi: pt.horairesOuvertureMardi || "",
+      mercredi: pt.horairesOuvertureMercredi || "", jeudi: pt.horairesOuvertureJeudi || "",
+      vendredi: pt.horairesOuvertureVendredi || "", samedi: pt.horairesOuvertureSamedi || "",
+      dimanche: pt.horairesOuvertureDimanche || "",
+    },
+  })).filter(pt => pt.id);
+}
+
 /** Message d'erreur lisible plutôt qu'un objet brut de La Poste. */
 function messageErreur(json: any): string {
   const msgs: any[] = json?.messages || [];
@@ -188,6 +264,30 @@ export async function POST(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const action = searchParams.get("action") || "label";
+
+  // Recherche de points de retrait : lecture seule, aucun colis créé.
+  if (action === "relais") {
+    try {
+      const b = await req.json();
+      if (!b?.cp || !b?.ville) {
+        return NextResponse.json({ error: "Code postal et ville requis pour chercher un point" }, { status: 400 });
+      }
+      const points = await chercherPointsRetrait({
+        adresse: String(b.adresse || ""),
+        cp: String(b.cp).trim(),
+        ville: String(b.ville).trim(),
+        pays: String(b.pays || "FR").toUpperCase(),
+        // Le service raisonne en grammes, l'écran en kilos.
+        poidsGrammes: Math.round((Number(b.poids) || 1) * 1000),
+        filtre: String(b.filtre || "1"),
+        reference: String(b.reference || ""),
+      });
+      return NextResponse.json({ points });
+    } catch (e: any) {
+      return NextResponse.json({ error: e?.message || "Recherche impossible" }, { status: 502 });
+    }
+  }
+
   if (action !== "label" && action !== "check") {
     return NextResponse.json({ error: `Action inconnue : ${action}` }, { status: 400 });
   }
