@@ -81,6 +81,9 @@ export default function ColissimoScreen({
   const [resultat, setResultat] = useState<{ numero: string; etiquetteBase64: string; test: boolean } | null>(null);
   const [imprimantes, setImprimantes] = useState<PrintNodePrinter[]>([]);
   const [imprimante, setImprimante] = useState<number | null>(null);
+  // Le bordereau est un A4, l'étiquette une 10×15 : ce sont deux imprimantes
+  // différentes. Les confondre sort un bordereau illisible sur du thermique.
+  const [imprimanteA4, setImprimanteA4] = useState<number | null>(null);
 
   useEffect(() => {
     fetch("/api/colissimo?action=config").then(r => r.json()).then(setConfig).catch(() => {});
@@ -88,6 +91,10 @@ export default function ColissimoScreen({
       setImprimantes(p);
       const memo = Number(localStorage.getItem("colissimo_printer") || "");
       setImprimante(memo && p.some(x => x.id === memo) ? memo : (p[0]?.id ?? null));
+      // Pas de choix par défaut pour le bordereau : imprimer un A4 sur la
+      // première imprimante venue, c'est ce qui vient de gâcher un rouleau.
+      const memoA4 = Number(localStorage.getItem("colissimo_printer_a4") || "");
+      setImprimanteA4(memoA4 && p.some(x => x.id === memoA4) ? memoA4 : null);
     }).catch(() => {});
   }, []);
 
@@ -312,9 +319,13 @@ export default function ColissimoScreen({
           retenus.includes(c.numero) ? { ...c, remis: r.numero || "édité" } : c) || null);
         setBordExclus(new Set(retenus));
       } catch { /* le bordereau est édité, c'est l'essentiel */ }
-      if (imprimante && r.pdfBase64) {
-        const p = await printPdfLabel(imprimante, r.pdfBase64, `Bordereau ${r.numero || bordJour}`);
+      // Imprimante A4 uniquement. Sans choix explicite, on ne lance rien : le
+      // PDF reste téléchargeable, ce qui vaut mieux qu'un A4 sur du thermique.
+      if (imprimanteA4 && r.pdfBase64) {
+        const p = await printPdfLabel(imprimanteA4, r.pdfBase64, `Bordereau ${r.numero || bordJour}`);
         if (!p.success) onToast("Impression échouée — utilise « Télécharger »", "error");
+      } else {
+        onToast("Bordereau prêt — choisis une imprimante A4 ou télécharge-le", "info");
       }
     } catch (e: any) { onToast("❌ " + (e?.message || e), "error"); }
     setBordBusy(false);
@@ -357,7 +368,7 @@ export default function ColissimoScreen({
       }).then(x => x.json());
       if (r?.error) throw new Error(r.error);
       setBordFait({ numero: r.numero, colis: 0, pdfBase64: r.pdfBase64 });
-      if (imprimante && r.pdfBase64) await printPdfLabel(imprimante, r.pdfBase64, `Bordereau ${r.numero}`);
+      if (imprimanteA4 && r.pdfBase64) await printPdfLabel(imprimanteA4, r.pdfBase64, `Bordereau ${r.numero}`);
       onToast(`✓ Bordereau ${r.numero} récupéré`, "success");
     } catch (e: any) { onToast("❌ " + (e?.message || e), "error"); }
     setBordBusy(false);
@@ -437,6 +448,29 @@ export default function ColissimoScreen({
 
         {bordOuvert && (
           <div style={{ padding: "0 12px 12px" }}>
+            {/* Imprimante A4, distincte de celle des étiquettes. */}
+            {imprimantes.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ fontSize: 10.5, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: .4, display: "block", marginBottom: 3 }}>
+                  Imprimante A4 (bordereau)
+                </label>
+                <select value={imprimanteA4 ?? ""}
+                  onChange={e => {
+                    const v = e.target.value ? Number(e.target.value) : null;
+                    setImprimanteA4(v);
+                    if (v) localStorage.setItem("colissimo_printer_a4", String(v));
+                    else localStorage.removeItem("colissimo_printer_a4");
+                  }}
+                  style={{ width: "100%", boxSizing: "border-box", padding: etroit ? "11px" : "9px 11px", border: `1.5px solid ${imprimanteA4 ? C.border : "#fed7aa"}`, borderRadius: 9, fontSize: 13.5, fontFamily: "inherit", background: C.white }}>
+                  <option value="">Aucune — télécharger le PDF seulement</option>
+                  {imprimantes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3 }}>
+                  Le bordereau est un A4 : ne choisis pas l&apos;imprimante d&apos;étiquettes.
+                </div>
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
               <input type="date" value={bordJour} onChange={e => { setBordJour(e.target.value); setBordColis(null); setBordFait(null); }}
                 style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: etroit ? "11px" : "9px 11px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13.5, fontFamily: "inherit" }} />
