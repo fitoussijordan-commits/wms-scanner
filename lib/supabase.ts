@@ -240,6 +240,39 @@ export async function savePrintConfig(
 }
 
 // ══════════════════════════════════════════
+// NOMS D'IMPRIMANTES
+// ══════════════════════════════════════════
+//
+// PrintNode renvoie le nom du pilote Windows, souvent identique pour plusieurs
+// machines (« ZDesigner GK420d », trois fois). Impossible de choisir la bonne
+// dans une liste où tout se ressemble.
+//
+// On garde donc un nom d'usage par imprimante, partagé entre tous les postes :
+// « Zebra emballage », « Canon bureau ». Stocké dans wms_sync_meta, ce qui
+// évite une table pour une poignée de lignes.
+
+const ALIAS_KEY = "printer_aliases";
+
+export async function loadPrinterAliases(): Promise<Record<string, string>> {
+  if (!supabaseConfigured) return {};
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", cfgKey(ALIAS_KEY)).single();
+    return data?.value ? JSON.parse(data.value) : {};
+  } catch { return {}; }
+}
+
+export async function savePrinterAliases(aliases: Record<string, string>): Promise<void> {
+  // Les entrées vides sont retirées : un alias vide masquerait le nom PrintNode
+  // sans rien mettre à la place.
+  const propre = Object.fromEntries(
+    Object.entries(aliases).filter(([, v]) => (v || "").trim()).map(([k, v]) => [k, v.trim()]));
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: cfgKey(ALIAS_KEY), value: JSON.stringify(propre), updated_at: new Date().toISOString() },
+    { onConflict: "key" });
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // IMPRIMANTES PAR UTILISATEUR
 // ══════════════════════════════════════════
 //

@@ -26,10 +26,27 @@ function mm(v: number): number { return Math.round(v * 8); } // mm → dots @203
 // PRINTER
 // ============================================
 export interface PrintNodePrinter {
-  id: number; name: string; description: string; state: string;
+  id: number;
+  /** Nom affiché : l'alias s'il existe, sinon le nom PrintNode. */
+  name: string;
+  /** Nom brut renvoyé par PrintNode — sert à distinguer les doublons. */
+  nomPrintNode: string;
+  /** Vrai si le nom affiché a été choisi dans le WMS. */
+  renomme: boolean;
+  description: string; state: string;
   computer: { id: number; name: string };
 }
 
+/**
+ * Liste des imprimantes, avec les noms d'usage définis dans le WMS.
+ *
+ * PrintNode renvoie le nom du pilote, souvent identique sur plusieurs postes.
+ * On substitue l'alias ici, à l'unique endroit où les imprimantes sont lues :
+ * tous les écrans en profitent sans être modifiés.
+ *
+ * L'échec de lecture des alias ne fait pas échouer la liste — mieux vaut des
+ * noms moches qu'un écran d'impression vide.
+ */
 export async function listPrinters(): Promise<PrintNodePrinter[]> {
   const res = await fetch("/api/printnode?action=printers");
   if (!res.ok) {
@@ -37,10 +54,24 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
     throw new Error(err.error || `Erreur ${res.status}`);
   }
   const data = await res.json();
-  return data.map((p: any) => ({
-    id: p.id, name: p.name, description: p.description || "", state: p.state,
-    computer: { id: p.computer?.id, name: p.computer?.name },
-  }));
+
+  let alias: Record<string, string> = {};
+  try {
+    const { loadPrinterAliases } = await import("@/lib/supabase");
+    alias = await loadPrinterAliases();
+  } catch { /* noms bruts */ }
+
+  return data.map((p: any) => {
+    const perso = (alias[String(p.id)] || "").trim();
+    return {
+      id: p.id,
+      name: perso || p.name,
+      nomPrintNode: p.name,
+      renomme: !!perso,
+      description: p.description || "", state: p.state,
+      computer: { id: p.computer?.id, name: p.computer?.name },
+    };
+  });
 }
 
 // ============================================

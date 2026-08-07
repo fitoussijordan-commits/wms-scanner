@@ -2,7 +2,8 @@
 import { useState, useEffect } from "react";
 import * as odoo from "@/lib/odoo";
 import { loadUserPermissions, saveUserPermission, loadHiddenTools, saveHiddenTools,
-         loadPrintConfigs, loadUserPrintConfigs, saveUserPrintConfig, clearUserPrintConfig } from "@/lib/supabase";
+         loadPrintConfigs, loadUserPrintConfigs, saveUserPrintConfig, clearUserPrintConfig,
+         loadPrinterAliases, savePrinterAliases } from "@/lib/supabase";
 import { listPrinters, type PrintNodePrinter } from "@/lib/printnode";
 import FieldMapEditor from "@/components/FieldMapEditor";
 import OdooDiagnosticScreen from "@/components/OdooDiagnosticScreen";
@@ -362,21 +363,46 @@ function PrintAssign({ users, search, setSearch, onToast }: {
   const [erreur, setErreur] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
 
+  // Noms d'usage : PrintNode renvoie le nom du pilote, souvent identique sur
+  // plusieurs machines. Sans renommage, choisir la bonne relève du hasard.
+  const [alias, setAlias] = useState<Record<string, string>>({});
+  const [renommer, setRenommer] = useState(false);
+  const [savingAlias, setSavingAlias] = useState(false);
+
+  const recharger = async () => {
+    const [p, a] = await Promise.all([listPrinters(), loadPrinterAliases().catch(() => ({}))]);
+    setPrinters(p);
+    setAlias(a);
+  };
+
   useEffect(() => {
     (async () => {
       try {
-        const [p, c, u] = await Promise.all([
+        const [p, c, u, a] = await Promise.all([
           listPrinters(),
           loadPrintConfigs().catch(() => ({})),
           loadUserPrintConfigs().catch(() => ({})),
+          loadPrinterAliases().catch(() => ({})),
         ]);
         setPrinters(p);
         setCommun(c as any);
         setPerso(u as any);
+        setAlias(a);
       } catch (e: any) { setErreur(e?.message || "Chargement impossible"); }
       setChargement(false);
     })();
   }, []);
+
+  const enregistrerAlias = async () => {
+    setSavingAlias(true);
+    try {
+      await savePrinterAliases(alias);
+      await recharger();
+      setRenommer(false);
+      onToast("✓ Noms enregistrés — visibles sur tous les postes", "success");
+    } catch (e: any) { onToast("Erreur : " + (e?.message || e), "error"); }
+    setSavingAlias(false);
+  };
 
   const nomImprimante = (id: number | null | undefined) =>
     id ? (printers.find(p => p.id === id)?.name || `Imprimante ${id}`) : "";
@@ -421,10 +447,51 @@ function PrintAssign({ users, search, setSearch, onToast }: {
 
   return (
     <div>
-      <div style={{ fontSize: 12.5, color: C.textMuted, marginBottom: 14, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 12.5, color: C.textMuted, marginBottom: 12, lineHeight: 1.5 }}>
         Choisis une personne, puis son imprimante pour chaque tâche. Ce qui reste sur
         <strong> « configuration commune »</strong> suit le réglage général — inutile de tout renseigner.
         Les changements s&apos;appliquent à la prochaine connexion de la personne.
+      </div>
+
+      {/* ── Noms d'usage des imprimantes ── */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🏷️ Noms des imprimantes</div>
+            <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2 }}>
+              PrintNode donne le nom du pilote, souvent le même partout. Renomme-les une fois, pour tout le monde.
+            </div>
+          </div>
+          <button onClick={() => setRenommer(v => !v)}
+            style={{ padding: "8px 13px", background: renommer ? C.bg : C.white, border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", color: C.textSec, flexShrink: 0 }}>
+            {renommer ? "Fermer" : "Renommer"}
+          </button>
+        </div>
+
+        {renommer && (
+          <div style={{ marginTop: 12 }}>
+            {printers.map(p => (
+              <div key={p.id} style={{ marginBottom: 9 }}>
+                {/* Le nom PrintNode reste affiché : c'est ce qui permet de
+                    distinguer deux imprimantes homonymes par leur poste. */}
+                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 3 }}>
+                  <span style={{ fontFamily: "monospace" }}>{p.nomPrintNode}</span>
+                  {p.computer?.name && <> · poste {p.computer.name}</>}
+                  <> · id {p.id}</>
+                </div>
+                <input
+                  value={alias[String(p.id)] ?? ""}
+                  onChange={e => setAlias(prev => ({ ...prev, [String(p.id)]: e.target.value }))}
+                  placeholder={`Nom d'usage (vide = ${p.nomPrintNode})`}
+                  style={{ width: "100%", boxSizing: "border-box", padding: "10px 11px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit", outline: "none" }} />
+              </div>
+            ))}
+            <button onClick={enregistrerAlias} disabled={savingAlias}
+              style={{ width: "100%", marginTop: 4, padding: 11, background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", opacity: savingAlias ? .6 : 1 }}>
+              {savingAlias ? "Enregistrement…" : "💾 Enregistrer les noms"}
+            </button>
+          </div>
+        )}
       </div>
 
       <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher un utilisateur…"
