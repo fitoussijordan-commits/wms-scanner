@@ -355,6 +355,93 @@ export default function ColissimoScreen({
     onToast(`${nouveaux.length} colis ajouté(s)`, "success");
   };
 
+  /**
+   * Fin de journée : liste, édite et imprime en une fois.
+   *
+   * Le parcours en trois étapes (ouvrir, lister, éditer) est le bon quand on
+   * veut vérifier ou retirer un colis. Le soir, à la fermeture, personne ne
+   * veut vérifier : on veut le papier. D'où ce raccourci.
+   *
+   * Il n'enchaîne QUE si tout est net : le moindre doute — aucun colis, ou des
+   * colis déjà remis — ramène au parcours détaillé plutôt que d'éditer un
+   * bordereau que personne n'a regardé.
+   */
+  const [finJourneeBusy, setFinJourneeBusy] = useState(false);
+  const finDeJournee = async () => {
+    setFinJourneeBusy(true);
+    setBordOuvert(true);
+    try {
+      const sb = await import("@/lib/supabase");
+      const aujourdhui = new Date().toISOString().slice(0, 10);
+      setBordJour(aujourdhui);
+
+      const diag = { trouves: 0, transporteurs: [] as string[] };
+      const [registre, depuisOdoo] = await Promise.all([
+        sb.colisColissimoDuJour(aujourdhui).catch(() => []),
+        odoo.colisColissimoDuJour(session, aujourdhui, diag).catch(() => []),
+      ]);
+      const parNumero = new Map<string, { numero: string; picking: string; client: string; remis?: string }>();
+      for (const c of registre) {
+        parNumero.set(c.numero, {
+          numero: c.numero,
+          picking: c.picking_name || c.reference || "saisie libre",
+          client: c.client || "",
+          remis: c.bordereau || undefined,
+        });
+      }
+      for (const c of depuisOdoo) if (!parNumero.has(c.numero)) parNumero.set(c.numero, c);
+
+      const liste = Array.from(parNumero.values());
+      setBordColis(liste);
+      setBordDiag({ registre: registre.length, odooTotal: diag.trouves, transporteurs: diag.transporteurs, retenus: depuisOdoo.length });
+
+      const aRemettre = liste.filter(c => !c.remis);
+      if (!aRemettre.length) {
+        setBordExclus(new Set(liste.map(c => c.numero)));
+        onToast(liste.length
+          ? "Tous les colis du jour sont déjà sur un bordereau"
+          : "Aucun colis à remettre aujourd'hui", "info");
+        setFinJourneeBusy(false);
+        return;
+      }
+      setBordExclus(new Set(liste.filter(c => c.remis).map(c => c.numero)));
+
+      const retenus = aRemettre.map(c => c.numero);
+      if (!confirm(
+        `Éditer le bordereau de dépôt du jour ?\n\n` +
+        `${retenus.length} colis à remettre à La Poste.\n\n` +
+        `Ils seront marqués comme remis et ne repasseront pas demain.`
+      )) { setFinJourneeBusy(false); return; }
+
+      setBordBusy(true);
+      const r = await fetch("/api/colissimo?action=bordereau", {
+        method: "POST",
+        headers: { ...writeHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ numeros: retenus }),
+      }).then(x => x.json());
+      if (r?.error) throw new Error(r.error);
+
+      setBordFait(r);
+      await sb.marquerBordereau(retenus, r.numero || "").catch(() => {});
+      setBordColis(prev => prev?.map(c =>
+        retenus.includes(c.numero) ? { ...c, remis: r.numero || "édité" } : c) || null);
+      setBordExclus(new Set(liste.map(c => c.numero)));
+
+      if (imprimanteA4 && r.pdfBase64) {
+        const p = await printPdfLabel(imprimanteA4, r.pdfBase64, `Bordereau ${r.numero || aujourdhui}`);
+        onToast(p.success
+          ? `✓ Bordereau ${r.numero || ""} imprimé — ${r.colis} colis`
+          : "Bordereau édité mais impression échouée — télécharge-le", p.success ? "success" : "error");
+      } else {
+        onToast(`✓ Bordereau ${r.numero || ""} édité — choisis une imprimante A4 ou télécharge-le`, "success");
+      }
+    } catch (e: any) {
+      onToast("❌ " + (e?.message || e), "error");
+    }
+    setBordBusy(false);
+    setFinJourneeBusy(false);
+  };
+
   const [bordRelire, setBordRelire] = useState("");
   const relireBordereau = async () => {
     const num = bordRelire.trim();
@@ -445,6 +532,17 @@ export default function ColissimoScreen({
             {bordOuvert ? "▲ Fermer" : "▼ Ouvrir"}
           </span>
         </button>
+
+        {/* Raccourci du soir : liste, édite et imprime en un geste. Toujours
+            visible, y compris bloc replié — c'est l'action la plus fréquente. */}
+        <div style={{ padding: "0 12px 12px" }}>
+          <button onClick={finDeJournee} disabled={finJourneeBusy || bordBusy}
+            style={{ width: "100%", padding: 14, background: finJourneeBusy ? "#94a3b8" : "#0f172a", color: "#fff",
+                     border: "none", borderRadius: 11, fontSize: 14.5, fontWeight: 800,
+                     cursor: finJourneeBusy ? "default" : "pointer", fontFamily: "inherit" }}>
+            {finJourneeBusy ? "Édition en cours…" : "🌙 Fin de journée — éditer et imprimer"}
+          </button>
+        </div>
 
         {bordOuvert && (
           <div style={{ padding: "0 12px 12px" }}>
