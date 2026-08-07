@@ -210,6 +210,47 @@ async function chercherPointsRetrait(p: {
   })).filter(pt => pt.id);
 }
 
+/**
+ * Bordereau de dépôt — la preuve de remise de fin de journée.
+ *
+ * Une fois tamponné par La Poste, ce document atteste de la prise en charge des
+ * colis. Sans lui, un colis perdu est un colis dont on ne peut pas prouver
+ * qu'il a été remis : le litige est perdu d'avance.
+ *
+ * `generateBordereauByParcelsNumbers` prend la liste des numéros de colis et
+ * rend un PDF, dans le même format MTOM que les étiquettes.
+ */
+async function genererBordereau(numeros: string[]) {
+  const c = cfg();
+  const payload: any = {
+    generateBordereauParcelNumberList: { parcelsNumbers: numeros },
+  };
+  if (c.methode === "contrat") {
+    payload.contractNumber = c.contrat;
+    payload.password = c.motDePasse;
+  }
+
+  const entetes: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Accept": "multipart/related, application/json",
+  };
+  if (c.methode === "cle") entetes["apiKey"] = c.cle;
+
+  const res = await fetchT(`${c.base}/generateBordereauByParcelsNumbers`, {
+    method: "POST", headers: entetes, body: JSON.stringify(payload),
+  }, 25_000);
+
+  const brut = Buffer.from(await res.arrayBuffer());
+  const { json, etiquette } = decouperMultipart(brut, res.headers.get("content-type") || "");
+  const erreurs: any[] = (json?.messages || []).filter((m: any) => String(m.type || "").toUpperCase() === "ERROR");
+  if (!res.ok || erreurs.length) throw new Error(messageErreur(json));
+
+  return {
+    numero: json?.bordereauHeader?.bordereauNumber || json?.bordereauNumber || "",
+    pdf: etiquette,
+  };
+}
+
 /** Message d'erreur lisible plutôt qu'un objet brut de La Poste. */
 function messageErreur(json: any): string {
   const msgs: any[] = json?.messages || [];
@@ -285,6 +326,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ points });
     } catch (e: any) {
       return NextResponse.json({ error: e?.message || "Recherche impossible" }, { status: 502 });
+    }
+  }
+
+  // Bordereau de dépôt — preuve de remise de fin de journée.
+  if (action === "bordereau") {
+    try {
+      const b = await req.json();
+      const numeros: string[] = Array.from(new Set(
+        (Array.isArray(b?.numeros) ? b.numeros : [])
+          .map((n: any) => String(n || "").trim().replace(/\s+/g, ""))
+          .filter(Boolean)));
+      if (!numeros.length) return NextResponse.json({ error: "Aucun numéro de colis" }, { status: 400 });
+
+      const r = await genererBordereau(numeros);
+      if (!r.pdf) {
+        return NextResponse.json({
+          error: "Bordereau généré mais PDF absent de la réponse", numero: r.numero,
+        }, { status: 502 });
+      }
+      return NextResponse.json({
+        numero: r.numero, colis: numeros.length, pdfBase64: r.pdf.toString("base64"),
+      });
+    } catch (e: any) {
+      return NextResponse.json({ error: e?.message || "Bordereau impossible" }, { status: 502 });
     }
   }
 

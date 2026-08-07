@@ -215,12 +215,57 @@ export default function ColissimoScreen({
 
   const telecharger = () => {
     if (!resultat) return;
-    const bin = atob(resultat.etiquetteBase64);
+    telechargerPdf(resultat.etiquetteBase64, `colissimo-${resultat.numero}.pdf`);
+  };
+
+  // ── Bordereau de dépôt (fin de journée) ────────────────────────────────────
+  // Une fois tamponné par La Poste, il atteste de la remise des colis. Sans lui,
+  // un colis perdu est un colis dont on ne peut pas prouver qu'il est parti.
+  const [bordOuvert, setBordOuvert] = useState(false);
+  const [bordJour, setBordJour] = useState(() => new Date().toISOString().slice(0, 10));
+  const [bordColis, setBordColis] = useState<{ numero: string; picking: string; client: string }[] | null>(null);
+  const [bordExclus, setBordExclus] = useState<Set<string>>(new Set());
+  const [bordBusy, setBordBusy] = useState(false);
+  const [bordFait, setBordFait] = useState<{ numero: string; colis: number; pdfBase64: string } | null>(null);
+
+  const listerColis = async () => {
+    setBordBusy(true); setBordFait(null); setBordExclus(new Set());
+    try {
+      const l = await odoo.colisColissimoDuJour(session, bordJour);
+      setBordColis(l);
+      if (!l.length) onToast("Aucun colis Colissimo affranchi ce jour-là", "info");
+    } catch (e: any) { onToast("Erreur : " + (e?.message || e), "error"); }
+    setBordBusy(false);
+  };
+
+  const editerBordereau = async () => {
+    const retenus = (bordColis || []).filter(c => !bordExclus.has(c.numero)).map(c => c.numero);
+    if (!retenus.length) { onToast("Aucun colis retenu", "error"); return; }
+    setBordBusy(true);
+    try {
+      const r = await fetch("/api/colissimo?action=bordereau", {
+        method: "POST",
+        headers: { ...writeHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ numeros: retenus }),
+      }).then(x => x.json());
+      if (r?.error) throw new Error(r.error);
+      setBordFait(r);
+      onToast(`✓ Bordereau ${r.numero || ""} — ${r.colis} colis`, "success");
+      if (imprimante && r.pdfBase64) {
+        const p = await printPdfLabel(imprimante, r.pdfBase64, `Bordereau ${r.numero || bordJour}`);
+        if (!p.success) onToast("Impression échouée — utilise « Télécharger »", "error");
+      }
+    } catch (e: any) { onToast("❌ " + (e?.message || e), "error"); }
+    setBordBusy(false);
+  };
+
+  const telechargerPdf = (base64: string, nom: string) => {
+    const bin = atob(base64);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
     const a = document.createElement("a");
-    a.href = url; a.download = `colissimo-${resultat.numero}.pdf`; a.click();
+    a.href = url; a.download = nom; a.click();
     URL.revokeObjectURL(url);
   };
 
@@ -270,6 +315,86 @@ export default function ColissimoScreen({
           ⚠ Mode bac à sable — les étiquettes générées ne sont pas valables pour un envoi réel.
         </div>
       )}
+
+      {/* Bordereau de dépôt — replié, c'est une action de fin de journée */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 12, overflow: "hidden" }}>
+        <button onClick={() => { setBordOuvert(v => !v); if (!bordOuvert && !bordColis) listerColis(); }}
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: 12, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>📋 Bordereau de dépôt</div>
+            <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2 }}>
+              Preuve de remise à faire tamponner par La Poste, en fin de journée
+            </div>
+          </div>
+          <span style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, flexShrink: 0 }}>
+            {bordOuvert ? "▲ Fermer" : "▼ Ouvrir"}
+          </span>
+        </button>
+
+        {bordOuvert && (
+          <div style={{ padding: "0 12px 12px" }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              <input type="date" value={bordJour} onChange={e => { setBordJour(e.target.value); setBordColis(null); setBordFait(null); }}
+                style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: etroit ? "11px" : "9px 11px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13.5, fontFamily: "inherit" }} />
+              <button onClick={listerColis} disabled={bordBusy}
+                style={{ padding: etroit ? "11px 15px" : "9px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: bordBusy ? .6 : 1, flexShrink: 0 }}>
+                {bordBusy ? "…" : "Lister"}
+              </button>
+            </div>
+
+            {bordColis && bordColis.length > 0 && (
+              <>
+                <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 6 }}>
+                  {bordColis.length - bordExclus.size} colis retenu(s) sur {bordColis.length}. Décoche ce qui ne part pas aujourd&apos;hui.
+                </div>
+                <div style={{ maxHeight: 240, overflowY: "auto", border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 10 }}>
+                  {bordColis.map(c => {
+                    const exclu = bordExclus.has(c.numero);
+                    return (
+                      <label key={c.numero} style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "9px 10px", borderBottom: `1px solid ${C.border}`, cursor: "pointer", opacity: exclu ? .45 : 1 }}>
+                        <input type="checkbox" checked={!exclu}
+                          onChange={() => setBordExclus(prev => {
+                            const s2 = new Set(prev);
+                            exclu ? s2.delete(c.numero) : s2.add(c.numero);
+                            return s2;
+                          })}
+                          style={{ width: 17, height: 17, marginTop: 1, flexShrink: 0, accentColor: C.green }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: C.text, wordBreak: "break-all" }}>{c.numero}</div>
+                          <div style={{ fontSize: 11.5, color: C.textMuted, lineHeight: 1.35 }}>
+                            {c.picking}{c.client ? ` · ${c.client}` : ""}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+                <button onClick={editerBordereau} disabled={bordBusy || bordColis.length === bordExclus.size}
+                  style={{ width: "100%", padding: 13, background: bordBusy ? "#94a3b8" : "#0f172a", color: "#fff", border: "none", borderRadius: 10, fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+                  {bordBusy ? "Édition…" : `Éditer le bordereau (${bordColis.length - bordExclus.size} colis)`}
+                </button>
+              </>
+            )}
+
+            {bordColis && bordColis.length === 0 && (
+              <div style={{ fontSize: 12.5, color: C.textMuted }}>Aucun colis Colissimo affranchi ce jour-là.</div>
+            )}
+
+            {bordFait && (
+              <div style={{ marginTop: 10, background: C.greenSoft, border: "1px solid #bbf7d0", borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#15803d" }}>✓ Bordereau édité — {bordFait.colis} colis</div>
+                {bordFait.numero && (
+                  <div style={{ fontSize: 16, fontWeight: 800, fontFamily: "monospace", color: C.text, marginTop: 4, wordBreak: "break-all" }}>{bordFait.numero}</div>
+                )}
+                <button onClick={() => telechargerPdf(bordFait.pdfBase64, `bordereau-${bordJour}.pdf`)}
+                  style={{ marginTop: 9, width: "100%", padding: 10, background: C.white, color: C.text, border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                  ⬇ Télécharger le bordereau (PDF)
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Chargement depuis Odoo */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 12 }}>

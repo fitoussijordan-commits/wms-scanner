@@ -2542,6 +2542,45 @@ export async function chargerLivraison(session: OdooSession, ref: string): Promi
   };
 }
 
+/**
+ * Colis Colissimo affranchis sur une journée.
+ *
+ * Sert à éditer le bordereau de dépôt du soir sans ressaisir les numéros. On
+ * s'appuie sur ce qui a été écrit dans Odoo au moment de l'affranchissement :
+ * pas de registre parallèle à tenir, donc rien qui puisse diverger.
+ *
+ * Le filtre sur le nom du transporteur est indispensable : `carrier_tracking_ref`
+ * porte aussi les numéros TNT, et les mélanger ferait refuser le bordereau.
+ */
+export async function colisColissimoDuJour(
+  session: OdooSession, jour: string,
+): Promise<{ numero: string; picking: string; client: string }[]> {
+  const debut = `${jour} 00:00:00`;
+  const fin = `${jour} 23:59:59`;
+
+  const pickings = await searchRead(session, M("MODEL_PICKING"),
+    [
+      ["picking_type_code", "=", "outgoing"],
+      ["carrier_tracking_ref", "!=", false],
+      ["write_date", ">=", debut],
+      ["write_date", "<=", fin],
+    ],
+    ["id", "name", "partner_id", "carrier_id", "carrier_tracking_ref"], 300, "write_date desc");
+
+  return pickings
+    .filter((p: any) => /colissimo|la\s*poste|laposte/i.test(
+      Array.isArray(p.carrier_id) ? String(p.carrier_id[1] || "") : ""))
+    .map((p: any) => ({
+      numero: String(p.carrier_tracking_ref || "").trim(),
+      picking: p.name || "",
+      client: Array.isArray(p.partner_id) ? String(p.partner_id[1] || "") : "",
+    }))
+    .filter((c: any, i: number, tout: any[]) =>
+      // Un même numéro peut apparaître deux fois si le transfert a été rouvert :
+      // le bordereau le refuserait en doublon.
+      c.numero && tout.findIndex((x: any) => x.numero === c.numero) === i);
+}
+
 /** Inscrit le numéro de colis sur le transfert, pour le retrouver depuis Odoo. */
 export async function ecrireSuiviColissimo(
   session: OdooSession, pickingId: number, numero: string,
