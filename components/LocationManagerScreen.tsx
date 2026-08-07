@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from "react";
 import * as odoo from "@/lib/odoo";
 import { PutawayTab } from "@/components/ArticleCreatorScreen";
+import RacksAuditTab from "@/components/RacksAuditTab";
 import FieldSettingsGear from "@/components/FieldSettingsGear";
 
 const C = {
@@ -30,7 +31,7 @@ interface Props {
 }
 
 export default function LocationManagerScreen({ session, onBack, onToast, onPrintLocation }: Props) {
-  const [tab, setTab] = useState<"locations" | "putaway">("locations");
+  const [tab, setTab] = useState<"locations" | "putaway" | "racks">("locations");
   const [locs, setLocs] = useState<Loc[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -174,7 +175,7 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
   // Barre d'onglets
   const TabBar = (
     <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-      {([["locations", "Emplacements"], ["putaway", "Stratégie de rangement"]] as const).map(([k, label]) => (
+      {([["locations", "Emplacements"], ["putaway", "Stratégie de rangement"], ["racks", "Racks"]] as const).map(([k, label]) => (
         <button key={k} onClick={() => setTab(k)} style={{
           padding: "8px 16px", borderRadius: 10, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
           background: tab === k ? C.blue : C.white, color: tab === k ? "#fff" : C.textSec, boxShadow: tab === k ? "none" : `inset 0 0 0 1px ${C.border}`,
@@ -197,6 +198,7 @@ export default function LocationManagerScreen({ session, onBack, onToast, onPrin
       </div>
       {TabBar}
       {tab === "putaway" && <PutawayTab session={session} onToast={onToast} />}
+      {tab === "racks" && <RacksAuditTab session={session} onToast={onToast} />}
       {tab === "locations" && (
     <div>
       {/* Suggestion de création de voisins (ex: A12 → A10, A11, A13) */}
