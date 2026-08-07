@@ -23,6 +23,7 @@ import InventoryCountScreen from "@/components/InventoryCountScreen";
 import EshopSortiesScreen from "@/components/EshopSortiesScreen";
 import LocationManagerScreen from "@/components/LocationManagerScreen";
 import ColissimoScreen from "@/components/ColissimoScreen";
+import ConflitRacksModal from "@/components/ConflitRacksModal";
 import ManufacturingScreen from "@/components/ManufacturingScreen";
 import ImparfaiteImportScreen from "@/components/ImparfaiteImportScreen";
 import FefoAnalysisScreen from "@/components/FefoAnalysisScreen";
@@ -2276,45 +2277,77 @@ export default function Page() {
    * arrêter, ou libérer le rack chez l'autre. Jamais en silence — c'est la
    * fiche d'un AUTRE article qu'on modifierait.
    */
+  // Conflit de racks en attente d'arbitrage — voir ConflitRacksModal.
+  const [conflitRacks, setConflitRacks] = useState<
+    { locId: number; nom: string; conflits: odoo.ConflitRack[] } | null>(null);
+  const [conflitOccupe, setConflitOccupe] = useState(false);
+
+  /** Écrit le nouveau nom et rafraîchit la liste. */
+  const appliquerRenommage = async (id: number, name: string) => {
+    await odoo.renameLocation(session!, id, name);
+    setLocations(await odoo.getLocations(session!));
+    showToast(`✓ Emplacement renommé : ${name}`);
+  };
+
+  /**
+   * Renomme un emplacement, en contrôlant les racks au passage.
+   *
+   * Le nom porte les racks de réserve (« A12-RKC1-RKC11 »). Renommer, c'est
+   * donc réattribuer des racks. Un rack déjà déclaré ailleurs n'est PAS
+   * forcément une erreur : deux articles peuvent réellement partager un rack.
+   * D'où trois issues, arbitrées dans une fenêtre — partager, libérer, ou
+   * renoncer.
+   */
   const rename = async (id: number, name: string) => {
     if (!session) return;
     try {
-      const conflits = await odoo.verifierRacksLibres(session, id, name).catch(() => []);
+      const tous = await odoo.verifierRacksLibres(session, id, name).catch(() => []);
+      // Les racks déjà reconnus comme partagés ne se redemandent pas.
+      const assumes = await sbase.loadRacksPartages().catch(() => [] as string[]);
+      const conflits = tous.filter(c => !assumes.includes(c.rack));
 
-      if (conflits.length > 0) {
-        const detail = conflits.slice(0, 6).map(c =>
-          `• ${c.rack} — déjà sur ${c.locationName}${c.articles.length ? ` (${c.articles.slice(0, 2).join(", ")})` : ""}`
-        ).join("\n");
-        const suite = conflits.length > 6 ? `\n… et ${conflits.length - 6} autre(s)` : "";
-
-        const libere = confirm(
-          `⚠ ${conflits.length} rack(s) déjà utilisé(s) ailleurs :\n\n${detail}${suite}\n\n` +
-          `OK = les retirer de l'autre emplacement, puis renommer.\n` +
-          `Annuler = ne rien faire.`
-        );
-        if (!libere) { showToast("Renommage annulé"); return; }
-
-        // Regrouper par emplacement : un seul write par fiche touchée.
-        const parLoc: Record<number, string[]> = {};
-        for (const c of conflits) (parLoc[c.locationId] ||= []).push(c.rack);
-        for (const [locId, racks] of Object.entries(parLoc)) {
-          try {
-            const r = await odoo.retirerRacksDuNom(session, Number(locId), racks);
-            showToast(`${r.ancien} → ${r.nouveau}`);
-          } catch (e: any) {
-            showToast(`Impossible de libérer ${racks.join(", ")} : ${e?.message || e}`);
-            return; // on ne renomme pas si un rack n'a pas pu être libéré
-          }
-        }
-      }
-
-      await odoo.renameLocation(session, id, name);
-      setLocations(await odoo.getLocations(session));
-      showToast(`✓ Emplacement renommé : ${name}`);
+      if (conflits.length > 0) { setConflitRacks({ locId: id, nom: name, conflits }); return; }
+      await appliquerRenommage(id, name);
     } catch (e: any) {
       // Avaler l'erreur laissait croire que le renommage avait eu lieu.
       showToast("❌ Renommage échoué : " + (e?.message || e));
     }
+  };
+
+  /** « C'est un partage » — on garde les deux et on cesse de le signaler. */
+  const conflitPartager = async () => {
+    if (!conflitRacks || !session) return;
+    setConflitOccupe(true);
+    try {
+      const deja = await sbase.loadRacksPartages().catch(() => [] as string[]);
+      const codes = Array.from(new Set([...deja, ...conflitRacks.conflits.map(c => c.rack)]));
+      await sbase.saveRacksPartages(codes).catch(() => {});
+      await appliquerRenommage(conflitRacks.locId, conflitRacks.nom);
+      setConflitRacks(null);
+    } catch (e: any) { showToast("❌ " + (e?.message || e)); }
+    setConflitOccupe(false);
+  };
+
+  /** « Le retirer de l'autre » — on libère puis on renomme. */
+  const conflitLiberer = async () => {
+    if (!conflitRacks || !session) return;
+    setConflitOccupe(true);
+    try {
+      // Un seul write par fiche touchée, même si elle porte plusieurs racks.
+      const parLoc: Record<number, string[]> = {};
+      for (const c of conflitRacks.conflits) (parLoc[c.locationId] ||= []).push(c.rack);
+      for (const [locId, racks] of Object.entries(parLoc)) {
+        const r = await odoo.retirerRacksDuNom(session, Number(locId), racks);
+        showToast(`${r.ancien.split("/").pop()} → ${r.nouveau.split("/").pop()}`);
+      }
+      await appliquerRenommage(conflitRacks.locId, conflitRacks.nom);
+      setConflitRacks(null);
+    } catch (e: any) {
+      // On ne renomme pas si un rack n'a pas pu être libéré : il serait
+      // revendiqué deux fois.
+      showToast("❌ Libération impossible : " + (e?.message || e));
+    }
+    setConflitOccupe(false);
   };
 
   // ===================== PREPARATION =====================
@@ -4405,6 +4438,17 @@ export default function Page() {
         )}
         {screen === "reprintLabel" && session && (
           <ReprintLabelScreen session={session} onBack={goHome} onToast={showToast} />
+        )}
+        {/* Arbitrage d'un rack deja utilise — trois issues, pas deux. */}
+        {conflitRacks && (
+          <ConflitRacksModal
+            nouveauNom={conflitRacks.nom}
+            conflits={conflitRacks.conflits}
+            occupe={conflitOccupe}
+            onPartager={conflitPartager}
+            onLiberer={conflitLiberer}
+            onAnnuler={() => { setConflitRacks(null); showToast("Renommage annule"); }}
+          />
         )}
         {screen === "colissimo" && session && (
           <ColissimoScreen session={session} onBack={goHome} onToast={showToast}
