@@ -1229,7 +1229,7 @@ function WeatherWidget() {
 // (pas d'état supplémentaire perdu au refresh, contrairement à prepDetail/history/settings/done
 // qui ont besoin d'un picking/contexte sélectionné en mémoire). Utilisé pour le deep-link
 // ?screen=... à la fois en lecture (restauration après refresh) et en écriture (sync URL).
-const DEEP_LINK_SCREENS = ["transfer", "prep", "waitingOrders", "packing", "arrival", "eshop", "inventory", "inventoryCount", "freeScan", "negativeStock", "reprintLabel", "productImport", "supplierImport", "returns", "order", "eshopSorties", "locationManager", "imparfaite", "fefo", "manufacturing", "admin", "invoiceAudit"];
+const DEEP_LINK_SCREENS = ["transfer", "prep", "waitingOrders", "packing", "arrival", "eshop", "inventory", "inventoryCount", "freeScan", "negativeStock", "reprintLabel", "productImport", "supplierImport", "returns", "order", "eshopSorties", "locationManager", "imparfaite", "fefo", "manufacturing", "admin", "invoiceAudit", "colissimo"];
 
 // ============================================
 // MAIN APP
@@ -4333,7 +4333,10 @@ export default function Page() {
           </div>
         )}
         {screen === "admin" && session && odoo.isAdmin(session) && (
-          <AdminScreen session={session} onBack={goHome} onToast={showToast} />
+          <AdminScreen session={session} onBack={goHome} onToast={showToast}
+            /* La liste réelle des tuiles, pour qu'un outil ajouté au menu soit
+               contrôlable sans avoir à l'inscrire ailleurs à la main. */
+            menuTools={toolItems.map(t => ({ key: t.key, label: t.label }))} />
         )}
         {screen === "waitingOrders" && session && (
           <WaitingOrdersScreen

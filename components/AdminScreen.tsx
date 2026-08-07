@@ -13,8 +13,14 @@ const C = {
   shadow: "0 1px 4px rgba(0,0,0,0.07)",
 };
 
-// Catalogue de TOUS les outils contrôlables (key = identifiant interne, label = affichage).
-// Doit rester aligné avec mainTools + toolItems de app/page.tsx.
+// Catalogue des outils contrôlables (key = identifiant interne, label = affichage).
+//
+// Il sert à RANGER les outils par thème et à leur donner un libellé lisible.
+// Il ne fait PAS autorité sur ce qui existe : l'écran reçoit en plus la liste
+// réelle des tuiles du menu (voir `menuTools`) et ajoute d'office celles qui
+// manquent ici. Sans ça, chaque outil ajouté au WMS restait invisible dans la
+// gestion des droits jusqu'à ce que quelqu'un pense à venir l'inscrire — ce qui
+// n'arrivait jamais.
 export const ALL_TOOLS: { key: string; label: string; group: string }[] = [
   { key: "transfer", label: "Transfert", group: "Opérations" },
   { key: "prep", label: "Préparation", group: "Opérations" },
@@ -34,19 +40,45 @@ export const ALL_TOOLS: { key: string; label: string; group: string }[] = [
   { key: "imparfaite", label: "Import Imparfaite", group: "Articles" },
   { key: "labels", label: "Étiquettes", group: "Outils" },
   { key: "reprintLabel", label: "Réimpr. étiq.", group: "Outils" },
+  { key: "colissimo", label: "Envoi Colissimo", group: "Outils" },
   { key: "order", label: "Commande", group: "Outils" },
   { key: "fefo", label: "Analyse FEFO", group: "Analyse" },
   { key: "manufacturing", label: "Fabrication", group: "Stock" },
+  { key: "invoiceAudit", label: "Factures", group: "Analyse" },
   { key: "dashboard", label: "Dashboard", group: "Analyse" },
 ];
+
+/**
+ * Catalogue effectif : le catalogue ci-dessus, complété par les tuiles du menu
+ * qui n'y figurent pas.
+ *
+ * L'écran Administration est rendu par la page qui construit le menu : elle
+ * peut donc lui passer la liste réelle des outils. Un outil ajouté demain
+ * apparaîtra ici sans qu'on ait rien à inscrire, rangé dans « Autres » en
+ * attendant qu'on lui donne un thème.
+ */
+export function catalogueEffectif(
+  menuTools?: { key: string; label: string }[],
+): { key: string; label: string; group: string }[] {
+  if (!menuTools?.length) return ALL_TOOLS;
+  const connus = new Set(ALL_TOOLS.map(t => t.key));
+  const absents = menuTools
+    .filter(t => t.key && !connus.has(t.key))
+    .map(t => ({ key: t.key, label: t.label || t.key, group: "Autres" }));
+  return [...ALL_TOOLS, ...absents];
+}
 
 interface Props {
   session: odoo.OdooSession;
   onBack: () => void;
   onToast: (msg: string, type?: "success" | "error" | "info") => void;
+  /** Tuiles réellement présentes dans le menu — évite tout oubli au catalogue. */
+  menuTools?: { key: string; label: string }[];
 }
 
-export default function AdminScreen({ session, onBack, onToast }: Props) {
+export default function AdminScreen({ session, onBack, onToast, menuTools }: Props) {
+  // Catalogue effectif : les outils connus, plus ceux du menu qui n'y sont pas.
+  const OUTILS = catalogueEffectif(menuTools);
   const [users, setUsers] = useState<{ id: number; name: string; login: string }[]>([]);
   const [perms, setPerms] = useState<Record<string, string[]>>({});
   const [selected, setSelected] = useState<string | null>(null);
@@ -104,7 +136,7 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
 
   const setAll = (on: boolean) => {
     if (!selected) return;
-    setPerms(prev => ({ ...prev, [selected]: on ? ALL_TOOLS.map(t => t.key) : [] }));
+    setPerms(prev => ({ ...prev, [selected]: on ? OUTILS.map(t => t.key) : [] }));
   };
 
   const saveSelected = async () => {
@@ -121,7 +153,7 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
     !search || u.name.toLowerCase().includes(search.toLowerCase()) || u.login.includes(search.toLowerCase())
   );
 
-  const groups = Array.from(new Set(ALL_TOOLS.map(t => t.group)));
+  const groups = Array.from(new Set(OUTILS.map(t => t.group)));
 
   return (
     <div style={{ padding: "16px 16px 60px", maxWidth: 760, margin: "0 auto", fontFamily: "'DM Sans', sans-serif" }}>
@@ -168,7 +200,7 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
               <div key={g} style={{ marginBottom: 16 }}>
                 <div style={{ fontSize: 11, fontWeight: 800, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>{g}</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  {ALL_TOOLS.filter(t => t.group === g).map(t => {
+                  {OUTILS.filter(t => t.group === g).map(t => {
                     const visible = !hiddenTools.includes(t.key);
                     return (
                       <button key={t.key} onClick={() => toggleHidden(t.key)}
@@ -255,7 +287,7 @@ export default function AdminScreen({ session, onBack, onToast }: Props) {
                       <div key={g} style={{ marginBottom: 14 }}>
                         <div style={{ fontSize: 11, fontWeight: 800, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>{g}</div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          {ALL_TOOLS.filter(t => t.group === g).map(t => {
+                          {OUTILS.filter(t => t.group === g).map(t => {
                             const on = current.includes(t.key);
                             return (
                               <label key={t.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: on ? C.blueSoft : C.white, border: `1px solid ${on ? C.blue + "55" : C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 14, color: C.text }}>
