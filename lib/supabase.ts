@@ -240,6 +240,67 @@ export async function savePrintConfig(
 }
 
 // ══════════════════════════════════════════
+// IMPRIMANTES PAR UTILISATEUR
+// ══════════════════════════════════════════
+//
+// wms_print_config s'applique à tout le monde. Cette table ne porte QUE les
+// exceptions : un utilisateur sans ligne suit la configuration commune.
+//
+// Sans ça, régler les imprimantes demandait de passer physiquement sur chaque
+// poste — impraticable dès qu'on a plus de deux préparateurs.
+
+export interface WmsPrintConfigUser {
+  login: string;
+  type: string;
+  printer_id: number | null;
+  label_width_mm: number | null;
+  label_height_mm: number | null;
+}
+
+/** Toutes les exceptions, pour l'écran Administration. */
+export async function loadUserPrintConfigs(): Promise<Record<string, Record<string, WmsPrintConfigUser>>> {
+  if (!supabaseConfigured) return {};
+  const { data, error } = await sb.from("wms_print_config_user").select("*").limit(2000);
+  if (error) throw new Error(error.message);
+  const out: Record<string, Record<string, WmsPrintConfigUser>> = {};
+  for (const r of (data || []) as WmsPrintConfigUser[]) {
+    (out[r.login] ||= {})[r.type] = r;
+  }
+  return out;
+}
+
+/** Les exceptions d'UN utilisateur — appelé par l'app à la connexion. */
+export async function loadUserPrintConfig(login: string): Promise<Record<string, WmsPrintConfigUser>> {
+  if (!supabaseConfigured || !login) return {};
+  const { data, error } = await sb.from("wms_print_config_user")
+    .select("*").eq("login", login.toLowerCase()).limit(100);
+  if (error) throw new Error(error.message);
+  return Object.fromEntries((data || []).map((r: WmsPrintConfigUser) => [r.type, r]));
+}
+
+export async function saveUserPrintConfig(
+  login: string, type: string, printerId: number | null,
+  labelWidthMM?: number | null, labelHeightMM?: number | null,
+): Promise<void> {
+  const { error } = await sb.from("wms_print_config_user").upsert(
+    {
+      login: login.toLowerCase(), type, printer_id: printerId,
+      label_width_mm: labelWidthMM ?? null, label_height_mm: labelHeightMM ?? null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "login,type" },
+  );
+  if (error) throw new Error(error.message);
+}
+
+/** Retire l'exception : l'utilisateur repasse sur la configuration commune. */
+export async function clearUserPrintConfig(login: string, type: string): Promise<void> {
+  const { error } = await sb.from("wms_print_config_user")
+    .delete().eq("login", login.toLowerCase()).eq("type", type);
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // UTILS
 // ══════════════════════════════════════════
 

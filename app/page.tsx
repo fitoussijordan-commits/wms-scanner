@@ -1577,7 +1577,14 @@ export default function Page() {
   useEffect(() => { _setPrintReq = setPrintReq; return () => { _setPrintReq = null; }; }, []);
 
   // Synchro config imprimante depuis Supabase au démarrage (partage entre tous les postes)
-  useEffect(() => { pn.syncPrintConfigFromSupabase(); }, []);
+  // Config d'impression commune, puis les imprimantes propres a l'utilisateur.
+  // L'ordre compte : les exceptions se posent PAR-DESSUS le reglage commun.
+  useEffect(() => {
+    const login = session?.login || "";
+    pn.syncPrintConfigFromSupabase().then(() => {
+      if (login) return pn.applyUserPrintConfig(login);
+    }).catch(() => {});
+  }, [session?.login]);
 
   // Auto-update : détecte un nouveau déploiement et vide le cache navigateur
   useEffect(() => {

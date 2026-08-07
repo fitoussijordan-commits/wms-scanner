@@ -886,6 +886,44 @@ export function getAllLabelTypeConfigs(): Record<LabelType, LabelTypeConfig> {
  * - Si Supabase a des données → les rapatrie en local (autres postes)
  * À appeler une fois au démarrage de l'app.
  */
+/**
+ * Applique les imprimantes propres à un utilisateur, par-dessus la config commune.
+ *
+ * À appeler APRÈS syncPrintConfigFromSupabase, et à chaque connexion : c'est le
+ * login qui décide, pas le navigateur. Un préparateur qui se connecte sur un
+ * poste voisin retrouve ainsi ses imprimantes.
+ *
+ * Seules les lignes existantes sont écrasées : un type sans exception continue
+ * de suivre le réglage commun, ce qui évite d'avoir à tout recopier par
+ * personne.
+ */
+export async function applyUserPrintConfig(login: string): Promise<void> {
+  if (!login) return;
+  try {
+    const { loadUserPrintConfig } = await import("@/lib/supabase");
+    const perso = await loadUserPrintConfig(login);
+    if (!Object.keys(perso).length) return;
+
+    const all = JSON.parse(localStorage.getItem(TYPE_CONFIG_KEY) || "{}") as Record<string, LabelTypeConfig>;
+    for (const [type, row] of Object.entries(perso)) {
+      if (!row.printer_id) continue;
+      const base = all[type] || { printerId: null, labelSize: getLabelSize() };
+      all[type] = {
+        printerId: row.printer_id,
+        // Le format n'est surchargé que s'il a été précisé : on ne veut pas
+        // qu'un choix d'imprimante écrase par effet de bord une taille
+        // d'étiquette réglée globalement.
+        labelSize: (row.label_width_mm && row.label_height_mm)
+          ? { widthMM: Number(row.label_width_mm), heightMM: Number(row.label_height_mm) }
+          : base.labelSize,
+      };
+    }
+    localStorage.setItem(TYPE_CONFIG_KEY, JSON.stringify(all));
+  } catch (e: any) {
+    console.warn("[printnode] applyUserPrintConfig:", e?.message);
+  }
+}
+
 export async function syncPrintConfigFromSupabase(): Promise<void> {
   try {
     const remote = await loadPrintConfigs();

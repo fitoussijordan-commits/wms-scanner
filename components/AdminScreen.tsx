@@ -1,7 +1,9 @@
 "use client";
 import { useState, useEffect } from "react";
 import * as odoo from "@/lib/odoo";
-import { loadUserPermissions, saveUserPermission, loadHiddenTools, saveHiddenTools } from "@/lib/supabase";
+import { loadUserPermissions, saveUserPermission, loadHiddenTools, saveHiddenTools,
+         loadPrintConfigs, loadUserPrintConfigs, saveUserPrintConfig, clearUserPrintConfig } from "@/lib/supabase";
+import { listPrinters, type PrintNodePrinter } from "@/lib/printnode";
 import FieldMapEditor from "@/components/FieldMapEditor";
 import OdooDiagnosticScreen from "@/components/OdooDiagnosticScreen";
 import ModelMapEditor from "@/components/ModelMapEditor";
@@ -85,7 +87,7 @@ export default function AdminScreen({ session, onBack, onToast, menuTools }: Pro
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
-  const [tab, setTab] = useState<"perms" | "menu" | "fields" | "models" | "diag">("perms");
+  const [tab, setTab] = useState<"perms" | "menu" | "print" | "fields" | "models" | "diag">("perms");
 
   // Visibilité globale des tuiles du menu (outils masqués pour tout le monde).
   const [hiddenTools, setHiddenTools] = useState<string[]>([]);
@@ -163,7 +165,7 @@ export default function AdminScreen({ session, onBack, onToast, menuTools }: Pro
         </button>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>Administration</div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>{tab === "perms" ? "Droits d'accès aux outils, par utilisateur" : tab === "menu" ? "Afficher / masquer les tuiles du menu" : tab === "fields" ? "Mapping des champs Odoo" : "Mapping des modèles Odoo"}</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>{tab === "perms" ? "Droits d'accès aux outils, par utilisateur" : tab === "menu" ? "Afficher / masquer les tuiles du menu" : tab === "print" ? "Imprimante par personne et par tâche" : tab === "fields" ? "Mapping des champs Odoo" : "Mapping des modèles Odoo"}</div>
         </div>
         {tab === "perms" && <button onClick={load} title="Recharger" style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", cursor: "pointer", color: C.textSec }}>↻</button>}
       </div>
@@ -173,6 +175,7 @@ export default function AdminScreen({ session, onBack, onToast, menuTools }: Pro
         {([
           { k: "perms" as const, label: "👤 Droits" },
           { k: "menu" as const, label: "☰ Menu" },
+          { k: "print" as const, label: "🖨 Imprimantes" },
           { k: "fields" as const, label: "⚙️ Champs" },
           { k: "models" as const, label: "🗂️ Modèles" },
           { k: "diag" as const, label: "🩺 Diagnostic" },
@@ -186,7 +189,9 @@ export default function AdminScreen({ session, onBack, onToast, menuTools }: Pro
         ))}
       </div>
 
-      {tab === "menu" ? (
+      {tab === "print" ? (
+        <PrintAssign users={filteredUsers} search={search} setSearch={setSearch} onToast={onToast} />
+      ) : tab === "menu" ? (
         // ── Visibilité des tuiles du menu (global, tout le monde) ──
         !hiddenLoaded ? (
           <div style={{ textAlign: "center", color: C.textMuted, padding: 40 }}>Chargement…</div>
@@ -311,6 +316,177 @@ export default function AdminScreen({ session, onBack, onToast, menuTools }: Pro
         </>
       )}
 
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IMPRIMANTES PAR PERSONNE
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Jusqu'ici, régler les imprimantes demandait de passer physiquement sur chaque
+// poste. Impraticable dès qu'on a plus de deux préparateurs, et invérifiable :
+// personne ne savait qui imprimait où.
+//
+// La configuration commune (wms_print_config) reste la valeur par défaut. On ne
+// stocke ici que les EXCEPTIONS : un type laissé sur « configuration commune »
+// n'écrit rien en base. Sans ça, chaque ajout d'imprimante aurait obligé à
+// repasser sur toutes les personnes.
+
+/** Tâches d'impression, dans l'ordre où elles se rencontrent sur le terrain. */
+const TACHES: { type: string; label: string; aide: string }[] = [
+  { type: "picking",           label: "Bon de préparation",     aide: "Imprimé à la validation d'un pick" },
+  { type: "packingslip",       label: "Bon de livraison",       aide: "Imprimé à l'emballage" },
+  { type: "packingslip_eshop", label: "BL e-shop",              aide: "Sorties e-shop" },
+  { type: "sendcloud",         label: "Étiquette transporteur", aide: "TNT, Colissimo, Sendcloud" },
+  { type: "product",           label: "Étiquette article",      aide: "Code-barres produit" },
+  { type: "lot",               label: "Étiquette lot",          aide: "Numéro de lot et péremption" },
+  { type: "location",          label: "Étiquette emplacement",  aide: "Allées et casiers" },
+  { type: "palette",           label: "Étiquette palette",      aide: "Palette fournisseur" },
+  { type: "palette_wms",       label: "Étiquette palette WMS",  aide: "Palette montée à l'entrepôt" },
+  { type: "order_barcode",     label: "Code-barres commande",   aide: "Étiquette 70×35" },
+  { type: "blank",             label: "Étiquette libre",        aide: "Saisie manuelle" },
+];
+
+function PrintAssign({ users, search, setSearch, onToast }: {
+  users: { id: number; name: string; login: string }[];
+  search: string;
+  setSearch: (v: string) => void;
+  onToast: (msg: string, type?: "success" | "error" | "info") => void;
+}) {
+  const [printers, setPrinters] = useState<PrintNodePrinter[]>([]);
+  const [commun, setCommun] = useState<Record<string, { printer_id: number | null }>>({});
+  const [perso, setPerso] = useState<Record<string, Record<string, { printer_id: number | null }>>>({});
+  const [selected, setSelected] = useState<string | null>(null);
+  const [chargement, setChargement] = useState(true);
+  const [erreur, setErreur] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [p, c, u] = await Promise.all([
+          listPrinters(),
+          loadPrintConfigs().catch(() => ({})),
+          loadUserPrintConfigs().catch(() => ({})),
+        ]);
+        setPrinters(p);
+        setCommun(c as any);
+        setPerso(u as any);
+      } catch (e: any) { setErreur(e?.message || "Chargement impossible"); }
+      setChargement(false);
+    })();
+  }, []);
+
+  const nomImprimante = (id: number | null | undefined) =>
+    id ? (printers.find(p => p.id === id)?.name || `Imprimante ${id}`) : "";
+
+  const changer = async (type: string, valeur: string) => {
+    if (!selected) return;
+    setBusy(type);
+    try {
+      if (valeur === "") {
+        // Chaîne vide = « suivre la configuration commune ». On supprime la
+        // ligne au lieu d'enregistrer null : une exception vide n'a pas de sens
+        // et masquerait un futur changement de la config commune.
+        await clearUserPrintConfig(selected, type);
+        setPerso(prev => {
+          const copie = { ...prev };
+          if (copie[selected]) { const t = { ...copie[selected] }; delete t[type]; copie[selected] = t; }
+          return copie;
+        });
+      } else {
+        const id = Number(valeur);
+        await saveUserPrintConfig(selected, type, id);
+        setPerso(prev => ({ ...prev, [selected]: { ...(prev[selected] || {}), [type]: { printer_id: id } } }));
+      }
+      onToast("✓ Enregistré", "success");
+    } catch (e: any) { onToast("Erreur : " + (e?.message || e), "error"); }
+    setBusy(null);
+  };
+
+  if (chargement) return <div style={{ textAlign: "center", color: C.textMuted, padding: 40 }}>Chargement…</div>;
+
+  if (!printers.length) {
+    return (
+      <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: 14, fontSize: 13, color: "#92400e" }}>
+        Aucune imprimante remontée par PrintNode. Vérifie que le client PrintNode tourne sur le poste relié aux imprimantes.
+        {erreur && <div style={{ marginTop: 6, fontSize: 12 }}>{erreur}</div>}
+      </div>
+    );
+  }
+
+  const persoDe = selected ? (perso[selected] || {}) : {};
+  const nbExceptions = Object.keys(persoDe).length;
+
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.textMuted, marginBottom: 14, lineHeight: 1.5 }}>
+        Choisis une personne, puis son imprimante pour chaque tâche. Ce qui reste sur
+        <strong> « configuration commune »</strong> suit le réglage général — inutile de tout renseigner.
+        Les changements s&apos;appliquent à la prochaine connexion de la personne.
+      </div>
+
+      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher un utilisateur…"
+        style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13.5, fontFamily: "inherit", outline: "none", marginBottom: 10 }} />
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 }}>
+        {users.map(u => {
+          const n = Object.keys(perso[u.login.toLowerCase()] || {}).length;
+          const actif = selected === u.login.toLowerCase();
+          return (
+            <button key={u.id} onClick={() => setSelected(actif ? null : u.login.toLowerCase())}
+              style={{ padding: "9px 13px", borderRadius: 9, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5, fontWeight: 700,
+                       border: `1.5px solid ${actif ? C.blue : C.border}`,
+                       background: actif ? C.blueSoft : C.white, color: actif ? C.blue : C.textSec }}>
+              {u.name}
+              {n > 0 && <span style={{ marginLeft: 6, fontSize: 11, color: C.purple }}>· {n}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {!selected ? (
+        <div style={{ textAlign: "center", color: C.textMuted, padding: 30, fontSize: 13 }}>
+          Choisis un utilisateur pour régler ses imprimantes.
+        </div>
+      ) : (
+        <>
+          <div style={{ fontSize: 12.5, color: C.textMuted, marginBottom: 10 }}>
+            {nbExceptions === 0
+              ? "Aucun réglage particulier — cette personne suit entièrement la configuration commune."
+              : `${nbExceptions} tâche(s) avec une imprimante propre à cette personne.`}
+          </div>
+
+          {TACHES.map(t => {
+            const perso_ = persoDe[t.type]?.printer_id ?? null;
+            const commun_ = commun[t.type]?.printer_id ?? null;
+            return (
+              <div key={t.type} style={{ background: C.white, border: `1px solid ${perso_ ? C.purple + "55" : C.border}`, borderRadius: 10, padding: 11, marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>{t.label}</div>
+                    <div style={{ fontSize: 11.5, color: C.textMuted }}>{t.aide}</div>
+                  </div>
+                  {perso_ != null && (
+                    <span style={{ fontSize: 10.5, fontWeight: 800, color: C.purple, background: "#f5f3ff", padding: "2px 7px", borderRadius: 20, whiteSpace: "nowrap" }}>
+                      PERSONNALISÉ
+                    </span>
+                  )}
+                </div>
+                <select value={perso_ ?? ""} disabled={busy === t.type}
+                  onChange={e => changer(t.type, e.target.value)}
+                  style={{ width: "100%", boxSizing: "border-box", padding: "10px 11px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit", background: C.white, color: C.text }}>
+                  <option value="">
+                    Configuration commune{commun_ ? ` — ${nomImprimante(commun_)}` : " — non réglée"}
+                  </option>
+                  {printers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+            );
+          })}
+        </>
+      )}
     </div>
   );
 }
