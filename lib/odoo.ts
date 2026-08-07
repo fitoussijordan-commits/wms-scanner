@@ -3240,6 +3240,104 @@ export async function getOutPickingLines(
   return { lines, foundPickings, missing };
 }
 
+// ============================================
+// RACKS DÉCLARÉS DANS LES NOMS D'EMPLACEMENT
+// ============================================
+//
+// Un emplacement s'appelle « A12-RKC1-RKC11 » : face de picking, puis racks de
+// réserve. Renommer, c'est donc réattribuer des racks — et un rack ne peut pas
+// servir à deux articles à la fois.
+//
+// Odoo n'a aucune notion de tout ça : il stocke un texte. Ces fonctions font le
+// contrôle qu'il ne fera jamais.
+
+export interface ConflitRack {
+  rack: string;
+  locationId: number;
+  locationName: string;
+  articles: string[];
+}
+
+/**
+ * Racks du nouveau nom déjà déclarés sur un AUTRE emplacement.
+ *
+ * On ne regarde que les emplacements internes : une zone de transit ou de
+ * sortie qui porterait un nom voisin n'est pas un conflit de rangement.
+ */
+export async function verifierRacksLibres(
+  session: OdooSession, locationId: number, nouveauNom: string,
+): Promise<ConflitRack[]> {
+  const { decoderEmplacement } = await import("@/lib/emplacements");
+  const racks = decoderEmplacement(nouveauNom).reserves;
+  if (!racks.length) return [];
+
+  const locs = await searchRead(session, "stock.location",
+    [["usage", "=", "internal"], ["id", "!=", locationId]],
+    ["id", "name", "complete_name"], 5000);
+
+  // Index rack → emplacements, en décodant chaque nom : une recherche
+  // textuelle brute ferait correspondre RKC1 à RKC11.
+  const parRack: Record<string, { id: number; name: string }[]> = {};
+  for (const l of locs as any[]) {
+    for (const r of decoderEmplacement(l.name || l.complete_name || "").reserves) {
+      (parRack[r] ||= []).push({ id: l.id, name: l.name || l.complete_name || "" });
+    }
+  }
+
+  const conflits: ConflitRack[] = [];
+  for (const rack of racks) {
+    for (const occupant of parRack[rack] || []) {
+      conflits.push({ rack, locationId: occupant.id, locationName: occupant.name, articles: [] });
+    }
+  }
+  if (!conflits.length) return [];
+
+  // Nommer les articles concernés : « déjà utilisé » sans dire par quoi
+  // n'aide pas à décider.
+  const ids = Array.from(new Set(conflits.map(c => c.locationId)));
+  try {
+    const quants = await searchRead(session, M("MODEL_QUANT"),
+      [["location_id", "in", ids], ["quantity", ">", 0]],
+      ["location_id", "product_id"], 2000);
+    const parLoc: Record<number, Set<string>> = {};
+    for (const q of quants as any[]) {
+      const lid = Array.isArray(q.location_id) ? q.location_id[0] : q.location_id;
+      const nom = Array.isArray(q.product_id) ? String(q.product_id[1] || "") : "";
+      if (nom) (parLoc[lid] ||= new Set()).add(nom);
+    }
+    for (const c of conflits) c.articles = Array.from(parLoc[c.locationId] || []);
+  } catch { /* le conflit reste signalé même sans le détail des articles */ }
+
+  return conflits;
+}
+
+/**
+ * Retire des racks du nom d'un emplacement.
+ *
+ * Sert à libérer un rack repris par un autre article. La face de picking n'est
+ * jamais touchée : c'est l'identité de l'emplacement.
+ */
+export async function retirerRacksDuNom(
+  session: OdooSession, locationId: number, racks: string[],
+): Promise<{ ancien: string; nouveau: string }> {
+  const { decoderEmplacement } = await import("@/lib/emplacements");
+  const [loc] = await searchRead(session, "stock.location",
+    [["id", "=", locationId]], ["id", "name"], 1);
+  if (!loc) throw new Error("Emplacement introuvable");
+
+  const ancien = String(loc.name || "");
+  const d = decoderEmplacement(ancien);
+  const aRetirer = new Set(racks.map(r => r.toUpperCase()));
+  const restants = d.reserves.filter(r => !aRetirer.has(r));
+
+  // Le nom est réécrit en clair, sans abréviation : c'est ce qui restera lisible
+  // pour la personne suivante.
+  const nouveau = [d.picking, ...restants].filter(Boolean).join("-");
+  if (nouveau === ancien) return { ancien, nouveau };
+  await write(session, "stock.location", [locationId], { name: nouveau });
+  return { ancien, nouveau };
+}
+
 export async function getProductLocations(session: OdooSession, productIds: number[]) {
   if (!productIds.length) return {};
 

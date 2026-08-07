@@ -2265,9 +2265,56 @@ export default function Page() {
     setLoading(false);
   };
 
+  /**
+   * Renomme un emplacement, en contrôlant les racks au passage.
+   *
+   * Le nom porte les racks de réserve (« A12-RKC1-RKC11 »). Renommer, c'est
+   * donc réattribuer des racks — et un rack ne peut pas servir à deux articles.
+   * Odoo ne le vérifiera jamais : c'est fait ici.
+   *
+   * En cas de conflit, on nomme l'article concerné et on laisse choisir :
+   * arrêter, ou libérer le rack chez l'autre. Jamais en silence — c'est la
+   * fiche d'un AUTRE article qu'on modifierait.
+   */
   const rename = async (id: number, name: string) => {
     if (!session) return;
-    try { await odoo.renameLocation(session, id, name); setLocations(await odoo.getLocations(session)); } catch {}
+    try {
+      const conflits = await odoo.verifierRacksLibres(session, id, name).catch(() => []);
+
+      if (conflits.length > 0) {
+        const detail = conflits.slice(0, 6).map(c =>
+          `• ${c.rack} — déjà sur ${c.locationName}${c.articles.length ? ` (${c.articles.slice(0, 2).join(", ")})` : ""}`
+        ).join("\n");
+        const suite = conflits.length > 6 ? `\n… et ${conflits.length - 6} autre(s)` : "";
+
+        const libere = confirm(
+          `⚠ ${conflits.length} rack(s) déjà utilisé(s) ailleurs :\n\n${detail}${suite}\n\n` +
+          `OK = les retirer de l'autre emplacement, puis renommer.\n` +
+          `Annuler = ne rien faire.`
+        );
+        if (!libere) { showToast("Renommage annulé"); return; }
+
+        // Regrouper par emplacement : un seul write par fiche touchée.
+        const parLoc: Record<number, string[]> = {};
+        for (const c of conflits) (parLoc[c.locationId] ||= []).push(c.rack);
+        for (const [locId, racks] of Object.entries(parLoc)) {
+          try {
+            const r = await odoo.retirerRacksDuNom(session, Number(locId), racks);
+            showToast(`${r.ancien} → ${r.nouveau}`);
+          } catch (e: any) {
+            showToast(`Impossible de libérer ${racks.join(", ")} : ${e?.message || e}`);
+            return; // on ne renomme pas si un rack n'a pas pu être libéré
+          }
+        }
+      }
+
+      await odoo.renameLocation(session, id, name);
+      setLocations(await odoo.getLocations(session));
+      showToast(`✓ Emplacement renommé : ${name}`);
+    } catch (e: any) {
+      // Avaler l'erreur laissait croire que le renommage avait eu lieu.
+      showToast("❌ Renommage échoué : " + (e?.message || e));
+    }
   };
 
   // ===================== PREPARATION =====================
