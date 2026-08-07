@@ -36,7 +36,10 @@ const BASE_TEST = "https://ws.colissimo.fr/sandbox/sls-ws/SlsServiceWSRest/2.0";
  * que de les laisser saisir évite qu'une faute de frappe parte en production
  * sous forme d'affranchissement facturé.
  */
-export const OFFRES = [
+// Volontairement NON exporté : Next.js n'accepte dans un fichier de route que
+// ses propres exports (GET, POST, dynamic, maxDuration…) et refuse de compiler
+// dès qu'il en trouve un autre. La liste sort par l'API, pas par l'import.
+const OFFRES = [
   { code: "DOM", libelle: "Domicile — sans signature", relais: false },
   { code: "DOS", libelle: "Domicile — avec signature", relais: false },
   { code: "BPR", libelle: "Point Retrait — bureau de poste", relais: true },
