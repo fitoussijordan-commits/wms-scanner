@@ -2725,6 +2725,9 @@ export default function Page() {
 
           // Relit l'état réel depuis Odoo (nouvelle ligne incluse) puis recalcule le step.
           const refreshed = await refreshGroupMoveLines(selectedPicking!);
+          // La scission a réécrit les quantités des deux lignes : toute valeur
+          // provisoire antérieure est désormais fausse.
+          oublierQuantitesProvisoires(refreshed.map((m: any) => m.id));
           pickingMoveLinesRef.current = refreshed;
           setPickingMoveLines(refreshed);
           flashScan("ok");
@@ -2773,6 +2776,11 @@ export default function Page() {
           });
         }
       }
+
+      // Le scan fait autorité sur cette ligne : toute quantité provisoire
+      // laissée par les boutons +/− doit disparaître, sinon elle réapparaîtrait
+      // à la validation et écraserait ce qui vient d'être scanné.
+      oublierQuantitesProvisoires([ml.id]);
 
       // ── Mise à jour optimiste (instantanée) ──────────────────────────────
       const optimisticLines = currentLines.map((m: any) =>
@@ -2864,6 +2872,10 @@ export default function Page() {
       const pending = pickingMoveLinesRef.current.filter((ml: any) =>
         ml.location_id && ml.location_id[0] === prepStep.locId && (ml.qty_done || 0) < (ml.reserved_uom_qty || 0)
       );
+      // « Tout prendre » fait autorité : on annule les écritures +/− en attente
+      // sur ces lignes, sinon l'une d'elles se déclencherait après et
+      // redescendrait la quantité qu'on vient de compléter.
+      oublierQuantitesProvisoires(pending.map((ml: any) => ml.id));
       for (const ml of pending) {
         await odoo.setMoveLineQtyDone(session, ml.id, ml.reserved_uom_qty || 0, ml.lot_id?.[0] || null);
       }
@@ -2897,6 +2909,9 @@ export default function Page() {
     try {
       await odoo.autoFillPicking(session, selectedPicking.id);
       const mlines = await refreshGroupMoveLines(selectedPicking);
+      // Odoo vient de fixer toutes les quantités : les valeurs provisoires
+      // encore en mémoire n'ont plus lieu d'être et fausseraient la validation.
+      oublierQuantitesProvisoires(mlines.map((m: any) => m.id));
       setPickingMoveLines(mlines);
       const done = new Set<number>();
       mlines.forEach((ml: any) => { if (ml.qty_done > 0) done.add(ml.id); });
@@ -2913,9 +2928,45 @@ export default function Page() {
   useEffect(() => { qtyOverridesRef.current = qtyOverrides; }, [qtyOverrides]);
   const debounceTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
+  /**
+   * Annule les écritures en attente sur des lignes et oublie leur quantité
+   * provisoire.
+   *
+   * Les boutons +/− affichent une quantité « optimiste » (qtyOverrides) et
+   * n'écrivent dans Odoo qu'au bout de 800 ms. Cette valeur n'était effacée
+   * qu'en cas d'écriture réussie. Si entre-temps un SCAN touchait la même
+   * ligne, son écriture annulait celle des boutons — mais l'ancienne quantité
+   * restait affichée, ET repartait telle quelle dans Odoo au moment de la
+   * validation, écrasant ce qui avait été scanné.
+   *
+   * Appelé dès qu'une autre source fait autorité sur ces lignes : un scan,
+   * « tout prendre », ou un remplissage automatique.
+   */
+  const oublierQuantitesProvisoires = (ids: number[]) => {
+    if (!ids.length) return;
+    for (const id of ids) {
+      clearTimeout(debounceTimers.current[id]);
+      delete debounceTimers.current[id];
+    }
+    setQtyOverrides(prev => {
+      let touche = false;
+      const suivant = { ...prev };
+      for (const id of ids) if (id in suivant) { delete suivant[id]; touche = true; }
+      return touche ? suivant : prev;
+    });
+    // Le ref sert aux lectures synchrones (validation) : il doit suivre
+    // immédiatement, sans attendre le prochain rendu.
+    const refSuivant = { ...qtyOverridesRef.current };
+    for (const id of ids) delete refSuivant[id];
+    qtyOverridesRef.current = refSuivant;
+  };
+
   // +1 / -1 / tout mettre — optimistic update + debounced Odoo sync
   const adjustMoveLineQty = (moveLineId: number, newQty: number) => {
-    const ml = pickingMoveLines.find((m: any) => m.id === moveLineId);
+    // Le ref, pas l'état : un scan qui vient de mettre à jour les lignes n'a
+    // pas encore provoqué de rendu, et l'état porterait la quantité d'avant —
+    // donc un plafond et un lot périmés.
+    const ml = pickingMoveLinesRef.current.find((m: any) => m.id === moveLineId);
     if (!ml || !session) return;
     const clamped = Math.max(0, Math.min(newQty, ml.reserved_uom_qty || 0));
     // Update display immediately
