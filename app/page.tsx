@@ -2303,8 +2303,9 @@ export default function Page() {
     try {
       const tous = await odoo.verifierRacksLibres(session, id, name).catch(() => []);
       // Les racks déjà reconnus comme partagés ne se redemandent pas.
-      const assumes = await sbase.loadRacksPartages().catch(() => [] as string[]);
-      const conflits = tous.filter(c => !assumes.includes(c.rack));
+      const assumes = await sbase.loadRacksPartages().catch(() => [] as sbase.RackPartage[]);
+      const codesAssumes = new Set(assumes.map(a => a.code));
+      const conflits = tous.filter(c => !codesAssumes.has(c.rack));
 
       if (conflits.length > 0) { setConflitRacks({ locId: id, nom: name, conflits }); return; }
       await appliquerRenommage(id, name);
@@ -2319,9 +2320,18 @@ export default function Page() {
     if (!conflitRacks || !session) return;
     setConflitOccupe(true);
     try {
-      const deja = await sbase.loadRacksPartages().catch(() => [] as string[]);
-      const codes = Array.from(new Set([...deja, ...conflitRacks.conflits.map(c => c.rack)]));
-      await sbase.saveRacksPartages(codes).catch(() => {});
+      // On mémorise AUSSI les emplacements concernés : le jour où l'un d'eux
+      // déménage, l'audit redemandera au lieu de rester muet.
+      const deja = await sbase.loadRacksPartages().catch(() => [] as sbase.RackPartage[]);
+      const parCode: Record<string, Set<number>> = {};
+      for (const c of conflitRacks.conflits) {
+        (parCode[c.rack] ||= new Set()).add(c.locationId);
+        parCode[c.rack].add(conflitRacks.locId);
+      }
+      const ajout: sbase.RackPartage[] = Object.entries(parCode).map(([code, locs]) => ({
+        code, emplacements: Array.from(locs), le: new Date().toISOString().slice(0, 10),
+      }));
+      await sbase.saveRacksPartages([...deja, ...ajout]).catch(() => {});
       await appliquerRenommage(conflitRacks.locId, conflitRacks.nom);
       setConflitRacks(null);
     } catch (e: any) { showToast("❌ " + (e?.message || e)); }

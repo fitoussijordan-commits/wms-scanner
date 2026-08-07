@@ -324,18 +324,38 @@ export async function marquerBordereau(numeros: string[], bordereau: string): Pr
 
 const RACKS_OK_KEY = "racks_partages_voulus";
 
-export async function loadRacksPartages(): Promise<string[]> {
+/**
+ * Un partage assumé retient AUSSI les emplacements qui le justifiaient.
+ *
+ * Sans cette liste, accepter un partage rendait aveugle définitivement : le
+ * jour où l'un des deux articles déménage, le rack reste inscrit dans l'ancien
+ * nom et plus rien ne le signale. En mémorisant la situation validée, on peut
+ * détecter qu'elle a changé et redemander.
+ */
+export interface RackPartage { code: string; emplacements: number[]; le: string }
+
+export async function loadRacksPartages(): Promise<RackPartage[]> {
   if (!supabaseConfigured) return [];
   try {
     const { data } = await sb.from("wms_sync_meta").select("value").eq("key", cfgKey(RACKS_OK_KEY)).single();
-    return data?.value ? JSON.parse(data.value) : [];
+    const brut = data?.value ? JSON.parse(data.value) : [];
+    // Ancien format : simple liste de codes. On le relit sans emplacements —
+    // ces partages seront donc proposés à revalidation, ce qui est le but.
+    return (brut as any[]).map(v => typeof v === "string"
+      ? { code: v, emplacements: [], le: "" }
+      : { code: String(v.code || ""), emplacements: v.emplacements || [], le: v.le || "" })
+      .filter(v => v.code);
   } catch { return []; }
 }
 
-export async function saveRacksPartages(codes: string[]): Promise<void> {
-  const propre = Array.from(new Set(codes.map(c => c.trim().toUpperCase()).filter(Boolean)));
+export async function saveRacksPartages(liste: RackPartage[]): Promise<void> {
+  const parCode: Record<string, RackPartage> = {};
+  for (const r of liste) {
+    const code = r.code.trim().toUpperCase();
+    if (code) parCode[code] = { code, emplacements: Array.from(new Set(r.emplacements)).sort(), le: r.le };
+  }
   const { error } = await sb.from("wms_sync_meta").upsert(
-    { key: cfgKey(RACKS_OK_KEY), value: JSON.stringify(propre), updated_at: new Date().toISOString() },
+    { key: cfgKey(RACKS_OK_KEY), value: JSON.stringify(Object.values(parCode)), updated_at: new Date().toISOString() },
     { onConflict: "key" });
   if (error) throw new Error(error.message);
 }

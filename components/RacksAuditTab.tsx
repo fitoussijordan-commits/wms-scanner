@@ -15,7 +15,7 @@ import { useState, useEffect } from "react";
 import * as odoo from "@/lib/odoo";
 import { decoderEmplacement, trouverCollisions, type CollisionRack } from "@/lib/emplacements";
 import { useEcranEtroit } from "@/lib/useEcranEtroit";
-import { loadRacksPartages, saveRacksPartages } from "@/lib/supabase";
+import { loadRacksPartages, saveRacksPartages, type RackPartage } from "@/lib/supabase";
 
 const C = {
   bg: "#f8fafc", white: "#fff", text: "#0f172a", textSec: "#374151",
@@ -46,35 +46,41 @@ export default function RacksAuditTab({ session, onToast }: {
   // Partages assumés : un rack peut légitimement porter plusieurs articles.
   // Sans cette liste, les cas corrects resteraient signalés indéfiniment et
   // l'écran finirait par ne plus être regardé.
-  const [partagesOk, setPartagesOk] = useState<string[]>([]);
+  const [partagesOk, setPartagesOk] = useState<RackPartage[]>([]);
   const [voirPartages, setVoirPartages] = useState(false);
 
   const charger = async () => {
     setChargement(true);
     try {
-      // Le stock réel plutôt que les règles de rangement : c'est ce qui est
-      // physiquement là qui compte, pas ce qui était prévu.
+      // TOUS les emplacements internes, pas seulement ceux qui ont du stock.
+      // Un emplacement vidé garde son nom : s'il revendique encore un rack,
+      // il faut le voir. Ne lire que les quants créait un angle mort.
+      const locs = await odoo.searchReadAll(session, "stock.location",
+        [["usage", "=", "internal"]], ["id", "name", "complete_name"], "");
+
       const quants = await odoo.searchReadAll(session, "stock.quant",
         [["location_id.usage", "=", "internal"], ["quantity", ">", 0]],
         ["id", "product_id", "location_id", "quantity"], "");
 
-      // Indexé par ID d'emplacement, pas par nom : deux emplacements peuvent
-      // porter le même libellé, et c'est l'ID qu'il faudra pour corriger.
-      const parEmplacement: Record<number, { nom: string; articles: Set<string> }> = {};
+      const articlesParLoc: Record<number, Set<string>> = {};
       for (const q of quants as any[]) {
         if (!Array.isArray(q.location_id)) continue;
-        const id = q.location_id[0];
-        const nom = String(q.location_id[1] || "");
-        if (!id || !nom) continue;
         const art = Array.isArray(q.product_id) ? String(q.product_id[1] || "") : "";
-        const e = (parEmplacement[id] ||= { nom, articles: new Set() });
-        if (art) e.articles.add(art);
+        if (art) (articlesParLoc[q.location_id[0]] ||= new Set()).add(art);
       }
 
-      const liste: Ligne[] = Object.entries(parEmplacement).map(([id, e]) => {
-        const d = decoderEmplacement(e.nom);
-        return { id: Number(id), nom: e.nom, articles: Array.from(e.articles), picking: d.picking, reserves: d.reserves, abrege: d.abrege };
-      }).sort((a, b) => a.nom.localeCompare(b.nom));
+      const liste: Ligne[] = (locs as any[]).map(l => {
+        const nom = String(l.complete_name || l.name || "");
+        const d = decoderEmplacement(nom);
+        return {
+          id: l.id, nom,
+          articles: Array.from(articlesParLoc[l.id] || []),
+          picking: d.picking, reserves: d.reserves, abrege: d.abrege,
+        };
+      })
+        // Sans rack déclaré, rien à auditer — inutile d'alourdir la liste.
+        .filter(l => l.reserves.length > 0)
+        .sort((a, b) => a.nom.localeCompare(b.nom));
 
       setLignes(liste);
       setCollisions(trouverCollisions(liste.map(l => ({ id: l.id, nom: l.nom, articles: l.articles }))));
@@ -90,13 +96,42 @@ export default function RacksAuditTab({ session, onToast }: {
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, []);
 
-  const basculerPartage = async (code: string) => {
-    const suivant = partagesOk.includes(code)
-      ? partagesOk.filter(c => c !== code)
-      : [...partagesOk, code];
+  /**
+   * Assume (ou retire) un partage, en mémorisant la situation validée.
+   *
+   * Les emplacements concernés sont enregistrés avec le code : si demain la
+   * liste change — un article déménage, un emplacement est vidé — le partage
+   * n'est plus celui qui a été validé, et l'écran le redemande au lieu de
+   * rester muet.
+   */
+  const basculerPartage = async (col: CollisionRack) => {
+    const deja = partagesOk.some(p => p.code === col.code);
+    const suivant = deja
+      ? partagesOk.filter(p => p.code !== col.code)
+      : [...partagesOk, {
+          code: col.code,
+          emplacements: col.emplacements.map(e => e.id),
+          le: new Date().toISOString().slice(0, 10),
+        }];
     setPartagesOk(suivant);
     try { await saveRacksPartages(suivant); }
     catch (e: any) { onToast("Non enregistré : " + (e?.message || e), "error"); }
+  };
+
+  /**
+   * Le partage validé décrit-il encore la réalité ?
+   *
+   * On compare les emplacements du moment à ceux enregistrés. Toute différence
+   * — en plus ou en moins — signifie que la décision portait sur autre chose.
+   */
+  const partageAJour = (col: CollisionRack): { assume: boolean; aRevoir: boolean; le: string } => {
+    const p = partagesOk.find(x => x.code === col.code);
+    if (!p) return { assume: false, aRevoir: false, le: "" };
+    const avant = [...p.emplacements].sort().join(",");
+    const maintenant = col.emplacements.map(e => e.id).sort().join(",");
+    // Sans emplacements enregistrés (ancien format), on redemande.
+    const aRevoir = !p.emplacements.length || avant !== maintenant;
+    return { assume: true, aRevoir, le: p.le };
   };
 
   /**
@@ -151,9 +186,16 @@ export default function RacksAuditTab({ session, onToast }: {
   // Les partages assumés sortent de la liste par défaut : c'est ce qui la garde
   // utile. Le compteur permet de les retrouver quand on veut les revoir.
   const collisionsAffichees = collisions
-    .filter(c => voirPartages || !partagesOk.includes(c.code))
+    .filter(c => {
+      const { assume, aRevoir } = partageAJour(c);
+      // Un partage assumé disparaît — sauf si la situation a changé depuis.
+      return voirPartages || !assume || aRevoir;
+    })
     .filter(c => !q || c.code.includes(q));
-  const nbPartages = collisions.filter(c => partagesOk.includes(c.code)).length;
+  const nbPartages = collisions.filter(c => {
+    const { assume, aRevoir } = partageAJour(c);
+    return assume && !aRevoir;
+  }).length;
 
   return (
     <div>
@@ -207,7 +249,7 @@ export default function RacksAuditTab({ session, onToast }: {
           </div>
         ) : (
           collisionsAffichees.map(c => {
-            const assume = partagesOk.includes(c.code);
+            const { assume, aRevoir, le } = partageAJour(c);
             const gardes = selection[c.code] ?? new Set(c.emplacements.map(e => e.id));
             const aRetirer = c.emplacements.filter(e => !gardes.has(e.id));
             return (
@@ -215,19 +257,28 @@ export default function RacksAuditTab({ session, onToast }: {
                 {/* En-tête : le code du rack, gros et lisible au bras tendu */}
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: assume ? C.text : C.red, lineHeight: 1.1 }}>{c.code}</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "monospace", color: aRevoir ? C.orange : assume ? C.text : C.red, lineHeight: 1.1 }}>{c.code}</div>
                     <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>
                       sur {c.emplacements.length} emplacements
-                      {assume && <span style={{ color: C.green, fontWeight: 700 }}> · partage assumé</span>}
+                      {assume && !aRevoir && <span style={{ color: C.green, fontWeight: 700 }}> · partage assumé{le ? ` le ${le}` : ""}</span>}
                     </div>
                   </div>
                 </div>
 
-                <button onClick={() => basculerPartage(c.code)}
+                {aRevoir && (
+                  <div style={{ background: C.orangeSoft, border: "1px solid #fed7aa", borderRadius: 9, padding: 9, marginTop: 6, fontSize: 12, color: "#7c2d12", lineHeight: 1.45 }}>
+                    <strong>Partage à revoir.</strong> Tu avais validé ce partage{le ? ` le ${le}` : ""},
+                    mais les emplacements concernés ont changé depuis. Tranche à nouveau.
+                  </div>
+                )}
+
+                <button onClick={() => basculerPartage(c)}
                   style={{ width: "100%", padding: 10, margin: "8px 0", borderRadius: 9, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5, fontWeight: 700,
-                           border: `1.5px solid ${assume ? "#bbf7d0" : C.border}`,
-                           background: assume ? "#f0fdf4" : C.white, color: assume ? C.green : C.textSec }}>
-                  {assume ? "✓ Partage voulu — ne plus signaler" : "C'est un partage voulu"}
+                           border: `1.5px solid ${assume && !aRevoir ? "#bbf7d0" : C.border}`,
+                           background: assume && !aRevoir ? "#f0fdf4" : C.white,
+                           color: assume && !aRevoir ? C.green : C.textSec }}>
+                  {assume && !aRevoir ? "✓ Partage voulu — ne plus signaler"
+                    : aRevoir ? "Revalider ce partage" : "C'est un partage voulu"}
                 </button>
 
                 {/* Une ligne par emplacement : coché = le rack y reste. */}
