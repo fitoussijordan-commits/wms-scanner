@@ -191,6 +191,25 @@ export default function ColissimoScreen({
       setResultat({ numero: r.numero, etiquetteBase64: r.etiquetteBase64, test: !!r.test });
       onToast(`✓ Colis ${r.numero}`, "success");
 
+      // Registre du WMS : un colis créé en saisie libre n'existe nulle part
+      // dans Odoo. Sans cette trace, il sortirait du bordereau du soir — donc
+      // partirait sans preuve de remise.
+      try {
+        const sb = await import("@/lib/supabase");
+        await sb.enregistrerColisColissimo({
+          numero: r.numero,
+          pickingName: livraison?.pickingName,
+          pickingId: livraison?.pickingId ?? null,
+          client: s.nom,
+          offre: s.offre,
+          poids,
+          reference: s.reference,
+          creePar: session.name || session.login,
+        });
+      } catch (e: any) {
+        onToast("Colis créé mais non inscrit au registre — à ajouter au bordereau à la main", "error");
+      }
+
       // Suivi dans Odoo : sans ça, le numéro n'existe que sur un bout de papier.
       if (livraison?.pickingId && r.numero) {
         try {
@@ -223,17 +242,44 @@ export default function ColissimoScreen({
   // un colis perdu est un colis dont on ne peut pas prouver qu'il est parti.
   const [bordOuvert, setBordOuvert] = useState(false);
   const [bordJour, setBordJour] = useState(() => new Date().toISOString().slice(0, 10));
-  const [bordColis, setBordColis] = useState<{ numero: string; picking: string; client: string }[] | null>(null);
+  const [bordColis, setBordColis] = useState<{ numero: string; picking: string; client: string; remis?: string }[] | null>(null);
   const [bordExclus, setBordExclus] = useState<Set<string>>(new Set());
   const [bordBusy, setBordBusy] = useState(false);
   const [bordFait, setBordFait] = useState<{ numero: string; colis: number; pdfBase64: string } | null>(null);
 
+  /**
+   * Colis du jour : registre du WMS ET transferts Odoo.
+   *
+   * Le registre couvre la saisie libre, Odoo couvre les colis affranchis avant
+   * la mise en place du registre. On prend l'union — un colis oublié sur le
+   * bordereau, c'est une preuve de remise en moins.
+   */
   const listerColis = async () => {
     setBordBusy(true); setBordFait(null); setBordExclus(new Set());
     try {
-      const l = await odoo.colisColissimoDuJour(session, bordJour);
-      setBordColis(l);
-      if (!l.length) onToast("Aucun colis Colissimo affranchi ce jour-là", "info");
+      const sb = await import("@/lib/supabase");
+      const [registre, depuisOdoo] = await Promise.all([
+        sb.colisColissimoDuJour(bordJour).catch(() => []),
+        odoo.colisColissimoDuJour(session, bordJour).catch(() => []),
+      ]);
+
+      const parNumero = new Map<string, { numero: string; picking: string; client: string; remis?: string }>();
+      for (const c of registre) {
+        parNumero.set(c.numero, {
+          numero: c.numero,
+          picking: c.picking_name || c.reference || "saisie libre",
+          client: c.client || "",
+          remis: c.bordereau || undefined,
+        });
+      }
+      for (const c of depuisOdoo) if (!parNumero.has(c.numero)) parNumero.set(c.numero, c);
+
+      const liste = Array.from(parNumero.values());
+      setBordColis(liste);
+      // Les colis déjà portés sur un bordereau sont décochés d'office : les
+      // remettre créerait un second bordereau pour les mêmes colis.
+      setBordExclus(new Set(liste.filter(c => c.remis).map(c => c.numero)));
+      if (!liste.length) onToast("Aucun colis Colissimo affranchi ce jour-là", "info");
     } catch (e: any) { onToast("Erreur : " + (e?.message || e), "error"); }
     setBordBusy(false);
   };
@@ -251,10 +297,39 @@ export default function ColissimoScreen({
       if (r?.error) throw new Error(r.error);
       setBordFait(r);
       onToast(`✓ Bordereau ${r.numero || ""} — ${r.colis} colis`, "success");
+
+      // Marqués comme remis : ils ne réapparaîtront pas dans le bordereau
+      // suivant, où ils feraient double emploi.
+      try {
+        const sb = await import("@/lib/supabase");
+        await sb.marquerBordereau(retenus, r.numero || "");
+        setBordColis(prev => prev?.map(c =>
+          retenus.includes(c.numero) ? { ...c, remis: r.numero || "édité" } : c) || null);
+        setBordExclus(new Set(retenus));
+      } catch { /* le bordereau est édité, c'est l'essentiel */ }
       if (imprimante && r.pdfBase64) {
         const p = await printPdfLabel(imprimante, r.pdfBase64, `Bordereau ${r.numero || bordJour}`);
         if (!p.success) onToast("Impression échouée — utilise « Télécharger »", "error");
       }
+    } catch (e: any) { onToast("❌ " + (e?.message || e), "error"); }
+    setBordBusy(false);
+  };
+
+  const [bordRelire, setBordRelire] = useState("");
+  const relireBordereau = async () => {
+    const num = bordRelire.trim();
+    if (!num) return;
+    setBordBusy(true);
+    try {
+      const r = await fetch("/api/colissimo?action=bordereau_relire", {
+        method: "POST",
+        headers: { ...writeHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ numero: num }),
+      }).then(x => x.json());
+      if (r?.error) throw new Error(r.error);
+      setBordFait({ numero: r.numero, colis: 0, pdfBase64: r.pdfBase64 });
+      if (imprimante && r.pdfBase64) await printPdfLabel(imprimante, r.pdfBase64, `Bordereau ${r.numero}`);
+      onToast(`✓ Bordereau ${r.numero} récupéré`, "success");
     } catch (e: any) { onToast("❌ " + (e?.message || e), "error"); }
     setBordBusy(false);
   };
@@ -364,6 +439,11 @@ export default function ColissimoScreen({
                           <div style={{ fontSize: 11.5, color: C.textMuted, lineHeight: 1.35 }}>
                             {c.picking}{c.client ? ` · ${c.client}` : ""}
                           </div>
+                          {c.remis && (
+                            <div style={{ fontSize: 11, color: C.orange, fontWeight: 700 }}>
+                              Déjà porté sur le bordereau {c.remis}
+                            </div>
+                          )}
                         </div>
                       </label>
                     );
@@ -380,9 +460,29 @@ export default function ColissimoScreen({
               <div style={{ fontSize: 12.5, color: C.textMuted }}>Aucun colis Colissimo affranchi ce jour-là.</div>
             )}
 
+            {/* Réimpression : le bordereau existe déjà chez La Poste, on le
+                redemande au lieu d'en créer un second pour les mêmes colis. */}
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 5 }}>
+                Réimprimer un bordereau déjà édité :
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input value={bordRelire} onChange={e => setBordRelire(e.target.value)}
+                  onKeyDown={e => e.stopPropagation()}
+                  placeholder="N° de bordereau"
+                  style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: etroit ? "11px" : "9px 11px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13, fontFamily: "inherit", outline: "none" }} />
+                <button onClick={relireBordereau} disabled={bordBusy || !bordRelire.trim()}
+                  style={{ padding: etroit ? "11px 15px" : "9px 15px", background: C.white, color: C.textSec, border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
+                  Récupérer
+                </button>
+              </div>
+            </div>
+
             {bordFait && (
               <div style={{ marginTop: 10, background: C.greenSoft, border: "1px solid #bbf7d0", borderRadius: 10, padding: 12 }}>
-                <div style={{ fontSize: 13, fontWeight: 800, color: "#15803d" }}>✓ Bordereau édité — {bordFait.colis} colis</div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#15803d" }}>
+                  ✓ Bordereau {bordFait.colis > 0 ? `édité — ${bordFait.colis} colis` : "récupéré"}
+                </div>
                 {bordFait.numero && (
                   <div style={{ fontSize: 16, fontWeight: 800, fontFamily: "monospace", color: C.text, marginTop: 4, wordBreak: "break-all" }}>{bordFait.numero}</div>
                 )}

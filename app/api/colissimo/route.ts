@@ -251,6 +251,36 @@ async function genererBordereau(numeros: string[]) {
   };
 }
 
+/**
+ * Récupère un bordereau DÉJÀ créé, à partir de son numéro.
+ *
+ * Sert à réimprimer sans en demander un nouveau — un second bordereau pour les
+ * mêmes colis sèmerait la confusion au dépôt.
+ */
+async function recupererBordereau(numero: string) {
+  const c = cfg();
+  const payload: any = { bordereauNumber: numero };
+  if (c.methode === "contrat") {
+    payload.contractNumber = c.contrat;
+    payload.password = c.motDePasse;
+  }
+  const entetes: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Accept": "multipart/related, application/json",
+  };
+  if (c.methode === "cle") entetes["apiKey"] = c.cle;
+
+  const res = await fetchT(`${c.base}/getBordereauByNumber`, {
+    method: "POST", headers: entetes, body: JSON.stringify(payload),
+  }, 25_000);
+
+  const brut = Buffer.from(await res.arrayBuffer());
+  const { json, etiquette } = decouperMultipart(brut, res.headers.get("content-type") || "");
+  const erreurs: any[] = (json?.messages || []).filter((m: any) => String(m.type || "").toUpperCase() === "ERROR");
+  if (!res.ok || erreurs.length) throw new Error(messageErreur(json));
+  return { numero, pdf: etiquette };
+}
+
 /** Message d'erreur lisible plutôt qu'un objet brut de La Poste. */
 function messageErreur(json: any): string {
   const msgs: any[] = json?.messages || [];
@@ -326,6 +356,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ points });
     } catch (e: any) {
       return NextResponse.json({ error: e?.message || "Recherche impossible" }, { status: 502 });
+    }
+  }
+
+  // Réimpression d'un bordereau déjà édité, par son numéro.
+  if (action === "bordereau_relire") {
+    try {
+      const b = await req.json();
+      const num = String(b?.numero || "").trim();
+      if (!num) return NextResponse.json({ error: "Numéro de bordereau requis" }, { status: 400 });
+      const r = await recupererBordereau(num);
+      if (!r.pdf) return NextResponse.json({ error: "Bordereau introuvable ou PDF absent" }, { status: 404 });
+      return NextResponse.json({ numero: r.numero, pdfBase64: r.pdf.toString("base64") });
+    } catch (e: any) {
+      return NextResponse.json({ error: e?.message || "Réimpression impossible" }, { status: 502 });
     }
   }
 

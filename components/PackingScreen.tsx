@@ -183,13 +183,12 @@ interface Props {
 /**
  * Le transporteur est-il La Poste ?
  *
- * Le libellé du transporteur est saisi dans Odoo et varie (« Colissimo »,
- * « La Poste - Colissimo », « LAPOSTE »…). On teste donc sur des mots-clés
- * plutôt que sur une correspondance exacte, qui raterait à la première
- * variante d'orthographe.
+ * Le libellé est saisi dans Odoo et varie : « Colissimo », « La Poste »,
+ * « LAPOSTE », ou simplement « POSTE ». Exiger « la poste » ratait ce dernier
+ * cas — qui est justement celui de l'entrepôt. On teste donc sur le mot seul.
  */
 function estLaPoste(nom: string): boolean {
-  return /colissimo|la\s*poste|laposte/i.test(nom || "");
+  return /colissimo|poste/i.test(nom || "");
 }
 
 export default function PackingScreen({ session, onBack, onToast, initialPickingId, onColissimo }: Props) {

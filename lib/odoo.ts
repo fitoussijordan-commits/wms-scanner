@@ -2568,7 +2568,9 @@ export async function colisColissimoDuJour(
     ["id", "name", "partner_id", "carrier_id", "carrier_tracking_ref"], 300, "write_date desc");
 
   return pickings
-    .filter((p: any) => /colissimo|la\s*poste|laposte/i.test(
+    // « POSTE » tout court est un nom de transporteur courant : exiger
+    // « la poste » écartait précisément les transferts de l'entrepôt.
+    .filter((p: any) => /colissimo|poste/i.test(
       Array.isArray(p.carrier_id) ? String(p.carrier_id[1] || "") : ""))
     .map((p: any) => ({
       numero: String(p.carrier_tracking_ref || "").trim(),

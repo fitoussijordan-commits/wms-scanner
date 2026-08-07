@@ -240,6 +240,67 @@ export async function savePrintConfig(
 }
 
 // ══════════════════════════════════════════
+// COLIS COLISSIMO AFFRANCHIS
+// ══════════════════════════════════════════
+//
+// Le bordereau de dépôt se construisait à partir d'Odoo. Or un colis créé en
+// saisie libre, sans transfert chargé, n'est écrit nulle part dans Odoo : il
+// serait sorti du bordereau, donc parti sans preuve de remise.
+//
+// Ce registre enregistre ce que le WMS a RÉELLEMENT affranchi, quelle que soit
+// la provenance. C'est lui qui fait foi pour le bordereau.
+
+export interface ColisColissimo {
+  numero: string;
+  jour: string;
+  picking_name: string | null;
+  client: string | null;
+  offre: string | null;
+  reference: string | null;
+  bordereau: string | null;
+}
+
+export async function enregistrerColisColissimo(c: {
+  numero: string; pickingName?: string; pickingId?: number | null;
+  client?: string; offre?: string; poids?: number; reference?: string; creePar?: string;
+}): Promise<void> {
+  if (!supabaseConfigured || !c.numero) return;
+  const { error } = await sb.from("wms_colissimo_parcels").upsert({
+    numero: c.numero.trim(),
+    jour: new Date().toISOString().slice(0, 10),
+    picking_name: c.pickingName || null,
+    picking_id: c.pickingId ?? null,
+    client: c.client || null,
+    offre: c.offre || null,
+    poids: c.poids ?? null,
+    reference: c.reference || null,
+    cree_par: c.creePar || null,
+  }, { onConflict: "numero" });
+  if (error) throw new Error(error.message);
+}
+
+/** Colis d'une journée. `sansBordereau` exclut ceux déjà remis. */
+export async function colisColissimoDuJour(
+  jour: string, sansBordereau = true,
+): Promise<ColisColissimo[]> {
+  if (!supabaseConfigured) return [];
+  let q = sb.from("wms_colissimo_parcels").select("*").eq("jour", jour).order("created_at");
+  if (sansBordereau) q = q.is("bordereau", null);
+  const { data, error } = await q.limit(500);
+  if (error) throw new Error(error.message);
+  return (data || []) as ColisColissimo[];
+}
+
+/** Marque les colis comme remis : ils ne repasseront pas dans un autre bordereau. */
+export async function marquerBordereau(numeros: string[], bordereau: string): Promise<void> {
+  if (!supabaseConfigured || !numeros.length) return;
+  const { error } = await sb.from("wms_colissimo_parcels")
+    .update({ bordereau: bordereau || "édité", bordereau_at: new Date().toISOString() })
+    .in("numero", numeros);
+  if (error) throw new Error(error.message);
+}
+
+// ══════════════════════════════════════════
 // NOMS D'IMPRIMANTES
 // ══════════════════════════════════════════
 //
