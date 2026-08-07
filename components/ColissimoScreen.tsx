@@ -246,6 +246,9 @@ export default function ColissimoScreen({
   const [bordExclus, setBordExclus] = useState<Set<string>>(new Set());
   const [bordBusy, setBordBusy] = useState(false);
   const [bordFait, setBordFait] = useState<{ numero: string; colis: number; pdfBase64: string } | null>(null);
+  // Diagnostic : quand la liste sort vide alors qu'on a expédié, il faut savoir
+  // OÙ ça coince — registre, date, ou nom du transporteur.
+  const [bordDiag, setBordDiag] = useState<{ registre: number; odooTotal: number; transporteurs: string[]; retenus: number } | null>(null);
 
   /**
    * Colis du jour : registre du WMS ET transferts Odoo.
@@ -258,10 +261,12 @@ export default function ColissimoScreen({
     setBordBusy(true); setBordFait(null); setBordExclus(new Set());
     try {
       const sb = await import("@/lib/supabase");
+      const diag = { trouves: 0, transporteurs: [] as string[] };
       const [registre, depuisOdoo] = await Promise.all([
         sb.colisColissimoDuJour(bordJour).catch(() => []),
-        odoo.colisColissimoDuJour(session, bordJour).catch(() => []),
+        odoo.colisColissimoDuJour(session, bordJour, diag).catch(() => []),
       ]);
+      setBordDiag({ registre: registre.length, odooTotal: diag.trouves, transporteurs: diag.transporteurs, retenus: depuisOdoo.length });
 
       const parNumero = new Map<string, { numero: string; picking: string; client: string; remis?: string }>();
       for (const c of registre) {
@@ -313,6 +318,30 @@ export default function ColissimoScreen({
       }
     } catch (e: any) { onToast("❌ " + (e?.message || e), "error"); }
     setBordBusy(false);
+  };
+
+  /**
+   * Ajout manuel de numéros de colis.
+   *
+   * Le WMS ne connaît que ce qu'il a lui-même affranchi. Un colis fait sur le
+   * portail La Poste, ou avant la mise en service, n'apparaîtrait jamais — et
+   * partirait donc sans figurer sur la preuve de remise. On peut coller ou
+   * scanner les numéros manquants.
+   */
+  const [bordAjout, setBordAjout] = useState("");
+  const ajouterNumeros = () => {
+    // Un scanner enchaîne les numéros par retour ligne ; un copier-coller de
+    // tableur les sépare par tabulation ou point-virgule. On accepte tout.
+    const bruts = bordAjout.split(/[\s,;]+/).map(n => n.trim()).filter(Boolean);
+    if (!bruts.length) return;
+    const existants = new Set((bordColis || []).map(c => c.numero));
+    const nouveaux = bruts
+      .filter(n => !existants.has(n))
+      .map(n => ({ numero: n, picking: "ajouté à la main", client: "" }));
+    if (!nouveaux.length) { onToast("Ces numéros sont déjà dans la liste", "info"); setBordAjout(""); return; }
+    setBordColis(prev => [...(prev || []), ...nouveaux]);
+    setBordAjout("");
+    onToast(`${nouveaux.length} colis ajouté(s)`, "success");
   };
 
   const [bordRelire, setBordRelire] = useState("");
@@ -457,8 +486,53 @@ export default function ColissimoScreen({
             )}
 
             {bordColis && bordColis.length === 0 && (
-              <div style={{ fontSize: 12.5, color: C.textMuted }}>Aucun colis Colissimo affranchi ce jour-là.</div>
+              <div style={{ fontSize: 12.5, color: C.textMuted, marginBottom: 10 }}>
+                Aucun colis affranchi depuis le WMS ce jour-là. Les colis créés sur le portail
+                La Poste ne sont pas connus d&apos;ici — ajoute leurs numéros ci-dessous.
+              </div>
             )}
+
+            {/* Ce qu'on a réellement trouvé, source par source. Sans ça,
+                « aucun colis » ne dit pas si c'est la date, le transporteur ou
+                le registre qui est en cause. */}
+            {bordDiag && (
+              <details style={{ marginBottom: 10 }}>
+                <summary style={{ fontSize: 11.5, color: C.textMuted, cursor: "pointer", fontWeight: 600 }}>
+                  Détail de la recherche
+                </summary>
+                <div style={{ marginTop: 6, fontSize: 11.5, color: C.textMuted, lineHeight: 1.6, background: C.bg, borderRadius: 8, padding: 9 }}>
+                  <div>Registre WMS : <strong>{bordDiag.registre}</strong> colis</div>
+                  <div>Transferts Odoo avec un n° de suivi ce jour-là : <strong>{bordDiag.odooTotal}</strong></div>
+                  <div>… dont retenus comme Colissimo : <strong>{bordDiag.retenus}</strong></div>
+                  {bordDiag.transporteurs.length > 0 && (
+                    <div style={{ marginTop: 3 }}>
+                      Transporteurs rencontrés : {bordDiag.transporteurs.join(", ")}
+                    </div>
+                  )}
+                  {bordDiag.odooTotal > 0 && bordDiag.retenus === 0 && (
+                    <div style={{ color: C.orange, fontWeight: 700, marginTop: 4 }}>
+                      Des transferts existent mais aucun transporteur n&apos;est reconnu comme La Poste — dis-moi le nom exact.
+                    </div>
+                  )}
+                </div>
+              </details>
+            )}
+
+            {/* Saisie manuelle : couvre les colis faits hors WMS. */}
+            <div style={{ marginTop: bordColis?.length ? 4 : 0 }}>
+              <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 5 }}>
+                Ajouter des numéros de colis (scan, ou collés à la suite) :
+              </div>
+              <textarea value={bordAjout} onChange={e => setBordAjout(e.target.value)}
+                onKeyDown={e => e.stopPropagation()}
+                rows={2}
+                placeholder="6A12345678901&#10;6C98765432109"
+                style={{ width: "100%", boxSizing: "border-box", padding: "10px 11px", border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 13.5, fontFamily: "monospace", outline: "none", resize: "vertical" }} />
+              <button onClick={ajouterNumeros} disabled={!bordAjout.trim()}
+                style={{ width: "100%", marginTop: 6, padding: 10, background: C.white, color: C.text, border: `1.5px solid ${C.border}`, borderRadius: 9, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                + Ajouter à la liste
+              </button>
+            </div>
 
             {/* Réimpression : le bordereau existe déjà chez La Poste, on le
                 redemande au lieu d'en créer un second pour les mêmes colis. */}

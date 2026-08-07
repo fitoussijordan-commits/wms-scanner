@@ -2554,20 +2554,39 @@ export async function chargerLivraison(session: OdooSession, ref: string): Promi
  */
 export async function colisColissimoDuJour(
   session: OdooSession, jour: string,
+  diag?: { trouves: number; transporteurs: string[] },
 ): Promise<{ numero: string; picking: string; client: string }[]> {
-  const debut = `${jour} 00:00:00`;
-  const fin = `${jour} 23:59:59`;
+  // Odoo stocke les dates en UTC. En été, la France est à UTC+2 : borner sur
+  // la journée locale telle quelle écarterait les deux premières heures de la
+  // matinée. On élargit d'un jour de chaque côté et on filtre ensuite.
+  const veille = new Date(new Date(`${jour}T00:00:00Z`).getTime() - 86_400_000).toISOString().slice(0, 10);
+  const lendemain = new Date(new Date(`${jour}T00:00:00Z`).getTime() + 86_400_000).toISOString().slice(0, 10);
 
   const pickings = await searchRead(session, M("MODEL_PICKING"),
     [
       ["picking_type_code", "=", "outgoing"],
       ["carrier_tracking_ref", "!=", false],
-      ["write_date", ">=", debut],
-      ["write_date", "<=", fin],
+      ["write_date", ">=", `${veille} 00:00:00`],
+      ["write_date", "<=", `${lendemain} 23:59:59`],
     ],
-    ["id", "name", "partner_id", "carrier_id", "carrier_tracking_ref"], 300, "write_date desc");
+    ["id", "name", "partner_id", "carrier_id", "carrier_tracking_ref", "write_date"], 500, "write_date desc");
 
-  return pickings
+  // On garde ce qui tombe dans la journée LOCALE de l'opérateur.
+  const duJour = pickings.filter((p: any) => {
+    const d = String(p.write_date || "").replace(" ", "T") + "Z";
+    const local = new Date(d);
+    if (isNaN(local.getTime())) return true;
+    const y = local.getFullYear(), m = String(local.getMonth() + 1).padStart(2, "0"), j = String(local.getDate()).padStart(2, "0");
+    return `${y}-${m}-${j}` === jour;
+  });
+
+  if (diag) {
+    diag.trouves = duJour.length;
+    diag.transporteurs = Array.from(new Set(duJour.map((p: any) =>
+      Array.isArray(p.carrier_id) ? String(p.carrier_id[1] || "—") : "aucun transporteur")));
+  }
+
+  return duJour
     // « POSTE » tout court est un nom de transporteur courant : exiger
     // « la poste » écartait précisément les transferts de l'entrepôt.
     .filter((p: any) => /colissimo|poste/i.test(
