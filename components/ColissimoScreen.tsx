@@ -12,7 +12,7 @@
 import { useState, useEffect, useCallback } from "react";
 import * as odoo from "@/lib/odoo";
 import { writeHeaders } from "@/lib/writeToken";
-import { listPrinters, printPdfLabel, type PrintNodePrinter } from "@/lib/printnode";
+import { listPrinters, printPdfLabel, getLabelTypeConfig, type PrintNodePrinter } from "@/lib/printnode";
 import { useEcranEtroit } from "@/lib/useEcranEtroit";
 
 const C = {
@@ -89,12 +89,20 @@ export default function ColissimoScreen({
     fetch("/api/colissimo?action=config").then(r => r.json()).then(setConfig).catch(() => {});
     listPrinters().then(p => {
       setImprimantes(p);
-      const memo = Number(localStorage.getItem("colissimo_printer") || "");
-      setImprimante(memo && p.some(x => x.id === memo) ? memo : (p[0]?.id ?? null));
-      // Pas de choix par défaut pour le bordereau : imprimer un A4 sur la
-      // première imprimante venue, c'est ce qui vient de gâcher un rouleau.
-      const memoA4 = Number(localStorage.getItem("colissimo_printer_a4") || "");
-      setImprimanteA4(memoA4 && p.some(x => x.id === memoA4) ? memoA4 : null);
+      const valide = (id: number | null | undefined) => (id && p.some(x => x.id === id)) ? id : null;
+
+      // Priorité au réglage central (Administration → Imprimantes), qui vaut
+      // pour tout le monde. Le choix fait ici ne sert qu'à dépanner ponctuellement.
+      const etiq = valide(getLabelTypeConfig("colissimo").printerId)
+        ?? valide(getLabelTypeConfig("sendcloud").printerId)
+        ?? valide(Number(localStorage.getItem("colissimo_printer") || ""));
+      setImprimante(etiq ?? p[0]?.id ?? null);
+
+      // Le bordereau est un A4 : pas de repli sur une imprimante quelconque.
+      // Sans réglage explicite, on n'imprime rien et on propose le PDF.
+      setImprimanteA4(
+        valide(getLabelTypeConfig("bordereau").printerId)
+        ?? valide(Number(localStorage.getItem("colissimo_printer_a4") || "")));
     }).catch(() => {});
   }, []);
 

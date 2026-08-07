@@ -339,7 +339,13 @@ const TACHES: { type: string; label: string; aide: string }[] = [
   { type: "picking",           label: "Bon de préparation",     aide: "Imprimé à la validation d'un pick" },
   { type: "packingslip",       label: "Bon de livraison",       aide: "Imprimé à l'emballage" },
   { type: "packingslip_eshop", label: "BL e-shop",              aide: "Sorties e-shop" },
-  { type: "sendcloud",         label: "Étiquette transporteur", aide: "TNT, Colissimo, Sendcloud" },
+  // Un transporteur par ligne : les étiquettes n'ont ni le même format ni la
+  // même imprimante, et les regrouper obligeait à rebasculer le réglage à
+  // chaque changement de transporteur.
+  { type: "sendcloud",         label: "Étiquette Sendcloud",    aide: "E-shop via Sendcloud" },
+  { type: "tnt",               label: "Étiquette TNT",          aide: "Expéditions TNT" },
+  { type: "colissimo",         label: "Étiquette Colissimo",    aide: "Envois La Poste" },
+  { type: "bordereau",         label: "Bordereau de dépôt",     aide: "A4 — surtout pas une thermique" },
   { type: "product",           label: "Étiquette article",      aide: "Code-barres produit" },
   { type: "lot",               label: "Étiquette lot",          aide: "Numéro de lot et péremption" },
   { type: "location",          label: "Étiquette emplacement",  aide: "Allées et casiers" },

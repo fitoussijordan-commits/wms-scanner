@@ -872,7 +872,7 @@ export function isConfigured(): boolean {
 // ============================================
 // PER-TYPE LABEL CONFIG
 // ============================================
-export type LabelType = "product" | "lot" | "location" | "palette" | "palette_wms" | "blank" | "picking" | "sendcloud" | "packingslip" | "packingslip_eshop" | "order_barcode";
+export type LabelType = "product" | "lot" | "location" | "palette" | "palette_wms" | "blank" | "picking" | "sendcloud" | "tnt" | "colissimo" | "bordereau" | "packingslip" | "packingslip_eshop" | "order_barcode";
 
 export interface LabelTypeConfig {
   printerId: number | null;
@@ -905,7 +905,7 @@ export function saveLabelTypeConfig(type: LabelType, config: Partial<LabelTypeCo
 }
 
 export function getAllLabelTypeConfigs(): Record<LabelType, LabelTypeConfig> {
-  const types: LabelType[] = ["product", "lot", "location", "palette", "palette_wms", "blank", "picking", "sendcloud", "packingslip", "packingslip_eshop", "order_barcode"];
+  const types: LabelType[] = ["product", "lot", "location", "palette", "palette_wms", "blank", "picking", "sendcloud", "tnt", "colissimo", "bordereau", "packingslip", "packingslip_eshop", "order_barcode"];
   const result = {} as Record<LabelType, LabelTypeConfig>;
   for (const t of types) result[t] = getLabelTypeConfig(t);
   return result;
@@ -963,7 +963,7 @@ export async function syncPrintConfigFromSupabase(): Promise<void> {
     if (!Object.keys(remote).length) {
       // Supabase vide → on pousse toute la config locale existante
       const pushPromises: Promise<void>[] = [];
-      const types: LabelType[] = ["product", "lot", "location", "palette", "palette_wms", "blank", "picking", "sendcloud", "packingslip", "packingslip_eshop", "order_barcode"];
+      const types: LabelType[] = ["product", "lot", "location", "palette", "palette_wms", "blank", "picking", "sendcloud", "tnt", "colissimo", "bordereau", "packingslip", "packingslip_eshop", "order_barcode"];
       for (const type of types) {
         const cfg = local[type];
         if (cfg?.printerId) {

@@ -628,8 +628,16 @@ export default function PackingScreen({ session, onBack, onToast, initialPicking
           setDone(prev => prev ? { ...prev, labelsPending: false } : prev);
           return;
         }
+        // Imprimante propre au transporteur si elle est réglée dans
+        // Administration : les étiquettes TNT, Colissimo et Sendcloud n'ont ni
+        // le même format ni forcément la même machine. À défaut, celle choisie
+        // sur ce poste.
+        const cle = estLaPoste(selectedCarrier) ? "colissimo"
+          : /tnt/i.test(selectedCarrier) ? "tnt" : "sendcloud";
+        const dediee = pn.getLabelTypeConfig(cle).printerId;
+        const cible = dediee || labelPrinterId;
         for (const att of atts) {
-          if (att.datas) await pn.printPdfLabel(labelPrinterId, att.datas, att.name || "Étiquette");
+          if (att.datas) await pn.printPdfLabel(cible, att.datas, att.name || "Étiquette");
         }
         setDone(prev => prev ? { ...prev, labelPrinted: true, labelsPending: false } : prev);
       }).catch(() => setDone(prev => prev ? { ...prev, labelsPending: false } : prev));
