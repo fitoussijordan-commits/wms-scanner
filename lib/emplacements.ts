@@ -112,9 +112,11 @@ export function correspondAuCode(nomEmplacement: string, code: string): boolean 
   return codesEmplacement(nomEmplacement).includes(cherche);
 }
 
+export interface EmplacementRef { id: number; nom: string; articles: string[] }
+
 export interface CollisionRack {
   code: string;
-  emplacements: { nom: string; articles: string[] }[];
+  emplacements: EmplacementRef[];
 }
 
 /**
@@ -125,9 +127,9 @@ export interface CollisionRack {
  * le savoir. On ne tranche pas : on montre.
  */
 export function trouverCollisions(
-  emplacements: { nom: string; articles: string[] }[],
+  emplacements: EmplacementRef[],
 ): CollisionRack[] {
-  const parCode: Record<string, { nom: string; articles: string[] }[]> = {};
+  const parCode: Record<string, EmplacementRef[]> = {};
 
   for (const e of emplacements) {
     const d = decoderEmplacement(e.nom);

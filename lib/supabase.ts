@@ -312,6 +312,34 @@ export async function marquerBordereau(numeros: string[], bordereau: string): Pr
 // « Zebra emballage », « Canon bureau ». Stocké dans wms_sync_meta, ce qui
 // évite une table pour une poignée de lignes.
 
+// ══════════════════════════════════════════
+// RACKS PARTAGÉS VOLONTAIREMENT
+// ══════════════════════════════════════════
+//
+// Un rack déclaré sur plusieurs emplacements est souvent une faute de saisie —
+// mais pas toujours : un même rack peut réellement porter plusieurs articles.
+//
+// Sans moyen d'acter ces cas-là, la liste des anomalies garderait en permanence
+// des lignes correctes, et finirait par ne plus être regardée du tout.
+
+const RACKS_OK_KEY = "racks_partages_voulus";
+
+export async function loadRacksPartages(): Promise<string[]> {
+  if (!supabaseConfigured) return [];
+  try {
+    const { data } = await sb.from("wms_sync_meta").select("value").eq("key", cfgKey(RACKS_OK_KEY)).single();
+    return data?.value ? JSON.parse(data.value) : [];
+  } catch { return []; }
+}
+
+export async function saveRacksPartages(codes: string[]): Promise<void> {
+  const propre = Array.from(new Set(codes.map(c => c.trim().toUpperCase()).filter(Boolean)));
+  const { error } = await sb.from("wms_sync_meta").upsert(
+    { key: cfgKey(RACKS_OK_KEY), value: JSON.stringify(propre), updated_at: new Date().toISOString() },
+    { onConflict: "key" });
+  if (error) throw new Error(error.message);
+}
+
 const ALIAS_KEY = "printer_aliases";
 
 export async function loadPrinterAliases(): Promise<Record<string, string>> {
